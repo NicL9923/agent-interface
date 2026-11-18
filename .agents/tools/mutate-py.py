@@ -33,6 +33,7 @@ clears the repository's bytecode after it restores a file. An unreadable record 
 because its saved original may be the only copy; it blocks a run on that file only. A mutant that does not compile is an
 `error:` row, not a caught mutant, because every test would fail on the import.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,7 +55,10 @@ SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv"})
 EXIT_SURVIVED, EXIT_ERROR, EXIT_RESTORE = 1, 2, 3
 # Signals that stop a run. SIGINT is Ctrl-C. SIGKILL cannot be caught and is covered by the pending record.
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-FAILURE_LINE = re.compile(r"^(?:FAIL|ERROR): (\S+)|^(\S+) \.\.\. (?:FAIL|ERROR)|^(?:FAILED|E +)\S.*|^AssertionError.*", re.MULTILINE)
+FAILURE_LINE = re.compile(
+    r"^(?:FAIL|ERROR): (\S+)|^(\S+) \.\.\. (?:FAIL|ERROR)|^(?:FAILED|E +)\S.*|^AssertionError.*",
+    re.MULTILINE,
+)
 
 
 class ToolError(Exception):
@@ -76,6 +80,7 @@ class RestoreFailure(Exception):
 # ---------------------------------------------------------------------------------------------------------------
 # The mutation itself.
 
+
 def apply_text(original: bytes, old: str | None, new: str, line: int | None) -> bytes:
     """The file's bytes with the mutation applied, or a ToolError saying why it cannot be."""
     new_bytes = new.encode()
@@ -84,8 +89,8 @@ def apply_text(original: bytes, old: str | None, new: str, line: int | None) -> 
         if not 1 <= line <= len(pieces):
             raise ToolError(f"line {line} is outside the file's {len(pieces)} lines")
         target = pieces[line - 1]
-        ending = target[len(target.rstrip(b"\r\n")):]
-        body = target[:len(target) - len(ending)]
+        ending = target[len(target.rstrip(b"\r\n")) :]
+        body = target[: len(target) - len(ending)]
         if old is None:
             pieces[line - 1] = new_bytes + ending
         else:
@@ -108,6 +113,7 @@ def apply_text(original: bytes, old: str | None, new: str, line: int | None) -> 
 
 # ---------------------------------------------------------------------------------------------------------------
 # Pending records, so a killed run's file is restored by the next run.
+
 
 def pending_dir() -> Path:
     directory = Path(tempfile.gettempdir()) / f"mutate-py-{os.getuid()}"
@@ -138,8 +144,10 @@ def write_atomic(path: Path, data: bytes | str) -> None:
 def read_record(record: Path) -> dict:
     """The pending record's fields, or a ValueError when the file is not a record this tool wrote."""
     info = json.loads(record.read_text())
-    if not isinstance(info, dict) or not all(isinstance(info.get(key), kind) for key, kind in
-                                             (("pid", int), ("path", str), ("mode", int), ("mtime_ns", int))):
+    if not isinstance(info, dict) or not all(
+        isinstance(info.get(key), kind)
+        for key, kind in (("pid", int), ("path", str), ("mode", int), ("mtime_ns", int))
+    ):
         raise ValueError("it lacks pid, path, mode and mtime_ns")
     return info
 
@@ -208,7 +216,10 @@ def recover_record(record: Path) -> str | None:
     path = Path(info["path"])
     if not path.parent.is_dir():
         # A volume that is not mounted hides a checkout that still exists, so its record waits for the volume to come back.
-        if isinstance(info.get("dev"), int) and nearest_existing(path).stat().st_dev != info["dev"]:
+        if (
+            isinstance(info.get("dev"), int)
+            and nearest_existing(path).stat().st_dev != info["dev"]
+        ):
             return f"kept the record of {path}: its directory is missing and the volume it was on is not mounted; the original bytes are in {backup}"
         # A throwaway checkout deleted after a killed run: nothing can be restored, and the record would warn forever.
         record.unlink(missing_ok=True)
@@ -242,15 +253,31 @@ class Pending:
         try:
             info = read_record(record)
         except (OSError, ValueError) as error:
-            raise ToolError(f"the pending record for this file is unreadable ({error}); its original bytes may be in {backup}, so check the file against them, then delete both") from None
+            raise ToolError(
+                f"the pending record for this file is unreadable ({error}); its original bytes may be in {backup}, so check the file against them, then delete both"
+            ) from None
         if alive(info["pid"]):
-            raise ToolError(f"another mutate-py run (pid {info['pid']}) is mutating this file")
-        raise ToolError(f"an earlier run of pid {info['pid']} left this file mutated and could not restore it; the original bytes are in {backup}")
+            raise ToolError(
+                f"another mutate-py run (pid {info['pid']}) is mutating this file"
+            )
+        raise ToolError(
+            f"an earlier run of pid {info['pid']} left this file mutated and could not restore it; the original bytes are in {backup}"
+        )
 
     def save(self) -> None:
         write_atomic(self.backup, self.original)
-        write_atomic(self.record, json.dumps({"pid": os.getpid(), "path": str(self.path), "mode": self.stat.st_mode,
-                                              "mtime_ns": self.stat.st_mtime_ns, "dev": self.stat.st_dev}))
+        write_atomic(
+            self.record,
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "path": str(self.path),
+                    "mode": self.stat.st_mode,
+                    "mtime_ns": self.stat.st_mtime_ns,
+                    "dev": self.stat.st_dev,
+                }
+            ),
+        )
 
     def drop(self) -> None:
         self.record.unlink(missing_ok=True)
@@ -269,6 +296,7 @@ def write_original(path: Path, data: bytes, mode: int, mtime_ns: int) -> None:
 # ---------------------------------------------------------------------------------------------------------------
 # Bytecode.
 
+
 def clear_pycache(root: Path) -> int:
     """Delete every __pycache__ under root, without entering .git, node_modules or virtual environments."""
     removed = 0
@@ -282,20 +310,35 @@ def clear_pycache(root: Path) -> int:
 
 
 def repository_root(path: Path) -> Path:
-    result = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=path.parent, capture_output=True, text=True, check=False)
-    return Path(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip() else path.parent
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=path.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return (
+        Path(result.stdout.strip())
+        if result.returncode == 0 and result.stdout.strip()
+        else path.parent
+    )
 
 
 def python_command(command: list[str]) -> list[str]:
     """The command, with -B after a leading python so the interpreter writes no bytecode either way."""
     first = Path(command[0]).name
-    if (first == "python" or re.fullmatch(r"python3(\.\d+)?", first) or command[0] == sys.executable) and "-B" not in command[1:2]:
+    if (
+        first == "python"
+        or re.fullmatch(r"python3(\.\d+)?", first)
+        or command[0] == sys.executable
+    ) and "-B" not in command[1:2]:
         return [command[0], "-B", *command[1:]]
     return command
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # Running the command.
+
 
 class Result:
     def __init__(self, kind: str, detail: str = ""):
@@ -318,13 +361,27 @@ def summarize(output: str, code: int) -> str:
     return f"{named} (exit {code})" if named else f"exit {code}"
 
 
-def run_command(command: list[str], cwd: Path, timeout: float | None, root: Path, state: dict) -> Result:
+def run_command(
+    command: list[str], cwd: Path, timeout: float | None, root: Path, state: dict
+) -> Result:
     prefix = tempfile.mkdtemp(prefix="mutate-py-pycache-")
-    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPYCACHEPREFIX": prefix}
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPYCACHEPREFIX": prefix,
+    }
     try:
         # Its own process group, so a stop signal ends the command and whatever it started.
-        child = subprocess.Popen(python_command(command), cwd=cwd, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True, errors="replace", start_new_session=True)
+        child = subprocess.Popen(
+            python_command(command),
+            cwd=cwd,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            start_new_session=True,
+        )
         state["child"] = child
         try:
             output, _ = child.communicate(timeout=timeout)
@@ -336,7 +393,9 @@ def run_command(command: list[str], cwd: Path, timeout: float | None, root: Path
             state["child"] = None
             stop_group(child)
     except FileNotFoundError as error:
-        return Result("error", f"cannot run the command: {error.filename or command[0]} not found")
+        return Result(
+            "error", f"cannot run the command: {error.filename or command[0]} not found"
+        )
     finally:
         shutil.rmtree(prefix, ignore_errors=True)
     if child.returncode == 0:
@@ -348,24 +407,42 @@ def stop_group(child: subprocess.Popen) -> None:
     """Kill what is left of the command's process group, which is only its own descendants."""
     try:
         os.killpg(child.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError, PermissionError:
         pass
 
 
-def mutate_once(path: Path, root: Path, old: str | None, new: str, line: int | None, command: list[str], timeout: float | None,
-                keep_mtime: bool) -> Result:
+def mutate_once(
+    path: Path,
+    root: Path,
+    old: str | None,
+    new: str,
+    line: int | None,
+    command: list[str],
+    timeout: float | None,
+    keep_mtime: bool,
+) -> Result:
     """Apply one mutation, run the command, and restore the file whatever happens.
 
     A second run on a file another run holds fails at once instead of waiting: the holder can keep the file for a whole
     test suite, a run that waits silently looks hung, and the error row says exactly which file to run again."""
     with file_lock(pending_key(path)) as holder:
         if holder is not None:
-            raise ToolError(f"another mutate-py run (pid {holder or 'unknown'}) is mutating this file")
+            raise ToolError(
+                f"another mutate-py run (pid {holder or 'unknown'}) is mutating this file"
+            )
         return mutate_locked(path, root, old, new, line, command, timeout, keep_mtime)
 
 
-def mutate_locked(path: Path, root: Path, old: str | None, new: str, line: int | None, command: list[str], timeout: float | None,
-                  keep_mtime: bool) -> Result:
+def mutate_locked(
+    path: Path,
+    root: Path,
+    old: str | None,
+    new: str,
+    line: int | None,
+    command: list[str],
+    timeout: float | None,
+    keep_mtime: bool,
+) -> Result:
     Pending.guard(path)
     if not path.is_file():
         return Result("error", f"{path} is not a file")
@@ -379,7 +456,11 @@ def mutate_locked(path: Path, root: Path, old: str | None, new: str, line: int |
         compile(mutated, str(path), "exec", dont_inherit=True)
     except (SyntaxError, ValueError) as error:
         # A mutant that cannot be imported fails every test, which would read as a caught mutant.
-        where = f"line {error.lineno}: {error.msg}" if isinstance(error, SyntaxError) and error.lineno else str(error)
+        where = (
+            f"line {error.lineno}: {error.msg}"
+            if isinstance(error, SyntaxError) and error.lineno
+            else str(error)
+        )
         return Result("error", f"the mutant does not compile ({where})")
     pending = Pending(path, original, stat)
     state: dict = {"child": None}
@@ -415,10 +496,14 @@ def mutate_locked(path: Path, root: Path, old: str | None, new: str, line: int |
             try:
                 write_original(path, original, stat.st_mode, stat.st_mtime_ns)
             except OSError as error:
-                raise RestoreFailure(f"{path} could not be restored ({error}); the original bytes are in {pending.backup}, and the next run restores them") from error
+                raise RestoreFailure(
+                    f"{path} could not be restored ({error}); the original bytes are in {pending.backup}, and the next run restores them"
+                ) from error
             clear_pycache(root)
             if path.read_bytes() != original:
-                raise RestoreFailure(f"{path} does not match its original after the restore; the original bytes are in {pending.backup}")
+                raise RestoreFailure(
+                    f"{path} does not match its original after the restore; the original bytes are in {pending.backup}"
+                )
             pending.drop()
         finally:
             for sig, handler in previous.items():
@@ -430,6 +515,7 @@ def mutate_locked(path: Path, root: Path, old: str | None, new: str, line: int |
 
 # ---------------------------------------------------------------------------------------------------------------
 # The table and the command line.
+
 
 def cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
@@ -444,14 +530,18 @@ def table(rows: list[tuple[str, Result]]) -> str:
 def label(spec: dict) -> str:
     if spec.get("name"):
         return spec["name"]
-    where = f"line {spec['line']}" if spec.get("line") else repr(spec.get("old", ""))[:60]
+    where = (
+        f"line {spec['line']}" if spec.get("line") else repr(spec.get("old", ""))[:60]
+    )
     return f"{spec['file']}: {where}"
 
 
 def parse_command(value, fallback: list[str] | None) -> list[str]:
     if value is None:
         if not fallback:
-            raise ToolError("no test command: give one after `--`, or a `command` on the mutation")
+            raise ToolError(
+                "no test command: give one after `--`, or a `command` on the mutation"
+            )
         return list(fallback)
     command = shlex.split(value) if isinstance(value, str) else list(value)
     if not command:
@@ -469,22 +559,45 @@ def load_batch(path: Path) -> list[dict]:
     for index, spec in enumerate(specs, 1):
         missing = [key for key in ("file", "new") if key not in spec]
         if missing or ("old" not in spec and "line" not in spec):
-            raise SystemExit(f"mutate-py: mutation {index} needs file, new, and old or line")
+            raise SystemExit(
+                f"mutate-py: mutation {index} needs file, new, and old or line"
+            )
     return specs
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="mutate-py.py", description="Apply a hand-made mutation to a Python file, run a test command, restore the file, and print a result row.",
-                                     usage="mutate-py.py FILE (--old TEXT | --line N [--old TEXT]) --new TEXT [options] -- COMMAND...\n       mutate-py.py --batch FILE.json [options] [-- COMMAND...]")
+    parser = argparse.ArgumentParser(
+        prog="mutate-py.py",
+        description="Apply a hand-made mutation to a Python file, run a test command, restore the file, and print a result row.",
+        usage="mutate-py.py FILE (--old TEXT | --line N [--old TEXT]) --new TEXT [options] -- COMMAND...\n       mutate-py.py --batch FILE.json [options] [-- COMMAND...]",
+    )
     parser.add_argument("file", nargs="?", help="the Python file to mutate")
-    parser.add_argument("--old", help="exact text to replace; it must occur once in the file, or once in --line")
-    parser.add_argument("--new", help="the replacement; with --line and no --old it replaces the whole line")
+    parser.add_argument(
+        "--old",
+        help="exact text to replace; it must occur once in the file, or once in --line",
+    )
+    parser.add_argument(
+        "--new",
+        help="the replacement; with --line and no --old it replaces the whole line",
+    )
     parser.add_argument("--line", type=int, help="1-based line number")
     parser.add_argument("--name", help="the Mutation column for this row")
     parser.add_argument("--batch", help="JSON list of mutations")
-    parser.add_argument("--baseline", action="store_true", help="run every distinct command once unmutated first and stop if any fails, so a red suite cannot read as a caught mutant")
-    parser.add_argument("--timeout", type=float, help="seconds a command may run before it counts as an error")
-    parser.add_argument("--keep-mtime", action="store_true", help="write the mutant with the original's mtime, to reproduce the same-second bytecode trap")
+    parser.add_argument(
+        "--baseline",
+        action="store_true",
+        help="run every distinct command once unmutated first and stop if any fails, so a red suite cannot read as a caught mutant",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        help="seconds a command may run before it counts as an error",
+    )
+    parser.add_argument(
+        "--keep-mtime",
+        action="store_true",
+        help="write the mutant with the original's mtime, to reproduce the same-second bytecode trap",
+    )
     return parser
 
 
@@ -494,16 +607,28 @@ def main(argv: list[str]) -> int:
     command = None
     if "--" in argv:
         split = argv.index("--")
-        command, argv = argv[split + 1:] or None, argv[:split]
+        command, argv = argv[split + 1 :] or None, argv[:split]
     args = parser.parse_args(argv)
     if args.batch:
         if args.file or args.old or args.new or args.line:
             parser.error("--batch takes its mutations from the file")
         specs = load_batch(Path(args.batch))
     else:
-        if not args.file or args.new is None or (args.old is None and args.line is None):
+        if (
+            not args.file
+            or args.new is None
+            or (args.old is None and args.line is None)
+        ):
             parser.error("give FILE, --new, and --old or --line")
-        specs = [{"file": args.file, "old": args.old, "new": args.new, "line": args.line, "name": args.name}]
+        specs = [
+            {
+                "file": args.file,
+                "old": args.old,
+                "new": args.new,
+                "line": args.line,
+                "name": args.name,
+            }
+        ]
     specs = [{**spec, "path": Path(spec["file"]).resolve()} for spec in specs]
     for note in recover_dead_runs():
         print(f"mutate-py: {note}", file=sys.stderr)
@@ -513,16 +638,26 @@ def main(argv: list[str]) -> int:
         baselines: dict[tuple[tuple[str, ...], Path], None] = {}
         try:
             for spec in specs:
-                baselines[(tuple(parse_command(spec.get("command"), command)), repository_root(spec["path"]))] = None
+                baselines[
+                    (
+                        tuple(parse_command(spec.get("command"), command)),
+                        repository_root(spec["path"]),
+                    )
+                ] = None
         except ToolError as error:
             print(f"mutate-py: {error}", file=sys.stderr)
             return EXIT_ERROR
         for unmutated, root in baselines:
             clear_pycache(root)
-            base = run_command(list(unmutated), root, args.timeout, root, {"child": None})
+            base = run_command(
+                list(unmutated), root, args.timeout, root, {"child": None}
+            )
             clear_pycache(root)
             if base.kind != "survived":
-                print(f"mutate-py: the unmutated command did not pass ({base.cell()}): {shlex.join(unmutated)} in {root}; no mutation was run", file=sys.stderr)
+                print(
+                    f"mutate-py: the unmutated command did not pass ({base.cell()}): {shlex.join(unmutated)} in {root}; no mutation was run",
+                    file=sys.stderr,
+                )
                 return EXIT_ERROR
     rows: list[tuple[str, Result]] = []
     try:
@@ -530,11 +665,22 @@ def main(argv: list[str]) -> int:
             path = spec["path"]
             try:
                 run = parse_command(spec.get("command"), command)
-                result = mutate_once(path, repository_root(path), spec.get("old"), spec["new"], spec.get("line"), run, args.timeout, args.keep_mtime)
+                result = mutate_once(
+                    path,
+                    repository_root(path),
+                    spec.get("old"),
+                    spec["new"],
+                    spec.get("line"),
+                    run,
+                    args.timeout,
+                    args.keep_mtime,
+                )
             except ToolError as error:
                 result = Result("error", str(error))
             except RestoreFailure as error:
-                rows.append((label(spec), Result("error", "the file could not be restored")))
+                rows.append(
+                    (label(spec), Result("error", "the file could not be restored"))
+                )
                 print(table(rows))
                 print(f"mutate-py: {error}", file=sys.stderr)
                 return EXIT_RESTORE
@@ -543,7 +689,10 @@ def main(argv: list[str]) -> int:
         # The file is already restored. Print what ran, so a long batch is not lost to Ctrl-C.
         if rows:
             print(table(rows))
-        print(f"mutate-py: stopped by {signal.Signals(stopped.signum).name}; the file was restored", file=sys.stderr)
+        print(
+            f"mutate-py: stopped by {signal.Signals(stopped.signum).name}; the file was restored",
+            file=sys.stderr,
+        )
         return 128 + stopped.signum
     print(table(rows))
     if any(result.kind == "error" for _, result in rows):

@@ -12,6 +12,7 @@ live routine run. Only with --household-idle, which the operator passes after th
 confirms nobody is mid-conversation, does it restart the gateway, once per run, after the
 host re-checks those conditions in the same command that restarts it.
 """
+
 import argparse
 import importlib.util
 import json
@@ -31,7 +32,9 @@ _spec.loader.exec_module(RELEASE_APP)
 # Either native admission owner can report work. Retry only their no-change preflight refusals.
 # Only the fence's own refusal counts. A traceback that merely quotes the fence's source line,
 # as when the gate's status call itself failed on Nov 2, 2026, is a real failure.
-BUSY = re.compile(r'Fence: (?:maintenance gate inactive with no busy work|gateway reports no active agents or work)')
+BUSY = re.compile(
+    r"Fence: (?:maintenance gate inactive with no busy work|gateway reports no active agents or work)"
+)
 DISCARD = re.compile(r"Discard with: release-app\.py discard (release-[\w-]+)")
 # How long a counted agent must persist with no message written and no live routine run
 # before it is reported as leaked, and restarted with --household-idle.
@@ -89,11 +92,18 @@ def gateway_report(host, hermes_home, restart_after=0):
     store is unreadable. With ``restart_after`` seconds, the host restarts the gateway in the same
     command when the count is up, no routine run is live and nothing was written for that long.
     """
-    command = "python3 -c " + shlex.quote(HOST_CHECK) + " " + shlex.quote(hermes_home) + " " + shlex.quote(str(restart_after))
+    command = (
+        "python3 -c "
+        + shlex.quote(HOST_CHECK)
+        + " "
+        + shlex.quote(hermes_home)
+        + " "
+        + shlex.quote(str(restart_after))
+    )
     try:
         result = host_access.ssh(host, command, timeout=180, check=False, capture=True)
         return json.loads(result.stdout) if result.returncode == 0 else None
-    except (subprocess.SubprocessError, ValueError):
+    except subprocess.SubprocessError, ValueError:
         return None
 
 
@@ -101,17 +111,37 @@ def describe(report):
     if report is None:
         return "gateway state unreadable"
     agents, work = report.get("agents"), report.get("work") or []
-    listed = ", ".join(str(item.get("profile") or item.get("kind") or item)[:40] for item in work[:3]) if work else ""
+    listed = (
+        ", ".join(
+            str(item.get("profile") or item.get("kind") or item)[:40]
+            for item in work[:3]
+        )
+        if work
+        else ""
+    )
     quiet = report.get("quiet")
-    silence = ", a session store unreadable" if quiet is None else f", last assistant message {quiet / 60:.0f} min ago"
+    silence = (
+        ", a session store unreadable"
+        if quiet is None
+        else f", last assistant message {quiet / 60:.0f} min ago"
+    )
     routines = report.get("routines") or 0
-    running = f", {routines} routine run{'' if routines == 1 else 's'} live" if routines else ""
+    running = (
+        f", {routines} routine run{'' if routines == 1 else 's'} live"
+        if routines
+        else ""
+    )
     return f"gateway: {agents} active agent{'' if agents == 1 else 's'}{', ' + listed if listed else ''}{silence}{running}"
 
 
 def leaked(report, counted_since, now, window):
     """A count this loop has watched for the whole window, with nothing written and no routine run live."""
-    if not report or counted_since is None or now - counted_since < window or report.get("routines"):
+    if (
+        not report
+        or counted_since is None
+        or now - counted_since < window
+        or report.get("routines")
+    ):
         return False
     quiet = report.get("quiet")
     return quiet is not None and quiet >= window
@@ -120,15 +150,36 @@ def leaked(report, counted_since, now, window):
 def main():
     # prepare's own argument definitions, so every prepare option is accepted here, parsed as prepare
     # parses it, and passed on to each attempt.
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     prepare_actions = RELEASE_APP.add_prepare_arguments(parser)
-    parser.add_argument("--minutes", type=float, default=40, help="give up after this long (default 40)")
-    parser.add_argument("--interval", type=float, default=120, help="seconds between attempts (default 120)")
-    parser.add_argument("--hermes-home", default="~/.hermes", help="Hermes home on the host (default ~/.hermes)")
-    parser.add_argument("--household-idle", action="store_true",
-                        help="the household confirmed nobody is mid-conversation: restart a leaked gateway count once")
+    parser.add_argument(
+        "--minutes", type=float, default=40, help="give up after this long (default 40)"
+    )
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=120,
+        help="seconds between attempts (default 120)",
+    )
+    parser.add_argument(
+        "--hermes-home",
+        default="~/.hermes",
+        help="Hermes home on the host (default ~/.hermes)",
+    )
+    parser.add_argument(
+        "--household-idle",
+        action="store_true",
+        help="the household confirmed nobody is mid-conversation: restart a leaked gateway count once",
+    )
     args = parser.parse_args()
-    command = [sys.executable, str(TOOL), "prepare", *RELEASE_APP.prepare_argv(prepare_actions, args)]
+    command = [
+        sys.executable,
+        str(TOOL),
+        "prepare",
+        *RELEASE_APP.prepare_argv(prepare_actions, args),
+    ]
     window = QUIET_MINUTES * 60
     deadline = time.monotonic() + args.minutes * 60
     attempt = 0
@@ -145,14 +196,35 @@ def main():
         stage = DISCARD.search(output)
         if not BUSY.search(output):
             print(output, end="", file=sys.stderr)
-            print(f"Attempt {attempt} failed for a reason other than busy assistants; not retrying.", file=sys.stderr)
+            print(
+                f"Attempt {attempt} failed for a reason other than busy assistants; not retrying.",
+                file=sys.stderr,
+            )
             return 1
         if stage:
-            subprocess.run([sys.executable, str(TOOL), "discard", stage.group(1), "--host", args.host], capture_output=True, check=True)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(TOOL),
+                    "discard",
+                    stage.group(1),
+                    "--host",
+                    args.host,
+                ],
+                capture_output=True,
+                check=True,
+            )
         report = gateway_report(args.host, args.hermes_home)
         # Two owners can refuse: app and routine sessions behind the maintenance gate, or the messaging gateway.
-        owner = "app or routine session running" if "Fence: maintenance gate" in output else "messaging gateway busy"
-        print(f"Attempt {attempt}: {owner} ({describe(report)}), discarded {stage.group(1) if stage else 'nothing'}.", flush=True)
+        owner = (
+            "app or routine session running"
+            if "Fence: maintenance gate" in output
+            else "messaging gateway busy"
+        )
+        print(
+            f"Attempt {attempt}: {owner} ({describe(report)}), discarded {stage.group(1) if stage else 'nothing'}.",
+            flush=True,
+        )
         now = time.monotonic()
         # Hermes flushes a turn's messages after each tool batch, so a working turn never stays
         # quiet for long. This loop still watches the count itself for the whole window rather
@@ -166,24 +238,36 @@ def main():
             if not args.household_idle:
                 if not reported:
                     reported = True
-                    print(f"The gateway has counted an agent for {QUIET_MINUTES}+ minutes with no message written and no "
-                          "routine run live, which looks like a leaked count. A long model call can also be silent, so "
-                          "confirm nobody is mid-conversation (Discord included), then rerun with --household-idle or run "
-                          "`systemctl --user restart hermes-gateway.service` on the host. See docs/Hosting.md.",
-                          file=sys.stderr, flush=True)
+                    print(
+                        f"The gateway has counted an agent for {QUIET_MINUTES}+ minutes with no message written and no "
+                        "routine run live, which looks like a leaked count. A long model call can also be silent, so "
+                        "confirm nobody is mid-conversation (Discord included), then rerun with --household-idle or run "
+                        "`systemctl --user restart hermes-gateway.service` on the host. See docs/Hosting.md.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
             else:
-                checked = gateway_report(args.host, args.hermes_home, restart_after=window)
+                checked = gateway_report(
+                    args.host, args.hermes_home, restart_after=window
+                )
                 if checked and checked.get("restarted"):
                     restarted = True
-                    print(f"Restarted hermes-gateway.service: it counted an agent for {QUIET_MINUTES}+ minutes with no "
-                          "message written and no routine run live.", flush=True)
+                    print(
+                        f"Restarted hermes-gateway.service: it counted an agent for {QUIET_MINUTES}+ minutes with no "
+                        "message written and no routine run live.",
+                        flush=True,
+                    )
                     counted_since = None
                     if time.monotonic() + 30 <= deadline:
                         time.sleep(30)
                         continue
                 else:
-                    print(f"Did not restart the gateway: the host re-check saw new work or could not restart it "
-                          f"({describe(checked)}).", file=sys.stderr, flush=True)
+                    print(
+                        f"Did not restart the gateway: the host re-check saw new work or could not restart it "
+                        f"({describe(checked)}).",
+                        file=sys.stderr,
+                        flush=True,
+                    )
         if time.monotonic() + args.interval > deadline:
             print("Gave up waiting for idle assistants.", file=sys.stderr)
             return 2

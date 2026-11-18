@@ -3,6 +3,7 @@
 Files in tests/ import this directly. Test files elsewhere put tests/ on sys.path first:
     sys.path.insert(0, str(Path(__file__).resolve().parents[N] / "tests"))
 """
+
 import importlib.util
 from pathlib import Path
 
@@ -16,7 +17,9 @@ def load_source(relative_path, name=None):
     name without its suffix, with hyphens as underscores.
     """
     path = ROOT / relative_path
-    spec = importlib.util.spec_from_file_location(name or path.stem.replace("-", "_"), path)
+    spec = importlib.util.spec_from_file_location(
+        name or path.stem.replace("-", "_"), path
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

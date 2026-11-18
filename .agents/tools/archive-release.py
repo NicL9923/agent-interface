@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Archive public server/build inputs without ignored secrets or macOS metadata."""
+
 import hashlib
 import json
 import subprocess
@@ -11,10 +12,21 @@ root = Path(__file__).resolve().parents[2]
 if len(sys.argv) != 2:
     raise SystemExit("Usage: python3 .agents/tools/archive-release.py OUTPUT.tar.gz")
 output = Path(sys.argv[1]).resolve()
-names = subprocess.check_output(
-    ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=root
-).decode().split("\0")
-top = {"package.json", "package-lock.json", "tsconfig.json", ".node-version", ".env.example"}
+names = (
+    subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=root,
+    )
+    .decode()
+    .split("\0")
+)
+top = {
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+    ".node-version",
+    ".env.example",
+}
 dirs = ("src/", "scripts/", "tests/", "public/", ".agents/tools/")
 # The host build type-checks everything tsconfig.json includes, so each of those paths ships
 # without editing this list. A directory added there and left out here broke the host build twice.
@@ -24,7 +36,15 @@ for entry in json.loads((root / "tsconfig.json").read_text())["include"]:
     else:
         top.add(entry)
 # Every top-level HTML file is a Vite entry, so a new entry ships without editing this list.
-files = sorted({name for name in names if name in top or ("/" not in name and name.endswith(".html")) or name.startswith(dirs)})
+files = sorted(
+    {
+        name
+        for name in names
+        if name in top
+        or ("/" not in name and name.endswith(".html"))
+        or name.startswith(dirs)
+    }
+)
 output.parent.mkdir(parents=True, exist_ok=True)
 with tarfile.open(output, "w:gz", format=tarfile.PAX_FORMAT) as archive:
     for name in files:
@@ -38,4 +58,12 @@ with tarfile.open(output, "w:gz", format=tarfile.PAX_FORMAT) as archive:
         info.uname = info.gname = ""
         with path.open("rb") as source:
             archive.addfile(info, source)
-print(json.dumps({"archive": str(output), "sha256": hashlib.sha256(output.read_bytes()).hexdigest(), "files": len(files)}))
+print(
+    json.dumps(
+        {
+            "archive": str(output),
+            "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+            "files": len(files),
+        }
+    )
+)

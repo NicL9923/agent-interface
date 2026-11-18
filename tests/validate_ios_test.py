@@ -4,6 +4,7 @@ Each test copies the script into a throwaway git repository and runs it with fak
 xcrun first on PATH and a fake machine lock. Nothing here touches a simulator, the shared lock or Xcode.
 Set VALIDATE_IOS_SCRIPT to run the tests against another copy of the script.
 """
+
 import json
 import os
 import plistlib
@@ -15,7 +16,9 @@ from pathlib import Path
 
 from support import ROOT
 
-SCRIPT = Path(os.environ.get("VALIDATE_IOS_SCRIPT", ROOT / ".agents/tools/validate-ios.sh"))
+SCRIPT = Path(
+    os.environ.get("VALIDATE_IOS_SCRIPT", ROOT / ".agents/tools/validate-ios.sh")
+)
 SIMULATOR = "11111111-2222-3333-4444-555555555555"
 
 FAKE_XCODEBUILD = """#!/usr/bin/env python3
@@ -98,18 +101,37 @@ class ValidateIosTests(unittest.TestCase):
         (self.repo / "ios/Input.swift").write_text("fixture")
         for name in ["ios-validation-state.py", "source-state.py"]:
             (tools / name).write_bytes((ROOT / ".agents/tools" / name).read_bytes())
-        (tools / "patch-xctestrun.py").write_bytes((ROOT / ".agents/tools/patch-xctestrun.py").read_bytes())
+        (tools / "patch-xctestrun.py").write_bytes(
+            (ROOT / ".agents/tools/patch-xctestrun.py").read_bytes()
+        )
         (tools / "native-smoke.mjs").write_text("")
         subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "x"],
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "x",
+            ],
             cwd=self.repo,
             check=True,
         )
         bin_dir = root / "bin"
         bin_dir.mkdir()
-        write_executable(bin_dir / "xcode-select", '#!/bin/sh\n[ "$1" = -p ] || exit 99\necho /Fake/Xcode\n')
-        write_executable(bin_dir / "sw_vers", '#!/bin/sh\n[ "$1" = -buildVersion ] || exit 99\necho FAKE_OS\n')
+        write_executable(
+            bin_dir / "xcode-select",
+            '#!/bin/sh\n[ "$1" = -p ] || exit 99\necho /Fake/Xcode\n',
+        )
+        write_executable(
+            bin_dir / "sw_vers",
+            '#!/bin/sh\n[ "$1" = -buildVersion ] || exit 99\necho FAKE_OS\n',
+        )
         write_executable(bin_dir / "xcodebuild", FAKE_XCODEBUILD)
         write_executable(bin_dir / "xcrun", FAKE_XCRUN)
         home = root / "home"
@@ -129,7 +151,12 @@ class ValidateIosTests(unittest.TestCase):
 
     def run_script(self, *args, **env):
         return subprocess.run(
-            ["bash", str(self.repo / ".agents/tools/validate-ios.sh"), SIMULATOR, *args],
+            [
+                "bash",
+                str(self.repo / ".agents/tools/validate-ios.sh"),
+                SIMULATOR,
+                *args,
+            ],
             check=False,
             cwd=self.repo,
             env={**self.env, **env},
@@ -139,34 +166,57 @@ class ValidateIosTests(unittest.TestCase):
         )
 
     def calls(self, tool="xcodebuild", phase=None):
-        entries = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
-        return [e["argv"] for e in entries if e["tool"] == tool and (phase is None or phase in e["argv"])]
+        entries = (
+            [json.loads(line) for line in self.log.read_text().splitlines()]
+            if self.log.exists()
+            else []
+        )
+        return [
+            e["argv"]
+            for e in entries
+            if e["tool"] == tool and (phase is None or phase in e["argv"])
+        ]
 
     def summary(self, result):
-        line = next(line for line in result.stdout.splitlines() if line.startswith("Summary: "))
+        line = next(
+            line for line in result.stdout.splitlines() if line.startswith("Summary: ")
+        )
         text = (self.repo / line.removeprefix("Summary: ")).read_text()
-        return {key: value for key, _, value in (row.partition(": ") for row in text.splitlines())}
+        return {
+            key: value
+            for key, _, value in (row.partition(": ") for row in text.splitlines())
+        }
 
     def test_worker_limits_run_with_the_tests_and_options_keep_their_values(self):
         space_value = "OTHER_SWIFT_FLAGS=-Xfrontend -warn-long-function-bodies=500"
         result = self.run_script(
             "test",
-            "-parallel-testing-worker-count", "2",
-            "-maximum-parallel-testing-workers", "3",
-            "-maximum-concurrent-test-simulator-destinations", "1",
+            "-parallel-testing-worker-count",
+            "2",
+            "-maximum-parallel-testing-workers",
+            "3",
+            "-maximum-concurrent-test-simulator-destinations",
+            "1",
             "-only-testing:AgentInterfaceUITests/Suite/test with space",
-            "-configuration", "Release",
+            "-configuration",
+            "Release",
             space_value,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         [build] = self.calls(phase="build-for-testing")
         [test] = self.calls(phase="test-without-building")
-        for limit in ("-parallel-testing-worker-count", "-maximum-parallel-testing-workers", "-maximum-concurrent-test-simulator-destinations"):
+        for limit in (
+            "-parallel-testing-worker-count",
+            "-maximum-parallel-testing-workers",
+            "-maximum-concurrent-test-simulator-destinations",
+        ):
             self.assertNotIn(limit, build)
             self.assertIn(limit, test)
         self.assertEqual(test[test.index("-parallel-testing-worker-count") + 1], "2")
         self.assertEqual(test[test.index("-maximum-parallel-testing-workers") + 1], "3")
-        self.assertEqual(test[test.index("-maximum-concurrent-test-simulator-destinations") + 1], "1")
+        self.assertEqual(
+            test[test.index("-maximum-concurrent-test-simulator-destinations") + 1], "1"
+        )
         self.assertEqual(test[test.index("-parallel-testing-enabled") + 1], "NO")
         self.assertIn("-only-testing:AgentInterfaceUITests/Suite/test with space", test)
         self.assertEqual(test[test.index("-collect-test-diagnostics") + 1], "never")
@@ -175,12 +225,17 @@ class ValidateIosTests(unittest.TestCase):
         self.assertIn(space_value, build)
         for build_only in ("-configuration", "Release", space_value):
             self.assertNotIn(build_only, test)
-        self.assertNotIn("-only-testing:AgentInterfaceUITests/Suite/test with space", build)
+        self.assertNotIn(
+            "-only-testing:AgentInterfaceUITests/Suite/test with space", build
+        )
         # The tests run from the patched copy with the short crash-report wait.
         patched = self.repo / test[test.index("-xctestrun") + 1]
         self.assertEqual(patched.name, "Fake-crash-wait.xctestrun")
         run = plistlib.loads(patched.read_bytes())
-        self.assertEqual(run["UITests"]["EnvironmentVariables"]["XCTCrashReportCollectionTimeout"], "15")
+        self.assertEqual(
+            run["UITests"]["EnvironmentVariables"]["XCTCrashReportCollectionTimeout"],
+            "15",
+        )
 
     def test_a_worker_option_without_a_value_is_rejected_before_building(self):
         result = self.run_script("test", "-maximum-parallel-testing-workers")
@@ -192,33 +247,80 @@ class ValidateIosTests(unittest.TestCase):
         default = self.summary(self.run_script("test"))
         flags = "SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG CUSTOM"
         release = self.summary(
-            self.run_script("test", "-configuration", "Release", flags, "-parallel-testing-worker-count", "2")
+            self.run_script(
+                "test",
+                "-configuration",
+                "Release",
+                flags,
+                "-parallel-testing-worker-count",
+                "2",
+            )
         )
         default_build = shlex.split(default["build options"])
         release_build = shlex.split(release["build options"])
-        self.assertEqual(default_build, ["CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-", "DEVELOPMENT_TEAM="])
-        self.assertEqual(release_build, [*default_build, "-configuration", "Release", flags])
+        self.assertEqual(
+            default_build,
+            ["CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-", "DEVELOPMENT_TEAM="],
+        )
+        self.assertEqual(
+            release_build, [*default_build, "-configuration", "Release", flags]
+        )
         self.assertNotEqual(default["build options"], release["build options"])
-        self.assertEqual(shlex.split(default["test options"]), ["-parallel-testing-enabled", "NO", "-test-timeouts-enabled", "YES", "-collect-test-diagnostics", "never"])
+        self.assertEqual(
+            shlex.split(default["test options"]),
+            [
+                "-parallel-testing-enabled",
+                "NO",
+                "-test-timeouts-enabled",
+                "YES",
+                "-collect-test-diagnostics",
+                "never",
+            ],
+        )
         self.assertEqual(
             shlex.split(release["test options"]),
-            ["-parallel-testing-worker-count", "2", "-parallel-testing-enabled", "NO", "-test-timeouts-enabled", "YES", "-collect-test-diagnostics", "never"],
+            [
+                "-parallel-testing-worker-count",
+                "2",
+                "-parallel-testing-enabled",
+                "NO",
+                "-test-timeouts-enabled",
+                "YES",
+                "-collect-test-diagnostics",
+                "never",
+            ],
         )
         # The other inputs that decide whether a result applies to a later run.
         self.assertEqual(release["operation"], "test")
-        self.assertEqual(release["project"], "ios/AgentInterface.xcodeproj, scheme: AgentInterface")
-        self.assertEqual(release["destination"], f"platform=iOS Simulator,id={SIMULATOR}")
+        self.assertEqual(
+            release["project"], "ios/AgentInterface.xcodeproj, scheme: AgentInterface"
+        )
+        self.assertEqual(
+            release["destination"], f"platform=iOS Simulator,id={SIMULATOR}"
+        )
         self.assertEqual(release["derived data"], ".private/ios-build")
 
     def test_summary_records_the_live_compiler_conditions_and_derived_data(self):
-        result = self.run_script("live", "-configuration", "Release", IOS_DERIVED_DATA=".private/custom-build")
+        result = self.run_script(
+            "live",
+            "-configuration",
+            "Release",
+            IOS_DERIVED_DATA=".private/custom-build",
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         summary = self.summary(result)
         self.assertEqual(
             shlex.split(summary["build options"])[-3:],
-            ["SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LIVE_HERMES_UI_TESTS", "-configuration", "Release"],
+            [
+                "SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LIVE_HERMES_UI_TESTS",
+                "-configuration",
+                "Release",
+            ],
         )
-        self.assertIn("-only-testing:AgentInterfaceUITests/LiveConnectionTests", shlex.split(summary["test options"]))
+        self.assertIn(
+            "-only-testing:AgentInterfaceUITests/LiveConnectionTests",
+            shlex.split(summary["test options"]),
+        )
         self.assertEqual(summary["operation"], "live")
         self.assertEqual(summary["derived data"], ".private/custom-build")
 
@@ -232,13 +334,25 @@ class ValidateIosTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls("mac-heavy-lock")), 1)
         entries = [json.loads(line) for line in self.log.read_text().splitlines()]
-        lock_index = next(i for i, entry in enumerate(entries) if entry["tool"] == "mac-heavy-lock")
-        build_index = next(i for i, entry in enumerate(entries) if "build-for-testing" in entry["argv"])
+        lock_index = next(
+            i for i, entry in enumerate(entries) if entry["tool"] == "mac-heavy-lock"
+        )
+        build_index = next(
+            i for i, entry in enumerate(entries) if "build-for-testing" in entry["argv"]
+        )
         self.assertLess(lock_index, build_index)
         self.assertNotIn(["simctl", "shutdown", "all"], self.calls("xcrun"))
         self.assertNotIn(["simctl", "boot", SIMULATOR], self.calls("xcrun"))
-        test_index = next(i for i, entry in enumerate(entries) if "test-without-building" in entry["argv"])
-        shutdown_index = next(i for i, entry in enumerate(entries) if entry["argv"] == ["simctl", "shutdown", SIMULATOR])
+        test_index = next(
+            i
+            for i, entry in enumerate(entries)
+            if "test-without-building" in entry["argv"]
+        )
+        shutdown_index = next(
+            i
+            for i, entry in enumerate(entries)
+            if entry["argv"] == ["simctl", "shutdown", SIMULATOR]
+        )
         self.assertGreater(shutdown_index, test_index)
 
     def test_failed_test_stage_still_shuts_down_the_simulator(self):

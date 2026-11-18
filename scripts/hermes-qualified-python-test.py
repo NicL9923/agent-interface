@@ -1,4 +1,5 @@
 """Focused contracts for PM generation attestation; real PM provisioning is separate evidence."""
+
 import importlib.util
 import importlib.metadata
 import json
@@ -24,10 +25,28 @@ class ManagedFingerprintTests(unittest.TestCase):
         self.source = self.root / "source"
         self.source.mkdir()
         (self.source / "core.py").write_text("answer = 42\n")
-        for args in (["init", "-q"], ["add", "."], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"]):
-            subprocess.run(["git", "-C", str(self.source), *args], check=True, capture_output=True)
+        for args in (
+            ["init", "-q"],
+            ["add", "."],
+            [
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
+        ):
+            subprocess.run(
+                ["git", "-C", str(self.source), *args], check=True, capture_output=True
+            )
         self.other_source = self.root / "production-source"
-        subprocess.run(["git", "clone", "-q", str(self.source), str(self.other_source)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "clone", "-q", str(self.source), str(self.other_source)],
+            check=True,
+            capture_output=True,
+        )
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -36,24 +55,49 @@ class ManagedFingerprintTests(unittest.TestCase):
         directory.mkdir()
         metadata = directory / "fixture-1.0.dist-info"
         metadata.mkdir()
-        (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: fixture\nVersion: " + version + "\n")
-        (metadata / "direct_url.json").write_text(json.dumps({"url": source.as_uri(), "dir_info": {"editable": True}}))
+        (metadata / "METADATA").write_text(
+            "Metadata-Version: 2.1\nName: fixture\nVersion: " + version + "\n"
+        )
+        (metadata / "direct_url.json").write_text(
+            json.dumps({"url": source.as_uri(), "dir_info": {"editable": True}})
+        )
         (directory / "fixture.pth").write_text(str(source) + "\n")
         (directory / "fixture.py").write_text(code)
-        (metadata / "RECORD").write_text("fixture.py,ignored,12\nfixture.pth,ignored,12\nfixture-1.0.dist-info/METADATA,ignored,12\nfixture-1.0.dist-info/direct_url.json,ignored,12\nfixture-1.0.dist-info/RECORD,,\n")
+        (metadata / "RECORD").write_text(
+            "fixture.py,ignored,12\nfixture.pth,ignored,12\nfixture-1.0.dist-info/METADATA,ignored,12\nfixture-1.0.dist-info/direct_url.json,ignored,12\nfixture-1.0.dist-info/RECORD,,\n"
+        )
         return importlib.metadata.PathDistribution(metadata)
 
     def fingerprint(self, distribution, source=None):
-        environment = {"HERMES_QUALIFIED_SOURCE": str(source or self.source),
-                       "HERMES_QUALIFIED_SITE_PACKAGES": str(distribution.locate_file(""))}
-        with patch.object(qualified.importlib.metadata, "distributions", return_value=[distribution]), patch.dict(os.environ, environment):
+        environment = {
+            "HERMES_QUALIFIED_SOURCE": str(source or self.source),
+            "HERMES_QUALIFIED_SITE_PACKAGES": str(distribution.locate_file("")),
+        }
+        with (
+            patch.object(
+                qualified.importlib.metadata,
+                "distributions",
+                return_value=[distribution],
+            ),
+            patch.dict(os.environ, environment),
+        ):
             return qualified.active_fingerprint()
 
     def test_dump_holds_exactly_the_hashed_rows(self):
         distribution = self.distribution(self.root / "libs", self.source)
         dump = self.root / "rows.json"
-        environment = {"HERMES_QUALIFIED_SOURCE": str(self.source), "HERMES_QUALIFIED_SITE_PACKAGES": str(distribution.locate_file(""))}
-        with patch.object(qualified.importlib.metadata, "distributions", return_value=[distribution]), patch.dict(os.environ, environment):
+        environment = {
+            "HERMES_QUALIFIED_SOURCE": str(self.source),
+            "HERMES_QUALIFIED_SITE_PACKAGES": str(distribution.locate_file("")),
+        }
+        with (
+            patch.object(
+                qualified.importlib.metadata,
+                "distributions",
+                return_value=[distribution],
+            ),
+            patch.dict(os.environ, environment),
+        ):
             value = qualified.active_fingerprint(dump)
             first = dump.read_bytes()
             # A diagnostic that cannot be written never changes or hides the result.
@@ -65,51 +109,84 @@ class ManagedFingerprintTests(unittest.TestCase):
         # The editable tree behind the row's token, file by file, with the source identity.
         editable = json.loads(Path(str(dump) + ".editable.json").read_text())
         self.assertEqual([entry["name"] for entry in editable], ["fixture"])
-        self.assertEqual(editable[0]["identity"], qualified.source_identity(self.source))
-        self.assertEqual(dict(editable[0]["files"])["core.py"], qualified.sha(b"answer = 42\n"))
-        self.assertEqual(Path(str(dump) + ".editable.json").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            editable[0]["identity"], qualified.source_identity(self.source)
+        )
+        self.assertEqual(
+            dict(editable[0]["files"])["core.py"], qualified.sha(b"answer = 42\n")
+        )
+        self.assertEqual(
+            Path(str(dump) + ".editable.json").stat().st_mode & 0o777, 0o600
+        )
 
-    def test_equivalent_staged_and_native_generations_match_but_library_bytes_do_not(self):
+    def test_equivalent_staged_and_native_generations_match_but_library_bytes_do_not(
+        self,
+    ):
         stage = self.distribution(self.root / "stage-libs", self.source)
         native = self.distribution(self.root / "native-libs", self.other_source)
         for directory, timestamp in (("stage-libs", "1"), ("native-libs", "2")):
             metadata = self.root / directory / "fixture-1.0.dist-info"
-            (metadata / "uv_cache.json").write_text('{"timestamp":' + timestamp + '}')
+            (metadata / "uv_cache.json").write_text('{"timestamp":' + timestamp + "}")
             with (metadata / "RECORD").open("a") as record:
                 record.write("fixture-1.0.dist-info/uv_cache.json,,\n")
-        self.assertEqual(self.fingerprint(stage), self.fingerprint(native, self.other_source))
+        self.assertEqual(
+            self.fingerprint(stage), self.fingerprint(native, self.other_source)
+        )
         (self.root / "native-libs" / "fixture.py").write_text("answer = 13\n")
-        self.assertNotEqual(self.fingerprint(stage), self.fingerprint(native, self.other_source))
+        self.assertNotEqual(
+            self.fingerprint(stage), self.fingerprint(native, self.other_source)
+        )
 
     def test_version_and_actual_editable_source_changes_invalidate_fingerprint(self):
         stage = self.distribution(self.root / "stage-libs", self.source)
-        native = self.distribution(self.root / "native-libs", self.other_source, version="2.0")
-        self.assertNotEqual(self.fingerprint(stage), self.fingerprint(native, self.other_source))
+        native = self.distribution(
+            self.root / "native-libs", self.other_source, version="2.0"
+        )
+        self.assertNotEqual(
+            self.fingerprint(stage), self.fingerprint(native, self.other_source)
+        )
         changed = self.distribution(self.root / "changed-libs", self.other_source)
         (self.other_source / "core.py").write_text("answer = 13\n")
-        self.assertNotEqual(self.fingerprint(stage), self.fingerprint(changed, self.other_source))
+        self.assertNotEqual(
+            self.fingerprint(stage), self.fingerprint(changed, self.other_source)
+        )
 
     def test_running_python_does_not_invalidate_a_generation(self):
         distribution = self.distribution(self.root / "libs", self.source)
         before = self.fingerprint(distribution)
         (self.source / "__pycache__").mkdir()
-        (self.source / "__pycache__" / "core.cpython-314.pyc").write_bytes(b"generated bytecode")
+        (self.source / "__pycache__" / "core.cpython-314.pyc").write_bytes(
+            b"generated bytecode"
+        )
         self.assertEqual(before, self.fingerprint(distribution))
 
-    def test_plugin_runtime_credentials_are_excluded_but_source_and_certificates_remain(self):
-        files = {".env": "SECRET=value", "auth.json": "private", "token.json": "private",
-                 "private.pem": "-----BEGIN PRIVATE KEY-----\nprivate", "public.pem": "-----BEGIN CERTIFICATE-----\npublic",
-                 "library.py": "answer = 42", "config.json": "{}"}
+    def test_plugin_runtime_credentials_are_excluded_but_source_and_certificates_remain(
+        self,
+    ):
+        files = {
+            ".env": "SECRET=value",
+            "auth.json": "private",
+            "token.json": "private",
+            "private.pem": "-----BEGIN PRIVATE KEY-----\nprivate",
+            "public.pem": "-----BEGIN CERTIFICATE-----\npublic",
+            "library.py": "answer = 42",
+            "config.json": "{}",
+        }
         for name, content in files.items():
             (self.source / name).write_text(content)
-        self.assertEqual(set(qualified.ignored(self.source, files)), {".env", "auth.json", "token.json", "private.pem"})
+        self.assertEqual(
+            set(qualified.ignored(self.source, files)),
+            {".env", "auth.json", "token.json", "private.pem"},
+        )
         before = qualified.tree_digest(self.source)
         (self.source / "auth.json").write_text("rotated")
         self.assertEqual(before, qualified.tree_digest(self.source))
         (self.source / "library.py").write_text("answer = 13")
         self.assertNotEqual(before, qualified.tree_digest(self.source))
 
-    def test_native_console_script_paths_match_but_changed_bodies_and_external_records_fail(self):
+    def test_native_console_script_paths_match_but_changed_bodies_and_external_records_fail(
+        self,
+    ):
         distributions = []
         for name, source in (("stage", self.source), ("native", self.other_source)):
             generation = self.root / name
@@ -119,32 +196,62 @@ class ManagedFingerprintTests(unittest.TestCase):
             executable = generation / "bin/fixture"
             executable.parent.mkdir()
             (generation / "bin/python").symlink_to(sys._base_executable)
-            executable.write_text("#!" + str(generation / "bin/python") + "\nprint('fixture')\n")
+            executable.write_text(
+                "#!" + str(generation / "bin/python") + "\nprint('fixture')\n"
+            )
             with (packages / "fixture-1.0.dist-info/RECORD").open("a") as record:
                 record.write("../../../bin/fixture,,\n")
             distributions.append(distribution)
-        self.assertEqual(self.fingerprint(distributions[0]), self.fingerprint(distributions[1], self.other_source))
+        self.assertEqual(
+            self.fingerprint(distributions[0]),
+            self.fingerprint(distributions[1], self.other_source),
+        )
         outside = self.root / "outside-venv"
         (outside / "bin").mkdir(parents=True)
         (outside / "bin/python").symlink_to(sys._base_executable)
-        (outside / "pyvenv.cfg").write_text("home = " + str(Path(sys._base_executable).parent) + "\ninclude-system-site-packages = false\n")
-        (self.root / "native/bin/fixture").write_text("#!" + str(outside / "bin/python") + "\nprint('fixture')\n")
+        (outside / "pyvenv.cfg").write_text(
+            "home = "
+            + str(Path(sys._base_executable).parent)
+            + "\ninclude-system-site-packages = false\n"
+        )
+        (self.root / "native/bin/fixture").write_text(
+            "#!" + str(outside / "bin/python") + "\nprint('fixture')\n"
+        )
         with self.assertRaisesRegex(RuntimeError, "external interpreter alias"):
             self.fingerprint(distributions[1], self.other_source)
-        (self.root / "native/bin/fixture").write_text("#!" + str(self.root / "native/bin/python") + "\nprint('changed')\n")
-        self.assertNotEqual(self.fingerprint(distributions[0]), self.fingerprint(distributions[1], self.other_source))
+        (self.root / "native/bin/fixture").write_text(
+            "#!" + str(self.root / "native/bin/python") + "\nprint('changed')\n"
+        )
+        self.assertNotEqual(
+            self.fingerprint(distributions[0]),
+            self.fingerprint(distributions[1], self.other_source),
+        )
         (self.root / "native/bin/python").unlink()
         (self.root / "native/bin/python").write_bytes(b"another interpreter")
         with self.assertRaisesRegex(RuntimeError, "different managed interpreter"):
             self.fingerprint(distributions[1], self.other_source)
-        with (self.root / "stage/lib/python3.14/site-packages/fixture-1.0.dist-info/RECORD").open("a") as record:
+        with (
+            self.root
+            / "stage/lib/python3.14/site-packages/fixture-1.0.dist-info/RECORD"
+        ).open("a") as record:
             record.write("../../../../outside.py,,\n")
         with self.assertRaisesRegex(RuntimeError, "escaped"):
             self.fingerprint(distributions[0])
 
     def test_unknown_editable_source_and_missing_installed_records_are_rejected(self):
         distribution = self.distribution(self.root / "libs", self.source)
-        with patch.object(qualified.importlib.metadata, "distributions", return_value=[distribution]), patch.dict(os.environ, {"HERMES_QUALIFIED_SITE_PACKAGES": str(self.root / "libs")}, clear=True):
+        with (
+            patch.object(
+                qualified.importlib.metadata,
+                "distributions",
+                return_value=[distribution],
+            ),
+            patch.dict(
+                os.environ,
+                {"HERMES_QUALIFIED_SITE_PACKAGES": str(self.root / "libs")},
+                clear=True,
+            ),
+        ):
             with self.assertRaisesRegex(RuntimeError, "exact managed source"):
                 qualified.active_fingerprint()
         (self.root / "libs" / "fixture-1.0.dist-info" / "RECORD").unlink()
@@ -156,12 +263,24 @@ class ManagedFingerprintTests(unittest.TestCase):
         self.distribution(packages, self.source)
         egg_info = self.source / "fixture.egg-info"
         egg_info.mkdir()
-        (egg_info / "PKG-INFO").write_text("Metadata-Version: 2.1\nName: fixture\nVersion: 99\n")
-        environment = {"HERMES_QUALIFIED_SOURCE": str(self.source), "HERMES_QUALIFIED_SITE_PACKAGES": str(packages)}
-        with patch.dict(os.environ, environment), patch.object(sys, "path", [str(self.source), str(packages)]):
-            self.assertEqual(len(list(importlib.metadata.distributions(path=[str(packages)]))), 1)
+        (egg_info / "PKG-INFO").write_text(
+            "Metadata-Version: 2.1\nName: fixture\nVersion: 99\n"
+        )
+        environment = {
+            "HERMES_QUALIFIED_SOURCE": str(self.source),
+            "HERMES_QUALIFIED_SITE_PACKAGES": str(packages),
+        }
+        with (
+            patch.dict(os.environ, environment),
+            patch.object(sys, "path", [str(self.source), str(packages)]),
+        ):
+            self.assertEqual(
+                len(list(importlib.metadata.distributions(path=[str(packages)]))), 1
+            )
             before = qualified.active_fingerprint()
-            (egg_info / "PKG-INFO").write_text("Metadata-Version: 2.1\nName: fixture\nVersion: 100\n")
+            (egg_info / "PKG-INFO").write_text(
+                "Metadata-Version: 2.1\nName: fixture\nVersion: 100\n"
+            )
             self.assertEqual(before, qualified.active_fingerprint())
             (packages / "fixture.py").write_text("changed installed code\n")
             self.assertNotEqual(before, qualified.active_fingerprint())
@@ -171,16 +290,22 @@ class ManagedFingerprintTests(unittest.TestCase):
 
     def test_pth_added_dependency_metadata_and_bytes_remain_attested(self):
         import site
+
         packages = self.root / "libs"
         self.distribution(packages, self.source)
         external = self.root / "external-libs"
         distribution = self.distribution(external, self.source)
         metadata = external / "fixture-1.0.dist-info"
-        (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: external\nVersion: 1.0\n")
+        (metadata / "METADATA").write_text(
+            "Metadata-Version: 2.1\nName: external\nVersion: 1.0\n"
+        )
         (packages / "external.pth").write_text(str(external) + "\n")
         with (packages / "fixture-1.0.dist-info/RECORD").open("a") as record:
             record.write("external.pth,,\n")
-        environment = {"HERMES_QUALIFIED_SOURCE": str(self.source), "HERMES_QUALIFIED_SITE_PACKAGES": str(packages)}
+        environment = {
+            "HERMES_QUALIFIED_SOURCE": str(self.source),
+            "HERMES_QUALIFIED_SITE_PACKAGES": str(packages),
+        }
         with patch.dict(os.environ, environment), patch.object(sys, "path", []):
             site.addsitedir(str(packages))
             before = qualified.active_fingerprint()
@@ -198,9 +323,17 @@ class ManagedFingerprintTests(unittest.TestCase):
         self.distribution(packages, workspace)
         egg_info = self.source / "fixture.egg-info"
         egg_info.mkdir()
-        (egg_info / "PKG-INFO").write_text("Metadata-Version: 2.1\nName: fixture\nVersion: 99\n")
-        environment = {"HERMES_QUALIFIED_SOURCE": str(self.source), "HERMES_QUALIFIED_SITE_PACKAGES": str(packages)}
-        with patch.dict(os.environ, environment), patch.object(sys, "path", [str(self.source), str(packages)]):
+        (egg_info / "PKG-INFO").write_text(
+            "Metadata-Version: 2.1\nName: fixture\nVersion: 99\n"
+        )
+        environment = {
+            "HERMES_QUALIFIED_SOURCE": str(self.source),
+            "HERMES_QUALIFIED_SITE_PACKAGES": str(packages),
+        }
+        with (
+            patch.dict(os.environ, environment),
+            patch.object(sys, "path", [str(self.source), str(packages)]),
+        ):
             before = qualified.active_fingerprint()
             (workspace / "fixture.py").write_text("changed workspace package\n")
             self.assertNotEqual(before, qualified.active_fingerprint())
@@ -212,19 +345,51 @@ class ManagedFingerprintTests(unittest.TestCase):
         stage = self.root / "qualification"
         stage.mkdir(mode=0o700)
         marker = stage / ".agent-interface-upgrade-stage"
-        marker.write_text(json.dumps({"schemaVersion": 1, "operationId": str(uuid.uuid4()), "state": "active"}))
+        marker.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "operationId": str(uuid.uuid4()),
+                    "state": "active",
+                }
+            )
+        )
         self.assertEqual(qualified.stage_marker(stage)["state"], "active")
         with self.assertRaisesRegex(RuntimeError, "inside the marked stage"):
-            qualified.prepare(self.source, stage, self.root / "launcher", self.source, self.root / "live-home")
+            qualified.prepare(
+                self.source,
+                stage,
+                self.root / "launcher",
+                self.source,
+                self.root / "live-home",
+            )
         stage.chmod(0o755)
         with self.assertRaisesRegex(RuntimeError, "private directory"):
             qualified.stage_marker(stage)
         stage.chmod(0o700)
-        marker.write_text(json.dumps({"schemaVersion": 1, "operationId": str(uuid.uuid4()), "state": "completed"}))
-        self.assertEqual(qualified.stage_marker(stage, allow_completed=True)["state"], "completed")
+        marker.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "operationId": str(uuid.uuid4()),
+                    "state": "completed",
+                }
+            )
+        )
+        self.assertEqual(
+            qualified.stage_marker(stage, allow_completed=True)["state"], "completed"
+        )
         with self.assertRaisesRegex(RuntimeError, "active upgrade marker"):
             qualified.stage_marker(stage)
-        marker.write_text(json.dumps({"schemaVersion": 1, "operationId": str(uuid.uuid4()), "state": "finished"}))
+        marker.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "operationId": str(uuid.uuid4()),
+                    "state": "finished",
+                }
+            )
+        )
         with self.assertRaisesRegex(RuntimeError, "active upgrade marker"):
             qualified.stage_marker(stage)
 

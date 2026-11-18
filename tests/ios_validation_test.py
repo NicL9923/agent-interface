@@ -1,4 +1,5 @@
 """Run the real iOS runner and evidence helper against strict tool I/O fakes."""
+
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import sys
 import tempfile
 import unittest
 
-TOOLS = Path(__file__).resolve().parents[1] / '.agents/tools'
+TOOLS = Path(__file__).resolve().parents[1] / ".agents/tools"
 
 
 class ValidationTests(unittest.TestCase):
@@ -16,38 +17,89 @@ class ValidationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.repo = self.root / 'repo'
-        self.tools = self.repo / '.agents/tools'
+        self.repo = self.root / "repo"
+        self.tools = self.repo / ".agents/tools"
         self.tools.mkdir(parents=True)
-        (self.repo / 'ios').mkdir()
-        self.input = self.repo / 'ios/Input.swift'
-        self.input.write_text('original source')
-        for name in ['validate-ios.sh', 'ios-validation-state.py', 'source-state.py', 'patch-xctestrun.py']:
+        (self.repo / "ios").mkdir()
+        self.input = self.repo / "ios/Input.swift"
+        self.input.write_text("original source")
+        for name in [
+            "validate-ios.sh",
+            "ios-validation-state.py",
+            "source-state.py",
+            "patch-xctestrun.py",
+        ]:
             shutil.copyfile(TOOLS / name, self.tools / name)
-        subprocess.run(['git', 'init', '-q', str(self.repo)], check=True)
-        subprocess.run(['git', 'add', '.'], cwd=self.repo, check=True)
-        subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], cwd=self.repo, check=True)
-        self.home = self.root / 'home'
-        (self.home / '.agents/tools').mkdir(parents=True)
-        self.bin = self.root / 'bin'
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
+            cwd=self.repo,
+            check=True,
+        )
+        self.home = self.root / "home"
+        (self.home / ".agents/tools").mkdir(parents=True)
+        self.bin = self.root / "bin"
         self.bin.mkdir()
-        self.calls = self.root / 'calls.jsonl'
-        self.env = dict(os.environ, HOME=str(self.home), PATH=str(self.bin) + ':' + os.environ['PATH'],
-                        TEST_CALLS=str(self.calls), TEST_ROOT=str(self.repo))
+        self.calls = self.root / "calls.jsonl"
+        self.env = dict(
+            os.environ,
+            HOME=str(self.home),
+            PATH=str(self.bin) + ":" + os.environ["PATH"],
+            TEST_CALLS=str(self.calls),
+            TEST_ROOT=str(self.repo),
+        )
         for name in list(self.env):
-            if name.startswith(('AGENT_INTERFACE_', 'TEST_RUNNER_', 'SIMCTL_CHILD_', 'SWIFT_', 'XCODE_', 'DYLD_')) or name in {'MAC_HEAVY_LOCK_OWNER', 'IOS_VALIDATION_FRESH', 'DEVELOPER_DIR', 'SDKROOT', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS'}:
+            if name.startswith(
+                (
+                    "AGENT_INTERFACE_",
+                    "TEST_RUNNER_",
+                    "SIMCTL_CHILD_",
+                    "SWIFT_",
+                    "XCODE_",
+                    "DYLD_",
+                )
+            ) or name in {
+                "MAC_HEAVY_LOCK_OWNER",
+                "IOS_VALIDATION_FRESH",
+                "DEVELOPER_DIR",
+                "SDKROOT",
+                "CFLAGS",
+                "CXXFLAGS",
+                "LDFLAGS",
+            }:
                 self.env.pop(name)
-        self.executable(self.home / '.agents/tools/mac-heavy-lock.sh', '''#!/bin/bash
+        self.executable(
+            self.home / ".agents/tools/mac-heavy-lock.sh",
+            """#!/bin/bash
 set -eu
 if [[ "$1" == --check-held ]]; then [[ "${TEST_HELD:-}" == 1 ]]; exit $?; fi
 printf 'queued\n' >> "$TEST_ROOT/queue.log"
 if [[ "${TEST_QUEUED_SOURCE_CHANGE:-}" == 1 ]]; then printf %s "${TEST_QUEUED_SOURCE_VALUE:-changed}" > "$TEST_ROOT/ios/Input.swift"; fi
 export TEST_HELD=1
 exec "$@"
-''')
-        self.executable(self.bin / 'xcode-select', '#!/bin/sh\n[ "$1" = -p ] || exit 99\necho /Test/Xcode\n')
-        self.executable(self.bin / 'sw_vers', '#!/bin/sh\n[ "$1" = -buildVersion ] || exit 99\necho TestOS\n')
-        self.executable(self.bin / 'xcodebuild', '''import sys,os,json,pathlib,plistlib
+""",
+        )
+        self.executable(
+            self.bin / "xcode-select",
+            '#!/bin/sh\n[ "$1" = -p ] || exit 99\necho /Test/Xcode\n',
+        )
+        self.executable(
+            self.bin / "sw_vers",
+            '#!/bin/sh\n[ "$1" = -buildVersion ] || exit 99\necho TestOS\n',
+        )
+        self.executable(
+            self.bin / "xcodebuild",
+            """import sys,os,json,pathlib,plistlib
 args=sys.argv[1:]
 if args==['-version']:
  print('Xcode '+os.environ.get('TEST_XCODE_VERSION','27.2'));sys.exit(0)
@@ -68,8 +120,12 @@ result=pathlib.Path(args[args.index('-resultBundlePath')+1]);result.mkdir(parent
 passed=int(os.environ.get('TEST_PASSED','1'));failed=int(os.environ.get('TEST_FAILED','0'))
 (result/'evidence.json').write_text(json.dumps({'result':'Passed' if failed==0 else 'Failed','passedTests':passed,'failedTests':failed,'skippedTests':int(os.environ.get('TEST_SKIPPED','0')),'expectedFailures':int(os.environ.get('TEST_EXPECTED','0')),'testFailures':[]}))
 sys.exit(int(os.environ.get('TEST_NATIVE_EXIT','0')) if 'test-without-building' in args else 0)
-''', python=True)
-        self.executable(self.bin / 'xcrun', '''import os,sys,pathlib,json
+""",
+            python=True,
+        )
+        self.executable(
+            self.bin / "xcrun",
+            """import os,sys,pathlib,json
 args=sys.argv[1:]; root=pathlib.Path(os.environ['TEST_ROOT'])
 if args==['--sdk','iphonesimulator','--show-sdk-build-version']:print('TestSDK');sys.exit(0)
 if args[:3]==['simctl','list','devices']:
@@ -89,348 +145,456 @@ if args[:4]==['xcresulttool','get','test-results','summary']:
  if os.environ.get('TEST_SUMMARY_CHANGE')=='1':(root/'ios/Input.swift').write_text('changed during summary')
  print((result/'evidence.json').read_text());sys.exit(0)
 sys.exit('unexpected xcrun call: '+repr(args))
-''', python=True)
+""",
+            python=True,
+        )
 
     def executable(self, path, text, python=False):
-        path.write_text(('#!' + sys.executable + '\n' if python else '') + text)
+        path.write_text(("#!" + sys.executable + "\n" if python else "") + text)
         path.chmod(0o755)
 
-    def run_validation(self, operation='test', options=(), timeout=20, **env):
-        return subprocess.run(['bash', str(self.tools / 'validate-ios.sh'), 'PHONE', operation, *options],
-                              check=False, cwd=self.root, env=dict(self.env, **env), capture_output=True, text=True, timeout=timeout)
+    def run_validation(self, operation="test", options=(), timeout=20, **env):
+        return subprocess.run(
+            ["bash", str(self.tools / "validate-ios.sh"), "PHONE", operation, *options],
+            check=False,
+            cwd=self.root,
+            env=dict(self.env, **env),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
 
     def actions(self):
-        return [json.loads(x) for x in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return (
+            [json.loads(x) for x in self.calls.read_text().splitlines()]
+            if self.calls.exists()
+            else []
+        )
 
     def receipts(self):
-        return list((self.repo / '.private/ios-validation-cache').glob('*.json'))
+        return list((self.repo / ".private/ios-validation-cache").glob("*.json"))
 
     def full_run(self):
-        return subprocess.run([sys.executable, str(self.tools / 'ios-validation-state.py'), 'full-run'],
-                              check=False, cwd=self.root, env=self.env, capture_output=True, text=True)
+        return subprocess.run(
+            [sys.executable, str(self.tools / "ios-validation-state.py"), "full-run"],
+            check=False,
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+        )
 
-    def test_default_design_fixtures_publish_evidence_and_changed_data_invalidates(self):
-        fixture = self.repo / '.agents/fixtures/questions-design.json'
+    def test_default_design_fixtures_publish_evidence_and_changed_data_invalidates(
+        self,
+    ):
+        fixture = self.repo / ".agents/fixtures/questions-design.json"
         fixture.parent.mkdir(parents=True)
         fixture.write_text('{"questions":["original"]}')
         first = self.run_validation()
         self.assertEqual(first.returncode, 0, first.stderr)
         evidence = self.full_run()
         self.assertEqual(evidence.returncode, 0, evidence.stderr)
-        self.assertEqual(json.loads(evidence.stdout)['tests']['passed'], 1)
+        self.assertEqual(json.loads(evidence.stdout)["tests"]["passed"], 1)
         before = self.actions()
-        reused = self.run_validation(TEST_RUNNER_AGENT_INTERFACE_DESIGN_QUESTIONS_PATH=str(fixture))
+        reused = self.run_validation(
+            TEST_RUNNER_AGENT_INTERFACE_DESIGN_QUESTIONS_PATH=str(fixture)
+        )
         self.assertEqual(reused.returncode, 0, reused.stderr)
-        self.assertIn('Reused successful', reused.stdout)
+        self.assertIn("Reused successful", reused.stdout)
         self.assertEqual(self.actions(), before)
 
         fixture.write_text('{"questions":["changed"]}')
         stale = self.full_run()
         self.assertEqual(stale.returncode, 1)
-        self.assertIn('No passing iOS validation exists', stale.stderr)
+        self.assertIn("No passing iOS validation exists", stale.stderr)
         rerun = self.run_validation()
         self.assertEqual(rerun.returncode, 0, rerun.stderr)
-        self.assertNotIn('Reused successful', rerun.stdout)
+        self.assertNotIn("Reused successful", rerun.stdout)
         self.assertGreater(len(self.actions()), len(before))
         self.assertEqual(self.full_run().returncode, 0)
 
     def test_custom_design_fixture_inputs_do_not_certify_a_full_run(self):
-        fixture = self.repo / '.agents/fixtures/questions-design.json'
+        fixture = self.repo / ".agents/fixtures/questions-design.json"
         fixture.parent.mkdir(parents=True)
         fixture.write_text('{"questions":["default"]}')
-        external = self.root / 'custom.json'
+        external = self.root / "custom.json"
         external.write_text('{"questions":["custom"]}')
-        key = 'TEST_RUNNER_AGENT_INTERFACE_DESIGN_QUESTIONS_PATH'
-        for override in [{key: str(external)}, {key: str(self.root / 'missing.json')}, {key: ''},
-                         {key: '.agents/fixtures/questions-design.json'},
-                         {'TEST_RUNNER_AGENT_INTERFACE_DESIGN_VARIANT': 'questions-loaded'}]:
+        key = "TEST_RUNNER_AGENT_INTERFACE_DESIGN_QUESTIONS_PATH"
+        for override in [
+            {key: str(external)},
+            {key: str(self.root / "missing.json")},
+            {key: ""},
+            {key: ".agents/fixtures/questions-design.json"},
+            {"TEST_RUNNER_AGENT_INTERFACE_DESIGN_VARIANT": "questions-loaded"},
+        ]:
             with self.subTest(override=override):
                 result = self.run_validation(**override)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.receipts(), [])
                 evidence = self.full_run()
                 self.assertEqual(evidence.returncode, 1)
-                self.assertIn('No passing iOS validation exists', evidence.stderr)
+                self.assertIn("No passing iOS validation exists", evidence.stderr)
 
     def test_ignored_default_fixture_changes_invalidate_evidence(self):
-        fixture = self.repo / '.agents/fixtures/questions-design.json'
+        fixture = self.repo / ".agents/fixtures/questions-design.json"
         fixture.parent.mkdir(parents=True)
         fixture.write_text('{"questions":["original"]}')
-        (self.repo / '.git/info/exclude').write_text('/.agents/fixtures/questions-design.json\n')
+        (self.repo / ".git/info/exclude").write_text(
+            "/.agents/fixtures/questions-design.json\n"
+        )
         result = self.run_validation()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.full_run().returncode, 0)
         fixture.write_text('{"questions":["changed"]}')
         stale = self.full_run()
-        self.assertEqual(stale.returncode, 1, 'A fixture exported by the runner is an input even when Git ignores it')
-        self.assertIn('No passing iOS validation exists', stale.stderr)
+        self.assertEqual(
+            stale.returncode,
+            1,
+            "A fixture exported by the runner is an input even when Git ignores it",
+        )
+        self.assertIn("No passing iOS validation exists", stale.stderr)
 
     def test_summary_source_change_never_certifies_new_source(self):
-        p = self.run_validation(TEST_SUMMARY_CHANGE='1')
+        p = self.run_validation(TEST_SUMMARY_CHANGE="1")
         self.assertEqual(p.returncode, 75, p.stderr)
         self.assertEqual(self.receipts(), [])
         self.assertEqual(self.full_run().returncode, 1)
 
     def test_filtered_scope_and_bundle_counts_are_checked(self):
-        self.assertEqual(self.run_validation(options=['-only-testing:Unit/one']).returncode, 0)
+        self.assertEqual(
+            self.run_validation(options=["-only-testing:Unit/one"]).returncode, 0
+        )
         receipt = self.receipts()[0]
         value = json.loads(receipt.read_text())
-        value['full'] = True
+        value["full"] = True
         receipt.write_text(json.dumps(value))
         self.assertEqual(self.full_run().returncode, 1)
         receipt.unlink()
         self.assertEqual(self.run_validation().returncode, 0)
         receipt = self.receipts()[0]
         value = json.loads(receipt.read_text())
-        execution = [a[1:] for a in self.actions() if a[0] == 'xcodebuild' and ('build-for-testing' in a or 'test-without-building' in a)][-2:]
-        self.assertEqual(value['arguments'], execution[0] + ['--test-invocation--'] + execution[1])
-        for field in ['passed', 'failed', 'skipped', 'expectedFailures']:
+        execution = [
+            a[1:]
+            for a in self.actions()
+            if a[0] == "xcodebuild"
+            and ("build-for-testing" in a or "test-without-building" in a)
+        ][-2:]
+        self.assertEqual(
+            value["arguments"], execution[0] + ["--test-invocation--"] + execution[1]
+        )
+        for field in ["passed", "failed", "skipped", "expectedFailures"]:
             damaged = json.loads(json.dumps(value))
-            damaged['tests'][field] += 1
+            damaged["tests"][field] += 1
             receipt.write_text(json.dumps(damaged))
             self.assertEqual(self.full_run().returncode, 1, field)
         receipt.write_text(json.dumps(value))
-        (Path(value['result']) / 'evidence.json').unlink()
+        (Path(value["result"]) / "evidence.json").unlink()
         self.assertEqual(self.full_run().returncode, 1)
 
     def test_incomplete_counts_are_not_reused(self):
         self.assertEqual(self.run_validation().returncode, 0)
         receipt = self.receipts()[0]
         value = json.loads(receipt.read_text())
-        del value['tests']
+        del value["tests"]
         receipt.write_text(json.dumps(value))
         p = self.run_validation()
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn('Reused successful', p.stdout)
+        self.assertNotIn("Reused successful", p.stdout)
         self.assertEqual(self.full_run().returncode, 0)
 
     def test_documentation_and_evidence_do_not_invalidate(self):
         self.assertEqual(self.run_validation().returncode, 0)
-        (self.repo / 'ios/README.md').write_text('notes')
-        (self.repo / 'ios/evidence').mkdir()
-        (self.repo / 'ios/evidence/screenshot.png').write_bytes(b'image')
+        (self.repo / "ios/README.md").write_text("notes")
+        (self.repo / "ios/evidence").mkdir()
+        (self.repo / "ios/evidence/screenshot.png").write_bytes(b"image")
         p = self.run_validation()
-        self.assertIn('Reused successful', p.stdout)
+        self.assertIn("Reused successful", p.stdout)
         self.assertEqual(self.full_run().returncode, 0)
 
     def test_identical_success_reuses_before_taking_the_lock(self):
-        first = self.run_validation(options=['-only-testing:Unit/one'])
+        first = self.run_validation(options=["-only-testing:Unit/one"])
         self.assertEqual(first.returncode, 0, first.stderr)
         self.assertEqual(len(self.receipts()), 1)
         before = self.actions()
-        queued = (self.repo / 'queue.log').read_text()
-        second = self.run_validation(options=['-only-testing:Unit/one'])
+        queued = (self.repo / "queue.log").read_text()
+        second = self.run_validation(options=["-only-testing:Unit/one"])
         self.assertEqual(second.returncode, 0, second.stderr)
-        self.assertIn('Reused successful iOS validation', second.stdout)
+        self.assertIn("Reused successful iOS validation", second.stdout)
         self.assertEqual(self.actions(), before)
-        self.assertEqual((self.repo / 'queue.log').read_text(), queued)
-        execution = next(a for a in before if 'test-without-building' in a)
-        self.assertIn('-test-timeouts-enabled', execution)
-        self.assertEqual(execution[execution.index('-test-timeouts-enabled')+1], 'YES')
-        self.assertEqual([a for a in before if a[0]=='xcrun'], [['xcrun','simctl','shutdown','PHONE']])
+        self.assertEqual((self.repo / "queue.log").read_text(), queued)
+        execution = next(a for a in before if "test-without-building" in a)
+        self.assertIn("-test-timeouts-enabled", execution)
+        self.assertEqual(
+            execution[execution.index("-test-timeouts-enabled") + 1], "YES"
+        )
+        self.assertEqual(
+            [a for a in before if a[0] == "xcrun"],
+            [["xcrun", "simctl", "shutdown", "PHONE"]],
+        )
 
     def test_dirty_untracked_options_runtime_and_toolchain_changes_invalidate(self):
         self.assertEqual(self.run_validation().returncode, 0)
         for change, env, options in [
-            (lambda:self.input.write_text('dirty source'), {}, []),
-            (lambda:(self.repo/'ios/New.swift').write_text('new source'), {}, []),
-            (lambda:None, {}, ['-only-testing:Unit/other']),
-            (lambda:None, {'TEST_RUNTIME_BUILD':'Runtime2'}, []),
-            (lambda:None, {'TEST_XCODE_VERSION':'27.3'}, []),
-            (lambda:None, {'TZ':'UTC'}, []),
+            (lambda: self.input.write_text("dirty source"), {}, []),
+            (lambda: (self.repo / "ios/New.swift").write_text("new source"), {}, []),
+            (lambda: None, {}, ["-only-testing:Unit/other"]),
+            (lambda: None, {"TEST_RUNTIME_BUILD": "Runtime2"}, []),
+            (lambda: None, {"TEST_XCODE_VERSION": "27.3"}, []),
+            (lambda: None, {"TZ": "UTC"}, []),
         ]:
             change()
-            before=len(self.actions())
-            p=self.run_validation(options=options, **env)
-            self.assertEqual(p.returncode,0,p.stderr)
-            self.assertNotIn('Reused successful',p.stdout)
-            self.assertGreater(len(self.actions()),before)
+            before = len(self.actions())
+            p = self.run_validation(options=options, **env)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertNotIn("Reused successful", p.stdout)
+            self.assertGreater(len(self.actions()), before)
 
     def test_recheck_after_queue_does_not_use_prior_source_evidence(self):
-        self.assertEqual(self.run_validation().returncode,0)
-        self.input.write_text('different before queue')
-        p=self.run_validation(TEST_QUEUED_SOURCE_CHANGE='1')
-        self.assertEqual(p.returncode,0,p.stderr)
-        self.assertNotIn('Reused successful',p.stdout)
-        self.assertEqual(self.input.read_text(),'changed')
+        self.assertEqual(self.run_validation().returncode, 0)
+        self.input.write_text("different before queue")
+        p = self.run_validation(TEST_QUEUED_SOURCE_CHANGE="1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("Reused successful", p.stdout)
+        self.assertEqual(self.input.read_text(), "changed")
 
     def test_success_completed_while_waiting_is_reused_after_acquisition(self):
-        self.assertEqual(self.run_validation().returncode,0)
-        before=self.actions()
-        self.input.write_text('not cached yet')
-        p=self.run_validation(TEST_QUEUED_SOURCE_CHANGE='1',TEST_QUEUED_SOURCE_VALUE='original source')
-        self.assertEqual(p.returncode,0,p.stderr)
-        self.assertIn('Reused successful',p.stdout)
-        self.assertEqual(self.actions(),before)
+        self.assertEqual(self.run_validation().returncode, 0)
+        before = self.actions()
+        self.input.write_text("not cached yet")
+        p = self.run_validation(
+            TEST_QUEUED_SOURCE_CHANGE="1", TEST_QUEUED_SOURCE_VALUE="original source"
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Reused successful", p.stdout)
+        self.assertEqual(self.actions(), before)
 
     def test_failing_fresh_attempt_invalidates_older_success(self):
-        self.assertEqual(self.run_validation().returncode,0)
-        self.assertEqual(len(self.receipts()),1)
-        p=self.run_validation(IOS_VALIDATION_FRESH='1',TEST_NATIVE_EXIT='65')
-        self.assertEqual(p.returncode,65,p.stderr)
-        self.assertEqual(self.receipts(),[])
-        p=self.run_validation()
-        self.assertEqual(p.returncode,0,p.stderr)
-        self.assertNotIn('Reused successful',p.stdout)
+        self.assertEqual(self.run_validation().returncode, 0)
+        self.assertEqual(len(self.receipts()), 1)
+        p = self.run_validation(IOS_VALIDATION_FRESH="1", TEST_NATIVE_EXIT="65")
+        self.assertEqual(p.returncode, 65, p.stderr)
+        self.assertEqual(self.receipts(), [])
+        p = self.run_validation()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("Reused successful", p.stdout)
 
     def test_live_checks_are_not_eligible_for_reuse(self):
-        p=subprocess.run([sys.executable,str(self.tools/'ios-validation-state.py'),'eligible','live'],check=False,env=self.env,capture_output=True,text=True)
-        self.assertEqual(p.returncode,1)
+        p = subprocess.run(
+            [
+                sys.executable,
+                str(self.tools / "ios-validation-state.py"),
+                "eligible",
+                "live",
+            ],
+            check=False,
+            env=self.env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(p.returncode, 1)
 
     def test_changed_inputs_during_tests_fail_and_are_not_reusable(self):
-        p=self.run_validation(TEST_CHANGE_INPUT='1')
-        self.assertEqual(p.returncode,75,p.stderr)
-        self.assertIn('inputs changed',p.stderr)
-        self.assertEqual(self.receipts(),[])
+        p = self.run_validation(TEST_CHANGE_INPUT="1")
+        self.assertEqual(p.returncode, 75, p.stderr)
+        self.assertIn("inputs changed", p.stderr)
+        self.assertEqual(self.receipts(), [])
 
     def test_failed_empty_and_corrupt_result_evidence_are_never_cached(self):
-        for env in [{'TEST_NATIVE_EXIT':'65'}, {'TEST_FAILED':'1'}, {'TEST_PASSED':'0'}]:
+        for env in [
+            {"TEST_NATIVE_EXIT": "65"},
+            {"TEST_FAILED": "1"},
+            {"TEST_PASSED": "0"},
+        ]:
             with self.subTest(env=env):
-                p=self.run_validation(**env)
-                self.assertEqual(self.receipts(),[])
-                if 'TEST_NATIVE_EXIT' in env:self.assertEqual(p.returncode,65)
-        p=self.run_validation()
-        self.assertEqual(p.returncode,0,p.stderr)
-        receipt=self.receipts()[0]
-        receipt.write_text('[]')
-        p=self.run_validation()
-        self.assertNotIn('Reused successful',p.stdout)
-        result=Path(json.loads(receipt.read_text())['result'])
+                p = self.run_validation(**env)
+                self.assertEqual(self.receipts(), [])
+                if "TEST_NATIVE_EXIT" in env:
+                    self.assertEqual(p.returncode, 65)
+        p = self.run_validation()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        receipt = self.receipts()[0]
+        receipt.write_text("[]")
+        p = self.run_validation()
+        self.assertNotIn("Reused successful", p.stdout)
+        result = Path(json.loads(receipt.read_text())["result"])
         shutil.rmtree(result)
-        p=self.run_validation()
-        self.assertNotIn('Reused successful',p.stdout)
+        p = self.run_validation()
+        self.assertNotIn("Reused successful", p.stdout)
 
     def test_capture_repetition_custom_build_flags_and_fresh_runs_do_not_reuse(self):
-        self.assertEqual(self.run_validation().returncode,0)
-        for options,env in [([],{'IOS_VALIDATION_FRESH':'1'}),([],{'AGENT_INTERFACE_SCREENSHOT_DIR':'/capture'}),([],{'TEST_RUNNER_AGENT_INTERFACE_SCREENSHOT_DIR':'/capture'}),
-                            (['-test-iterations','2'],{}),(['OTHER_SWIFT_FLAGS=-I/external'],{}),
-                            (['-only-testing','@tests.txt'],{}),([],{ 'SWIFT_EXEC':'/external/compiler'})]:
-            with self.subTest(options=options,env=env):
-                before=len(self.actions());p=self.run_validation(options=options,**env)
-                self.assertEqual(p.returncode,0,p.stderr)
-                self.assertNotIn('Reused successful',p.stdout)
-                self.assertGreater(len(self.actions()),before)
-                self.assertEqual(len(self.receipts()),1)
+        self.assertEqual(self.run_validation().returncode, 0)
+        for options, env in [
+            ([], {"IOS_VALIDATION_FRESH": "1"}),
+            ([], {"AGENT_INTERFACE_SCREENSHOT_DIR": "/capture"}),
+            ([], {"TEST_RUNNER_AGENT_INTERFACE_SCREENSHOT_DIR": "/capture"}),
+            (["-test-iterations", "2"], {}),
+            (["OTHER_SWIFT_FLAGS=-I/external"], {}),
+            (["-only-testing", "@tests.txt"], {}),
+            ([], {"SWIFT_EXEC": "/external/compiler"}),
+        ]:
+            with self.subTest(options=options, env=env):
+                before = len(self.actions())
+                p = self.run_validation(options=options, **env)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertNotIn("Reused successful", p.stdout)
+                self.assertGreater(len(self.actions()), before)
+                self.assertEqual(len(self.receipts()), 1)
 
     def test_build_only_never_touches_a_simulator_and_honors_options(self):
-        p=self.run_validation('build',['-jobs','2'])
-        self.assertEqual(p.returncode,0,p.stderr)
-        self.assertEqual(len(self.actions()),1)
-        self.assertEqual(self.actions()[0][-3:],['build','-jobs','2'])
-        self.assertEqual(self.receipts(),[])
+        p = self.run_validation("build", ["-jobs", "2"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(self.actions()), 1)
+        self.assertEqual(self.actions()[0][-3:], ["build", "-jobs", "2"])
+        self.assertEqual(self.receipts(), [])
 
     def test_existing_device_is_not_shut_down_and_explicit_timeouts_are_respected(self):
-        p=self.run_validation(options=['-test-timeouts-enabled','NO'],TEST_BOOTED='1')
-        self.assertEqual(p.returncode,0,p.stderr)
-        self.assertFalse(any(a[0]=='xcrun' for a in self.actions()))
-        execution=next(a for a in self.actions() if 'test-without-building' in a)
-        self.assertEqual(execution.count('-test-timeouts-enabled'),1)
-        self.assertEqual(execution[execution.index('-test-timeouts-enabled')+1],'NO')
+        p = self.run_validation(
+            options=["-test-timeouts-enabled", "NO"], TEST_BOOTED="1"
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(any(a[0] == "xcrun" for a in self.actions()))
+        execution = next(a for a in self.actions() if "test-without-building" in a)
+        self.assertEqual(execution.count("-test-timeouts-enabled"), 1)
+        self.assertEqual(execution[execution.index("-test-timeouts-enabled") + 1], "NO")
 
     def test_xctest_already_shutdown_is_success_and_can_be_reused(self):
-        p=self.run_validation(TEST_XCTEST_SHUTDOWN='1')
-        self.assertEqual(p.returncode,0,p.stderr)
-        self.assertFalse(any(a[:3]==['xcrun','simctl','shutdown'] for a in self.actions()))
-        self.assertEqual(len(self.receipts()),1)
+        p = self.run_validation(TEST_XCTEST_SHUTDOWN="1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(
+            any(a[:3] == ["xcrun", "simctl", "shutdown"] for a in self.actions())
+        )
+        self.assertEqual(len(self.receipts()), 1)
 
     def test_unknown_cleanup_state_fails_without_recording_success(self):
-        p=self.run_validation(TEST_CLEANUP_STATE='Unknown')
-        self.assertNotEqual(p.returncode,0)
-        self.assertIn('Cannot clean up selected simulator in state Unknown',p.stderr)
-        self.assertEqual(self.receipts(),[])
+        p = self.run_validation(TEST_CLEANUP_STATE="Unknown")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("Cannot clean up selected simulator in state Unknown", p.stderr)
+        self.assertEqual(self.receipts(), [])
 
     def test_cleanup_failure_preserves_test_failure_and_summary(self):
-        p=self.run_validation(TEST_NATIVE_EXIT='65',TEST_CLEANUP_STATE='Unknown')
-        self.assertEqual(p.returncode,65,p.stderr)
-        self.assertIn('Cannot clean up selected simulator in state Unknown',p.stderr)
-        summary=next((self.repo/'.private').glob('ios-test-*.txt')).read_text()
-        self.assertIn('exit status: 65',summary)
-        self.assertIn('cleanup exit status: 1',summary)
-        self.assertEqual(self.receipts(),[])
+        p = self.run_validation(TEST_NATIVE_EXIT="65", TEST_CLEANUP_STATE="Unknown")
+        self.assertEqual(p.returncode, 65, p.stderr)
+        self.assertIn("Cannot clean up selected simulator in state Unknown", p.stderr)
+        summary = next((self.repo / ".private").glob("ios-test-*.txt")).read_text()
+        self.assertIn("exit status: 65", summary)
+        self.assertIn("cleanup exit status: 1", summary)
+        self.assertEqual(self.receipts(), [])
 
     def test_stalled_shutdown_is_bounded_and_not_cached(self):
-        p=self.run_validation(TEST_CLEANUP_STATE='Shutting Down',timeout=40)
-        self.assertNotEqual(p.returncode,0)
-        self.assertIn('did not shut down within 30 seconds',p.stderr)
-        self.assertEqual(self.receipts(),[])
+        p = self.run_validation(TEST_CLEANUP_STATE="Shutting Down", timeout=40)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("did not shut down within 30 seconds", p.stderr)
+        self.assertEqual(self.receipts(), [])
 
     def test_invalid_device_and_missing_option_value_fail_before_native_execution(self):
-        p=subprocess.run(['bash',str(self.tools/'validate-ios.sh'),'UNKNOWN','test'],check=False,env=self.env,capture_output=True,text=True,timeout=8)
-        self.assertNotEqual(p.returncode,0)
-        self.assertIn('available simulator UUID',p.stderr)
-        self.assertEqual(self.actions(),[])
-        p=self.run_validation(options=['-only-testing'])
-        self.assertNotEqual(p.returncode,0)
-        self.assertIn('needs a value',p.stderr)
-        self.assertEqual(self.actions(),[])
+        p = subprocess.run(
+            ["bash", str(self.tools / "validate-ios.sh"), "UNKNOWN", "test"],
+            check=False,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("available simulator UUID", p.stderr)
+        self.assertEqual(self.actions(), [])
+        p = self.run_validation(options=["-only-testing"])
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("needs a value", p.stderr)
+        self.assertEqual(self.actions(), [])
 
     def test_full_run_names_a_passing_whole_scheme_run_and_its_counts(self):
         # A normal full run has skipped tests and one expected failure; neither blocks a release.
-        self.assertEqual(self.run_validation(TEST_PASSED='700',TEST_SKIPPED='29',TEST_EXPECTED='1').returncode,0)
-        p=self.full_run()
-        self.assertEqual(p.returncode,0,p.stderr)
-        evidence=json.loads(p.stdout)
-        self.assertEqual(evidence['tests'],{'passed':700,'failed':0,'skipped':29,'expectedFailures':1})
-        self.assertTrue(Path(evidence['summary']).is_file() and Path(evidence['result']).is_dir())
-        self.assertEqual(evidence['source'],json.loads(self.receipts()[0].read_text())['source'])
+        self.assertEqual(
+            self.run_validation(
+                TEST_PASSED="700", TEST_SKIPPED="29", TEST_EXPECTED="1"
+            ).returncode,
+            0,
+        )
+        p = self.full_run()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        evidence = json.loads(p.stdout)
+        self.assertEqual(
+            evidence["tests"],
+            {"passed": 700, "failed": 0, "skipped": 29, "expectedFailures": 1},
+        )
+        self.assertTrue(
+            Path(evidence["summary"]).is_file() and Path(evidence["result"]).is_dir()
+        )
+        self.assertEqual(
+            evidence["source"], json.loads(self.receipts()[0].read_text())["source"]
+        )
 
     def test_full_run_refuses_without_any_run(self):
-        p=self.full_run()
-        self.assertEqual(p.returncode,1)
-        self.assertIn('No passing iOS validation exists',p.stderr)
-        self.assertEqual(p.stdout,'')
+        p = self.full_run()
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("No passing iOS validation exists", p.stderr)
+        self.assertEqual(p.stdout, "")
 
     def test_full_run_refuses_a_filtered_run_and_says_so(self):
-        for option in ['-only-testing:Unit/one','-skip-testing:Unit/one']:
+        for option in ["-only-testing:Unit/one", "-skip-testing:Unit/one"]:
             with self.subTest(option=option):
-                self.assertEqual(self.run_validation(options=[option]).returncode,0)
-                self.assertEqual(len(self.receipts()),1)
-                self.assertFalse(json.loads(self.receipts()[0].read_text())['full'])
-                p=self.full_run()
-                self.assertEqual(p.returncode,1)
-                self.assertIn('Only a partial run',p.stderr)
-                shutil.rmtree(self.repo/'.private/ios-validation-cache')
+                self.assertEqual(self.run_validation(options=[option]).returncode, 0)
+                self.assertEqual(len(self.receipts()), 1)
+                self.assertFalse(json.loads(self.receipts()[0].read_text())["full"])
+                p = self.full_run()
+                self.assertEqual(p.returncode, 1)
+                self.assertIn("Only a partial run", p.stderr)
+                shutil.rmtree(self.repo / ".private/ios-validation-cache")
 
     def test_full_run_refuses_after_the_ios_inputs_change(self):
-        self.assertEqual(self.run_validation().returncode,0)
-        self.assertEqual(self.full_run().returncode,0)
-        for change in [lambda:self.input.write_text('edited after the run'),lambda:(self.repo/'ios/New.swift').write_text('new')]:
+        self.assertEqual(self.run_validation().returncode, 0)
+        self.assertEqual(self.full_run().returncode, 0)
+        for change in [
+            lambda: self.input.write_text("edited after the run"),
+            lambda: (self.repo / "ios/New.swift").write_text("new"),
+        ]:
             change()
-            p=self.full_run()
-            self.assertEqual(p.returncode,1)
-            self.assertIn('No passing iOS validation exists',p.stderr)
+            p = self.full_run()
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("No passing iOS validation exists", p.stderr)
 
     def test_full_run_ignores_failed_runs_and_unreadable_or_incomplete_receipts(self):
-        self.assertEqual(self.run_validation(TEST_NATIVE_EXIT='65').returncode,65)
-        self.assertEqual(self.full_run().returncode,1)
-        self.assertEqual(self.run_validation().returncode,0)
-        receipt=self.receipts()[0]
-        good=json.loads(receipt.read_text())
-        for name,damage in [('failures',lambda r:r['tests'].update(failed=1)),('nothing passed',lambda r:r['tests'].update(passed=0)),
-                            ('no counts',lambda r:r.pop('tests')),('failed exit',lambda r:r.update(exit=1)),
-                            ('result gone',lambda r:r.update(result=str(self.root/'missing.xcresult'))),
-                            ('other source',lambda r:r.update(source='0'*64))]:
+        self.assertEqual(self.run_validation(TEST_NATIVE_EXIT="65").returncode, 65)
+        self.assertEqual(self.full_run().returncode, 1)
+        self.assertEqual(self.run_validation().returncode, 0)
+        receipt = self.receipts()[0]
+        good = json.loads(receipt.read_text())
+        for name, damage in [
+            ("failures", lambda r: r["tests"].update(failed=1)),
+            ("nothing passed", lambda r: r["tests"].update(passed=0)),
+            ("no counts", lambda r: r.pop("tests")),
+            ("failed exit", lambda r: r.update(exit=1)),
+            (
+                "result gone",
+                lambda r: r.update(result=str(self.root / "missing.xcresult")),
+            ),
+            ("other source", lambda r: r.update(source="0" * 64)),
+        ]:
             with self.subTest(name=name):
-                value=json.loads(json.dumps(good));damage(value)
+                value = json.loads(json.dumps(good))
+                damage(value)
                 receipt.write_text(json.dumps(value))
-                p=self.full_run()
-                self.assertEqual(p.returncode,1)
-        receipt.write_text('[]')
-        self.assertEqual(self.full_run().returncode,1)
+                p = self.full_run()
+                self.assertEqual(p.returncode, 1)
+        receipt.write_text("[]")
+        self.assertEqual(self.full_run().returncode, 1)
 
     def test_a_receipt_from_before_scope_was_recorded_is_rerun_not_reused(self):
-        self.assertEqual(self.run_validation().returncode,0)
-        receipt=self.receipts()[0]
-        old=json.loads(receipt.read_text())
-        for field in ['source','full','tests']:old.pop(field)
+        self.assertEqual(self.run_validation().returncode, 0)
+        receipt = self.receipts()[0]
+        old = json.loads(receipt.read_text())
+        for field in ["source", "full", "tests"]:
+            old.pop(field)
         receipt.write_text(json.dumps(old))
-        self.assertEqual(self.full_run().returncode,1)
-        before=len(self.actions())
-        p=self.run_validation()
-        self.assertEqual(p.returncode,0,p.stderr)
-        self.assertNotIn('Reused successful',p.stdout)
-        self.assertGreater(len(self.actions()),before)
-        self.assertEqual(self.full_run().returncode,0)
+        self.assertEqual(self.full_run().returncode, 1)
+        before = len(self.actions())
+        p = self.run_validation()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("Reused successful", p.stdout)
+        self.assertGreater(len(self.actions()), before)
+        self.assertEqual(self.full_run().returncode, 0)
 
 
-if __name__=='__main__':unittest.main()
+if __name__ == "__main__":
+    unittest.main()

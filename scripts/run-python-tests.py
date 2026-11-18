@@ -12,6 +12,7 @@ at least one test ran, so an empty file or a bare script that exits 0 fails. A
 file whose every test was skipped shows SKIP, which passes locally (for example
 no tmux) and fails when CI=true, so a runner missing a tool cannot go green.
 """
+
 import os
 import re
 import subprocess
@@ -30,10 +31,22 @@ def discover():
 
 def stray_tests(found, root=ROOT):
     """Test-looking files that git tracks or would add, so ignored output is skipped."""
-    listing = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=root, check=True, stdout=subprocess.PIPE, text=True).stdout
+    listing = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=root,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout
     known = set(found)
     paths = (root / name for name in listing.split("\0") if name)
-    return sorted(path for path in paths if path not in known and path.is_file() and any(path.match(pattern) for pattern in TEST_NAMES))
+    return sorted(
+        path
+        for path in paths
+        if path not in known
+        and path.is_file()
+        and any(path.match(pattern) for pattern in TEST_NAMES)
+    )
 
 
 def classify(returncode, summary, ci):
@@ -47,7 +60,9 @@ def classify(returncode, summary, ci):
     """
     if returncode != 0:
         return "FAIL", ""
-    final = re.findall(r"^Ran (\d+) tests? in [^\n]*(?:\n+([^\n]*))?", summary, re.MULTILINE)
+    final = re.findall(
+        r"^Ran (\d+) tests? in [^\n]*(?:\n+([^\n]*))?", summary, re.MULTILINE
+    )
     if not final:
         return "FAIL", "no unittest tests ran; test files must define unittest tests"
     ran, outcome = int(final[-1][0]), final[-1][1].strip()
@@ -59,30 +74,63 @@ def classify(returncode, summary, ci):
     skipped = re.search(r"skipped=(\d+)", match.group(1) or "")
     skips = int(skipped.group(1)) if skipped else 0
     if skips >= ran:
-        return ("FAIL", f"all {ran} tests skipped under CI") if ci else ("SKIP", f"all {ran} tests skipped")
+        return (
+            ("FAIL", f"all {ran} tests skipped under CI")
+            if ci
+            else ("SKIP", f"all {ran} tests skipped")
+        )
     return "PASS", f"{skips} skipped" if skips else ""
 
 
 def run(path):
     started = time.monotonic()
-    result = subprocess.run([sys.executable, str(path)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+    result = subprocess.run(
+        [sys.executable, str(path)],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
     return result.returncode, time.monotonic() - started, result.stdout, result.stderr
 
 
 def main(argv):
     found = discover()
     if argv:
-        selected = [(Path(arg) if Path(arg).is_absolute() else Path.cwd() / arg).resolve() for arg in argv]
+        selected = [
+            (Path(arg) if Path(arg).is_absolute() else Path.cwd() / arg).resolve()
+            for arg in argv
+        ]
         missing = [path for path in selected if path not in found]
         if missing:
-            print("Not a discovered Python test file:", *(str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path) for path in missing), sep="\n  ")
+            print(
+                "Not a discovered Python test file:",
+                *(
+                    str(path.relative_to(ROOT))
+                    if path.is_relative_to(ROOT)
+                    else str(path)
+                    for path in missing
+                ),
+                sep="\n  ",
+            )
             return 2
     else:
         selected = found
         strays = stray_tests(found)
         if strays:
-            print("Test files outside the discovery globs would never run:", *(str(path.relative_to(ROOT)) for path in strays), sep="\n  ")
-            print("Move them under " + ", ".join(GLOBS) + " or update GLOBS in " + Path(__file__).name + ".")
+            print(
+                "Test files outside the discovery globs would never run:",
+                *(str(path.relative_to(ROOT)) for path in strays),
+                sep="\n  ",
+            )
+            print(
+                "Move them under "
+                + ", ".join(GLOBS)
+                + " or update GLOBS in "
+                + Path(__file__).name
+                + "."
+            )
             return 2
     if not selected:
         print("No Python test files found.")
@@ -96,11 +144,15 @@ def main(argv):
         code, seconds, stdout, stderr = run(path)
         status, note = classify(code, stderr, ci)
         counts[status] = counts.get(status, 0) + 1
-        print(f"{status} {name} ({seconds:.1f}s){' ' + note if note else ''}", flush=True)
+        print(
+            f"{status} {name} ({seconds:.1f}s){' ' + note if note else ''}", flush=True
+        )
         if status == "FAIL":
             failures.append(name)
             print((stdout + stderr).rstrip(), flush=True)
-    print(f"\n{counts.get('PASS', 0)} passed, {counts.get('SKIP', 0)} skipped, {len(failures)} failed in {time.monotonic() - started:.1f}s (Python {sys.version.split()[0]})")
+    print(
+        f"\n{counts.get('PASS', 0)} passed, {counts.get('SKIP', 0)} skipped, {len(failures)} failed in {time.monotonic() - started:.1f}s (Python {sys.version.split()[0]})"
+    )
     if failures:
         print("Failed:", *failures, sep="\n  ")
     return 1 if failures else 0

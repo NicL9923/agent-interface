@@ -4,6 +4,7 @@ Hermes labels every shell command in a history each time it projects one. The ad
 the pure helpers under summarize_shell_command. Hermes's display module is a fake whose summary looks its
 helpers up on the module at call time, as Hermes's module globals do, and counts what each helper parsed.
 """
+
 import types
 import unittest
 from collections import Counter
@@ -36,9 +37,18 @@ def fake_display():
     display._shell_head_word, display._is_shell_boundary_echo = head, echo
 
     def summarize(command):
-        core = [display._clean_shell_segment(segment) for segment in display._split_shell_compound(command)]
-        core = [segment for segment in core if display._shell_head_word(segment) != "cd" and not display._is_shell_boundary_echo(segment)]
+        core = [
+            display._clean_shell_segment(segment)
+            for segment in display._split_shell_compound(command)
+        ]
+        core = [
+            segment
+            for segment in core
+            if display._shell_head_word(segment) != "cd"
+            and not display._is_shell_boundary_echo(segment)
+        ]
         return core[0] + (f" +{len(core) - 1}" if len(core) > 1 else "")
+
     display.summarize_shell_command = summarize
     return display
 
@@ -80,9 +90,11 @@ class InstalledSummaryTest(unittest.TestCase):
 class TextMemoTest(unittest.TestCase):
     def counted(self, answer, budget=1_000):
         calls = Counter()
+
         def native(text):
             calls[text] += 1
             return answer(text)
+
         return extension.TextMemo(native, budget), calls
 
     def test_a_list_answer_is_a_new_list_each_time(self):
@@ -105,7 +117,9 @@ class TextMemoTest(unittest.TestCase):
         self.assertEqual((calls[texts[0]], calls[texts[1]]), (1, 2))
         self.assertLessEqual(memo.size, 160)
 
-    def test_a_string_too_long_to_keep_and_anything_not_a_string_go_to_the_function_each_time(self):
+    def test_a_string_too_long_to_keep_and_anything_not_a_string_go_to_the_function_each_time(
+        self,
+    ):
         memo, calls = self.counted(lambda text: str(text), budget=160)
         for _ in range(2):
             memo("x" * 11)

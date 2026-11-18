@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Combine labeled screenshots without cropping. Requires Pillow 10.1 or newer."""
+
 import argparse
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -21,9 +22,22 @@ for item in args.panels:
         parser.error("Each panel needs Label=path")
     with Image.open(path) as original:
         width = round(original.width * args.height / original.height)
-        panels.append((label, original.convert("RGB").resize(
-            (width, args.height), Image.Resampling.LANCZOS)))
-canvas = Image.new("RGB", (sum(im.width for _, im in panels) + 16 * (len(panels) + 1), args.height + header_height + 16), "#eeeeee")
+        panels.append(
+            (
+                label,
+                original.convert("RGB").resize(
+                    (width, args.height), Image.Resampling.LANCZOS
+                ),
+            )
+        )
+canvas = Image.new(
+    "RGB",
+    (
+        sum(im.width for _, im in panels) + 16 * (len(panels) + 1),
+        args.height + header_height + 16,
+    ),
+    "#eeeeee",
+)
 draw = ImageDraw.Draw(canvas)
 x = 16
 for label, panel in panels:

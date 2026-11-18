@@ -4,6 +4,7 @@ Hermes is a fake at its edges: the gateway's session table and ``session.compres
 compaction's commit fence, and its token estimator. The real gateway contract, including a
 message sent during a held compaction, lives in scripts/spike/compaction_probe.py.
 """
+
 import contextlib
 import itertools
 import json
@@ -30,9 +31,13 @@ DELAY = 600
 
 class Agent:
     """What the add-on reads from Hermes's agent. Anything else is an AttributeError."""
+
     def __init__(self, tail=1000, summary=200):
-        self.context_compressor = types.SimpleNamespace(tail_token_budget=tail, max_summary_tokens=summary,
-                                                        _compression_working_attempt_generation=3)
+        self.context_compressor = types.SimpleNamespace(
+            tail_token_budget=tail,
+            max_summary_tokens=summary,
+            _compression_working_attempt_generation=3,
+        )
         self._cached_system_prompt = "s" * 400
         self.tools = None
 
@@ -45,8 +50,14 @@ def estimate(messages, *, system_prompt="", tools=None):
 class Fence:
     """A compaction's CompressionCommitFence. ``answers`` are its successive try_cancel results, the last repeating:
     True cancelled, False a commit already started, None a commit holding the fence."""
+
     def __init__(self, native, answers):
-        self.native, self.answers, self.cancelled, self.progress = native, list(answers), False, False
+        self.native, self.answers, self.cancelled, self.progress = (
+            native,
+            list(answers),
+            False,
+            False,
+        )
 
     @property
     def progress_observed(self):
@@ -55,7 +66,9 @@ class Fence:
     def try_cancel_before_commit(self):
         answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
         session = self.native.server._sessions[self.native.sid]
-        self.native.events.append(("cancel", bool(session.get("_manual_compress_active")), answer))
+        self.native.events.append(
+            ("cancel", bool(session.get("_manual_compress_active")), answer)
+        )
         if answer is True:
             self.cancelled = True
         elif answer is False:
@@ -65,6 +78,7 @@ class Fence:
 
 class SteppedClock:
     """A monotonic clock that moves ``step`` seconds at each look and can be moved on by hand."""
+
     def __init__(self, step):
         self.step, self.now = step, 0.0
 
@@ -79,6 +93,7 @@ class ChargedLock:
     An ``acquire`` without a timeout fails the test: a holder could keep the input waiting for as long as it likes.
     Hermes's own ``with`` on the lock waits as long as it needs, as it does in Hermes.
     """
+
     def __init__(self, lock, clock):
         self.lock, self.clock = lock, clock
 
@@ -106,10 +121,23 @@ class ChargedLock:
 class Native:
     """Hermes's ``session.compress``: holds the session running like _manual_compress_turn, publishes its
     commit fence on the agent, and returns when the fence is cancelled or the summary is released."""
+
     def __init__(self, server, sid, events, rows_after=None):
-        self.server, self.sid, self.events, self.rows_after = server, sid, events, rows_after
-        self.calls, self.entered, self.release = [], threading.Event(), threading.Event()
-        self.hold_before_active, self.hold_before_dispatch = threading.Event(), threading.Event()
+        self.server, self.sid, self.events, self.rows_after = (
+            server,
+            sid,
+            events,
+            rows_after,
+        )
+        self.calls, self.entered, self.release = (
+            [],
+            threading.Event(),
+            threading.Event(),
+        )
+        self.hold_before_active, self.hold_before_dispatch = (
+            threading.Event(),
+            threading.Event(),
+        )
         self.hold_before_active.set()
         self.hold_before_dispatch.set()
         self.answers = [True]
@@ -128,12 +156,16 @@ class Native:
             session["running"] = session["_manual_compress_active"] = True
             # The add-on's owned_turn seam names the thread Hermes holds the session for.
             session[compaction.OWNER] = threading.get_ident()
-        fence = session["agent"]._active_compression_commit_fence = Fence(self, self.answers)
+        fence = session["agent"]._active_compression_commit_fence = Fence(
+            self, self.answers
+        )
         self.entered.set()
         try:
             # Hermes builds the summary prompt, then marks this attempt's summary as working.
             self.hold_before_dispatch.wait(5)
-            session["agent"].context_compressor._compression_working_attempt_generation += 1
+            session[
+                "agent"
+            ].context_compressor._compression_working_attempt_generation += 1
             for _ in range(self.polls):
                 if fence.cancelled:
                     return {"status": "aborted"}
@@ -141,7 +173,7 @@ class Native:
                     break
                 time.sleep(0.01)
             if self.rows_after is not None:
-                session["history"] = session["history"][:self.rows_after]
+                session["history"] = session["history"][: self.rows_after]
                 session["history_version"] += 1
             return {"status": "compressed"}
         finally:
@@ -155,6 +187,7 @@ class Native:
 
 class Fixture:
     """One canonical profile with a built agent, idle long enough and over budget."""
+
     def __init__(self, test):
         self.events = []
         directory = tempfile.TemporaryDirectory()
@@ -164,25 +197,48 @@ class Fixture:
         self.requests = types.SimpleNamespace(_lock=threading.Lock(), _open={})
         gateway = types.ModuleType("tui_gateway")
         gateway.server_requests = self.requests
-        modules = {"tui_gateway": gateway, "tui_gateway.server_requests": self.requests,
-                   "agent": types.ModuleType("agent"),
-                   "agent.model_metadata": types.SimpleNamespace(estimate_request_tokens_rough=estimate)}
+        modules = {
+            "tui_gateway": gateway,
+            "tui_gateway.server_requests": self.requests,
+            "agent": types.ModuleType("agent"),
+            "agent.model_metadata": types.SimpleNamespace(
+                estimate_request_tokens_rough=estimate
+            ),
+        }
         patcher = patch.dict(sys.modules, modules)
         patcher.start()
         test.addCleanup(patcher.stop)
         self.agent = Agent()
-        self.server = types.SimpleNamespace(_sessions={"sid": {
-            "session_key": "stored", "agent": self.agent, "history_lock": threading.RLock(), "history_version": 4,
-            "history": [{"role": "user", "content": "x"}] * 30, "last_active": NOW - DELAY}},
-            _session_uses_compute_host=lambda session: bool(session.get("host")), _manual_compress_turn=lambda: None)
+        self.server = types.SimpleNamespace(
+            _sessions={
+                "sid": {
+                    "session_key": "stored",
+                    "agent": self.agent,
+                    "history_lock": threading.RLock(),
+                    "history_version": 4,
+                    "history": [{"role": "user", "content": "x"}] * 30,
+                    "last_active": NOW - DELAY,
+                }
+            },
+            _session_uses_compute_host=lambda session: bool(session.get("host")),
+            _manual_compress_turn=lambda: None,
+        )
         self.native = Native(self.server, "sid", self.events)
         self.lease = None
         self.clock = [NOW]
         self.monotonic = [0.0]
         self.canonical = {"default": "sid"}
-        self.idle = compaction.IdleCompaction(self.server, self.native, self.canonical, self.journal, threading.RLock(),
-                                              lambda: self.lease, DELAY, clock=lambda: self.clock[0],
-                                              monotonic=lambda: self.monotonic[0])
+        self.idle = compaction.IdleCompaction(
+            self.server,
+            self.native,
+            self.canonical,
+            self.journal,
+            threading.RLock(),
+            lambda: self.lease,
+            DELAY,
+            clock=lambda: self.clock[0],
+            monotonic=lambda: self.monotonic[0],
+        )
         self.idle.activity["sid"] = NOW - DELAY
 
     @property
@@ -196,7 +252,10 @@ class Fixture:
     def running(self):
         """Start a compaction on its own thread and return once Hermes holds the session for it."""
         results = []
-        thread = threading.Thread(target=lambda: results.append(self.idle.compact("default", "sid")), daemon=True)
+        thread = threading.Thread(
+            target=lambda: results.append(self.idle.compact("default", "sid")),
+            daemon=True,
+        )
         thread.start()
         if not self.native.entered.wait(5):
             raise AssertionError("The compaction never reached Hermes")
@@ -205,24 +264,55 @@ class Fixture:
 
 class SettingTests(unittest.TestCase):
     def test_the_setting_reads_seconds_and_turns_off_at_zero_or_when_unreadable(self):
-        cases = [(None, 600, False), ("", 600, False), (" 120 ", 120, False), ("0", 0, False), ("-5", 0, True),
-                 ("ten minutes", 0, True), ("1.5", 0, True)]
+        cases = [
+            (None, 600, False),
+            ("", 600, False),
+            (" 120 ", 120, False),
+            ("0", 0, False),
+            ("-5", 0, True),
+            ("ten minutes", 0, True),
+            ("1.5", 0, True),
+        ]
         for raw, expected, warned in cases:
-            with self.subTest(raw=raw), self.assertLogs(compaction.log, logging.ERROR) if warned else _quiet():
+            with (
+                self.subTest(raw=raw),
+                self.assertLogs(compaction.log, logging.ERROR) if warned else _quiet(),
+            ):
                 environ = {} if raw is None else {compaction.SETTING: raw}
                 self.assertEqual(compaction.delay_from(environ), expected)
 
     def test_a_hermes_that_does_not_hold_a_manual_compaction_is_not_supported(self):
-        server = types.SimpleNamespace(_manual_compress_turn=lambda: None, _session_uses_compute_host=lambda s: False)
+        server = types.SimpleNamespace(
+            _manual_compress_turn=lambda: None,
+            _session_uses_compute_host=lambda s: False,
+        )
         estimator = types.SimpleNamespace(estimate_request_tokens_rough=estimate)
         fences = types.SimpleNamespace(CompressionCommitFence=Fence)
-        with patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.model_metadata": estimator, "agent.conversation_compression": fences}):
+        with patch.dict(
+            sys.modules,
+            {
+                "agent": types.ModuleType("agent"),
+                "agent.model_metadata": estimator,
+                "agent.conversation_compression": fences,
+            },
+        ):
             self.assertTrue(compaction.supported(server))
             # Hermes b9cb268 and d23cc6b compacted without marking the session running.
-            self.assertFalse(compaction.supported(types.SimpleNamespace(_session_uses_compute_host=lambda s: False)))
+            self.assertFalse(
+                compaction.supported(
+                    types.SimpleNamespace(_session_uses_compute_host=lambda s: False)
+                )
+            )
             fences.CompressionCommitFence = object
             self.assertFalse(compaction.supported(server))
-        with patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.model_metadata": estimator, "agent.conversation_compression": None}):
+        with patch.dict(
+            sys.modules,
+            {
+                "agent": types.ModuleType("agent"),
+                "agent.model_metadata": estimator,
+                "agent.conversation_compression": None,
+            },
+        ):
             self.assertFalse(compaction.supported(server))
 
 
@@ -235,14 +325,31 @@ class _quiet:
 
 
 class SizeTests(unittest.TestCase):
-    def test_the_budget_is_the_prompt_plus_the_compactors_tail_ceiling_and_summary(self):
-        with patch.dict(sys.modules, {"agent": types.ModuleType("agent"),
-                                      "agent.model_metadata": types.SimpleNamespace(estimate_request_tokens_rough=estimate)}):
-            session = {"agent": Agent(tail=1000, summary=200), "history_lock": threading.Lock(), "history": [{}] * 3}
+    def test_the_budget_is_the_prompt_plus_the_compactors_tail_ceiling_and_summary(
+        self,
+    ):
+        with patch.dict(
+            sys.modules,
+            {
+                "agent": types.ModuleType("agent"),
+                "agent.model_metadata": types.SimpleNamespace(
+                    estimate_request_tokens_rough=estimate
+                ),
+            },
+        ):
+            session = {
+                "agent": Agent(tail=1000, summary=200),
+                "history_lock": threading.Lock(),
+                "history": [{}] * 3,
+            }
             # 100 prompt tokens, 1.5 x 1000 tail, 200 summary.
             self.assertEqual(compaction.request_size(session), (400, 1800))
-            for compressor in (None, types.SimpleNamespace(tail_token_budget=0, max_summary_tokens=200),
-                               types.SimpleNamespace(tail_token_budget=1000), types.SimpleNamespace(tail_token_budget="1000", max_summary_tokens=200)):
+            for compressor in (
+                None,
+                types.SimpleNamespace(tail_token_budget=0, max_summary_tokens=200),
+                types.SimpleNamespace(tail_token_budget=1000),
+                types.SimpleNamespace(tail_token_budget="1000", max_summary_tokens=200),
+            ):
                 with self.subTest(compressor=compressor):
                     session["agent"].context_compressor = compressor
                     self.assertIsNone(compaction.request_size(session))
@@ -255,10 +362,32 @@ class DecisionTests(unittest.TestCase):
     def test_each_reason_to_wait_blocks_compaction(self):
         def unsettled(f):
             with f.journal.db:
-                f.journal.db.execute(extension.INSERT_REJECTED, ("r", "d", "default", "sid", "stored", "a", "e", "r", "t", "[]", 0, "accepted", 0, NOW))
+                f.journal.db.execute(
+                    extension.INSERT_REJECTED,
+                    (
+                        "r",
+                        "d",
+                        "default",
+                        "sid",
+                        "stored",
+                        "a",
+                        "e",
+                        "r",
+                        "t",
+                        "[]",
+                        0,
+                        "accepted",
+                        0,
+                        NOW,
+                    ),
+                )
+
         def interrupted(f):
             with f.journal.db:
-                f.journal.db.execute("INSERT INTO interruptions VALUES('default','stored','old',1)")
+                f.journal.db.execute(
+                    "INSERT INTO interruptions VALUES('default','stored','old',1)"
+                )
+
         cases = [
             ("not canonical", lambda f: f.canonical.update(default="other")),
             ("compacting", lambda f: f.idle.attempts.update(sid=compaction.Attempt())),
@@ -266,12 +395,20 @@ class DecisionTests(unittest.TestCase):
             ("compute host", lambda f: f.session.update(host=True)),
             ("busy", lambda f: f.session.update(queued_prompt={"text": "next"})),
             ("maintenance", lambda f: setattr(f, "lease", {"operationId": "upgrade"})),
-            ("open request", lambda f: f.requests._open.update(q=types.SimpleNamespace(sid="sid"))),
+            (
+                "open request",
+                lambda f: f.requests._open.update(q=types.SimpleNamespace(sid="sid")),
+            ),
             ("unsettled receipt", unsettled),
             ("interruption under review", interrupted),
             ("recent activity", lambda f: f.session.update(last_active=NOW - 1)),
             ("already compacted", lambda f: f.idle.settled.update(sid=("stored", 4))),
-            ("size unknown", lambda f: f.agent.context_compressor.__setattr__("tail_token_budget", None)),
+            (
+                "size unknown",
+                lambda f: f.agent.context_compressor.__setattr__(
+                    "tail_token_budget", None
+                ),
+            ),
             ("within budget", lambda f: f.session.update(history=[{}] * 3)),
         ]
         for reason, change in cases:
@@ -300,7 +437,9 @@ class DecisionTests(unittest.TestCase):
         fixture.clock[0] = NOW + DELAY
         self.assertIsNone(fixture.blocker())
 
-    def test_after_a_compaction_left_it_over_budget_it_waits_for_the_transcript_to_double(self):
+    def test_after_a_compaction_left_it_over_budget_it_waits_for_the_transcript_to_double(
+        self,
+    ):
         fixture = Fixture(self)
         fixture.idle.after["sid"] = 2000
         fixture.session["history"] = [{}] * 39
@@ -328,7 +467,9 @@ class CompactTests(unittest.TestCase):
         fixture.native.rows_after = 5
         result = fixture.idle.compact("default", "sid")
         self.assertEqual(result, {"status": "compressed"})
-        self.assertEqual(fixture.native.calls, [{"session_id": "sid", "profile": "default"}])
+        self.assertEqual(
+            fixture.native.calls, [{"session_id": "sid", "profile": "default"}]
+        )
         self.assertFalse(fixture.idle.owns("sid"))
         self.assertEqual(fixture.idle.after["sid"], 600)
         # The same history is never compacted twice, and nothing was ever cancelled.
@@ -337,8 +478,10 @@ class CompactTests(unittest.TestCase):
 
     def test_a_refused_or_failed_compaction_waits_for_the_next_turn(self):
         fixture = Fixture(self)
+
         def refused(method, params):
             raise RuntimeError(json.dumps({"code": 4009, "message": "session busy"}))
+
         fixture.idle.native = refused
         self.assertIsNone(fixture.idle.compact("default", "sid"))
         self.assertFalse(fixture.idle.owns("sid"))
@@ -355,10 +498,21 @@ class CompactTests(unittest.TestCase):
 
     def test_poll_forgets_sessions_that_are_no_longer_canonical(self):
         fixture = Fixture(self)
-        fixture.idle.activity["old"], fixture.idle.settled["old"], fixture.idle.after["old"] = NOW, ("k", 1), 10
+        (
+            fixture.idle.activity["old"],
+            fixture.idle.settled["old"],
+            fixture.idle.after["old"],
+        ) = NOW, ("k", 1), 10
         fixture.session["running"] = True
         fixture.idle.poll()
-        self.assertEqual((set(fixture.idle.activity), set(fixture.idle.settled), set(fixture.idle.after)), ({"sid"}, set(), set()))
+        self.assertEqual(
+            (
+                set(fixture.idle.activity),
+                set(fixture.idle.settled),
+                set(fixture.idle.after),
+            ),
+            ({"sid"}, set(), set()),
+        )
 
 
 class PreemptTests(unittest.TestCase):
@@ -382,21 +536,27 @@ class PreemptTests(unittest.TestCase):
     def test_the_cancel_waits_until_hermes_has_marked_the_compaction_active(self):
         fixture = Fixture(self)
         fixture.native.hold_before_active.clear()
-        thread = threading.Thread(target=lambda: fixture.idle.compact("default", "sid"), daemon=True)
+        thread = threading.Thread(
+            target=lambda: fixture.idle.compact("default", "sid"), daemon=True
+        )
         thread.start()
         for _ in range(500):
             if fixture.idle.owns("sid"):
                 break
             time.sleep(0.01)
         preempted = []
-        waiter = threading.Thread(target=lambda: preempted.append(fixture.idle.preempt("sid")), daemon=True)
+        waiter = threading.Thread(
+            target=lambda: preempted.append(fixture.idle.preempt("sid")), daemon=True
+        )
         waiter.start()
         time.sleep(0.1)
         self.assertEqual(fixture.events, [])
         fixture.native.hold_before_active.set()
         waiter.join(5)
         thread.join(5)
-        self.assertEqual((preempted, fixture.events), ([True], [("cancel", True, True)]))
+        self.assertEqual(
+            (preempted, fixture.events), ([True], [("cancel", True, True)])
+        )
 
     def test_the_cancel_waits_until_the_summary_has_started(self):
         # Cancelled before its summary starts, Hermes would read no progress and back off its own compaction.
@@ -404,14 +564,19 @@ class PreemptTests(unittest.TestCase):
         fixture.native.hold_before_dispatch.clear()
         thread, results = fixture.running()
         preempted = []
-        waiter = threading.Thread(target=lambda: preempted.append(fixture.idle.preempt("sid")), daemon=True)
+        waiter = threading.Thread(
+            target=lambda: preempted.append(fixture.idle.preempt("sid")), daemon=True
+        )
         waiter.start()
         time.sleep(0.1)
         self.assertEqual(fixture.events, [])
         fixture.native.hold_before_dispatch.set()
         waiter.join(5)
         thread.join(5)
-        self.assertEqual((preempted, results, fixture.events), ([True], [{"status": "aborted"}], [("cancel", True, True)]))
+        self.assertEqual(
+            (preempted, results, fixture.events),
+            ([True], [{"status": "aborted"}], [("cancel", True, True)]),
+        )
 
     def test_a_held_session_lock_cannot_keep_an_input_past_the_bound(self):
         fixture = Fixture(self)
@@ -421,14 +586,21 @@ class PreemptTests(unittest.TestCase):
         # time the input spends blocked on the lock counts against the bound. The lock stays held until the test lets it go.
         clock = SteppedClock(0.1)
         fixture.idle.monotonic = clock.look
-        fixture.session["history_lock"] = ChargedLock(fixture.session["history_lock"], clock)
-        held, release, finished = threading.Event(), threading.Event(), threading.Event()
+        fixture.session["history_lock"] = ChargedLock(
+            fixture.session["history_lock"], clock
+        )
+        held, release, finished = (
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
+        )
 
         def hold():
             with fixture.session["history_lock"]:
                 held.set()
                 release.wait(10)
             finished.set()
+
         holder = threading.Thread(target=hold, daemon=True)
         with self.assertLogs(compaction.log, logging.WARNING):
             holder.start()
@@ -451,15 +623,23 @@ class PreemptTests(unittest.TestCase):
         thread, results = fixture.running()
         self.assertTrue(fixture.idle.preempt("sid"))
         thread.join(5)
-        self.assertEqual(fixture.events, [("cancel", True, None), ("cancel", True, None), ("cancel", True, False)])
-        self.assertEqual((results, fixture.idle.after["sid"]), ([{"status": "compressed"}], 600))
+        self.assertEqual(
+            fixture.events,
+            [("cancel", True, None), ("cancel", True, None), ("cancel", True, False)],
+        )
+        self.assertEqual(
+            (results, fixture.idle.after["sid"]), ([{"status": "compressed"}], 600)
+        )
 
     def test_input_another_client_queued_in_hermes_cancels_the_compaction(self):
         fixture = Fixture(self)
         thread, results = fixture.running()
         fixture.session["queued_prompt"] = {"text": "from another client"}
         thread.join(5)
-        self.assertEqual((results, fixture.events), ([{"status": "aborted"}], [("cancel", True, True)]))
+        self.assertEqual(
+            (results, fixture.events),
+            ([{"status": "aborted"}], [("cancel", True, True)]),
+        )
 
     def held(self, fixture, owner=None):
         """A compaction Hermes holds for ``owner``'s thread, its summary already started."""
@@ -474,7 +654,10 @@ class PreemptTests(unittest.TestCase):
             # Hermes released the session; the fence is a later turn's own compaction's.
             ("released", lambda f, a: f.session.pop(compaction.OWNER)),
             # Another client's manual compaction won the session.
-            ("another client", lambda f, a: f.session.update({compaction.OWNER: a.thread + 1})),
+            (
+                "another client",
+                lambda f, a: f.session.update({compaction.OWNER: a.thread + 1}),
+            ),
             # This attempt already ended; the compaction now held is a later one.
             ("finished attempt", lambda f, a: a.done.set()),
         ]
@@ -488,13 +671,22 @@ class PreemptTests(unittest.TestCase):
         fixture = Fixture(self)
         attempt = self.held(fixture)
         fixture.idle.stop("sid", attempt)
-        self.assertEqual((fixture.events, attempt.cancelled), ([("cancel", True, True)], True))
+        self.assertEqual(
+            (fixture.events, attempt.cancelled), ([("cancel", True, True)], True)
+        )
 
-    def test_a_compaction_that_ends_while_the_cancel_waits_for_the_session_lock_is_not_cancelled(self):
+    def test_a_compaction_that_ends_while_the_cancel_waits_for_the_session_lock_is_not_cancelled(
+        self,
+    ):
         fixture = Fixture(self)
         attempt = self.held(fixture)
-        with patch.object(compaction, "LOCK_SECONDS", 5), fixture.session["history_lock"]:
-            stopper = threading.Thread(target=fixture.idle.stop, args=("sid", attempt), daemon=True)
+        with (
+            patch.object(compaction, "LOCK_SECONDS", 5),
+            fixture.session["history_lock"],
+        ):
+            stopper = threading.Thread(
+                target=fixture.idle.stop, args=("sid", attempt), daemon=True
+            )
             stopper.start()
             time.sleep(0.05)
             # Hermes releases the session, and could admit a turn, under the same lock.
@@ -503,41 +695,66 @@ class PreemptTests(unittest.TestCase):
         stopper.join(5)
         self.assertEqual((fixture.events, attempt.cancelled), ([], False))
 
-    def test_an_attempt_that_finishes_while_the_cancel_waits_for_the_lock_cancels_nothing_after_it(self):
+    def test_an_attempt_that_finishes_while_the_cancel_waits_for_the_lock_cancels_nothing_after_it(
+        self,
+    ):
         fixture = Fixture(self)
         attempt = self.held(fixture)
-        with patch.object(compaction, "LOCK_SECONDS", 5), fixture.session["history_lock"]:
-            stopper = threading.Thread(target=fixture.idle.stop, args=("sid", attempt), daemon=True)
+        with (
+            patch.object(compaction, "LOCK_SECONDS", 5),
+            fixture.session["history_lock"],
+        ):
+            stopper = threading.Thread(
+                target=fixture.idle.stop, args=("sid", attempt), daemon=True
+            )
             stopper.start()
             time.sleep(0.05)
             # The attempt ended, and the same poll thread now holds the session for the next one.
             attempt.done.set()
-            fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
+            fixture.agent._active_compression_commit_fence = Fence(
+                fixture.native, [True]
+            )
         stopper.join(5)
         self.assertEqual((fixture.events, attempt.cancelled), ([], False))
 
     def test_a_stall_fallback_is_cancelled_only_once_its_own_summary_starts(self):
         fixture = Fixture(self)
         compressor = fixture.agent.context_compressor
-        attempt = compaction.Attempt(working=compressor._compression_working_attempt_generation)
-        fixture.session["_manual_compress_active"], fixture.session[compaction.OWNER] = True, attempt.thread
-        primary = fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
+        attempt = compaction.Attempt(
+            working=compressor._compression_working_attempt_generation
+        )
+        (
+            fixture.session["_manual_compress_active"],
+            fixture.session[compaction.OWNER],
+        ) = True, attempt.thread
+        primary = fixture.agent._active_compression_commit_fence = Fence(
+            fixture.native, [True]
+        )
         fixture.idle.stop("sid", attempt)
         self.assertEqual(fixture.events, [])
         # The primary summary started and stalled; Hermes published a fresh fence for its fallback.
         compressor._compression_working_attempt_generation += 1
-        fallback = fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
+        fallback = fixture.agent._active_compression_commit_fence = Fence(
+            fixture.native, [True]
+        )
         fixture.idle.stop("sid", attempt)
         self.assertEqual(fixture.events, [])
         compressor._compression_working_attempt_generation += 1
         fixture.idle.stop("sid", attempt)
-        self.assertEqual((primary.cancelled, fallback.cancelled, attempt.cancelled), (False, True, True))
+        self.assertEqual(
+            (primary.cancelled, fallback.cancelled, attempt.cancelled),
+            (False, True, True),
+        )
 
-    def test_a_fallback_whose_marker_was_missed_counts_as_started_once_it_reports_progress(self):
+    def test_a_fallback_whose_marker_was_missed_counts_as_started_once_it_reports_progress(
+        self,
+    ):
         fixture = Fixture(self)
         attempt = self.held(fixture)
         attempt.fence = Fence(fixture.native, [True])
-        fallback = fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
+        fallback = fixture.agent._active_compression_commit_fence = Fence(
+            fixture.native, [True]
+        )
         fixture.idle.stop("sid", attempt)
         self.assertFalse(fallback.cancelled)
         fallback.progress = True
@@ -547,18 +764,22 @@ class PreemptTests(unittest.TestCase):
     def test_the_seam_names_the_thread_only_while_hermes_holds_the_session(self):
         fixture = Fixture(self)
         seen = []
+
         @contextlib.contextmanager
         def original(sid, session):
             seen.append(("claim", session.get(compaction.OWNER)))
             yield
             # Hermes releases the session and drains its queue here.
             seen.append(("release", session.get(compaction.OWNER)))
+
         fixture.server._manual_compress_turn = original
         with patch.object(compaction.threading, "Thread"):
             fixture.idle.start(interval=60)
         with fixture.server._manual_compress_turn("sid", fixture.session):
             seen.append(("held", fixture.session.get(compaction.OWNER)))
-        self.assertEqual(seen, [("claim", None), ("held", threading.get_ident()), ("release", None)])
+        self.assertEqual(
+            seen, [("claim", None), ("held", threading.get_ident()), ("release", None)]
+        )
 
     def test_an_input_on_its_way_to_admission_holds_off_a_new_compaction(self):
         fixture = Fixture(self)
@@ -571,10 +792,15 @@ class PreemptTests(unittest.TestCase):
         with fixture.idle.admitting("sid"):
             self.assertTrue(fixture.idle.preempt("sid"))
         thread.join(5)
-        self.assertEqual((results, fixture.events), ([{"status": "aborted"}], [("cancel", True, True)]))
+        self.assertEqual(
+            (results, fixture.events),
+            ([{"status": "aborted"}], [("cancel", True, True)]),
+        )
         self.assertEqual(fixture.idle.pending, {})
 
-    def test_a_compaction_that_cannot_be_cancelled_releases_the_input_after_the_bound(self):
+    def test_a_compaction_that_cannot_be_cancelled_releases_the_input_after_the_bound(
+        self,
+    ):
         fixture = Fixture(self)
         fixture.native.answers = [None]
         thread, _ = fixture.running()
@@ -595,13 +821,20 @@ def bridge_with_compaction(test, hermes, answers=None):
     events = []
     server, idle = hermes.server, hermes.bridge.compaction
     session = server._sessions["sid"]
-    session.update(agent=Agent(), history_lock=threading.RLock(), history_version=1, history=[{}] * 30)
+    session.update(
+        agent=Agent(),
+        history_lock=threading.RLock(),
+        history_version=1,
+        history=[{}] * 30,
+    )
     server._session_uses_compute_host = lambda session: False
     native = Native(server, "sid", events)
     native.answers = answers or [True]
     idle.delay, idle.native, idle.size = DELAY, native, lambda session: (2000, 1000)
     idle.activity["sid"] = time.time() - DELAY
-    thread = threading.Thread(target=lambda: idle.compact("default", "sid"), daemon=True)
+    thread = threading.Thread(
+        target=lambda: idle.compact("default", "sid"), daemon=True
+    )
     thread.start()
     if not native.entered.wait(5):
         raise AssertionError("The compaction never reached Hermes")
@@ -618,10 +851,23 @@ class BridgeTests(unittest.TestCase):
             fixture = bridge_with_compaction(self, hermes)
             hermes.native_calls.clear()
             # The client saw the compaction's running flag and asked to steer; there is no task to steer.
-            result = hermes.methods["agent-interface.submit"]("send", {"profile": "default", "request_id": "one", "sender_id": "member",
-                                                                       "text": "What's the weather?", "steer": True})["result"]
-            self.assertEqual((result["status"], result["steering"], result["runId"]), ("accepted", False, "one"))
-            self.assertEqual([method for method, _ in hermes.native_calls], ["prompt.submit"])
+            result = hermes.methods["agent-interface.submit"](
+                "send",
+                {
+                    "profile": "default",
+                    "request_id": "one",
+                    "sender_id": "member",
+                    "text": "What's the weather?",
+                    "steer": True,
+                },
+            )["result"]
+            self.assertEqual(
+                (result["status"], result["steering"], result["runId"]),
+                ("accepted", False, "one"),
+            )
+            self.assertEqual(
+                [method for method, _ in hermes.native_calls], ["prompt.submit"]
+            )
             self.assertEqual(fixture.events, [("cancel", True, True)])
 
     def send_as_another_turn_takes_the_session(self, native):
@@ -633,33 +879,76 @@ class BridgeTests(unittest.TestCase):
             fixture = bridge_with_compaction(self, hermes)
             session, calls = hermes.server._sessions["sid"], []
             fixture.native.on_release = lambda: session.update(running=True)
+
             def handle(request):
                 calls.append(request["method"])
-                return hermes.server._ok(request["id"], {"status": native if session.get("running") else "streaming"})
+                return hermes.server._ok(
+                    request["id"],
+                    {"status": native if session.get("running") else "streaming"},
+                )
+
             hermes.server.handle_request = handle
-            result = hermes.methods["agent-interface.submit"]("send", {"profile": "default", "request_id": "one", "sender_id": "member",
-                                                                       "text": "What's the weather?"})["result"]
+            result = hermes.methods["agent-interface.submit"](
+                "send",
+                {
+                    "profile": "default",
+                    "request_id": "one",
+                    "sender_id": "member",
+                    "text": "What's the weather?",
+                },
+            )["result"]
             return result, calls, fixture.events
 
-    def test_a_message_that_stops_a_compaction_says_when_another_turn_took_the_session_first(self):
+    def test_a_message_that_stops_a_compaction_says_when_another_turn_took_the_session_first(
+        self,
+    ):
         for native, turn in [("redirected", "joined"), ("queued", "queued")]:
             with self.subTest(native=native):
-                result, calls, events = self.send_as_another_turn_takes_the_session(native)
-                self.assertEqual((result["status"], result["steering"], result["runId"], result.get("turn")), ("accepted", False, "one", turn))
-                self.assertEqual((calls, events), (["prompt.submit"], [("cancel", True, True)]))
+                result, calls, events = self.send_as_another_turn_takes_the_session(
+                    native
+                )
+                self.assertEqual(
+                    (
+                        result["status"],
+                        result["steering"],
+                        result["runId"],
+                        result.get("turn"),
+                    ),
+                    ("accepted", False, "one", turn),
+                )
+                self.assertEqual(
+                    (calls, events), (["prompt.submit"], [("cancel", True, True)])
+                )
 
-    def test_a_compaction_looks_idle_to_every_client_and_its_progress_stays_private(self):
+    def test_a_compaction_looks_idle_to_every_client_and_its_progress_stays_private(
+        self,
+    ):
         with FakeGateway([]) as hermes:
             hermes.open()
             fixture = bridge_with_compaction(self, hermes)
             session = hermes.server._sessions["sid"]
             session["app_exposed_reasoning"] = "Earlier turn's reasoning"
-            value = {"session_id": "sid", "running": True, "info": {"running": True}, "inflight": None}
+            value = {
+                "session_id": "sid",
+                "running": True,
+                "info": {"running": True},
+                "inflight": None,
+            }
             hermes.bridge.describe_task("default", "sid", session, value)
-            self.assertEqual((value["running"], value["info"]["running"], value["inflight"]), (False, False, None))
+            self.assertEqual(
+                (value["running"], value["info"]["running"], value["inflight"]),
+                (False, False, None),
+            )
             written = []
             hermes.bridge.native_write = written.append
-            progress = {"method": "event", "params": {"type": "status.update", "session_id": "sid", "payload": {"text": "compressing 30 messages"}}}
+            progress = {
+                "method": "event",
+                "params": {
+                    "type": "status.update",
+                    "session_id": "sid",
+                    "payload": {"text": "compressing 30 messages"},
+                },
+            }
             self.assertTrue(hermes.bridge.write(progress))
             self.assertEqual(written, [])
             fixture.native.release.set()
@@ -670,15 +959,43 @@ class BridgeTests(unittest.TestCase):
     def test_discovery_does_not_hold_completed_events_behind_a_compaction(self):
         with FakeGateway([]) as hermes:
             hermes.open()
-            hermes.journal.event("default", "sid", "completed", "Hermes completed", "run", event_key="run:completed")
+            hermes.journal.event(
+                "default",
+                "sid",
+                "completed",
+                "Hermes completed",
+                "run",
+                event_key="run:completed",
+            )
             bridge_with_compaction(self, hermes)
             # No routines: discovery reads only the journal's events.
-            executions = types.SimpleNamespace(list_executions=lambda **_: [], EXECUTIONS_FILE=Path(hermes.directory.name) / "executions.db")
-            cron = types.SimpleNamespace(_owner_home_scope=lambda _: contextlib.nullcontext(), _list_cron_jobs_sync=lambda _: [])
-            with patch.dict(sys.modules, {"hermes_cli": types.ModuleType("hermes_cli"), "hermes_cli.web_routers": types.ModuleType("hermes_cli.web_routers"),
-                                          "hermes_cli.web_routers.cron": cron, "cron": types.SimpleNamespace(executions=executions), "cron.executions": executions}):
-                found = hermes.methods["agent-interface.discover"]("poll", {"cursor": "0"})["result"]["events"]
-            self.assertEqual([(event["kind"], event["runId"]) for event in found], [("completed", "run")])
+            executions = types.SimpleNamespace(
+                list_executions=lambda **_: [],
+                EXECUTIONS_FILE=Path(hermes.directory.name) / "executions.db",
+            )
+            cron = types.SimpleNamespace(
+                _owner_home_scope=lambda _: contextlib.nullcontext(),
+                _list_cron_jobs_sync=lambda _: [],
+            )
+            with patch.dict(
+                sys.modules,
+                {
+                    "hermes_cli": types.ModuleType("hermes_cli"),
+                    "hermes_cli.web_routers": types.ModuleType(
+                        "hermes_cli.web_routers"
+                    ),
+                    "hermes_cli.web_routers.cron": cron,
+                    "cron": types.SimpleNamespace(executions=executions),
+                    "cron.executions": executions,
+                },
+            ):
+                found = hermes.methods["agent-interface.discover"](
+                    "poll", {"cursor": "0"}
+                )["result"]["events"]
+            self.assertEqual(
+                [(event["kind"], event["runId"]) for event in found],
+                [("completed", "run")],
+            )
 
     def test_routine_delivery_admission_stops_a_compaction_first(self):
         with FakeGateway([]) as hermes:
@@ -689,10 +1006,19 @@ class BridgeTests(unittest.TestCase):
                 self.assertFalse(hermes.server._sessions["sid"]["running"])
             self.assertEqual(fixture.events, [("cancel", True, True)])
 
-
     def test_maintenance_stops_a_compaction_instead_of_waiting_for_it(self):
-        with tempfile.TemporaryDirectory() as directory, FakeHermes([], environment={
-                "HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(Path(directory) / "maintenance.json"), "HERMES_AGENT_INTERFACE_TOKEN": "key"}) as hermes:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            FakeHermes(
+                [],
+                environment={
+                    "HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(
+                        Path(directory) / "maintenance.json"
+                    ),
+                    "HERMES_AGENT_INTERFACE_TOKEN": "key",
+                },
+            ) as hermes,
+        ):
             hermes.open()
             fixture = bridge_with_compaction(self, hermes)
             # Hermes's release admits any queued turn through the guarded retirement gate.
@@ -703,24 +1029,45 @@ class BridgeTests(unittest.TestCase):
             reads = itertools.count()
             hermes.bridge.compaction.monotonic = lambda: next(reads) * 0.01
             bridge_compaction = sys.modules[type(hermes.bridge.compaction).__module__]
-            with patch.object(bridge_compaction, "PREEMPT_WAIT", 2), self.assertNoLogs(bridge_compaction.log, logging.WARNING):
-                lease = hermes.methods["agent-interface.maintenance"]("lease", {"service_key": "key", "action": "acquire", "operation_id": "operation-1"})
+            with (
+                patch.object(bridge_compaction, "PREEMPT_WAIT", 2),
+                self.assertNoLogs(bridge_compaction.log, logging.WARNING),
+            ):
+                lease = hermes.methods["agent-interface.maintenance"](
+                    "lease",
+                    {
+                        "service_key": "key",
+                        "action": "acquire",
+                        "operation_id": "operation-1",
+                    },
+                )
             self.assertNotIn("error", lease)
-            self.assertEqual((lease["result"]["active"], lease["result"]["busy"]), (True, []))
+            self.assertEqual(
+                (lease["result"]["active"], lease["result"]["busy"]), (True, [])
+            )
             self.assertEqual(fixture.events, [("cancel", True, True)])
 
 
 class MaintenanceDeadlineTests(unittest.TestCase):
     """An acquire whose caller gave up writes no lease, and one that is refused anyway stops no compaction."""
 
-    BUSY = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
+    BUSY = {
+        "code": 409,
+        "message": "Hermes still has active work; no maintenance lease acquired",
+    }
     OWNED = {"code": 409, "message": "Another maintenance operation owns this lease"}
 
     def host(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.lease = Path(directory.name) / "maintenance.json"
-        hermes = FakeHermes([], environment={"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(self.lease), "HERMES_AGENT_INTERFACE_TOKEN": "key"})
+        hermes = FakeHermes(
+            [],
+            environment={
+                "HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(self.lease),
+                "HERMES_AGENT_INTERFACE_TOKEN": "key",
+            },
+        )
         hermes.__enter__()
         self.addCleanup(hermes.__exit__, None, None, None)
         hermes.open()
@@ -729,12 +1076,22 @@ class MaintenanceDeadlineTests(unittest.TestCase):
         return hermes
 
     def call(self, hermes, action, operation="operation-1", **params):
-        params = {"service_key": "key", "action": action, **({} if operation is None else {"operation_id": operation}), **params}
+        params = {
+            "service_key": "key",
+            "action": action,
+            **({} if operation is None else {"operation_id": operation}),
+            **params,
+        }
         return hermes.methods["agent-interface.maintenance"]("rid", params)
 
     def acquire_on_thread(self, hermes, operation, **params):
         answers = []
-        thread = threading.Thread(target=lambda: answers.append(self.call(hermes, "acquire", operation, **params)), daemon=True)
+        thread = threading.Thread(
+            target=lambda: answers.append(
+                self.call(hermes, "acquire", operation, **params)
+            ),
+            daemon=True,
+        )
         thread.start()
         self.addCleanup(thread.join, 5)
         return thread, answers
@@ -743,25 +1100,46 @@ class MaintenanceDeadlineTests(unittest.TestCase):
         def other_lease(hermes):
             self.lease.write_text(json.dumps({"operationId": "another-operation"}))
             self.lease.chmod(0o600)
+
         def work_beside_compaction(hermes):
             # Another client's turn waiting to start beside the compaction is work the acquire must not preempt for.
             hermes.server._sessions["sid"]["_auto_continue_scheduled"] = True
+
         def turn_elsewhere(hermes):
             hermes.server._sessions["elsewhere"] = {"running": True}
+
         def reservation(hermes):
             # A queued RPC holds a reservation of its own beside the compaction's.
-            hermes.retirement.active_count = lambda: 2 + hermes.bridge.compaction.running()
+            hermes.retirement.active_count = lambda: (
+                2 + hermes.bridge.compaction.running()
+            )
+
         def send_on_a_lane(hermes):
             hermes.bridge.sends_in_flight[1] = ("default", "queued")
+
         busy, owned = self.BUSY, self.OWNED
-        cases = [("another operation owns the lease", other_lease, {}, owned),
-                 ("work beside the compaction", work_beside_compaction, {}, busy),
-                 ("a turn running on another session", turn_elsewhere, {}, busy),
-                 ("a queued reservation", reservation, {}, busy),
-                 ("a send waiting for its lane", send_on_a_lane, {}, busy),
-                 ("a malformed operation", lambda hermes: None, {"operation": "short"}, {"code": 400, "message": "Invalid maintenance operation"})]
-        cases += [("deadline " + repr(value), lambda hermes: None, {"deadline": value}, {"code": 400, "message": "Invalid maintenance deadline"})
-                  for value in (0, -1, "5", True, float("nan"), math.inf, [])]
+        cases = [
+            ("another operation owns the lease", other_lease, {}, owned),
+            ("work beside the compaction", work_beside_compaction, {}, busy),
+            ("a turn running on another session", turn_elsewhere, {}, busy),
+            ("a queued reservation", reservation, {}, busy),
+            ("a send waiting for its lane", send_on_a_lane, {}, busy),
+            (
+                "a malformed operation",
+                lambda hermes: None,
+                {"operation": "short"},
+                {"code": 400, "message": "Invalid maintenance operation"},
+            ),
+        ]
+        cases += [
+            (
+                "deadline " + repr(value),
+                lambda hermes: None,
+                {"deadline": value},
+                {"code": 400, "message": "Invalid maintenance deadline"},
+            )
+            for value in (0, -1, "5", True, float("nan"), math.inf, [])
+        ]
         for name, arrange, params, expected in cases:
             with self.subTest(name):
                 hermes = self.host()
@@ -773,21 +1151,31 @@ class MaintenanceDeadlineTests(unittest.TestCase):
                 self.assertEqual(fixture.events, [])
                 self.assertTrue(fixture.thread.is_alive())
                 # Whatever lease was there is untouched, and none was written.
-                self.assertEqual(self.lease.read_text() if self.lease.exists() else None, before)
+                self.assertEqual(
+                    self.lease.read_text() if self.lease.exists() else None, before
+                )
 
     def test_a_compactions_own_hold_is_no_work_to_refuse_for(self):
         hermes = self.host()
         fixture = bridge_with_compaction(self, hermes)
         result = self.call(hermes, "acquire")["result"]
-        self.assertEqual(result, {"active": True, "operationId": "operation-1", "busy": []})
+        self.assertEqual(
+            result, {"active": True, "operationId": "operation-1", "busy": []}
+        )
         self.assertEqual(fixture.events, [("cancel", True, True)])
-        self.assertEqual(json.loads(self.lease.read_text()), {"operationId": "operation-1"})
+        self.assertEqual(
+            json.loads(self.lease.read_text()), {"operationId": "operation-1"}
+        )
 
-    def test_an_acquire_without_a_deadline_waits_out_the_preempt_bound_then_writes_nothing_while_busy(self):
+    def test_an_acquire_without_a_deadline_waits_out_the_preempt_bound_then_writes_nothing_while_busy(
+        self,
+    ):
         hermes = self.host()
         bridge_with_compaction(self, hermes, [None])
         started = time.monotonic()
-        with patch.object(sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 0.3):
+        with patch.object(
+            sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 0.3
+        ):
             refused = self.call(hermes, "acquire")
         # The compaction still holds its session: busy, as before the deadline existed.
         self.assertEqual((refused["error"], self.lease.exists()), (self.BUSY, False))
@@ -797,7 +1185,9 @@ class MaintenanceDeadlineTests(unittest.TestCase):
         hermes = self.host()
         fixture = bridge_with_compaction(self, hermes, [None])
         started = time.monotonic()
-        with patch.object(sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 5):
+        with patch.object(
+            sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 5
+        ):
             refused = self.call(hermes, "acquire", deadline=0.3)
         # The deadline, not the 5 s preempt bound, ended the wait.
         self.assertLess(time.monotonic() - started, 2)
@@ -822,7 +1212,9 @@ class MaintenanceDeadlineTests(unittest.TestCase):
         hermes = self.host()
         fixture = bridge_with_compaction(self, hermes)
         with hermes.bridge.maintenance_lock:
-            thread, answers = self.acquire_on_thread(hermes, "operation-1", deadline=0.3)
+            thread, answers = self.acquire_on_thread(
+                hermes, "operation-1", deadline=0.3
+            )
             time.sleep(0.6)
         thread.join(5)
         # The caller stopped waiting while the acquire queued behind another maintenance call, so nothing is stopped or written.
@@ -845,8 +1237,13 @@ class MaintenanceDeadlineTests(unittest.TestCase):
         fixture.native.on_release = lambda: clock.__setitem__(0, finished)
         answer = self.call(hermes, "acquire", deadline=10)
         if written:
-            self.assertEqual(answer["result"], {"active": True, "operationId": "operation-1", "busy": []})
-            self.assertEqual(json.loads(self.lease.read_text()), {"operationId": "operation-1"})
+            self.assertEqual(
+                answer["result"],
+                {"active": True, "operationId": "operation-1", "busy": []},
+            )
+            self.assertEqual(
+                json.loads(self.lease.read_text()), {"operationId": "operation-1"}
+            )
         else:
             self.assertEqual(answer["error"], self.BUSY)
             self.assertFalse(self.lease.exists())
@@ -855,14 +1252,18 @@ class MaintenanceDeadlineTests(unittest.TestCase):
         hermes = self.host()
         fixture = bridge_with_compaction(self, hermes)
         # An app turn takes the session as Hermes lets go of the compaction.
-        fixture.native.on_release = lambda: hermes.server._sessions["sid"].__setitem__("_auto_continue_scheduled", True)
+        fixture.native.on_release = lambda: hermes.server._sessions["sid"].__setitem__(
+            "_auto_continue_scheduled", True
+        )
         self.assertEqual(self.call(hermes, "acquire")["error"], self.BUSY)
         self.assertFalse(self.lease.exists())
 
     def test_status_and_release_are_answered_while_an_acquire_preempts(self):
         hermes = self.host()
         fixture = bridge_with_compaction(self, hermes, [None])
-        with patch.object(sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 3):
+        with patch.object(
+            sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 3
+        ):
             thread, answers = self.acquire_on_thread(hermes, "operation-1")
             time.sleep(0.2)
             started = time.monotonic()
@@ -875,12 +1276,16 @@ class MaintenanceDeadlineTests(unittest.TestCase):
             fixture.native.release.set()
             thread.join(5)
         self.assertEqual(answers[0]["result"]["active"], True)
-        self.assertEqual(self.call(hermes, "status", None)["result"]["operationId"], "operation-1")
+        self.assertEqual(
+            self.call(hermes, "status", None)["result"]["operationId"], "operation-1"
+        )
 
     def test_two_acquires_at_once_leave_one_lease_for_one_operation(self):
         hermes = self.host()
         fixture = bridge_with_compaction(self, hermes, [None])
-        with patch.object(sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 5):
+        with patch.object(
+            sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 5
+        ):
             first, first_answers = self.acquire_on_thread(hermes, "operation-1")
             second, second_answers = self.acquire_on_thread(hermes, "operation-2")
             # Both found no lease and no work, and wait in their preempts for the compaction.
@@ -892,14 +1297,19 @@ class MaintenanceDeadlineTests(unittest.TestCase):
         answers = {"operation-1": first_answers[0], "operation-2": second_answers[0]}
         winners = [name for name, answer in answers.items() if "result" in answer]
         self.assertEqual(len(winners), 1)
-        self.assertEqual(json.loads(self.lease.read_text()), {"operationId": winners[0]})
+        self.assertEqual(
+            json.loads(self.lease.read_text()), {"operationId": winners[0]}
+        )
         loser = answers["operation-2" if winners[0] == "operation-1" else "operation-1"]
         self.assertEqual(loser["error"], self.OWNED)
 
     def test_an_acquire_repeated_for_its_own_lease_is_idempotent(self):
         hermes = self.host()
         self.assertTrue(self.call(hermes, "acquire")["result"]["active"])
-        self.assertEqual(self.call(hermes, "acquire")["result"], {"active": True, "operationId": "operation-1", "busy": []})
+        self.assertEqual(
+            self.call(hermes, "acquire")["result"],
+            {"active": True, "operationId": "operation-1", "busy": []},
+        )
 
 
 class OriginalRowTests(unittest.TestCase):
@@ -910,28 +1320,57 @@ class OriginalRowTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         db = sqlite3.connect(Path(directory.name) / "state.db", check_same_thread=False)
         self.addCleanup(db.close)
-        db.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, message_uid TEXT)")
+        db.execute(
+            "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, message_uid TEXT)"
+        )
         # Rows 1-4 were archived; 5 and 6 copy 2 and 4; 7 is new; 9's uid also names an older row of another session.
-        db.executemany("INSERT INTO messages VALUES(?,?,?)", [(1, "stored", "a"), (2, "stored", "b"), (3, "stored", "c"), (4, "stored", "d"),
-                                                             (5, "stored", "b"), (6, "stored", "d"), (7, "stored", "e"), (8, "other", "f"), (9, "stored", "f")])
-        store = types.SimpleNamespace(_read_all=lambda sql, params=(): db.execute(sql, params).fetchall())
+        db.executemany(
+            "INSERT INTO messages VALUES(?,?,?)",
+            [
+                (1, "stored", "a"),
+                (2, "stored", "b"),
+                (3, "stored", "c"),
+                (4, "stored", "d"),
+                (5, "stored", "b"),
+                (6, "stored", "d"),
+                (7, "stored", "e"),
+                (8, "other", "f"),
+                (9, "stored", "f"),
+            ],
+        )
+        store = types.SimpleNamespace(
+            _read_all=lambda sql, params=(): db.execute(sql, params).fetchall()
+        )
         return store
 
     def test_copies_show_their_originals_row_id_and_receipts_follow(self):
         store = self.store()
-        with FakeGateway([{"row_id": 1, "role": "user", "text": "first"}, {"row_id": 5, "role": "user", "text": "kept"},
-                          {"row_id": 6, "role": "assistant", "text": "reply"}, {"row_id": 7, "role": "user", "text": "new"},
-                          {"row_id": 9, "role": "user", "text": "own"}]) as hermes:
+        with FakeGateway(
+            [
+                {"row_id": 1, "role": "user", "text": "first"},
+                {"row_id": 5, "role": "user", "text": "kept"},
+                {"row_id": 6, "role": "assistant", "text": "reply"},
+                {"row_id": 7, "role": "user", "text": "new"},
+                {"row_id": 9, "role": "user", "text": "own"},
+            ]
+        ) as hermes:
             seen = []
+
             def session_db(session):
                 seen.append(session.get("session_key"))
                 return _Yield(store)
+
             hermes.server._session_db = session_db
             with hermes.journal.db:
-                hermes.journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,status,row_id,terminal,created) VALUES('kept','d','default','sid','stored','member','e','kept','kept','accepted',2,1,1)")
+                hermes.journal.db.execute(
+                    "INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,status,row_id,terminal,created) VALUES('kept','d','default','sid','stored','member','e','kept','kept','accepted',2,1,1)"
+                )
             rows = hermes.open()["messages"]
             self.assertEqual([row["row_id"] for row in rows], [1, 2, 4, 7, 9])
-            self.assertEqual((rows[1]["app_request_id"], rows[1]["app_sender_id"]), ("kept", "member"))
+            self.assertEqual(
+                (rows[1]["app_request_id"], rows[1]["app_sender_id"]),
+                ("kept", "member"),
+            )
             self.assertEqual(seen, ["stored"])
 
     def test_without_a_session_store_rows_are_left_alone(self):

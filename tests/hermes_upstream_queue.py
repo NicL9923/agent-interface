@@ -22,17 +22,24 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+
 from __future__ import annotations
 
 from typing import Any
+
 
 def _ac_inflight_original(session: dict) -> str:
     turn = session.get("inflight_turn")
     return str(turn.get("user") or "").strip() if isinstance(turn, dict) else ""
 
 
-def _enqueue_prompt(session: dict, text: Any, transport: Any, image_paths: list[str] | None = None,
-                    turn_author: dict | None = None) -> dict | None:
+def _enqueue_prompt(
+    session: dict,
+    text: Any,
+    transport: Any,
+    image_paths: list[str] | None = None,
+    turn_author: dict | None = None,
+) -> dict | None:
     """Queue a message for the next turn. Text-only arrivals share a slot and merge losslessly (like the
     consecutive-user merge in ``repair_message_sequence``); image-bearing and authored ones stay separate
     envelopes so attachment chronology and the sender survive. ``transport`` is pinned so the drained turn
@@ -45,14 +52,28 @@ def _enqueue_prompt(session: dict, text: Any, transport: Any, image_paths: list[
     _drop_queued_duplicates_of_inflight_user(session)
     text_only = not image_paths and isinstance(text, str)
     # A text-only self-copy of the live prompt would restart it on drain; an authored copy is another sender's message.
-    if text_only and not turn_author and text.strip() == _ac_inflight_original(session) != "":
+    if (
+        text_only
+        and not turn_author
+        and text.strip() == _ac_inflight_original(session) != ""
+    ):
         return None
-    queued = {"text": text, "transport": transport, **({"image_paths": image_paths} if image_paths else {}),
-              **({"turn_author": turn_author} if turn_author else {})}
+    queued = {
+        "text": text,
+        "transport": transport,
+        **({"image_paths": image_paths} if image_paths else {}),
+        **({"turn_author": turn_author} if turn_author else {}),
+    }
     existing = session.get("queued_prompt")
-    if (existing and text_only and not turn_author and isinstance(existing.get("text"), str)
-            and not existing.get("image_paths") and not existing.get("turn_author")
-            and not session.get("queued_prompts")):
+    if (
+        existing
+        and text_only
+        and not turn_author
+        and isinstance(existing.get("text"), str)
+        and not existing.get("image_paths")
+        and not existing.get("turn_author")
+        and not session.get("queued_prompts")
+    ):
         prev = existing["text"]
         existing["text"] = f"{prev}\n\n{text}" if prev and text else (prev or text)
         return existing
@@ -75,11 +96,27 @@ def _sanitize_queued_entry_vs_inflight_user(entry: Any, original: str) -> dict |
     if not isinstance(entry, dict):
         return None
     text = entry.get("text")
-    if not original or entry.get("image_paths") or entry.get("turn_author") or not isinstance(text, str):
+    if (
+        not original
+        or entry.get("image_paths")
+        or entry.get("turn_author")
+        or not isinstance(text, str)
+    ):
         return entry
     # A lossless text-merge may have glued the live original onto a later follow-up: keep the remainder.
-    rest = next((text[len(original + sep):] for sep in ("\n\n", "\n") if text.startswith(original + sep)), text).strip()
-    return None if not rest or rest == original else (entry if rest == text.strip() else {**entry, "text": rest})
+    rest = next(
+        (
+            text[len(original + sep) :]
+            for sep in ("\n\n", "\n")
+            if text.startswith(original + sep)
+        ),
+        text,
+    ).strip()
+    return (
+        None
+        if not rest or rest == original
+        else (entry if rest == text.strip() else {**entry, "text": rest})
+    )
 
 
 def _drop_queued_duplicates_of_inflight_user(session: dict) -> None:
@@ -94,8 +131,10 @@ def _drop_queued_duplicates_of_inflight_user(session: dict) -> None:
     if not (original := _ac_inflight_original(session)):
         return
     head = session.get("queued_prompt")
-    cleaned = (_sanitize_queued_entry_vs_inflight_user(e, original)
-               for e in ([head] if head else []) + list(session.get("queued_prompts") or []))
+    cleaned = (
+        _sanitize_queued_entry_vs_inflight_user(e, original)
+        for e in ([head] if head else []) + list(session.get("queued_prompts") or [])
+    )
     _ac_set_queue(session, [c for c in cleaned if c is not None])
 
 

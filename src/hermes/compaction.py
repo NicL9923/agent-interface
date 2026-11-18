@@ -11,6 +11,7 @@ client queues in Hermes directly is watched for: a running background compaction
 through its own commit fence, and the input runs as an ordinary turn on the uncompacted
 transcript. See docs/HermesCapabilityMatrix.md, "Idle compaction".
 """
+
 import contextlib
 import logging
 import os
@@ -30,8 +31,18 @@ POLL_SECONDS = 30
 PREEMPT_WAIT = 30
 
 # Native session state that means work is running or about to run.
-BUSY = ("running", "queued_prompt", "queued_prompts", "pending_steer", "_auto_continue_scheduled",
-        "_compute_host_open_request", "_compute_host_active", "resume_hydrating", "_closing", "_finalized")
+BUSY = (
+    "running",
+    "queued_prompt",
+    "queued_prompts",
+    "pending_steer",
+    "_auto_continue_scheduled",
+    "_compute_host_open_request",
+    "_compute_host_active",
+    "resume_hydrating",
+    "_closing",
+    "_finalized",
+)
 # Input another client sent straight to Hermes, which queued it behind the compaction.
 NATIVE_QUEUE = ("queued_prompt", "queued_prompts", "pending_steer")
 WATCH_SECONDS = 0.25
@@ -55,7 +66,10 @@ def delay_from(environ=os.environ):
     except ValueError:
         value = -1
     if value < 0:
-        log.error("%s must be a whole number of seconds, or 0 to turn idle compaction off; it is off.", SETTING)
+        log.error(
+            "%s must be a whole number of seconds, or 0 to turn idle compaction off; it is off.",
+            SETTING,
+        )
         return 0
     return value
 
@@ -71,7 +85,12 @@ def supported(server):
         from agent.model_metadata import estimate_request_tokens_rough  # noqa: F401
     except ImportError:
         return False
-    return callable(getattr(CompressionCommitFence, "try_cancel_before_commit", None)) and all(callable(getattr(server, name, None)) for name in ("_manual_compress_turn", "_session_uses_compute_host"))
+    return callable(
+        getattr(CompressionCommitFence, "try_cancel_before_commit", None)
+    ) and all(
+        callable(getattr(server, name, None))
+        for name in ("_manual_compress_turn", "_session_uses_compute_host")
+    )
 
 
 def request_size(session):
@@ -83,16 +102,25 @@ def request_size(session):
     so with about 32K of prompt and tools the budget is near 155K.
     """
     from agent.model_metadata import estimate_request_tokens_rough
+
     agent = session.get("agent")
     compressor = getattr(agent, "context_compressor", None)
-    tail, summary = getattr(compressor, "tail_token_budget", None), getattr(compressor, "max_summary_tokens", None)
+    tail, summary = (
+        getattr(compressor, "tail_token_budget", None),
+        getattr(compressor, "max_summary_tokens", None),
+    )
     if type(tail) is not int or type(summary) is not int or tail <= 0 or summary <= 0:
         return None
     with session["history_lock"]:
         history = list(session.get("history") or [])
-    prompt, tools = getattr(agent, "_cached_system_prompt", "") or "", getattr(agent, "tools", None) or None
+    prompt, tools = (
+        getattr(agent, "_cached_system_prompt", "") or "",
+        getattr(agent, "tools", None) or None,
+    )
     overhead = estimate_request_tokens_rough([], system_prompt=prompt, tools=tools)
-    return estimate_request_tokens_rough(history, system_prompt=prompt, tools=tools), overhead + tail * 3 // 2 + summary
+    return estimate_request_tokens_rough(
+        history, system_prompt=prompt, tools=tools
+    ), overhead + tail * 3 // 2 + summary
 
 
 class Attempt:
@@ -116,10 +144,30 @@ class IdleCompaction:
     submission_lock. It must not wait under maintenance_lock: Hermes's release takes it.
     """
 
-    def __init__(self, server, native, canonical, journal, submission_lock, maintenance_state, delay,
-                 clock=time.time, monotonic=time.monotonic, size=request_size):
-        self.server, self.native, self.canonical, self.journal = server, native, canonical, journal
-        self.submission_lock, self.maintenance_state, self.delay = submission_lock, maintenance_state, delay
+    def __init__(
+        self,
+        server,
+        native,
+        canonical,
+        journal,
+        submission_lock,
+        maintenance_state,
+        delay,
+        clock=time.time,
+        monotonic=time.monotonic,
+        size=request_size,
+    ):
+        self.server, self.native, self.canonical, self.journal = (
+            server,
+            native,
+            canonical,
+            journal,
+        )
+        self.submission_lock, self.maintenance_state, self.delay = (
+            submission_lock,
+            maintenance_state,
+            delay,
+        )
         self.clock, self.monotonic, self.size = clock, monotonic, size
         self.lock = threading.Lock()
         self.attempts = {}
@@ -184,18 +232,33 @@ class IdleCompaction:
         if self.maintenance_state():
             return "maintenance"
         from tui_gateway import server_requests
+
         with server_requests._lock:
-            if any(getattr(request, "sid", None) == sid for request in server_requests._open.values()):
+            if any(
+                getattr(request, "sid", None) == sid
+                for request in server_requests._open.values()
+            ):
                 return "open request"
         with self.journal.lock:
-            if self.journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 LIMIT 1", (sid,)).fetchone():
+            if self.journal.db.execute(
+                "SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 LIMIT 1",
+                (sid,),
+            ).fetchone():
                 return "unsettled receipt"
-            if self.journal.db.execute("SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?", (profile, session.get("session_key"))).fetchone():
+            if self.journal.db.execute(
+                "SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?",
+                (profile, session.get("session_key")),
+            ).fetchone():
                 return "interruption under review"
-        last = max(self.activity.setdefault(sid, now), float(session.get("last_active") or 0))
+        last = max(
+            self.activity.setdefault(sid, now), float(session.get("last_active") or 0)
+        )
         if now - last < self.delay:
             return "recent activity"
-        if self.settled.get(sid) == (session.get("session_key"), session.get("history_version")):
+        if self.settled.get(sid) == (
+            session.get("session_key"),
+            session.get("history_version"),
+        ):
             return "already compacted"
         size = self.size(session)
         if size is None:
@@ -215,7 +278,9 @@ class IdleCompaction:
             try:
                 self.compact(profile, sid)
             except Exception:
-                log.warning("Idle compaction failed for profile %s", profile, exc_info=True)
+                log.warning(
+                    "Idle compaction failed for profile %s", profile, exc_info=True
+                )
 
     def compact(self, profile, sid):
         """Compact one canonical session if it is due. Returns the native result, or None."""
@@ -224,23 +289,37 @@ class IdleCompaction:
             if self.blocker(profile, sid, session, self.clock()) is not None:
                 return None
             before = self.size(session)[0]
-            attempt = Attempt(getattr(session["agent"].context_compressor, WORKING, None))
+            attempt = Attempt(
+                getattr(session["agent"].context_compressor, WORKING, None)
+            )
             with self.lock:
                 # An input admitted without submission_lock holds this off; see admitting().
                 if self.pending.get(sid):
                     return None
                 self.attempts[sid] = attempt
         result = None
-        watcher = threading.Thread(target=self.watch, args=(sid, attempt), name="agent-interface-compaction-watch", daemon=True)
+        watcher = threading.Thread(
+            target=self.watch,
+            args=(sid, attempt),
+            name="agent-interface-compaction-watch",
+            daemon=True,
+        )
         watcher.start()
         try:
-            result = self.native("session.compress", {"session_id": sid, "profile": profile})
+            result = self.native(
+                "session.compress", {"session_id": sid, "profile": profile}
+            )
         except Exception as exc:
             # A refusal (4009 when another turn won the session) or a failed summary. Either
             # way the transcript is unchanged; try again after the next turn.
-            log.info("Idle compaction of profile %s did not run: %s", profile, str(exc)[:300])
+            log.info(
+                "Idle compaction of profile %s did not run: %s", profile, str(exc)[:300]
+            )
         finally:
-            self.settled[sid] = (session.get("session_key"), session.get("history_version"))
+            self.settled[sid] = (
+                session.get("session_key"),
+                session.get("history_version"),
+            )
             with self.lock:
                 self.attempts.pop(sid, None)
             attempt.done.set()
@@ -249,8 +328,13 @@ class IdleCompaction:
         if size is not None and size[0] < before:
             self.after[sid] = size[0]
         if isinstance(result, dict):
-            log.info("Idle compaction of profile %s: %s, about %s to %s tokens", profile, result.get("status"),
-                     result.get("before_tokens"), result.get("after_tokens"))
+            log.info(
+                "Idle compaction of profile %s: %s, about %s to %s tokens",
+                profile,
+                result.get("status"),
+                result.get("before_tokens"),
+                result.get("after_tokens"),
+            )
         return result
 
     def preempt(self, sid, wait=None):
@@ -268,7 +352,10 @@ class IdleCompaction:
         while not attempt.done.wait(0.02):
             self.stop(sid, attempt)
             if self.monotonic() >= deadline:
-                log.warning("Idle compaction did not stop within %s seconds; the input proceeds while it runs.", wait)
+                log.warning(
+                    "Idle compaction did not stop within %s seconds; the input proceeds while it runs.",
+                    wait,
+                )
                 break
         return True
 
@@ -293,7 +380,9 @@ class IdleCompaction:
             if attempt.done.is_set() or session.get(OWNER) != attempt.thread:
                 return
             agent = session.get("agent")
-            fence = getattr(agent, "__dict__", {}).get("_active_compression_commit_fence")
+            fence = getattr(agent, "__dict__", {}).get(
+                "_active_compression_commit_fence"
+            )
             working = getattr(getattr(agent, "context_compressor", None), WORKING, None)
             if fence is None:
                 return
@@ -303,7 +392,10 @@ class IdleCompaction:
                     attempt.working = working
                 attempt.fence = fence
             # CompressionCommitFence.progress_observed is a property: provider progress for this fence.
-            if working == attempt.working and getattr(fence, "progress_observed", False) is not True:
+            if (
+                working == attempt.working
+                and getattr(fence, "progress_observed", False) is not True
+            ):
                 return
             cancel = getattr(fence, "try_cancel_before_commit", None)
             if callable(cancel) and cancel() is not None:
@@ -322,6 +414,7 @@ class IdleCompaction:
 
     def owned_turn(self, original):
         """Hermes's manual-compaction hold, naming the thread it holds the session for."""
+
         @contextlib.contextmanager
         def turn(sid, session):
             with original(sid, session):
@@ -331,17 +424,24 @@ class IdleCompaction:
                 finally:
                     # Cleared before Hermes releases the session and admits the next turn.
                     session.pop(OWNER, None)
+
         return turn
 
     def start(self, interval=None):
         # Hermes's session.compress resolves this seam on the server module, as other wrapped seams do.
-        self.server._manual_compress_turn = self.owned_turn(self.server._manual_compress_turn)
+        self.server._manual_compress_turn = self.owned_turn(
+            self.server._manual_compress_turn
+        )
         # A short delay, as in a qualification probe, is checked proportionally more often.
         interval = interval or min(POLL_SECONDS, max(1, self.delay // 4))
+
         def loop():
             while True:
                 time.sleep(interval)
                 self.poll()
-        thread = threading.Thread(target=loop, name="agent-interface-idle-compaction", daemon=True)
+
+        thread = threading.Thread(
+            target=loop, name="agent-interface-idle-compaction", daemon=True
+        )
         thread.start()
         return thread

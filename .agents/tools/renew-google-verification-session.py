@@ -11,6 +11,7 @@ lock and atomic replace as the host's live-google-check.py. Tokens are never pri
     python3 .agents/tools/renew-google-verification-session.py --host hermes-prod \\
         --session-file /home/nicolas/.local/share/agent-interface/shared/google-session.json
 """
+
 import argparse
 import base64
 import hashlib
@@ -30,7 +31,7 @@ PROVIDER = "google-family"
 WAIT_SECONDS = 3600
 
 # Runs on the host: reads the session JSON from stdin and replaces the file under its lock.
-HOST_WRITE = r'''
+HOST_WRITE = r"""
 import fcntl, json, os, stat, sys, tempfile
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -54,12 +55,16 @@ finally:
     if os.path.exists(name):
         os.unlink(name)
 print("written")
-'''
+"""
 
 
 def pkce():
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode()
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
     return verifier, challenge
 
 
@@ -86,7 +91,11 @@ def wait_for_code(state, authorize):
                 result["error"] = "The sign-in answer did not match this request."
             else:
                 result["code"] = query["code"][0]
-            body = ("Signed in. You can close this tab." if "code" in result else result["error"]).encode()
+            body = (
+                "Signed in. You can close this tab."
+                if "code" in result
+                else result["error"]
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
@@ -103,12 +112,19 @@ def wait_for_code(state, authorize):
 
 
 def redeem(origin, code, verifier):
-    request = urllib.request.Request(origin + "/auth/native/token", method="POST",
-                                     data=json.dumps({"code": code, "code_verifier": verifier}).encode(),
-                                     headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(
+        origin + "/auth/native/token",
+        method="POST",
+        data=json.dumps({"code": code, "code_verifier": verifier}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
     with urllib.request.urlopen(request, timeout=30) as response:
         payload = json.load(response)
-    if payload.get("provider") != PROVIDER or not payload.get("access_token") or not payload.get("refresh_token"):
+    if (
+        payload.get("provider") != PROVIDER
+        or not payload.get("access_token")
+        or not payload.get("refresh_token")
+    ):
         raise SystemExit("Hermes did not return a Google session with a refresh token.")
     return payload
 
@@ -116,9 +132,15 @@ def redeem(origin, code, verifier):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--host", required=True, help="SSH alias of the Hermes host")
-    parser.add_argument("--session-file", required=True, help="absolute host path of googleSessionFile")
+    parser.add_argument(
+        "--session-file", required=True, help="absolute host path of googleSessionFile"
+    )
     parser.add_argument("--origin", default=ORIGIN)
-    parser.add_argument("--open", action="store_true", help="also open the start link in the default browser")
+    parser.add_argument(
+        "--open",
+        action="store_true",
+        help="also open the start link in the default browser",
+    )
     args = parser.parse_args()
     origin = args.origin.rstrip("/")
     if not args.session_file.startswith("/"):
@@ -128,13 +150,25 @@ def main():
     state = secrets.token_urlsafe(24)
 
     def authorize(port):
-        return origin + "/auth/native/authorize?" + urllib.parse.urlencode({
-            "provider": PROVIDER, "code_challenge": challenge, "code_challenge_method": "S256",
-            "redirect_uri": f"http://127.0.0.1:{port}/callback", "state": state})
+        return (
+            origin
+            + "/auth/native/authorize?"
+            + urllib.parse.urlencode(
+                {
+                    "provider": PROVIDER,
+                    "code_challenge": challenge,
+                    "code_challenge_method": "S256",
+                    "redirect_uri": f"http://127.0.0.1:{port}/callback",
+                    "state": state,
+                }
+            )
+        )
 
     server, done, result = wait_for_code(state, authorize)
     start = f"http://127.0.0.1:{server.server_address[1]}/start"
-    print("On this computer, open this link and sign in with an allowed household Google account:")
+    print(
+        "On this computer, open this link and sign in with an allowed household Google account:"
+    )
     print(start, flush=True)
     if args.open:
         webbrowser.open(start)
@@ -149,10 +183,19 @@ def main():
     # SSH joins arguments into one remote shell line, so the script travels base64-encoded.
     script = base64.b64encode(HOST_WRITE.encode()).decode()
     remote = f"python3 -I -c 'import base64; exec(base64.b64decode(\"{script}\"))' {shlex.quote(args.session_file)}"
-    written = subprocess.run(["ssh", args.host, remote],
-                             input=json.dumps(session), text=True, capture_output=True, timeout=60, check=False)
+    written = subprocess.run(
+        ["ssh", args.host, remote],
+        input=json.dumps(session),
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
     if written.returncode or written.stdout.strip() != "written":
-        raise SystemExit("Writing the session on the host failed: " + (written.stderr.strip()[-300:] or "no detail"))
+        raise SystemExit(
+            "Writing the session on the host failed: "
+            + (written.stderr.strip()[-300:] or "no detail")
+        )
     print(f"Renewed the {PROVIDER} verification session on {args.host}.")
 
 

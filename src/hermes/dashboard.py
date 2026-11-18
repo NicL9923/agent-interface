@@ -4,6 +4,7 @@ hermes --run-module agent_interface_dashboard dashboard --host 127.0.0.1 --port 
 Install agent_interface_dashboard.py as a symlink to this file beside hermes_cli.
 The original CLI owns configuration, plugins, auth, owner registration, UI and lifecycle.
 """
+
 import os
 import sys
 import importlib.util
@@ -11,8 +12,10 @@ import subprocess
 from pathlib import Path
 
 
-UPDATE_HANDOFF_MESSAGE = ("Hermes updates are managed by WildBots. Check for and install them "
-                          "from Hermes updates in the app.")
+UPDATE_HANDOFF_MESSAGE = (
+    "Hermes updates are managed by WildBots. Check for and install them "
+    "from Hermes updates in the app."
+)
 
 
 def sibling_module(name):
@@ -21,7 +24,10 @@ def sibling_module(name):
     A second load under another name would be a separate instance with its own state.
     Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
     """
-    canonical, path = "agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py")
+    canonical, path = (
+        "agent_interface_" + name,
+        Path(__file__).resolve().with_name(name + ".py"),
+    )
     if canonical not in sys.modules:
         spec = importlib.util.spec_from_file_location(canonical, path)
         sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
@@ -50,7 +56,9 @@ def hand_updates_to_app():
         import hermes_cli.web_routers.actions as actions
     except ImportError:
         return False
-    if not hasattr(files, "_dashboard_local_update_managed_externally") or not hasattr(actions, "_MANAGED_EXTERNALLY_MESSAGE"):
+    if not hasattr(files, "_dashboard_local_update_managed_externally") or not hasattr(
+        actions, "_MANAGED_EXTERNALLY_MESSAGE"
+    ):
         return False
     files._dashboard_local_update_managed_externally = lambda: True
     actions._MANAGED_EXTERNALLY_MESSAGE = UPDATE_HANDOFF_MESSAGE
@@ -61,27 +69,37 @@ def main():
     if len(sys.argv) < 2 or sys.argv[1] != "dashboard" or "--isolated" in sys.argv:
         raise SystemExit("This wrapper starts the existing supervised dashboard only.")
     if os.environ.get("HERMES_SERVE_HEADLESS") == "1":
-        raise SystemExit("A production dashboard must preserve its UI. Remove HERMES_SERVE_HEADLESS.")
+        raise SystemExit(
+            "A production dashboard must preserve its UI. Remove HERMES_SERVE_HEADLESS."
+        )
     extension, service = sibling_module("extension"), sibling_module("service_auth")
     secret = os.environ.get("HERMES_AGENT_INTERFACE_TOKEN", "")
     qualified = True
     try:
         service.validate_secret(secret)
         extension.source_state()
-    except (SystemExit, OSError, subprocess.SubprocessError):
+    except SystemExit, OSError, subprocess.SubprocessError:
         # This check is pure. Preserve the native dashboard if its separately
         # deployed integration needs requalification or credential repair.
-        print("WildBots add-on disabled: source qualification or service key unavailable. Native dashboard continues.", file=sys.stderr)
+        print(
+            "WildBots add-on disabled: source qualification or service key unavailable. Native dashboard continues.",
+            file=sys.stderr,
+        )
         qualified = False
     # Let the native entrypoint initialize the same environment before importing the web app.
     from hermes_cli import main as cli
+
     # Applies even while the add-on is disabled, so a second native update cannot
     # move Hermes further from the app's last qualification.
     if not hand_updates_to_app():
-        print("WildBots could not turn off the native Hermes updater. Update Hermes from the app only.", file=sys.stderr)
+        print(
+            "WildBots could not turn off the native Hermes updater. Update Hermes from the app only.",
+            file=sys.stderr,
+        )
     if qualified:
         import hermes_cli.web_server as web
         from tui_gateway import server
+
         sibling_module("computer").install_tools()
         journal = extension.install()
         sibling_module("experience").install(web, journal, server._history_to_messages)

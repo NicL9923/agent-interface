@@ -26,6 +26,7 @@ puts the locks at 3 and 4, and `run_process` refuses to pass on one that is 16 o
 can shut down the web server it started in a process group of its own, and kills what is left after ten
 seconds. Nothing here needs a package outside the standard library.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -87,7 +88,9 @@ def cache_dir(env=None, home=None):
     home = Path(home) if home else Path.home()
     if sys.platform == "darwin":
         return home / "Library/Caches/agent-interface/check-all"
-    return Path(env.get("XDG_CACHE_HOME") or home / ".cache") / "agent-interface/check-all"
+    return (
+        Path(env.get("XDG_CACHE_HOME") or home / ".cache") / "agent-interface/check-all"
+    )
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -183,7 +186,7 @@ def wait_for(path, poll=0.2):
 def read_info(path):
     try:
         info = json.loads(path.read_text())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return info if isinstance(info, dict) else None
 
@@ -195,7 +198,16 @@ def describe_holder(info, now):
     return f"{info.get('check', '?')} in {info.get('worktree', '?')} (pid {info.get('pid', '?')}, {seconds}s)"
 
 
-def acquire_slot(directory, slots, info, timeout, poll=0.25, note=None, clock=time.monotonic, sleep=time.sleep):
+def acquire_slot(
+    directory,
+    slots,
+    info,
+    timeout,
+    poll=0.25,
+    note=None,
+    clock=time.monotonic,
+    sleep=time.sleep,
+):
     """Take one of `slots` machine-wide heavy slots, waiting up to `timeout` seconds. Returns (Held, seconds waited).
 
     `note(message)` is called when the wait starts and every 30 seconds, naming who holds the slots.
@@ -209,9 +221,14 @@ def acquire_slot(directory, slots, info, timeout, poll=0.25, note=None, clock=ti
                 held.write_info({**info, "since": time.time()})
                 return held, clock() - started
         waited = clock() - started
-        holders = ", ".join(describe_holder(read_info(directory / f"heavy-{index}.lock"), time.time()) for index in range(slots))
+        holders = ", ".join(
+            describe_holder(read_info(directory / f"heavy-{index}.lock"), time.time())
+            for index in range(slots)
+        )
         if waited >= timeout:
-            raise LockTimeout(f"Gave up after {int(waited)}s waiting for a heavy slot; {slots} in use by {holders}. Raise --lock-timeout or CHECK_ALL_HEAVY_SLOTS.")
+            raise LockTimeout(
+                f"Gave up after {int(waited)}s waiting for a heavy slot; {slots} in use by {holders}. Raise --lock-timeout or CHECK_ALL_HEAVY_SLOTS."
+            )
         if note and (announced is None or waited - announced >= 30):
             announced = waited
             note(f"queued for a heavy slot ({slots} total), held by {holders}")
@@ -240,7 +257,9 @@ def port_candidates(seed, base=PORT_BASE, pairs=PORT_PAIRS):
     return [base + 2 * ((start + step) % pairs) for step in range(pairs)]
 
 
-def pick_e2e_port(directory, seed, requested=None, base=PORT_BASE, pairs=PORT_PAIRS, bindable=can_bind):
+def pick_e2e_port(
+    directory, seed, requested=None, base=PORT_BASE, pairs=PORT_PAIRS, bindable=can_bind
+):
     """Lock a free app port and control port pair for the browser suite. Returns (HeldPorts, port).
 
     With `requested` (the caller's own E2E_PORT) only that pair is considered, and a busy one is an error rather
@@ -267,7 +286,9 @@ def pick_e2e_port(directory, seed, requested=None, base=PORT_BASE, pairs=PORT_PA
         try:
             taken = [number for number in (port, port + 1) if not bindable(number)]
             if not taken:
-                held.write_info({"pid": os.getpid(), "port": port, "since": time.time()})
+                held.write_info(
+                    {"pid": os.getpid(), "port": port, "since": time.time()}
+                )
                 return held, port
         except BaseException:
             held.release()
@@ -276,8 +297,12 @@ def pick_e2e_port(directory, seed, requested=None, base=PORT_BASE, pairs=PORT_PA
         busy.append(f"{port} (port {taken[0]} is in use)")
 
     if requested:
-        raise Refusal(f"E2E_PORT={requested} is not usable: {busy[0]}. Unset E2E_PORT to let check-all choose, or free that port and the next one.")
-    raise Refusal(f"No free app and control port pair in {base}-{base + 2 * pairs - 1}.")
+        raise Refusal(
+            f"E2E_PORT={requested} is not usable: {busy[0]}. Unset E2E_PORT to let check-all choose, or free that port and the next one."
+        )
+    raise Refusal(
+        f"No free app and control port pair in {base}-{base + 2 * pairs - 1}."
+    )
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -298,7 +323,9 @@ def lock_drift(lock, installed):
         if path not in wanted:
             problems.append(f"{path} is installed but not in package-lock.json")
         elif entry.get("version") != wanted[path].get("version"):
-            problems.append(f"{path} is {entry.get('version')} but package-lock.json has {wanted[path].get('version')}")
+            problems.append(
+                f"{path} is {entry.get('version')} but package-lock.json has {wanted[path].get('version')}"
+            )
     for path, entry in wanted.items():
         if path and path not in present and not entry.get("optional"):
             problems.append(f"{path} is in package-lock.json but not installed")
@@ -310,41 +337,74 @@ def check_install(root):
     modules = root / "node_modules"
     fix = "Fix: npm ci"
     if not modules.exists():
-        where = f" (a symlink to {os.readlink(modules)}, which does not exist)" if modules.is_symlink() else ""
+        where = (
+            f" (a symlink to {os.readlink(modules)}, which does not exist)"
+            if modules.is_symlink()
+            else ""
+        )
         raise Refusal(f"node_modules is missing{where}. {fix}")
     installed_path = modules / ".package-lock.json"
     if not installed_path.is_file():
-        raise Refusal(f"node_modules has no .package-lock.json, so npm did not install it. {fix}")
+        raise Refusal(
+            f"node_modules has no .package-lock.json, so npm did not install it. {fix}"
+        )
     try:
         lock = json.loads((root / "package-lock.json").read_text())
         installed = json.loads(installed_path.read_text())
     except (OSError, ValueError) as error:
-        raise Refusal(f"Could not read the lockfiles to compare them ({error}). {fix}") from error
+        raise Refusal(
+            f"Could not read the lockfiles to compare them ({error}). {fix}"
+        ) from error
     drift = lock_drift(lock, installed)
     if drift:
-        shown = "; ".join(drift[:3]) + (f"; and {len(drift) - 3} more" if len(drift) > 3 else "")
-        raise Refusal(f"package-lock.json changed since node_modules was installed: {shown}. {fix}")
+        shown = "; ".join(drift[:3]) + (
+            f"; and {len(drift) - 3} more" if len(drift) > 3 else ""
+        )
+        raise Refusal(
+            f"package-lock.json changed since node_modules was installed: {shown}. {fix}"
+        )
     if modules.is_symlink():
-        return [f"node_modules is a symlink to {os.readlink(modules)}. It matches package-lock.json, but a shared install lets"
-                " the other checkout change what this one tests; run npm ci here to own one."]
+        return [
+            f"node_modules is a symlink to {os.readlink(modules)}. It matches package-lock.json, but a shared install lets"
+            " the other checkout change what this one tests; run npm ci here to own one."
+        ]
     return []
 
 
 def check_node(root, env=None):
     """Refuse when the node on PATH is outside package.json's engines, as the test suite itself would."""
-    script = ("import { readFileSync } from 'node:fs'; import { satisfiesEngine } from './scripts/node-engine.mjs';"
-              "const range = JSON.parse(readFileSync('package.json', 'utf8')).engines.node;"
-              "console.log(JSON.stringify({ ok: satisfiesEngine(process.version, range), version: process.version, range }));")
+    script = (
+        "import { readFileSync } from 'node:fs'; import { satisfiesEngine } from './scripts/node-engine.mjs';"
+        "const range = JSON.parse(readFileSync('package.json', 'utf8')).engines.node;"
+        "console.log(JSON.stringify({ ok: satisfiesEngine(process.version, range), version: process.version, range }));"
+    )
     try:
-        result = subprocess.run(["node", "--input-type=module", "-e", script], cwd=root, env=env, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     except FileNotFoundError as error:
-        raise Refusal('node is not on PATH. Fix: export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env)"') from error
+        raise Refusal(
+            'node is not on PATH. Fix: export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env)"'
+        ) from error
     if result.returncode != 0:
-        raise Refusal(f"node could not read scripts/node-engine.mjs: {result.stderr.strip()[-300:]}")
+        raise Refusal(
+            f"node could not read scripts/node-engine.mjs: {result.stderr.strip()[-300:]}"
+        )
     info = json.loads(result.stdout)
     if not info["ok"]:
-        wanted = (root / ".node-version").read_text().strip() if (root / ".node-version").is_file() else info["range"]
-        raise Refusal(f"node {info['version']} is outside this repository's supported range ({info['range']}). Fix: fnm use {wanted}")
+        wanted = (
+            (root / ".node-version").read_text().strip()
+            if (root / ".node-version").is_file()
+            else info["range"]
+        )
+        raise Refusal(
+            f"node {info['version']} is outside this repository's supported range ({info['range']}). Fix: fnm use {wanted}"
+        )
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -356,16 +416,28 @@ def pinned_ruff(root):
     text = (root / ".github/requirements-ci.txt").read_text()
     match = re.search(r"^ruff==(\S+)\s*$", text, re.MULTILINE)
     if not match:
-        raise Refusal("Could not find a `ruff==VERSION` line in .github/requirements-ci.txt.")
+        raise Refusal(
+            "Could not find a `ruff==VERSION` line in .github/requirements-ci.txt."
+        )
     return match.group(1)
 
 
 def ruff_version(executable, env=None):
     try:
-        result = subprocess.run([str(executable), "--version"], capture_output=True, text=True, check=False, env=env)
+        result = subprocess.run(
+            [str(executable), "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
     except OSError:
         return None
-    match = re.fullmatch(r"ruff (\S+)", result.stdout.strip()) if result.returncode == 0 else None
+    match = (
+        re.fullmatch(r"ruff (\S+)", result.stdout.strip())
+        if result.returncode == 0
+        else None
+    )
     return match.group(1) if match else None
 
 
@@ -391,7 +463,9 @@ def find_ruff(root, cache, env=None, bootstrap_python=sys.executable, note=None)
             return None
         found = ruff_version(cached, env)
         if found != wanted:
-            raise Refusal(f"Refusing the cached ruff at {cached}: it reports {found}, and this repository pins {wanted}. Fix: rm -rf {venv}")
+            raise Refusal(
+                f"Refusing the cached ruff at {cached}: it reports {found}, and this repository pins {wanted}. Fix: rm -rf {venv}"
+            )
         return str(cached)
 
     if from_cache():
@@ -403,17 +477,34 @@ def find_ruff(root, cache, env=None, bootstrap_python=sys.executable, note=None)
         if from_cache():  # another worktree finished while this one waited
             return str(cached)
         if note:
-            note(f"installing ruff=={wanted} into {venv} once ({'; '.join(seen) or 'none on PATH'})")
+            note(
+                f"installing ruff=={wanted} into {venv} once ({'; '.join(seen) or 'none on PATH'})"
+            )
         shutil.rmtree(venv, ignore_errors=True)
         try:
-            for argv in ([bootstrap_python, "-m", "venv", str(venv)], [str(venv / "bin/pip"), "install", "--disable-pip-version-check", "--quiet", f"ruff=={wanted}"]):
-                result = subprocess.run(argv, capture_output=True, text=True, check=False, env=env)
+            for argv in (
+                [bootstrap_python, "-m", "venv", str(venv)],
+                [
+                    str(venv / "bin/pip"),
+                    "install",
+                    "--disable-pip-version-check",
+                    "--quiet",
+                    f"ruff=={wanted}",
+                ],
+            ):
+                result = subprocess.run(
+                    argv, capture_output=True, text=True, check=False, env=env
+                )
                 if result.returncode != 0:
                     tail_text = (result.stderr or result.stdout).strip()[-400:]
-                    raise Refusal(f"Could not install ruff=={wanted} ({' '.join(argv[:3])} failed: {tail_text}). Fix: put ruff {wanted} on PATH, for example pip install ruff=={wanted}.")
+                    raise Refusal(
+                        f"Could not install ruff=={wanted} ({' '.join(argv[:3])} failed: {tail_text}). Fix: put ruff {wanted} on PATH, for example pip install ruff=={wanted}."
+                    )
             found = ruff_version(cached, env)
             if found != wanted:
-                raise Refusal(f"The installed ruff reports {found}, and this repository pins {wanted}; refusing to use it.")
+                raise Refusal(
+                    f"The installed ruff reports {found}, and this repository pins {wanted}; refusing to use it."
+                )
             done.write_text(found + "\n")
         except BaseException:
             shutil.rmtree(venv, ignore_errors=True)
@@ -432,21 +523,37 @@ def find_ruff(root, cache, env=None, bootstrap_python=sys.executable, note=None)
 # can see: a literal path joined to a base name defined from `Path(__file__)` (in the file or in `support.py`), a
 # `load_source` argument, a literal glob, or a relative literal given to `open` or `Path(...).read_text()`. A path
 # that is computed at run time is not seen, so a test that builds one is on its author to list the directory here.
-PYTHON_INPUT_DIRS = ("src/hermes/", "scripts/", ".agents/tools/", "src/shared/", "public/voice-previews/")
+PYTHON_INPUT_DIRS = (
+    "src/hermes/",
+    "scripts/",
+    ".agents/tools/",
+    "src/shared/",
+    "public/voice-previews/",
+)
 PYTHON_INPUTS = "Python or a file the Python tests read"
 
 
 def python_touched(paths):
-    return any(path.endswith(".py") or path.startswith(PYTHON_INPUT_DIRS) for path in paths)
+    return any(
+        path.endswith(".py") or path.startswith(PYTHON_INPUT_DIRS) for path in paths
+    )
 
 
 def changed_paths(root, base):
     """Paths changed on this branch since it left `base`, plus uncommitted and untracked ones. None if git cannot say.
 
     Renames are listed as a delete and an add, so moving a Python file away still counts as touching Python."""
+
     def lines(*argv):
-        result = subprocess.run(["git", *argv], cwd=root, capture_output=True, text=True, check=False)
-        return None if result.returncode != 0 else [part for part in result.stdout.split("\0") if part]
+        result = subprocess.run(
+            ["git", *argv], cwd=root, capture_output=True, text=True, check=False
+        )
+        return (
+            None
+            if result.returncode != 0
+            else [part for part in result.stdout.split("\0") if part]
+        )
+
     committed = lines("diff", "--name-only", "--no-renames", "-z", f"{base}...HEAD")
     working = lines("diff", "--name-only", "--no-renames", "-z", "HEAD")
     untracked = lines("ls-files", "--others", "--exclude-standard", "-z")
@@ -476,7 +583,12 @@ def decide_py(mode, paths, base, explicit=False):
 
 def numbers(line):
     """{'passed': 3, 'failed': 1} from text like '1 failed | 3 passed (4)'."""
-    return {label: int(count) for count, label in re.findall(r"(\d+) (passed|failed|skipped|todo|flaky|interrupted|did not run)", line)}
+    return {
+        label: int(count)
+        for count, label in re.findall(
+            r"(\d+) (passed|failed|skipped|todo|flaky|interrupted|did not run)", line
+        )
+    }
 
 
 def parse_counts(check, output):
@@ -493,17 +605,31 @@ def parse_counts(check, output):
                 counts[f"{key}_failed"] = parts.get("failed", 0)
                 counts[f"{key}_skipped"] = parts.get("skipped", 0)
     elif check == "e2e":
-        for label in ("passed", "failed", "flaky", "skipped", "interrupted", "did not run"):
+        for label in (
+            "passed",
+            "failed",
+            "flaky",
+            "skipped",
+            "interrupted",
+            "did not run",
+        ):
             match = re.search(rf"^\s*(\d+) {label}\b", text, re.MULTILINE)
             if match:
                 counts[label.replace(" ", "_")] = int(match.group(1))
         if counts:
             counts["tests"] = sum(counts.values())
     elif check == "py":
-        match = re.search(r"^(\d+) passed, (\d+) skipped, (\d+) failed in ", text, re.MULTILINE)
+        match = re.search(
+            r"^(\d+) passed, (\d+) skipped, (\d+) failed in ", text, re.MULTILINE
+        )
         if match:
             passed, skipped, failed = map(int, match.groups())
-            counts.update(files=passed + skipped + failed, passed=passed, skipped=skipped, failed=failed)
+            counts.update(
+                files=passed + skipped + failed,
+                passed=passed,
+                skipped=skipped,
+                failed=failed,
+            )
     elif check == "build":
         match = re.search(r"✓ (\d+) modules transformed", text)
         if match:
@@ -512,7 +638,9 @@ def parse_counts(check, output):
         # oxlint prints one `file:line:col: warning|error rule: message` line per problem when piped, and no total.
         problems = re.findall(r"^\S+:\d+:\d+: (warning|error)\b", text, re.MULTILINE)
         if problems:
-            counts.update(errors=problems.count("error"), warnings=problems.count("warning"))
+            counts.update(
+                errors=problems.count("error"), warnings=problems.count("warning")
+            )
     elif check == "typecheck":
         errors = len(re.findall(r"\berror TS\d+", text))
         if errors:
@@ -533,15 +661,26 @@ def describe_counts(check, counts):
 
     parts = []
     if check == "test" and "tests" in counts:
-        parts = [plural(counts.get("files", 0), "file"), plural(counts["tests"], "test")] + extras(("tests_failed", "failed"), ("tests_skipped", "skipped"))
+        parts = [
+            plural(counts.get("files", 0), "file"),
+            plural(counts["tests"], "test"),
+        ] + extras(("tests_failed", "failed"), ("tests_skipped", "skipped"))
     elif check == "e2e" and "tests" in counts:
-        parts = [plural(counts["tests"], "test")] + extras(("failed", "failed"), ("flaky", "flaky"), ("skipped", "skipped"))
+        parts = [plural(counts["tests"], "test")] + extras(
+            ("failed", "failed"), ("flaky", "flaky"), ("skipped", "skipped")
+        )
     elif check == "py" and "files" in counts:
-        parts = [plural(counts["files"], "file")] + extras(("failed", "failed"), ("skipped", "skipped"))
+        parts = [plural(counts["files"], "file")] + extras(
+            ("failed", "failed"), ("skipped", "skipped")
+        )
     elif check == "build" and "modules" in counts:
         parts = [plural(counts["modules"], "module")]
-    elif check in ("typecheck", "lint", "ruff") and (counts.get("errors") or counts.get("warnings")):
-        parts = ([plural(counts["errors"], "error")] if counts.get("errors") else []) + ([plural(counts["warnings"], "warning")] if counts.get("warnings") else [])
+    elif check in ("typecheck", "lint", "ruff") and (
+        counts.get("errors") or counts.get("warnings")
+    ):
+        parts = (
+            [plural(counts["errors"], "error")] if counts.get("errors") else []
+        ) + ([plural(counts["warnings"], "warning")] if counts.get("warnings") else [])
     return ", ".join(parts)
 
 
@@ -553,8 +692,23 @@ class Result:
     """`note` is the table's last cell when there are no counts, such as why a check was skipped.
     `detail` is the output tail printed under a failure, and `log` is where the full output went."""
 
-    def __init__(self, name, status, queued=0.0, seconds=0.0, counts=None, note="", detail="", log=None):
-        self.name, self.status, self.queued, self.seconds = name, status, queued, seconds
+    def __init__(
+        self,
+        name,
+        status,
+        queued=0.0,
+        seconds=0.0,
+        counts=None,
+        note="",
+        detail="",
+        log=None,
+    ):
+        self.name, self.status, self.queued, self.seconds = (
+            name,
+            status,
+            queued,
+            seconds,
+        )
         self.counts, self.note, self.detail, self.log = counts or {}, note, detail, log
 
 
@@ -565,7 +719,7 @@ STOP_GRACE = 10.0
 def signal_group(pgid, number):
     try:
         os.killpg(pgid, number)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError, PermissionError:
         pass
 
 
@@ -619,11 +773,23 @@ def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start
     `on_start(pid)` runs once the child exists, for a caller that records who now holds the locks."""
     too_high = [fd for fd in inherit if fd >= NODE_KEEPS_BELOW]
     if too_high:
-        raise RuntimeError(f"Lock descriptors {too_high} are {NODE_KEEPS_BELOW} or higher, so Node would pass them to every process in the suite; "
-                           "main() closes inherited descriptors above 2 so the locks land low.")
+        raise RuntimeError(
+            f"Lock descriptors {too_high} are {NODE_KEEPS_BELOW} or higher, so Node would pass them to every process in the suite; "
+            "main() closes inherited descriptors above 2 so the locks land low."
+        )
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True, errors="replace", start_new_session=True, pass_fds=tuple(inherit))
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        start_new_session=True,
+        pass_fds=tuple(inherit),
+    )
     expired = threading.Event()
 
     def expire():
@@ -669,13 +835,40 @@ def format_queued(seconds):
 
 
 def render_table(results):
-    labels = {"pass": "pass", "fail": "FAIL", "timeout": "TIMEOUT", "locked": "NOT QUEUED", "skip": "skipped"}
+    labels = {
+        "pass": "pass",
+        "fail": "FAIL",
+        "timeout": "TIMEOUT",
+        "locked": "NOT QUEUED",
+        "skip": "skipped",
+    }
     rows = [("check", "result", "queued", "run", "counts")]
     for result in results:
-        text = describe_counts(result.name, result.counts) or result.note or ("counts unknown" if result.status == "pass" and result.name in COUNTED else "-")
-        rows.append((result.name, labels[result.status], format_queued(result.queued), format_seconds(result.seconds) if result.status != "skip" else "-", text))
+        text = (
+            describe_counts(result.name, result.counts)
+            or result.note
+            or (
+                "counts unknown"
+                if result.status == "pass" and result.name in COUNTED
+                else "-"
+            )
+        )
+        rows.append(
+            (
+                result.name,
+                labels[result.status],
+                format_queued(result.queued),
+                format_seconds(result.seconds) if result.status != "skip" else "-",
+                text,
+            )
+        )
     widths = [max(len(row[column]) for row in rows) for column in range(4)]
-    return "\n".join("  ".join(cell.ljust(widths[column]) for column, cell in enumerate(row[:4])) + "  " + row[4] for row in rows)
+    return "\n".join(
+        "  ".join(cell.ljust(widths[column]) for column, cell in enumerate(row[:4]))
+        + "  "
+        + row[4]
+        for row in rows
+    )
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -691,17 +884,58 @@ def parse_names(value, option):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="check-all", description="Run typecheck, lint, ruff, test, build, e2e and py, in that order.",
-                                     epilog=f"Checks: {', '.join(CHECKS)}. Heavy (machine-wide slot): {', '.join(sorted(HEAVY))}.")
-    parser.add_argument("--only", metavar="LIST", help="run only these checks, comma separated")
-    parser.add_argument("--skip", metavar="LIST", help="leave out these checks, comma separated")
-    parser.add_argument("--py", choices=PY_MODES, default="auto", help="auto runs py when the diff against --base touches Python or a file the Python tests read")
-    parser.add_argument("--keep-going", "--continue", dest="keep_going", action="store_true", help="run the rest after a failure")
-    parser.add_argument("--verbose", action="store_true", help="stream each check's output as it runs")
-    parser.add_argument("--base", default="origin/main", help="ref the auto Python decision diffs against (default origin/main)")
-    parser.add_argument("--heavy-slots", type=int, metavar="N", help="heavy suites allowed at once on this machine (default $CHECK_ALL_HEAVY_SLOTS or 1)")
-    parser.add_argument("--lock-timeout", type=float, default=3600, metavar="SECONDS", help="how long to queue for a heavy slot (default 3600)")
-    parser.add_argument("--check-timeout", type=float, default=1800, metavar="SECONDS", help="kill a check that runs longer (default 1800)")
+    parser = argparse.ArgumentParser(
+        prog="check-all",
+        description="Run typecheck, lint, ruff, test, build, e2e and py, in that order.",
+        epilog=f"Checks: {', '.join(CHECKS)}. Heavy (machine-wide slot): {', '.join(sorted(HEAVY))}.",
+    )
+    parser.add_argument(
+        "--only", metavar="LIST", help="run only these checks, comma separated"
+    )
+    parser.add_argument(
+        "--skip", metavar="LIST", help="leave out these checks, comma separated"
+    )
+    parser.add_argument(
+        "--py",
+        choices=PY_MODES,
+        default="auto",
+        help="auto runs py when the diff against --base touches Python or a file the Python tests read",
+    )
+    parser.add_argument(
+        "--keep-going",
+        "--continue",
+        dest="keep_going",
+        action="store_true",
+        help="run the rest after a failure",
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="stream each check's output as it runs"
+    )
+    parser.add_argument(
+        "--base",
+        default="origin/main",
+        help="ref the auto Python decision diffs against (default origin/main)",
+    )
+    parser.add_argument(
+        "--heavy-slots",
+        type=int,
+        metavar="N",
+        help="heavy suites allowed at once on this machine (default $CHECK_ALL_HEAVY_SLOTS or 1)",
+    )
+    parser.add_argument(
+        "--lock-timeout",
+        type=float,
+        default=3600,
+        metavar="SECONDS",
+        help="how long to queue for a heavy slot (default 3600)",
+    )
+    parser.add_argument(
+        "--check-timeout",
+        type=float,
+        default=1800,
+        metavar="SECONDS",
+        help="kill a check that runs longer (default 1800)",
+    )
     return parser
 
 
@@ -709,27 +943,40 @@ def select(args):
     """The checks to run, in order, and whether py was named explicitly."""
     chosen = parse_names(args.only, "--only") if args.only else list(CHECKS)
     skipped = set(parse_names(args.skip, "--skip")) if args.skip else set()
-    return [name for name in CHECKS if name in chosen and name not in skipped], bool(args.only and "py" in chosen)
+    return [name for name in CHECKS if name in chosen and name not in skipped], bool(
+        args.only and "py" in chosen
+    )
 
 
 def prune_logs(directory, keep, current):
     if directory.is_dir():
-        old = sorted((path for path in directory.iterdir() if path.is_dir() and path != current), key=lambda path: path.name)
-        for path in old[:max(0, len(old) - keep)]:
+        old = sorted(
+            (path for path in directory.iterdir() if path.is_dir() and path != current),
+            key=lambda path: path.name,
+        )
+        for path in old[: max(0, len(old) - keep)]:
             shutil.rmtree(path, ignore_errors=True)
 
 
 def run_battery(root, args, cache, log=None, env=None):
     """Run the checks. Returns (results, warnings). Preconditions are checked before anything runs."""
-    log = log or (lambda message: print(f"check-all: {message}", file=sys.stderr, flush=True))
+    log = log or (
+        lambda message: print(f"check-all: {message}", file=sys.stderr, flush=True)
+    )
     env = dict(os.environ if env is None else env)
     names, py_explicit = select(args)
     if not names:
         raise Refusal("Nothing to run after --only and --skip.")
     try:
-        slots = args.heavy_slots if args.heavy_slots is not None else int(env.get("CHECK_ALL_HEAVY_SLOTS") or 1)
+        slots = (
+            args.heavy_slots
+            if args.heavy_slots is not None
+            else int(env.get("CHECK_ALL_HEAVY_SLOTS") or 1)
+        )
     except ValueError:
-        raise Refusal(f"CHECK_ALL_HEAVY_SLOTS={env['CHECK_ALL_HEAVY_SLOTS']!r} must be a whole number.") from None
+        raise Refusal(
+            f"CHECK_ALL_HEAVY_SLOTS={env['CHECK_ALL_HEAVY_SLOTS']!r} must be a whole number."
+        ) from None
     if slots < 1:
         raise Refusal("The heavy slot count must be at least 1.")
 
@@ -740,24 +987,44 @@ def run_battery(root, args, cache, log=None, env=None):
         for warning in warnings:
             log(f"warning: {warning}")
     ruff = find_ruff(root, cache, env, note=log) if "ruff" in names else None
-    if "e2e" in names and "build" not in names and not (root / "dist/client/index.html").is_file():
-        raise Refusal("e2e serves dist/client, which is not built. Fix: npm run build, or do not --skip build.")
+    if (
+        "e2e" in names
+        and "build" not in names
+        and not (root / "dist/client/index.html").is_file()
+    ):
+        raise Refusal(
+            "e2e serves dist/client, which is not built. Fix: npm run build, or do not --skip build."
+        )
     requested = None
     if "e2e" in names and env.get("E2E_PORT"):
         if not env["E2E_PORT"].isdigit() or not 1024 <= int(env["E2E_PORT"]) <= 65534:
-            raise Refusal(f"E2E_PORT={env['E2E_PORT']!r} must be a whole number from 1024 to 65534.")
+            raise Refusal(
+                f"E2E_PORT={env['E2E_PORT']!r} must be a whole number from 1024 to 65534."
+            )
         requested = int(env["E2E_PORT"])
     run_py, py_reason = False, ""
     if "py" in names:
-        paths = changed_paths(root, args.base) if args.py == "auto" and not py_explicit else []
+        paths = (
+            changed_paths(root, args.base)
+            if args.py == "auto" and not py_explicit
+            else []
+        )
         run_py, py_reason = decide_py(args.py, paths, args.base, py_explicit)
 
     child_env = {**env, "NO_COLOR": "1"}
-    commands = {"typecheck": ["npm", "run", "typecheck"], "lint": ["npm", "run", "lint"], "test": ["npm", "test"], "build": ["npm", "run", "build"],
-                "e2e": ["npm", "run", "test:e2e"], "py": ["npm", "run", "test:py"]}
+    commands = {
+        "typecheck": ["npm", "run", "typecheck"],
+        "lint": ["npm", "run", "lint"],
+        "test": ["npm", "test"],
+        "build": ["npm", "run", "build"],
+        "e2e": ["npm", "run", "test:e2e"],
+        "py": ["npm", "run", "test:py"],
+    }
     if ruff:
         commands["ruff"] = [ruff, "check", "."]
-    logs = cache / "logs" / f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}-{root.name}"
+    logs = (
+        cache / "logs" / f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}-{root.name}"
+    )
     prune_logs(cache / "logs", keep=30, current=logs)
 
     results, failed = [], {}
@@ -769,14 +1036,39 @@ def run_battery(root, args, cache, log=None, env=None):
         elif failed and not args.keep_going:
             results.append(Result(name, "skip", note="an earlier check failed"))
         else:
-            log(f"[{index}/{len(names)}] {name}" + (f" ({py_reason})" if name == "py" else ""))
-            result = run_one(root, name, commands[name], child_env, logs, cache, slots, args, requested, log)
+            log(
+                f"[{index}/{len(names)}] {name}"
+                + (f" ({py_reason})" if name == "py" else "")
+            )
+            result = run_one(
+                root,
+                name,
+                commands[name],
+                child_env,
+                logs,
+                cache,
+                slots,
+                args,
+                requested,
+                log,
+            )
             results.append(result)
-            log(f"{name}: {result.status} in {format_seconds(result.seconds)}" + (f" after {format_seconds(result.queued)} queued" if result.queued >= 0.05 else ""))
+            log(
+                f"{name}: {result.status} in {format_seconds(result.seconds)}"
+                + (
+                    f" after {format_seconds(result.queued)} queued"
+                    if result.queued >= 0.05
+                    else ""
+                )
+            )
             if result.status != "pass":
                 failed[name] = result
                 if result.detail:
-                    print(f"\n--- {name}: last lines (full output: {result.log}) ---\n{result.detail}\n", file=sys.stderr, flush=True)
+                    print(
+                        f"\n--- {name}: last lines (full output: {result.log}) ---\n{result.detail}\n",
+                        file=sys.stderr,
+                        flush=True,
+                    )
     return results, warnings
 
 
@@ -786,10 +1078,22 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
     try:
         if name in HEAVY:
             try:
-                held, queued = acquire_slot(cache / "locks", slots, {"pid": os.getpid(), "check": name, "worktree": str(root)}, args.lock_timeout,
-                                            note=lambda message: log(f"{name}: {message}"))
+                held, queued = acquire_slot(
+                    cache / "locks",
+                    slots,
+                    {"pid": os.getpid(), "check": name, "worktree": str(root)},
+                    args.lock_timeout,
+                    note=lambda message: log(f"{name}: {message}"),
+                )
             except LockTimeout as error:
-                return Result(name, "locked", args.lock_timeout, 0.0, note="gave up queueing for a heavy slot", detail=str(error))
+                return Result(
+                    name,
+                    "locked",
+                    args.lock_timeout,
+                    0.0,
+                    note="gave up queueing for a heavy slot",
+                    detail=str(error),
+                )
         if name == "e2e":
             port_lease, port = pick_e2e_port(cache / "locks", root, requested)
             env = {**env, "E2E_PORT": str(port)}
@@ -803,8 +1107,16 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
             for lease in leases:
                 lease.update_info(pid=pid)
 
-        code, output = run_process(argv, root, env, log_path, args.check_timeout, args.verbose, inherit=[fd for lease in leases for fd in lease.fds],
-                                   on_start=name_the_child)
+        code, output = run_process(
+            argv,
+            root,
+            env,
+            log_path,
+            args.check_timeout,
+            args.verbose,
+            inherit=[fd for lease in leases for fd in lease.fds],
+            on_start=name_the_child,
+        )
         seconds = time.monotonic() - started
     except Refusal as error:
         return Result(name, "fail", queued, 0.0, note="refused", detail=str(error))
@@ -814,8 +1126,26 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
                 lease.release()
     counts = parse_counts(name, output)
     if code is None:
-        return Result(name, "timeout", queued, seconds, counts, f"killed after {int(args.check_timeout)}s", f"killed after {int(args.check_timeout)}s\n{tail(output)}", log_path)
-    return Result(name, "pass" if code == 0 else "fail", queued, seconds, counts, "", tail(output) if code else "", log_path)
+        return Result(
+            name,
+            "timeout",
+            queued,
+            seconds,
+            counts,
+            f"killed after {int(args.check_timeout)}s",
+            f"killed after {int(args.check_timeout)}s\n{tail(output)}",
+            log_path,
+        )
+    return Result(
+        name,
+        "pass" if code == 0 else "fail",
+        queued,
+        seconds,
+        counts,
+        "",
+        tail(output) if code else "",
+        log_path,
+    )
 
 
 class Interrupted(BaseException):
@@ -826,7 +1156,7 @@ def close_inherited_descriptors():
     """Close every descriptor above 2, so the locks this process opens next get the lowest numbers (3 and 4)."""
     try:
         highest = os.sysconf("SC_OPEN_MAX")
-    except (ValueError, OSError):
+    except ValueError, OSError:
         highest = 4096
     os.closerange(3, max(highest, 4096))
 
@@ -841,7 +1171,10 @@ def main(argv, root=ROOT, cache=None, close_inherited=True):
     def interrupt(signum, _frame):
         raise Interrupted(signal.Signals(signum).name)
 
-    previous = {number: signal.signal(number, interrupt) for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    previous = {
+        number: signal.signal(number, interrupt)
+        for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    }
     started = time.monotonic()
     try:
         args = build_parser().parse_args(argv)
@@ -850,7 +1183,10 @@ def main(argv, root=ROOT, cache=None, close_inherited=True):
         print(f"check-all: refusing to run. {error}", file=sys.stderr)
         return EXIT_USAGE
     except Interrupted as error:
-        print(f"check-all: stopped by {error}; its checks were killed and its locks released", file=sys.stderr)
+        print(
+            f"check-all: stopped by {error}; its checks were killed and its locks released",
+            file=sys.stderr,
+        )
         return 130
     finally:
         for number, handler in previous.items():
@@ -858,10 +1194,16 @@ def main(argv, root=ROOT, cache=None, close_inherited=True):
     print("\n" + render_table(results))
     for warning in warnings:
         print(f"\nWarning: {warning}")
-    bad = [result.name for result in results if result.status in ("fail", "timeout", "locked")]
+    bad = [
+        result.name
+        for result in results
+        if result.status in ("fail", "timeout", "locked")
+    ]
     ran = [result for result in results if result.status != "skip"]
     verdict = "FAILED: " + ", ".join(bad) if bad else f"All {len(ran)} checks passed"
-    print(f"\n{verdict} ({format_seconds(time.monotonic() - started)} total, {format_seconds(sum(r.queued for r in ran))} of it queued for heavy slots)")
+    print(
+        f"\n{verdict} ({format_seconds(time.monotonic() - started)} total, {format_seconds(sum(r.queued for r in ran))} of it queued for heavy slots)"
+    )
     if any(result.status == "locked" for result in results):
         return EXIT_LOCK_TIMEOUT
     return 1 if bad else 0

@@ -3,6 +3,7 @@
 These prove durable upgrade/rollback ordering, not Hermes integration. The shipped
 worker separately requires the complete real Hermes qualification suite.
 """
+
 import datetime
 import importlib.util
 import base64
@@ -28,7 +29,7 @@ from support import load_source
 
 worker = load_source("scripts/hermes-upgrade-worker.py", "worker")
 
-HOOK = r'''
+HOOK = r"""
 import json, os, pathlib, subprocess, sys, time
 source=pathlib.Path(os.environ['HERMES_UPGRADE_SOURCE'])
 stage=pathlib.Path(os.environ['HERMES_UPGRADE_STAGE_HOME'])
@@ -79,11 +80,11 @@ elif action=='finish':
         (stage/'config-at-finish.json').write_bytes(pathlib.Path(os.environ['FIXTURE_WORKER_CONFIG']).read_bytes())
     (stage/'gate').unlink(missing_ok=True)
     if (stage/'fail-finish').exists(): raise SystemExit(1)
-'''
+"""
 
 # Fixture managed-runtime helper. It validates controller wiring only; the actual helper has
 # separate tests and the final Hermes suite proves activated libraries.
-MANAGED_HELPER = '''import argparse, hashlib, json, pathlib, shlex, sys
+MANAGED_HELPER = """import argparse, hashlib, json, pathlib, shlex, sys
 def fingerprint(python):
     return {"interpreterSha256":hashlib.sha256(pathlib.Path(sys.executable).read_bytes()).hexdigest(),"dependenciesSha256":"b"*64}
 if __name__=="__main__":
@@ -94,10 +95,10 @@ if __name__=="__main__":
     launcher=stage/"qualified-python"; launcher.write_text("#!/bin/sh\\nexec "+shlex.quote(sys.executable)+" \\\"$@\\\"\\n"); launcher.chmod(0o700)
     descriptor=stage/"qualified-runtime.json"; descriptor.write_text("{}"); descriptor.chmod(0o600)
     print(json.dumps({"python":str(launcher),"descriptor":str(descriptor),"fingerprint":fingerprint(str(launcher))}))
-'''
+"""
 
 # Native marker double tests worker ownership/handoff wiring, not native locking.
-UPDATE_LOCK = '''import os, time
+UPDATE_LOCK = """import os, time
 class UpdateLock:
     def __init__(self, *, path): self.path=path; self.acquired=False
     def acquire(self):
@@ -109,7 +110,8 @@ class UpdateLock:
         self.acquired=True; return True
     def release(self):
         if self.acquired and self.path.exists() and self.path.read_text().splitlines()[0]==str(os.getpid()): self.path.unlink()
-'''
+"""
+
 
 class ChromiumTests(unittest.TestCase):
     def setUp(self):
@@ -123,10 +125,18 @@ class ChromiumTests(unittest.TestCase):
         self.browser.chmod(0o700)
 
     def facts(self, package):
-        (self.tools / "facts.json").write_text(json.dumps({"packages": {"chromium": package}}))
+        (self.tools / "facts.json").write_text(
+            json.dumps({"packages": {"chromium": package}})
+        )
 
     def test_legacy_browser_env(self):
-        self.facts({"env": {"AGENT_BROWSER_EXECUTABLE_PATH": "{{store}}/chromium-1208/chrome-linux64/chrome"}})
+        self.facts(
+            {
+                "env": {
+                    "AGENT_BROWSER_EXECUTABLE_PATH": "{{store}}/chromium-1208/chrome-linux64/chrome"
+                }
+            }
+        )
         self.assertEqual(worker.native_chromium(self.home), self.browser.resolve())
 
     def test_new_browser_entry(self):
@@ -143,10 +153,12 @@ class ChromiumTests(unittest.TestCase):
         for entry in (None, "../outside", str(self.home), ".", ".."):
             with self.subTest(entry=entry):
                 self.facts({"entry": entry})
-                with self.assertRaises(RuntimeError): worker.native_chromium(self.home)
+                with self.assertRaises(RuntimeError):
+                    worker.native_chromium(self.home)
         self.facts({"entry": "linked"})
         (self.tools / "linked").symlink_to(self.home, target_is_directory=True)
-        with self.assertRaises(RuntimeError): worker.native_chromium(self.home)
+        with self.assertRaises(RuntimeError):
+            worker.native_chromium(self.home)
 
     def test_browser_symlink_cannot_escape_entry(self):
         outside = self.tools / "other/chrome"
@@ -160,21 +172,36 @@ class ChromiumTests(unittest.TestCase):
 
 class RepairMergeTests(unittest.TestCase):
     def merge(self, base, ours, theirs):
-        result = worker.merge_lines(*(text.splitlines(True) for text in (base, ours, theirs)))
+        result = worker.merge_lines(
+            *(text.splitlines(True) for text in (base, ours, theirs))
+        )
         return None if result is None else "".join(result)
 
     def test_edit_survives_an_upstream_change_on_the_line_beside_it(self):
-        self.assertEqual(self.merge("sig Dict\nimport lock\nbody\n", "sig Dict\nimport transaction\nbody\n", "sig dict\nimport lock\nbody\n"),
-            "sig dict\nimport transaction\nbody\n")
+        self.assertEqual(
+            self.merge(
+                "sig Dict\nimport lock\nbody\n",
+                "sig Dict\nimport transaction\nbody\n",
+                "sig dict\nimport lock\nbody\n",
+            ),
+            "sig dict\nimport transaction\nbody\n",
+        )
 
     def test_edit_follows_lines_upstream_moved(self):
-        self.assertEqual(self.merge("a\nlock\nz\n", "a\ntransaction\nz\n", "new\nnew\na\nlock\nz\n"), "new\nnew\na\ntransaction\nz\n")
+        self.assertEqual(
+            self.merge("a\nlock\nz\n", "a\ntransaction\nz\n", "new\nnew\na\nlock\nz\n"),
+            "new\nnew\na\ntransaction\nz\n",
+        )
 
     def test_refuses_when_upstream_changed_a_line_the_repair_replaces(self):
-        self.assertIsNone(self.merge("a\nlock\nz\n", "a\ntransaction\nz\n", "a\nlock2\nz\n"))
+        self.assertIsNone(
+            self.merge("a\nlock\nz\n", "a\ntransaction\nz\n", "a\nlock2\nz\n")
+        )
 
     def test_insertion_needs_both_neighbours_unchanged_and_adjacent(self):
-        self.assertEqual(self.merge("a\nb\n", "a\nadded\nb\n", "a\nb\nc\n"), "a\nadded\nb\nc\n")
+        self.assertEqual(
+            self.merge("a\nb\n", "a\nadded\nb\n", "a\nb\nc\n"), "a\nadded\nb\nc\n"
+        )
         self.assertIsNone(self.merge("a\nb\n", "a\nadded\nb\n", "a\nupstream\nb\n"))
         self.assertIsNone(self.merge("a\nb\n", "a\nadded\nb\n", "a2\nb\n"))
 
@@ -192,51 +219,102 @@ class RepairMergeTests(unittest.TestCase):
 
     def test_refuses_when_the_replaced_lines_appear_twice_upstream(self):
         base = "a\nb\nlock\nc\nd\n"
-        self.assertIsNone(self.merge(base, base.replace("lock", "transaction"), "a2\nb\nlock\nc\nd\nx\nlock\ny\n"))
+        self.assertIsNone(
+            self.merge(
+                base,
+                base.replace("lock", "transaction"),
+                "a2\nb\nlock\nc\nd\nx\nlock\ny\n",
+            )
+        )
 
     def test_no_newline_marker_on_unchanged_context_is_ignored(self):
         with_marker = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n-lock\n+transaction\n tail\n\\ No newline at end of file\n"
         without = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n-lock\n+transaction\n tail\n"
-        self.assertEqual(worker.repair_changes(with_marker), worker.repair_changes(without))
+        self.assertEqual(
+            worker.repair_changes(with_marker), worker.repair_changes(without)
+        )
 
     def test_repair_changes_ignore_context_but_not_edits_or_modes(self):
         one = b"diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n sig Dict\n-lock\n+transaction\n"
         two = b"diff --git a/f b/f\nindex 3..4 100644\n--- a/f\n+++ b/f\n@@ -9,2 +9,2 @@\n sig dict\n-lock\n+transaction\n"
         self.assertEqual(worker.repair_changes(one), worker.repair_changes(two))
-        self.assertNotEqual(worker.repair_changes(one), worker.repair_changes(two.replace(b"+transaction", b"+other")))
-        self.assertNotEqual(worker.repair_changes(one), worker.repair_changes(one.replace(b"index 1..2 100644\n", b"old mode 100644\nnew mode 100755\nindex 1..2\n")))
+        self.assertNotEqual(
+            worker.repair_changes(one),
+            worker.repair_changes(two.replace(b"+transaction", b"+other")),
+        )
+        self.assertNotEqual(
+            worker.repair_changes(one),
+            worker.repair_changes(
+                one.replace(
+                    b"index 1..2 100644\n",
+                    b"old mode 100644\nnew mode 100755\nindex 1..2\n",
+                )
+            ),
+        )
 
 
 class MirrorTests(unittest.TestCase):
     """A staged runtime matches production only if it sees what a live reset keeps outside Git."""
+
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(); self.addCleanup(self.temporary.cleanup)
-        root = Path(self.temporary.name); self.live = root / "live"; self.staged = root / "staged"
-        git = lambda path, *args: subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.live = root / "live"
+        self.staged = root / "staged"
+        git = lambda path, *args: subprocess.run(
+            ["git", "-C", str(path), *args], check=True, capture_output=True
+        )
         self.live.mkdir()
-        (self.live / ".gitignore").write_text("web_dist/\nvenv/\n__pycache__/\nstamp.json\nlocal.py\nlinked\n")
-        (self.live / "pkg").mkdir(); (self.live / "pkg/core.py").write_text("old\n")
-        (self.live / "removed").mkdir(); (self.live / "removed/data.txt").write_text("tracked, deleted upstream\n")
-        (self.live / "cached").mkdir(); (self.live / "cached/old.py").write_text("tracked, deleted upstream\n")
-        git(self.live, "init", "-q"); git(self.live, "add", ".")
-        git(self.live, "-c", "user.name=F", "-c", "user.email=f@example.test", "commit", "-qm", "base")
-        subprocess.run(["git", "clone", "-q", str(self.live), str(self.staged)], check=True, capture_output=True)
+        (self.live / ".gitignore").write_text(
+            "web_dist/\nvenv/\n__pycache__/\nstamp.json\nlocal.py\nlinked\n"
+        )
+        (self.live / "pkg").mkdir()
+        (self.live / "pkg/core.py").write_text("old\n")
+        (self.live / "removed").mkdir()
+        (self.live / "removed/data.txt").write_text("tracked, deleted upstream\n")
+        (self.live / "cached").mkdir()
+        (self.live / "cached/old.py").write_text("tracked, deleted upstream\n")
+        git(self.live, "init", "-q")
+        git(self.live, "add", ".")
+        git(
+            self.live,
+            "-c",
+            "user.name=F",
+            "-c",
+            "user.email=f@example.test",
+            "commit",
+            "-qm",
+            "base",
+        )
+        subprocess.run(
+            ["git", "clone", "-q", str(self.live), str(self.staged)],
+            check=True,
+            capture_output=True,
+        )
         for path in ("removed/data.txt", "cached/old.py"):
             (self.staged / path).unlink()
         for path in ("removed", "cached"):
             (self.staged / path).rmdir()
         # Live keeps build output, caches, an old venv and directories a past revision left behind.
-        (self.live / "web_dist/assets").mkdir(parents=True); (self.live / "web_dist/assets/app.js").write_text("built\n")
+        (self.live / "web_dist/assets").mkdir(parents=True)
+        (self.live / "web_dist/assets/app.js").write_text("built\n")
         (self.live / "stamp.json").write_text("{}\n")
-        (self.live / "cached/__pycache__").mkdir(); (self.live / "cached/__pycache__/old.cpython-314.pyc").write_bytes(b"\0")
-        (self.live / "venv/lib").mkdir(parents=True); (self.live / "venv/lib/site.py").write_text("old venv\n")
+        (self.live / "cached/__pycache__").mkdir()
+        (self.live / "cached/__pycache__/old.cpython-314.pyc").write_bytes(b"\0")
+        (self.live / "venv/lib").mkdir(parents=True)
+        (self.live / "venv/lib/site.py").write_text("old venv\n")
         (self.live / "leftover/empty").mkdir(parents=True)
 
     def test_reset_survivors_are_mirrored_and_the_rest_is_not(self):
         (self.staged / "stamp.json").write_text("candidate tracks this now\n")
         worker.mirror_untracked(self.live, self.staged)
-        self.assertEqual((self.staged / "web_dist/assets/app.js").read_text(), "built\n")
-        self.assertEqual((self.staged / "stamp.json").read_text(), "candidate tracks this now\n")
+        self.assertEqual(
+            (self.staged / "web_dist/assets/app.js").read_text(), "built\n"
+        )
+        self.assertEqual(
+            (self.staged / "stamp.json").read_text(), "candidate tracks this now\n"
+        )
         self.assertTrue((self.staged / "leftover/empty").is_dir())
         # A directory kept alive only by caches survives a reset, so it exists without the cache.
         self.assertTrue((self.staged / "cached").is_dir())
@@ -247,10 +325,14 @@ class MirrorTests(unittest.TestCase):
 
     def test_ignored_code_and_links_require_review(self):
         # Git never lists special files such as FIFOs, so they cannot reach the mirror.
-        (self.live / ".gitignore").write_text((self.live / ".gitignore").read_text() + "pkg/stale.pyc\n")
-        cases = (("local.py", lambda path: path.write_text("unqualified\n")),
-                 ("pkg/stale.pyc", lambda path: path.write_bytes(b"\0bytecode")),
-                 ("linked", lambda path: path.symlink_to(self.live / "pkg/core.py")))
+        (self.live / ".gitignore").write_text(
+            (self.live / ".gitignore").read_text() + "pkg/stale.pyc\n"
+        )
+        cases = (
+            ("local.py", lambda path: path.write_text("unqualified\n")),
+            ("pkg/stale.pyc", lambda path: path.write_bytes(b"\0bytecode")),
+            ("linked", lambda path: path.symlink_to(self.live / "pkg/core.py")),
+        )
         for name, make in cases:
             with self.subTest(name):
                 make(self.live / name)
@@ -260,33 +342,52 @@ class MirrorTests(unittest.TestCase):
 
     def test_code_inside_a_hermes_product_build_is_mirrored(self):
         # Hermes copies tracked TUI helpers into ui-tui/dist and rebuilds it when its receipt is stale.
-        (self.live / ".gitignore").write_text((self.live / ".gitignore").read_text() + "ui-tui/dist/\nstray/\n")
+        (self.live / ".gitignore").write_text(
+            (self.live / ".gitignore").read_text() + "ui-tui/dist/\nstray/\n"
+        )
         build = self.live / "ui-tui/dist"
-        (build / "scripts").mkdir(parents=True); (build / "scripts/gateway_bootstrap.py").write_text("helper\n")
-        receipt = {"schema": 1, "product": "tui", "inputs": {"sourceHash": "0" * 64}, "outputHash": "1" * 64}
+        (build / "scripts").mkdir(parents=True)
+        (build / "scripts/gateway_bootstrap.py").write_text("helper\n")
+        receipt = {
+            "schema": 1,
+            "product": "tui",
+            "inputs": {"sourceHash": "0" * 64},
+            "outputHash": "1" * 64,
+        }
         (build / "hermes-build.json").write_text(json.dumps(receipt))
         worker.mirror_untracked(self.live, self.staged)
-        self.assertEqual((self.staged / "ui-tui/dist/scripts/gateway_bootstrap.py").read_text(), "helper\n")
+        self.assertEqual(
+            (self.staged / "ui-tui/dist/scripts/gateway_bootstrap.py").read_text(),
+            "helper\n",
+        )
         # Only a valid receipt for that product at a known output path excuses code.
         (self.live / "stray").mkdir()
-        cases = (("stray/run.py", receipt), ("ui-tui/dist/run.py", dict(receipt, product="web")),
-                 ("ui-tui/dist/run.py", dict(receipt, outputHash="")), ("ui-tui/dist/run.py", {"schema": 1, "product": "tui"}),
-                 ("ui-tui/dist/run.py", "not json"))
+        cases = (
+            ("stray/run.py", receipt),
+            ("ui-tui/dist/run.py", dict(receipt, product="web")),
+            ("ui-tui/dist/run.py", dict(receipt, outputHash="")),
+            ("ui-tui/dist/run.py", {"schema": 1, "product": "tui"}),
+            ("ui-tui/dist/run.py", "not json"),
+        )
         for code, value in cases:
             with self.subTest(code=code, receipt=value):
                 code = self.live / code
                 code.write_text("unqualified\n")
-                (code.parent / "hermes-build.json").write_text(value if isinstance(value, str) else json.dumps(value))
+                (code.parent / "hermes-build.json").write_text(
+                    value if isinstance(value, str) else json.dumps(value)
+                )
                 with self.assertRaisesRegex(RuntimeError, "installer review"):
                     worker.mirror_untracked(self.live, self.staged)
                 code.unlink()
         (build / "hermes-build.json").write_text(json.dumps(receipt))
 
     def test_candidate_paths_win_over_ignored_live_content(self):
-        outside = self.staged.parent / "outside"; outside.mkdir()
+        outside = self.staged.parent / "outside"
+        outside.mkdir()
         # The candidate tracks a file where live had ignored Python, replaces a directory with a
         # link, and replaces another directory with a file. A reset discards the live copies.
-        (self.live / "local.py").write_text("ignored here\n"); (self.staged / "local.py").write_text("tracked now\n")
+        (self.live / "local.py").write_text("ignored here\n")
+        (self.staged / "local.py").write_text("tracked now\n")
         (self.live / "web_dist/assets").mkdir(parents=True, exist_ok=True)
         (self.staged / "web_dist").symlink_to(outside, target_is_directory=True)
         (self.staged / "cached").write_text("now a file\n")
@@ -296,276 +397,543 @@ class MirrorTests(unittest.TestCase):
         self.assertEqual((self.staged / "cached").read_text(), "now a file\n")
 
     def test_dist_is_skipped_only_at_the_root(self):
-        (self.live / ".gitignore").write_text((self.live / ".gitignore").read_text() + "dist/\n")
-        (self.live / "dist").mkdir(); (self.live / "dist/root.txt").write_text("root build\n")
+        (self.live / ".gitignore").write_text(
+            (self.live / ".gitignore").read_text() + "dist/\n"
+        )
+        (self.live / "dist").mkdir()
+        (self.live / "dist/root.txt").write_text("root build\n")
         (self.live / "plugins/board/dashboard/dist").mkdir(parents=True)
-        (self.live / "plugins/board/dashboard/dist/app.js").write_text("bundled dashboard\n")
+        (self.live / "plugins/board/dashboard/dist/app.js").write_text(
+            "bundled dashboard\n"
+        )
         worker.mirror_untracked(self.live, self.staged)
         self.assertFalse((self.staged / "dist").exists())
-        self.assertEqual((self.staged / "plugins/board/dashboard/dist/app.js").read_text(), "bundled dashboard\n")
+        self.assertEqual(
+            (self.staged / "plugins/board/dashboard/dist/app.js").read_text(),
+            "bundled dashboard\n",
+        )
 
 
 class QualificationWorkerTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="agent-interface-upgrade-worker-test-")
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="agent-interface-upgrade-worker-test-"
+        )
         self.root = Path(self.temporary.name).resolve()
-        self.source = self.root / "source"; self.source.mkdir()
-        def git(*args): return subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(self.source), *args], stderr=subprocess.DEVNULL)
+        self.source = self.root / "source"
+        self.source.mkdir()
+
+        def git(*args):
+            return subprocess.check_output(
+                ["git", "-c", "core.abbrev=10", "-C", str(self.source), *args],
+                stderr=subprocess.DEVNULL,
+            )
+
         self.git = git
-        git("init"); git("config", "user.email", "fixture@example.invalid"); git("config", "user.name", "Fixture")
+        git("init")
+        git("config", "user.email", "fixture@example.invalid")
+        git("config", "user.name", "Fixture")
         (self.source / "version").write_text("old")
-        (self.source / "hermes_cli").mkdir(); (self.source / "hermes_cli/update_lock.py").write_text(UPDATE_LOCK)
+        (self.source / "hermes_cli").mkdir()
+        (self.source / "hermes_cli/update_lock.py").write_text(UPDATE_LOCK)
         (self.source / ".gitignore").write_text("web_dist/\n")
-        git("add", "."); git("commit", "-m", "old")
+        git("add", ".")
+        git("commit", "-m", "old")
         self.old = git("rev-parse", "HEAD").decode().strip()
-        (self.source / "version").write_text("new"); git("add", "."); git("commit", "-m", "new")
+        (self.source / "version").write_text("new")
+        git("add", ".")
+        git("commit", "-m", "new")
         self.new = git("rev-parse", "HEAD").decode().strip()
-        git("update-ref", "refs/remotes/origin/main", self.new); git("checkout", "--detach", self.old)
-        git("remote", "add", "origin", "https://github.com/NousResearch/hermes-agent.git")
-        self.app = self.root / "app"; (self.app / "src/hermes").mkdir(parents=True); (self.app / "scripts/spike").mkdir(parents=True)
+        git("update-ref", "refs/remotes/origin/main", self.new)
+        git("checkout", "--detach", self.old)
+        git(
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/NousResearch/hermes-agent.git",
+        )
+        self.app = self.root / "app"
+        (self.app / "src/hermes").mkdir(parents=True)
+        (self.app / "scripts/spike").mkdir(parents=True)
         (self.app / "node_modules").mkdir()
         # Exercise the real shared selector; only replace the integration manifest with
         # this control-plane fixture's one input, not the native runtime suite.
-        shutil.copy2(Path(worker.__file__).resolve().parents[1] / "src/hermes/qualification.py", self.app / "src/hermes/qualification.py")
+        shutil.copy2(
+            Path(worker.__file__).resolve().parents[1] / "src/hermes/qualification.py",
+            self.app / "src/hermes/qualification.py",
+        )
         (self.app / "src/shared").mkdir()
-        (self.app / "src/shared/qualification-inputs.json").write_text('["src/hermes/qualification.py"]')
-        (self.app / "scripts/spike/run.py").write_text("# Control-plane fixture, never production qualification.\nprint('fixture integration command complete')\n")
-        for filename in ["package.json", "package-lock.json", "tsconfig.json"]: (self.app / filename).write_text("{}")
-        hook = self.root / "hook.py"; hook.write_text(HOOK)
-        self.state = self.root / "state"; self.state.mkdir(mode=0o700); (self.state / "requests").mkdir(mode=0o700)
+        (self.app / "src/shared/qualification-inputs.json").write_text(
+            '["src/hermes/qualification.py"]'
+        )
+        (self.app / "scripts/spike/run.py").write_text(
+            "# Control-plane fixture, never production qualification.\nprint('fixture integration command complete')\n"
+        )
+        for filename in ["package.json", "package-lock.json", "tsconfig.json"]:
+            (self.app / filename).write_text("{}")
+        hook = self.root / "hook.py"
+        hook.write_text(HOOK)
+        self.state = self.root / "state"
+        self.state.mkdir(mode=0o700)
+        (self.state / "requests").mkdir(mode=0o700)
         self.receipt = self.root / "deployed-qualification.json"
         self.config = self.root / "config.json"
-        worker.atomic(self.config, {"source":str(self.source),"appRoot":str(self.app),"stageRoot":str(self.root/'stages'),
-            "qualificationPython":sys.executable,"qualificationReceipt":str(self.receipt),"requiredPatchSha256":None,
-            "hooks":{**{action:[sys.executable,str(hook),action] for action in ['quiescence','backup','install','verify','rollback','finish','recover','restart_service']},
-                "regressions":[[sys.executable,str(hook),'regressions']]}})
+        worker.atomic(
+            self.config,
+            {
+                "source": str(self.source),
+                "appRoot": str(self.app),
+                "stageRoot": str(self.root / "stages"),
+                "qualificationPython": sys.executable,
+                "qualificationReceipt": str(self.receipt),
+                "requiredPatchSha256": None,
+                "hooks": {
+                    **{
+                        action: [sys.executable, str(hook), action]
+                        for action in [
+                            "quiescence",
+                            "backup",
+                            "install",
+                            "verify",
+                            "rollback",
+                            "finish",
+                            "recover",
+                            "restart_service",
+                        ]
+                    },
+                    "regressions": [[sys.executable, str(hook), "regressions"]],
+                },
+            },
+        )
         # The headroom check reads the real disk, which a CI runner may not have spare. Tests of it patch their own.
-        ample = type('Usage',(),{'free':200*1024**3,'total':256*1024**3,'used':56*1024**3})()
-        disk = patch.object(worker.shutil,'disk_usage',return_value=ample); disk.start(); self.addCleanup(disk.stop)
+        ample = type(
+            "Usage",
+            (),
+            {"free": 200 * 1024**3, "total": 256 * 1024**3, "used": 56 * 1024**3},
+        )()
+        disk = patch.object(worker.shutil, "disk_usage", return_value=ample)
+        disk.start()
+        self.addCleanup(disk.stop)
         self.original_run = worker.Worker.run
         self.fixture_upstream = self.source
+
         def run(instance, argv, **kwargs):
             # Only replace the fixed network URL with the local Git fixture.
             # The staging fetch, object transfer and checkout all run for real.
-            if argv[:4] == ["git", "-C", str(self.source), "fetch"]: return
-            if argv[3:6] == ["remote", "add", "origin"] and argv[-1] == worker.OFFICIAL_UPSTREAM:
+            if argv[:4] == ["git", "-C", str(self.source), "fetch"]:
+                return
+            if (
+                argv[3:6] == ["remote", "add", "origin"]
+                and argv[-1] == worker.OFFICIAL_UPSTREAM
+            ):
                 argv = [*argv[:-1], self.fixture_upstream.as_uri()]
             return self.original_run(instance, argv, **kwargs)
-        self.interception = patch.object(worker.Worker, "run", run); self.interception.start()
 
-    def tearDown(self): self.interception.stop(); self.temporary.cleanup()
-    def status(self): return json.loads((self.state / "status.json").read_text())
+        self.interception = patch.object(worker.Worker, "run", run)
+        self.interception.start()
+
+    def tearDown(self):
+        self.interception.stop()
+        self.temporary.cleanup()
+
+    def status(self):
+        return json.loads((self.state / "status.json").read_text())
+
     def check(self):
-        operation = str(uuid.uuid4()); worker.atomic(self.state / "status.json", {"operationId":operation,"phase":"checking","checks":[],"message":"Checking"})
-        worker.Worker(self.config,self.state,"check",operation).main()
-        self.assertEqual(self.status()["phase"],"ready")
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json",
+            {
+                "operationId": operation,
+                "phase": "checking",
+                "checks": [],
+                "message": "Checking",
+            },
+        )
+        worker.Worker(self.config, self.state, "check", operation).main()
+        self.assertEqual(self.status()["phase"], "ready")
         return Path(self.status()["qualification"]["stage"])
+
     def install(self, expect_error=False):
-        operation, request = str(uuid.uuid4()),str(uuid.uuid4()); state=self.status()
-        state.update(operationId=operation,requestId=request,phase="installing",maintenance=True)
-        worker.atomic(self.state / "status.json",state)
-        worker.atomic(self.state / "requests" / (request+'.json'),{"operationId":operation,"candidateRevision":self.new,"status":"pending"})
-        instance=worker.Worker(self.config,self.state,"install",operation)
-        if instance.config.get('managedHome'):
-            instance.environment.update(FIXTURE_MANAGED_HOME=instance.config['managedHome'], FIXTURE_WORKER_CONFIG=str(self.config))
+        operation, request = str(uuid.uuid4()), str(uuid.uuid4())
+        state = self.status()
+        state.update(
+            operationId=operation,
+            requestId=request,
+            phase="installing",
+            maintenance=True,
+        )
+        worker.atomic(self.state / "status.json", state)
+        worker.atomic(
+            self.state / "requests" / (request + ".json"),
+            {
+                "operationId": operation,
+                "candidateRevision": self.new,
+                "status": "pending",
+            },
+        )
+        instance = worker.Worker(self.config, self.state, "install", operation)
+        if instance.config.get("managedHome"):
+            instance.environment.update(
+                FIXTURE_MANAGED_HOME=instance.config["managedHome"],
+                FIXTURE_WORKER_CONFIG=str(self.config),
+            )
         if expect_error:
-            with self.assertRaises(Exception): instance.main()
-        else: instance.main()
-        return json.loads((self.state / "requests" / (request+'.json')).read_text())
+            with self.assertRaises(Exception):
+                instance.main()
+        else:
+            instance.main()
+        return json.loads((self.state / "requests" / (request + ".json")).read_text())
 
     def wait_for(self, predicate):
         deadline = time.monotonic() + 10
         while not predicate():
-            if time.monotonic() > deadline: self.fail("Timed out waiting for worker fault boundary")
-            time.sleep(.02)
+            if time.monotonic() > deadline:
+                self.fail("Timed out waiting for worker fault boundary")
+            time.sleep(0.02)
 
     def control(self, action):
         operation = self.status()["operationId"]
-        controls = self.state / "controls"; controls.mkdir(mode=0o700, exist_ok=True)
-        intent = {"operationId": operation, "requestId": str(uuid.uuid4()), "action": action, "status": "pending"}
+        controls = self.state / "controls"
+        controls.mkdir(mode=0o700, exist_ok=True)
+        intent = {
+            "operationId": operation,
+            "requestId": str(uuid.uuid4()),
+            "action": action,
+            "status": "pending",
+        }
         worker.atomic(controls / (operation + ".json"), intent)
         worker.atomic(controls / ("request-" + intent["requestId"] + ".json"), intent)
         return operation
 
     def flaky_integration(self, failures):
-        counter = self.root / 'integration-runs'
-        (self.app / 'scripts/spike/run.py').write_text(f'''import pathlib, sys
+        counter = self.root / "integration-runs"
+        (self.app / "scripts/spike/run.py").write_text(f"""import pathlib, sys
 counter = pathlib.Path({str(counter)!r})
 runs = int(counter.read_text()) + 1 if counter.exists() else 1
 counter.write_text(str(runs))
 if runs <= {failures}: sys.exit("fixture intermittent probe failure")
 print("fixture integration command complete")
-''')
+""")
         return counter
 
     def select_browser(self):
-        browser = self.root / 'system-chrome'
-        browser.write_bytes(b'\x7fELFfixture'); browser.chmod(0o700)
-        selected = self.root / 'selected-chrome'
-        selected.unlink(missing_ok=True); selected.symlink_to(browser)
-        descriptor = worker.qualification_module(self.app).computer_probe_browser(str(selected))
-        worker.atomic(self.receipt, {'schemaVersion': 1, 'revision': self.old, 'trackedPatchSha256': None,
-            'integrationDigest': worker.integration_digest(self.app), 'qualifiedAt': worker.now(),
-            'checks': {'realIntegration': True, 'hostRegressions': True}, 'computerProbeBrowser': descriptor})
+        browser = self.root / "system-chrome"
+        browser.write_bytes(b"\x7fELFfixture")
+        browser.chmod(0o700)
+        selected = self.root / "selected-chrome"
+        selected.unlink(missing_ok=True)
+        selected.symlink_to(browser)
+        descriptor = worker.qualification_module(self.app).computer_probe_browser(
+            str(selected)
+        )
+        worker.atomic(
+            self.receipt,
+            {
+                "schemaVersion": 1,
+                "revision": self.old,
+                "trackedPatchSha256": None,
+                "integrationDigest": worker.integration_digest(self.app),
+                "qualifiedAt": worker.now(),
+                "checks": {"realIntegration": True, "hostRegressions": True},
+                "computerProbeBrowser": descriptor,
+            },
+        )
         return browser, selected, descriptor
 
     def capture_browser_environment(self):
-        output = self.root / 'browser-environment.json'
-        (self.app / 'scripts/spike/run.py').write_text(f'''import json, os, pathlib
+        output = self.root / "browser-environment.json"
+        (self.app / "scripts/spike/run.py").write_text(f"""import json, os, pathlib
 pathlib.Path({str(output)!r}).write_text(json.dumps({{key: os.environ.get(key) for key in
     ('HERMES_COMPUTER_PROBE_BROWSER', 'AGENT_BROWSER_EXECUTABLE_PATH')}}))
-''')
+""")
         return output
 
     def test_check_labels_both_revisions_with_their_commit_dates(self):
-        worker.atomic(self.receipt, {'schemaVersion': 1, 'revision': self.old, 'trackedPatchSha256': None,
-            'integrationDigest': worker.integration_digest(self.app), 'qualifiedAt': worker.now(),
-            'checks': {'realIntegration': True, 'hostRegressions': True}})
+        worker.atomic(
+            self.receipt,
+            {
+                "schemaVersion": 1,
+                "revision": self.old,
+                "trackedPatchSha256": None,
+                "integrationDigest": worker.integration_digest(self.app),
+                "qualifiedAt": worker.now(),
+                "checks": {"realIntegration": True, "hostRegressions": True},
+            },
+        )
         self.check()
         status = self.status()
         for key, revision in (("current", self.old), ("candidate", self.new)):
             expected = self.git("show", "-s", "--format=%ct", revision).decode().strip()
             self.assertEqual(status[key]["revision"], revision)
-            self.assertEqual(int(datetime.datetime.fromisoformat(status[key]["committedAt"]).timestamp()), int(expected))
+            self.assertEqual(
+                int(
+                    datetime.datetime.fromisoformat(
+                        status[key]["committedAt"]
+                    ).timestamp()
+                ),
+                int(expected),
+            )
         # An unknown object keeps the record and only loses its date.
-        self.assertNotIn("committedAt", worker.Worker.revision(SimpleNamespace(source=self.source), "0" * 40))
+        self.assertNotIn(
+            "committedAt",
+            worker.Worker.revision(SimpleNamespace(source=self.source), "0" * 40),
+        )
 
     def test_legacy_receipt_qualifies_without_a_browser_override(self):
-        worker.atomic(self.receipt, {'schemaVersion': 1, 'revision': self.old, 'trackedPatchSha256': None,
-            'integrationDigest': worker.integration_digest(self.app), 'qualifiedAt': worker.now(),
-            'checks': {'realIntegration': True, 'hostRegressions': True}})
+        worker.atomic(
+            self.receipt,
+            {
+                "schemaVersion": 1,
+                "revision": self.old,
+                "trackedPatchSha256": None,
+                "integrationDigest": worker.integration_digest(self.app),
+                "qualifiedAt": worker.now(),
+                "checks": {"realIntegration": True, "hostRegressions": True},
+            },
+        )
         seen = self.capture_browser_environment()
         stage = self.check()
-        self.assertIsNone(json.loads(seen.read_text())['HERMES_COMPUTER_PROBE_BROWSER'])
-        self.assertNotIn('computerProbeBrowser', json.loads((stage / 'qualification.json').read_text()))
-        self.assertEqual(self.install()['status'], 'complete')
-        self.assertEqual(self.status()['phase'], 'succeeded')
+        self.assertIsNone(json.loads(seen.read_text())["HERMES_COMPUTER_PROBE_BROWSER"])
+        self.assertNotIn(
+            "computerProbeBrowser",
+            json.loads((stage / "qualification.json").read_text()),
+        )
+        self.assertEqual(self.install()["status"], "complete")
+        self.assertEqual(self.status()["phase"], "succeeded")
 
-    def test_consecutive_updates_rebind_browser_content_and_preserve_canonical_selection(self):
+    def test_consecutive_updates_rebind_browser_content_and_preserve_canonical_selection(
+        self,
+    ):
         browser, selected, descriptor = self.select_browser()
         seen = self.capture_browser_environment()
         for index in range(2):
             if index:
                 # System Chrome can update between qualifications without changing its path.
-                browser.write_bytes(b'\x7fELFupdated-browser')
+                browser.write_bytes(b"\x7fELFupdated-browser")
                 installed = self.new
-                (self.source / 'version').write_text('next update')
-                self.git('add', '.'); self.git('commit', '-m', 'next update')
-                self.new = self.git('rev-parse', 'HEAD').decode().strip()
-                self.git('update-ref', 'refs/remotes/origin/main', self.new)
-                self.git('checkout', '--detach', installed)
+                (self.source / "version").write_text("next update")
+                self.git("add", ".")
+                self.git("commit", "-m", "next update")
+                self.new = self.git("rev-parse", "HEAD").decode().strip()
+                self.git("update-ref", "refs/remotes/origin/main", self.new)
+                self.git("checkout", "--detach", installed)
             stage = self.check()
-            receipt = json.loads((stage / 'qualification.json').read_text())
-            expected = {**descriptor, 'sha256': worker.sha(browser.read_bytes())}
-            self.assertEqual(receipt['computerProbeBrowser'], expected)
-            self.assertEqual(self.status()['qualification']['hostFingerprint']['computerProbeBrowser'], expected)
-            self.assertEqual(json.loads(seen.read_text())['HERMES_COMPUTER_PROBE_BROWSER'], str(browser))
+            receipt = json.loads((stage / "qualification.json").read_text())
+            expected = {**descriptor, "sha256": worker.sha(browser.read_bytes())}
+            self.assertEqual(receipt["computerProbeBrowser"], expected)
+            self.assertEqual(
+                self.status()["qualification"]["hostFingerprint"][
+                    "computerProbeBrowser"
+                ],
+                expected,
+            )
+            self.assertEqual(
+                json.loads(seen.read_text())["HERMES_COMPUTER_PROBE_BROWSER"],
+                str(browser),
+            )
             self.install()
-            self.assertEqual(self.status()['phase'], 'succeeded')
-            self.assertEqual(json.loads(self.receipt.read_text())['computerProbeBrowser'], expected)
-        self.assertNotEqual(expected['sha256'], descriptor['sha256'])
-        self.assertEqual(expected['requested'], str(selected))
+            self.assertEqual(self.status()["phase"], "succeeded")
+            self.assertEqual(
+                json.loads(self.receipt.read_text())["computerProbeBrowser"], expected
+            )
+        self.assertNotEqual(expected["sha256"], descriptor["sha256"])
+        self.assertEqual(expected["requested"], str(selected))
 
     def test_explicit_selection_errors_fail_before_staging(self):
-        for invalid in ('missing', 'retargeted', 'malformed', 'shared-receipt', 'symlink-receipt'):
+        for invalid in (
+            "missing",
+            "retargeted",
+            "malformed",
+            "shared-receipt",
+            "symlink-receipt",
+        ):
             with self.subTest(invalid=invalid):
                 browser, selected, descriptor = self.select_browser()
-                message = 'path is unavailable'
-                if invalid == 'missing': browser.unlink()
-                elif invalid == 'retargeted':
-                    other = self.root / 'other'; other.write_bytes(browser.read_bytes()); other.chmod(0o700)
-                    selected.unlink(); selected.symlink_to(other)
-                    message = 'resolved path changed'
-                elif invalid == 'malformed':
-                    worker.atomic(self.receipt, {'computerProbeBrowser': None})
-                    message = 'malformed computer probe browser'
-                elif invalid == 'shared-receipt':
-                    self.receipt.chmod(0o644); message = 'private file'
+                message = "path is unavailable"
+                if invalid == "missing":
+                    browser.unlink()
+                elif invalid == "retargeted":
+                    other = self.root / "other"
+                    other.write_bytes(browser.read_bytes())
+                    other.chmod(0o700)
+                    selected.unlink()
+                    selected.symlink_to(other)
+                    message = "resolved path changed"
+                elif invalid == "malformed":
+                    worker.atomic(self.receipt, {"computerProbeBrowser": None})
+                    message = "malformed computer probe browser"
+                elif invalid == "shared-receipt":
+                    self.receipt.chmod(0o644)
+                    message = "private file"
                 else:
-                    other_receipt = self.root / 'other-receipt'; self.receipt.replace(other_receipt)
-                    self.receipt.symlink_to(other_receipt); message = 'private file'
+                    other_receipt = self.root / "other-receipt"
+                    self.receipt.replace(other_receipt)
+                    self.receipt.symlink_to(other_receipt)
+                    message = "private file"
                 operation = str(uuid.uuid4())
-                worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking', 'checks': []})
+                worker.atomic(
+                    self.state / "status.json",
+                    {"operationId": operation, "phase": "checking", "checks": []},
+                )
                 with self.assertRaisesRegex((ValueError, RuntimeError), message):
-                    worker.Worker(self.config, self.state, 'check', operation).main()
-                self.assertFalse((self.root / 'stages' / ('qualification-' + operation)).exists())
+                    worker.Worker(self.config, self.state, "check", operation).main()
+                self.assertFalse(
+                    (self.root / "stages" / ("qualification-" + operation)).exists()
+                )
                 self.receipt.unlink()
 
     def test_browser_mutation_during_prepare_or_integration_prevents_receipt(self):
-        for boundary, mutation in (('prepare', 'content'), ('integration', 'content'), ('integration', 'symlink')):
+        for boundary, mutation in (
+            ("prepare", "content"),
+            ("integration", "content"),
+            ("integration", "symlink"),
+        ):
             with self.subTest(boundary=boundary, mutation=mutation):
                 browser, selected, descriptor = self.select_browser()
-                other = self.root / 'other'; other.write_bytes(browser.read_bytes()); other.chmod(0o700)
+                other = self.root / "other"
+                other.write_bytes(browser.read_bytes())
+                other.chmod(0o700)
                 original_prepare = worker.Worker.stage_source
-                def mutate(mutation=mutation, browser=browser, selected=selected, other=other):
-                    if mutation == 'content': browser.write_bytes(b'\x7fELFchanged-during-check')
-                    else: selected.unlink(); selected.symlink_to(other)
-                def prepare(instance, *args, original_prepare=original_prepare, mutate=mutate):
+
+                def mutate(
+                    mutation=mutation, browser=browser, selected=selected, other=other
+                ):
+                    if mutation == "content":
+                        browser.write_bytes(b"\x7fELFchanged-during-check")
+                    else:
+                        selected.unlink()
+                        selected.symlink_to(other)
+
+                def prepare(
+                    instance, *args, original_prepare=original_prepare, mutate=mutate
+                ):
                     original_prepare(instance, *args)
                     mutate()
-                if boundary == 'integration':
-                    (self.app / 'scripts/spike/run.py').write_text(
+
+                if boundary == "integration":
+                    (self.app / "scripts/spike/run.py").write_text(
                         f'import pathlib\npathlib.Path({str(browser)!r}).write_bytes(b"\\x7fELFchanged-during-check")\n'
-                        if mutation == 'content' else
-                        f'import pathlib\nlink=pathlib.Path({str(selected)!r})\nlink.unlink()\nlink.symlink_to({str(other)!r})\n')
+                        if mutation == "content"
+                        else f"import pathlib\nlink=pathlib.Path({str(selected)!r})\nlink.unlink()\nlink.symlink_to({str(other)!r})\n"
+                    )
                 operation = str(uuid.uuid4())
-                worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking', 'checks': []})
-                with patch.object(worker.Worker, 'stage_source', prepare if boundary == 'prepare' else original_prepare):
-                    with self.assertRaisesRegex((ValueError, RuntimeError), 'inputs changed|resolved path changed'):
-                        worker.Worker(self.config, self.state, 'check', operation).main()
-                stage = self.root / 'stages' / ('qualification-' + operation)
-                self.assertFalse((stage / 'qualification.json').exists())
-                self.assertNotIn('qualification', self.status())
+                worker.atomic(
+                    self.state / "status.json",
+                    {"operationId": operation, "phase": "checking", "checks": []},
+                )
+                with patch.object(
+                    worker.Worker,
+                    "stage_source",
+                    prepare if boundary == "prepare" else original_prepare,
+                ):
+                    with self.assertRaisesRegex(
+                        (ValueError, RuntimeError),
+                        "inputs changed|resolved path changed",
+                    ):
+                        worker.Worker(
+                            self.config, self.state, "check", operation
+                        ).main()
+                stage = self.root / "stages" / ("qualification-" + operation)
+                self.assertFalse((stage / "qualification.json").exists())
+                self.assertNotIn("qualification", self.status())
 
     def test_browser_or_receipt_changes_invalidate_install_before_hooks(self):
-        for mutation in ('content', 'symlink', 'missing-browser', 'missing-receipt', 'candidate-metadata'):
+        for mutation in (
+            "content",
+            "symlink",
+            "missing-browser",
+            "missing-receipt",
+            "candidate-metadata",
+        ):
             with self.subTest(mutation=mutation):
                 browser, selected, descriptor = self.select_browser()
                 stage = self.check()
-                if mutation == 'content': browser.write_bytes(b'\x7fELFchanged-before-install')
-                elif mutation == 'symlink':
-                    other = self.root / 'other'; other.write_bytes(browser.read_bytes()); other.chmod(0o700)
-                    selected.unlink(); selected.symlink_to(other)
-                elif mutation == 'missing-browser': browser.unlink()
-                elif mutation == 'missing-receipt': self.receipt.unlink()
+                if mutation == "content":
+                    browser.write_bytes(b"\x7fELFchanged-before-install")
+                elif mutation == "symlink":
+                    other = self.root / "other"
+                    other.write_bytes(browser.read_bytes())
+                    other.chmod(0o700)
+                    selected.unlink()
+                    selected.symlink_to(other)
+                elif mutation == "missing-browser":
+                    browser.unlink()
+                elif mutation == "missing-receipt":
+                    self.receipt.unlink()
                 else:
-                    receipt = json.loads((stage / 'qualification.json').read_text())
-                    receipt.pop('computerProbeBrowser'); worker.atomic(stage / 'qualification.json', receipt)
+                    receipt = json.loads((stage / "qualification.json").read_text())
+                    receipt.pop("computerProbeBrowser")
+                    worker.atomic(stage / "qualification.json", receipt)
                 self.install(expect_error=True)
-                self.assertEqual(self.status()['phase'], 'blocked')
-                self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
-                self.assertEqual((stage / 'hook-order.txt').read_text().splitlines(), ['regressions'])
+                self.assertEqual(self.status()["phase"], "blocked")
+                self.assertEqual(
+                    self.git("rev-parse", "HEAD").decode().strip(), self.old
+                )
+                self.assertEqual(
+                    (stage / "hook-order.txt").read_text().splitlines(), ["regressions"]
+                )
 
     def test_browser_mutation_in_backup_or_install_stops_or_rolls_back(self):
-        for boundary in ('backup', 'install'):
+        for boundary in ("backup", "install"):
             with self.subTest(boundary=boundary):
                 browser, selected, descriptor = self.select_browser()
                 stage = self.check()
                 original_hook = worker.Worker.hook
-                def hook(instance, name, original_hook=original_hook, boundary=boundary, browser=browser):
+
+                def hook(
+                    instance,
+                    name,
+                    original_hook=original_hook,
+                    boundary=boundary,
+                    browser=browser,
+                ):
                     original_hook(instance, name)
-                    if name == boundary: browser.write_bytes(b'\x7fELFchanged-in-host-hook')
-                with patch.object(worker.Worker, 'hook', hook): self.install()
-                self.assertEqual(self.status()['phase'], 'blocked' if boundary == 'backup' else 'rolled_back')
-                self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
-                self.assertEqual(json.loads(self.receipt.read_text())['computerProbeBrowser'], descriptor)
-                self.assertFalse((stage / 'gate').exists())
+                    if name == boundary:
+                        browser.write_bytes(b"\x7fELFchanged-in-host-hook")
+
+                with patch.object(worker.Worker, "hook", hook):
+                    self.install()
+                self.assertEqual(
+                    self.status()["phase"],
+                    "blocked" if boundary == "backup" else "rolled_back",
+                )
+                self.assertEqual(
+                    self.git("rev-parse", "HEAD").decode().strip(), self.old
+                )
+                self.assertEqual(
+                    json.loads(self.receipt.read_text())["computerProbeBrowser"],
+                    descriptor,
+                )
+                self.assertFalse((stage / "gate").exists())
 
     def test_integration_suite_reruns_once_and_says_so(self):
         counter = self.flaky_integration(1)
         self.check()
-        self.assertEqual(counter.read_text(), '2')
-        integration = next(item for item in self.status()['checks'] if item['id'] == 'integration')
-        self.assertEqual(integration['status'], 'passed')
-        self.assertIn('second run', integration['detail'])
+        self.assertEqual(counter.read_text(), "2")
+        integration = next(
+            item for item in self.status()["checks"] if item["id"] == "integration"
+        )
+        self.assertEqual(integration["status"], "passed")
+        self.assertIn("second run", integration["detail"])
 
     def test_integration_suite_failing_twice_still_fails_the_check(self):
         counter = self.flaky_integration(2)
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking', 'checks': []})
-        with self.assertRaises(subprocess.CalledProcessError): worker.Worker(self.config, self.state, 'check', operation).main()
-        self.assertEqual(counter.read_text(), '2')
-        self.assertEqual(self.status()['phase'], 'failed')
-        self.assertEqual(next(item for item in self.status()['checks'] if item['id'] == 'integration')['status'], 'failed')
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json",
+            {"operationId": operation, "phase": "checking", "checks": []},
+        )
+        with self.assertRaises(subprocess.CalledProcessError):
+            worker.Worker(self.config, self.state, "check", operation).main()
+        self.assertEqual(counter.read_text(), "2")
+        self.assertEqual(self.status()["phase"], "failed")
+        self.assertEqual(
+            next(
+                item for item in self.status()["checks"] if item["id"] == "integration"
+            )["status"],
+            "failed",
+        )
 
     def test_cancel_staged_check_and_retry_create_a_new_qualification(self):
         self.check()
@@ -580,7 +948,15 @@ pathlib.Path({str(output)!r}).write_text(json.dumps({{key: os.environ.get(key) f
 
     def test_saved_cancel_before_check_runs_no_qualification_or_host_hook(self):
         operation = str(uuid.uuid4())
-        worker.atomic(self.state / "status.json", {"operationId": operation, "phase": "checking", "checks": [], "message": "Checking"})
+        worker.atomic(
+            self.state / "status.json",
+            {
+                "operationId": operation,
+                "phase": "checking",
+                "checks": [],
+                "message": "Checking",
+            },
+        )
         self.control("cancel")
         worker.Worker(self.config, self.state, "check", operation).main()
         self.assertEqual(self.status()["phase"], "cancelled")
@@ -590,28 +966,73 @@ pathlib.Path({str(output)!r}).write_text(json.dumps({{key: os.environ.get(key) f
 
     def test_sigterm_keeps_orphan_hook_lock_and_cancel_recovers_saved_baseline(self):
         stage = self.check()
-        worker.atomic(self.receipt, {"schemaVersion": 1, "revision": self.old, "trackedPatchSha256": None,
-            "integrationDigest": worker.integration_digest(self.app), "qualifiedAt": worker.now(), "checks": {"realIntegration": True, "hostRegressions": True}})
+        worker.atomic(
+            self.receipt,
+            {
+                "schemaVersion": 1,
+                "revision": self.old,
+                "trackedPatchSha256": None,
+                "integrationDigest": worker.integration_digest(self.app),
+                "qualifiedAt": worker.now(),
+                "checks": {"realIntegration": True, "hostRegressions": True},
+            },
+        )
         (stage / "pause-install").touch()
         operation, request = str(uuid.uuid4()), str(uuid.uuid4())
-        state = self.status(); state.update(operationId=operation, requestId=request, phase="installing", maintenance=True)
+        state = self.status()
+        state.update(
+            operationId=operation,
+            requestId=request,
+            phase="installing",
+            maintenance=True,
+        )
         worker.atomic(self.state / "status.json", state)
-        worker.atomic(self.state / "requests" / (request + ".json"), {"operationId": operation, "candidateRevision": self.new, "status": "pending"})
+        worker.atomic(
+            self.state / "requests" / (request + ".json"),
+            {
+                "operationId": operation,
+                "candidateRevision": self.new,
+                "status": "pending",
+            },
+        )
         program = Path(worker.__file__).resolve()
-        child = subprocess.Popen([sys.executable, str(program), "--config", str(self.config), "--state-dir", str(self.state), "--action", "install", "--operation-id", operation], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                str(program),
+                "--config",
+                str(self.config),
+                "--state-dir",
+                str(self.state),
+                "--action",
+                "install",
+                "--operation-id",
+                operation,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         try:
             self.wait_for(lambda: (stage / "install-entered").exists())
-            child.send_signal(signal.SIGTERM); child.wait(timeout=5)
+            child.send_signal(signal.SIGTERM)
+            child.wait(timeout=5)
             self.assertEqual(child.returncode, -signal.SIGTERM)
             with (self.state / "worker.lock").open("r+") as lock:
-                with self.assertRaises(BlockingIOError): fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.control("cancel")
-            with self.assertRaises(BlockingIOError): worker.Worker(self.config, self.state, "cancel", operation).main()
+            with self.assertRaises(BlockingIOError):
+                worker.Worker(self.config, self.state, "cancel", operation).main()
             (stage / "resume-install").touch()
+
             def released():
                 with (self.state / "worker.lock").open("r+") as lock:
-                    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB); return True
-                    except BlockingIOError: return False
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        return True
+                    except BlockingIOError:
+                        return False
+
             self.wait_for(released)
             self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.new)
             instance = worker.Worker(self.config, self.state, "cancel", operation)
@@ -621,22 +1042,69 @@ pathlib.Path({str(output)!r}).write_text(json.dumps({{key: os.environ.get(key) f
             self.assertFalse(self.status()["maintenance"])
             self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
             self.assertEqual(json.loads(self.receipt.read_text())["revision"], self.old)
-            self.assertEqual(json.loads((self.state / "requests" / (request + ".json")).read_text())["status"], "complete")
-            self.assertEqual(json.loads((stage / "recovery.json").read_text())["operationId"], operation)
+            self.assertEqual(
+                json.loads((self.state / "requests" / (request + ".json")).read_text())[
+                    "status"
+                ],
+                "complete",
+            )
+            self.assertEqual(
+                json.loads((stage / "recovery.json").read_text())["operationId"],
+                operation,
+            )
         finally:
             (stage / "resume-install").touch()
-            if child.poll() is None: child.terminate(); child.wait(timeout=5)
+            if child.poll() is None:
+                child.terminate()
+                child.wait(timeout=5)
 
     def test_live_install_cancellation_waits_for_boundary_then_restores(self):
         stage = self.check()
-        worker.atomic(self.receipt, {"schemaVersion": 1, "revision": self.old, "trackedPatchSha256": None,
-            "integrationDigest": worker.integration_digest(self.app), "qualifiedAt": worker.now(), "checks": {"realIntegration": True, "hostRegressions": True}})
+        worker.atomic(
+            self.receipt,
+            {
+                "schemaVersion": 1,
+                "revision": self.old,
+                "trackedPatchSha256": None,
+                "integrationDigest": worker.integration_digest(self.app),
+                "qualifiedAt": worker.now(),
+                "checks": {"realIntegration": True, "hostRegressions": True},
+            },
+        )
         (stage / "pause-install").touch()
         operation, request = str(uuid.uuid4()), str(uuid.uuid4())
-        state = self.status(); state.update(operationId=operation, requestId=request, phase="installing", maintenance=True)
+        state = self.status()
+        state.update(
+            operationId=operation,
+            requestId=request,
+            phase="installing",
+            maintenance=True,
+        )
         worker.atomic(self.state / "status.json", state)
-        worker.atomic(self.state / "requests" / (request + ".json"), {"operationId": operation, "candidateRevision": self.new, "status": "pending"})
-        child = subprocess.Popen([sys.executable, worker.__file__, "--config", str(self.config), "--state-dir", str(self.state), "--action", "install", "--operation-id", operation], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        worker.atomic(
+            self.state / "requests" / (request + ".json"),
+            {
+                "operationId": operation,
+                "candidateRevision": self.new,
+                "status": "pending",
+            },
+        )
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                worker.__file__,
+                "--config",
+                str(self.config),
+                "--state-dir",
+                str(self.state),
+                "--action",
+                "install",
+                "--operation-id",
+                operation,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         try:
             self.wait_for(lambda: (stage / "install-entered").exists())
             self.control("cancel")
@@ -647,13 +1115,20 @@ pathlib.Path({str(output)!r}).write_text(json.dumps({{key: os.environ.get(key) f
             self.assertEqual(self.status()["phase"], "cancelled")
             self.assertFalse(self.status()["maintenance"])
             self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
-            self.assertEqual((stage / "hook-order.txt").read_text().splitlines()[-2:], ["install", "recover"])
+            self.assertEqual(
+                (stage / "hook-order.txt").read_text().splitlines()[-2:],
+                ["install", "recover"],
+            )
         finally:
             (stage / "resume-install").touch()
-            if child.poll() is None: child.terminate(); child.wait(timeout=5)
+            if child.poll() is None:
+                child.terminate()
+                child.wait(timeout=5)
 
     def test_ambiguous_release_refuses_cancel_without_touching_source_or_gate(self):
-        stage = self.check(); (stage / "fail-finish").touch(); self.install(expect_error=True)
+        stage = self.check()
+        (stage / "fail-finish").touch()
+        self.install(expect_error=True)
         operation = self.control("cancel")
         before = self.git("rev-parse", "HEAD")
         with self.assertRaisesRegex(RuntimeError, "Admission release"):
@@ -662,608 +1137,1244 @@ pathlib.Path({str(output)!r}).write_text(json.dumps({{key: os.environ.get(key) f
         self.assertEqual(self.git("rev-parse", "HEAD"), before)
 
     def offset_repair(self, artifact=True):
-        oauth = self.source / 'oauth.py'
-        oauth.write_text(''.join('context-%02d\n' % line for line in range(30)).replace('context-15', 'unrepaired-shared-source'))
-        (self.source / 'provider.bin').write_bytes(b'\0original provider')
-        (self.source / 'repair-tool.py').write_text('# native repair helper\n')
-        self.git('add', '.'); self.git('commit', '-m', 'repair baseline')
-        self.old = self.git('rev-parse', 'HEAD').decode().strip()
-        oauth.write_text('upstream insertion\n' * 6 + oauth.read_text())
-        self.git('add', '.'); self.git('commit', '-m', 'upstream moves repair hunk')
-        self.new = self.git('rev-parse', 'HEAD').decode().strip()
-        self.git('update-ref', 'refs/remotes/origin/main', self.new)
-        self.git('checkout', '--detach', self.old)
-        oauth.write_text(oauth.read_text().replace('unrepaired-shared-source', 'approved-shared-source'))
-        (self.source / 'provider.bin').write_bytes(b'\0approved provider')
-        (self.source / 'repair-tool.py').chmod(0o755)
-        (self.source / 'shared_oauth_regression.py').write_text('# exact approved added regression\n')
-        self.git('add', '.')
-        approved = self.git('diff', 'HEAD', '--binary')
-        path = self.root / 'approved-repair.patch'; path.write_bytes(approved); path.chmod(0o600)
-        config = json.loads(self.config.read_text()); config['requiredPatchSha256'] = worker.sha(approved)
-        if artifact: config['approvedPatchFile'] = str(path)
+        oauth = self.source / "oauth.py"
+        oauth.write_text(
+            "".join("context-%02d\n" % line for line in range(30)).replace(
+                "context-15", "unrepaired-shared-source"
+            )
+        )
+        (self.source / "provider.bin").write_bytes(b"\0original provider")
+        (self.source / "repair-tool.py").write_text("# native repair helper\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "repair baseline")
+        self.old = self.git("rev-parse", "HEAD").decode().strip()
+        oauth.write_text("upstream insertion\n" * 6 + oauth.read_text())
+        self.git("add", ".")
+        self.git("commit", "-m", "upstream moves repair hunk")
+        self.new = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("update-ref", "refs/remotes/origin/main", self.new)
+        self.git("checkout", "--detach", self.old)
+        oauth.write_text(
+            oauth.read_text().replace(
+                "unrepaired-shared-source", "approved-shared-source"
+            )
+        )
+        (self.source / "provider.bin").write_bytes(b"\0approved provider")
+        (self.source / "repair-tool.py").chmod(0o755)
+        (self.source / "shared_oauth_regression.py").write_text(
+            "# exact approved added regression\n"
+        )
+        self.git("add", ".")
+        approved = self.git("diff", "HEAD", "--binary")
+        path = self.root / "approved-repair.patch"
+        path.write_bytes(approved)
+        path.chmod(0o600)
+        config = json.loads(self.config.read_text())
+        config["requiredPatchSha256"] = worker.sha(approved)
+        if artifact:
+            config["approvedPatchFile"] = str(path)
         worker.atomic(self.config, config)
         # Real Git verifies that the qualification command receives the staged
         # candidate identity, rather than the current checkout's original diff.
-        (self.app / 'scripts/spike/run.py').write_text('''import hashlib, subprocess, sys
+        (
+            self.app / "scripts/spike/run.py"
+        ).write_text("""import hashlib, subprocess, sys
 source = sys.argv[sys.argv.index('--source') + 1]
 expected = sys.argv[sys.argv.index('--source-patch-sha256') + 1]
 actual = subprocess.check_output(['git','-c','core.abbrev=10','-C',source,'diff','HEAD','--binary'])
 assert hashlib.sha256(actual).hexdigest() == expected
 print('fixture real candidate patch identity passed')
-''')
+""")
         return approved, path
 
-    def test_approved_artifact_preserves_repair_across_changed_diff_headers_and_next_upgrade(self):
+    def test_approved_artifact_preserves_repair_across_changed_diff_headers_and_next_upgrade(
+        self,
+    ):
         approved, path = self.offset_repair()
-        stage = self.check(); qualification = self.status()['qualification']
-        candidate_patch = worker.git(stage / 'source', 'diff', 'HEAD', '--binary')
+        stage = self.check()
+        qualification = self.status()["qualification"]
+        candidate_patch = worker.git(stage / "source", "diff", "HEAD", "--binary")
         self.assertNotEqual(candidate_patch, approved)
-        self.assertEqual(qualification['currentPatchSha256'], worker.sha(approved))
-        self.assertEqual(qualification['candidatePatchSha256'], worker.sha(candidate_patch))
-        self.assertEqual(json.loads((stage / 'qualification.json').read_text())['trackedPatchSha256'], worker.sha(candidate_patch))
-        self.assertEqual((stage / 'preserved.patch').read_bytes(), approved)
+        self.assertEqual(qualification["currentPatchSha256"], worker.sha(approved))
+        self.assertEqual(
+            qualification["candidatePatchSha256"], worker.sha(candidate_patch)
+        )
+        self.assertEqual(
+            json.loads((stage / "qualification.json").read_text())[
+                "trackedPatchSha256"
+            ],
+            worker.sha(candidate_patch),
+        )
+        self.assertEqual((stage / "preserved.patch").read_bytes(), approved)
         self.install()
-        self.assertEqual(self.status()['phase'], 'succeeded')
-        self.assertEqual(self.git('diff', 'HEAD', '--binary'), candidate_patch)
-        upstream = self.root / 'second-upstream'
-        subprocess.run(['git','clone','--no-hardlinks',str(self.source),str(upstream)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        oauth = upstream / 'oauth.py'; oauth.write_text('second upstream insertion\n' + oauth.read_text())
-        for argv in (['config','user.email','fixture@example.invalid'], ['config','user.name','Fixture'], ['add','.'], ['commit','-m','next upstream hunk move']):
-            subprocess.run(['git','-C',str(upstream),*argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.new = subprocess.check_output(['git','-C',str(upstream),'rev-parse','HEAD']).decode().strip()
-        self.git('fetch', upstream.as_uri(), self.new)
-        self.git('update-ref', 'refs/remotes/origin/main', self.new); self.fixture_upstream = upstream
-        stage = self.check(); qualification = self.status()['qualification']
-        self.assertEqual(qualification['currentPatchSha256'], worker.sha(candidate_patch))
-        self.assertNotEqual(qualification['candidatePatchSha256'], worker.sha(candidate_patch))
-        self.assertEqual((stage / 'preserved.patch').read_bytes(), approved)
+        self.assertEqual(self.status()["phase"], "succeeded")
+        self.assertEqual(self.git("diff", "HEAD", "--binary"), candidate_patch)
+        upstream = self.root / "second-upstream"
+        subprocess.run(
+            ["git", "clone", "--no-hardlinks", str(self.source), str(upstream)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        oauth = upstream / "oauth.py"
+        oauth.write_text("second upstream insertion\n" + oauth.read_text())
+        for argv in (
+            ["config", "user.email", "fixture@example.invalid"],
+            ["config", "user.name", "Fixture"],
+            ["add", "."],
+            ["commit", "-m", "next upstream hunk move"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(upstream), *argv],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        self.new = (
+            subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"])
+            .decode()
+            .strip()
+        )
+        self.git("fetch", upstream.as_uri(), self.new)
+        self.git("update-ref", "refs/remotes/origin/main", self.new)
+        self.fixture_upstream = upstream
+        stage = self.check()
+        qualification = self.status()["qualification"]
+        self.assertEqual(
+            qualification["currentPatchSha256"], worker.sha(candidate_patch)
+        )
+        self.assertNotEqual(
+            qualification["candidatePatchSha256"], worker.sha(candidate_patch)
+        )
+        self.assertEqual((stage / "preserved.patch").read_bytes(), approved)
         self.assertEqual(path.read_bytes(), approved)
         self.install()
-        self.assertEqual(self.status()['phase'], 'succeeded')
-        self.assertEqual((self.source / 'provider.bin').read_bytes(), b'\0approved provider')
-        self.assertTrue((self.source / 'repair-tool.py').stat().st_mode & 0o111)
-        self.assertEqual((self.source / 'shared_oauth_regression.py').read_text(), '# exact approved added regression\n')
+        self.assertEqual(self.status()["phase"], "succeeded")
+        self.assertEqual(
+            (self.source / "provider.bin").read_bytes(), b"\0approved provider"
+        )
+        self.assertTrue((self.source / "repair-tool.py").stat().st_mode & 0o111)
+        self.assertEqual(
+            (self.source / "shared_oauth_regression.py").read_text(),
+            "# exact approved added regression\n",
+        )
 
-    def test_approved_artifact_merges_over_adjacent_upstream_edits_and_next_upgrade(self):
+    def test_approved_artifact_merges_over_adjacent_upstream_edits_and_next_upgrade(
+        self,
+    ):
         approved, path = self.offset_repair()
         # Upstream lints the line beside the repair, as Hermes did to a function signature.
-        linted = self.root / 'linted-upstream'
-        self.git('worktree', 'add', '--detach', str(linted), self.new)
-        oauth = linted / 'oauth.py'
-        oauth.write_text(oauth.read_text().replace('context-14\n', 'context-14 linted\n'))
-        for argv in (['add', 'oauth.py'], ['commit', '-m', 'upstream lints beside the repair']):
-            subprocess.run(['git', '-C', str(linted), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.new = subprocess.check_output(['git', '-C', str(linted), 'rev-parse', 'HEAD']).decode().strip()
-        self.git('update-ref', 'refs/remotes/origin/main', self.new)
+        linted = self.root / "linted-upstream"
+        self.git("worktree", "add", "--detach", str(linted), self.new)
+        oauth = linted / "oauth.py"
+        oauth.write_text(
+            oauth.read_text().replace("context-14\n", "context-14 linted\n")
+        )
+        for argv in (
+            ["add", "oauth.py"],
+            ["commit", "-m", "upstream lints beside the repair"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(linted), *argv],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        self.new = (
+            subprocess.check_output(["git", "-C", str(linted), "rev-parse", "HEAD"])
+            .decode()
+            .strip()
+        )
+        self.git("update-ref", "refs/remotes/origin/main", self.new)
         stage = self.check()
-        staging = next(item for item in self.status()['checks'] if item['id'] == 'staging')
-        self.assertIn('Re-applied over nearby upstream edits', staging['detail'])
-        candidate = (stage / 'source' / 'oauth.py').read_text()
-        self.assertIn('context-14 linted\napproved-shared-source\n', candidate)
-        self.assertEqual(worker.repair_changes(worker.git(stage / 'source', 'diff', 'HEAD', '--binary')), worker.repair_changes(approved))
+        staging = next(
+            item for item in self.status()["checks"] if item["id"] == "staging"
+        )
+        self.assertIn("Re-applied over nearby upstream edits", staging["detail"])
+        candidate = (stage / "source" / "oauth.py").read_text()
+        self.assertIn("context-14 linted\napproved-shared-source\n", candidate)
+        self.assertEqual(
+            worker.repair_changes(
+                worker.git(stage / "source", "diff", "HEAD", "--binary")
+            ),
+            worker.repair_changes(approved),
+        )
         self.install()
-        self.assertEqual(self.status()['phase'], 'succeeded')
+        self.assertEqual(self.status()["phase"], "succeeded")
         # The next update proves the installed, merged repair against the original approved artifact.
-        upstream = self.root / 'second-upstream'
-        subprocess.run(['git','clone','--no-hardlinks',str(self.source),str(upstream)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(['git','-C',str(upstream),'reset','--hard',self.new], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        (upstream / 'later.txt').write_text('later upstream change\n')
-        for argv in (['config','user.email','fixture@example.invalid'], ['config','user.name','Fixture'], ['add','.'], ['commit','-m','later upstream change']):
-            subprocess.run(['git','-C',str(upstream),*argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.new = subprocess.check_output(['git','-C',str(upstream),'rev-parse','HEAD']).decode().strip()
-        self.git('fetch', upstream.as_uri(), self.new)
-        self.git('update-ref', 'refs/remotes/origin/main', self.new); self.fixture_upstream = upstream
+        upstream = self.root / "second-upstream"
+        subprocess.run(
+            ["git", "clone", "--no-hardlinks", str(self.source), str(upstream)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        subprocess.run(
+            ["git", "-C", str(upstream), "reset", "--hard", self.new],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        (upstream / "later.txt").write_text("later upstream change\n")
+        for argv in (
+            ["config", "user.email", "fixture@example.invalid"],
+            ["config", "user.name", "Fixture"],
+            ["add", "."],
+            ["commit", "-m", "later upstream change"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(upstream), *argv],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        self.new = (
+            subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"])
+            .decode()
+            .strip()
+        )
+        self.git("fetch", upstream.as_uri(), self.new)
+        self.git("update-ref", "refs/remotes/origin/main", self.new)
+        self.fixture_upstream = upstream
         self.check()
         self.install()
-        self.assertEqual(self.status()['phase'], 'succeeded')
-        self.assertIn('context-14 linted\napproved-shared-source\n', (self.source / 'oauth.py').read_text())
+        self.assertEqual(self.status()["phase"], "succeeded")
+        self.assertIn(
+            "context-14 linted\napproved-shared-source\n",
+            (self.source / "oauth.py").read_text(),
+        )
         self.assertEqual(path.read_bytes(), approved)
 
     def linted_upstream(self):
-        linted = self.root / 'linted-upstream'
-        self.git('worktree', 'add', '--detach', str(linted), self.new)
-        oauth = linted / 'oauth.py'
-        oauth.write_text(oauth.read_text().replace('context-14\n', 'context-14 linted\n'))
-        for argv in (['add', 'oauth.py'], ['commit', '-m', 'upstream lints beside the repair']):
-            subprocess.run(['git', '-C', str(linted), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.new = subprocess.check_output(['git', '-C', str(linted), 'rev-parse', 'HEAD']).decode().strip()
-        self.git('update-ref', 'refs/remotes/origin/main', self.new)
+        linted = self.root / "linted-upstream"
+        self.git("worktree", "add", "--detach", str(linted), self.new)
+        oauth = linted / "oauth.py"
+        oauth.write_text(
+            oauth.read_text().replace("context-14\n", "context-14 linted\n")
+        )
+        for argv in (
+            ["add", "oauth.py"],
+            ["commit", "-m", "upstream lints beside the repair"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(linted), *argv],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        self.new = (
+            subprocess.check_output(["git", "-C", str(linted), "rev-parse", "HEAD"])
+            .decode()
+            .strip()
+        )
+        self.git("update-ref", "refs/remotes/origin/main", self.new)
         return linted
 
     def test_merged_install_proof_requires_the_receipt_binding(self):
-        approved, _ = self.offset_repair(); self.linted_upstream()
-        self.check(); self.install()
+        approved, _ = self.offset_repair()
+        self.linted_upstream()
+        self.check()
+        self.install()
         receipt = json.loads(self.receipt.read_text())
-        self.assertEqual(receipt['repairArtifactSha256'], worker.sha(approved))
-        actual = self.git('diff', 'HEAD', '--binary')
+        self.assertEqual(receipt["repairArtifactSha256"], worker.sha(approved))
+        actual = self.git("diff", "HEAD", "--binary")
         # Equal changed lines prove nothing about where they sit; the receipt binds the exact tree.
         self.assertEqual(worker.repair_changes(actual), worker.repair_changes(approved))
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
-        instance = worker.Worker(self.config, self.state, 'check', operation)
-        self.assertEqual(instance.approved_repair(self.new, worker.sha(actual), actual), approved)
-        for tampered in ({**receipt, 'repairArtifactSha256': 'f' * 64}, {**receipt, 'trackedPatchSha256': 'e' * 64}, {k: v for k, v in receipt.items() if k != 'repairArtifactSha256'}):
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json", {"operationId": operation, "phase": "checking"}
+        )
+        instance = worker.Worker(self.config, self.state, "check", operation)
+        self.assertEqual(
+            instance.approved_repair(self.new, worker.sha(actual), actual), approved
+        )
+        for tampered in (
+            {**receipt, "repairArtifactSha256": "f" * 64},
+            {**receipt, "trackedPatchSha256": "e" * 64},
+            {k: v for k, v in receipt.items() if k != "repairArtifactSha256"},
+        ):
             worker.atomic(self.receipt, tampered)
-            with self.subTest(receipt=sorted(tampered)), self.assertRaises(worker.UnsupportedRepair):
+            with (
+                self.subTest(receipt=sorted(tampered)),
+                self.assertRaises(worker.UnsupportedRepair),
+            ):
                 instance.approved_repair(self.new, worker.sha(actual), actual)
 
     def test_merge_refuses_a_symlinked_directory_in_the_candidate(self):
-        approved, _ = self.offset_repair(); linted = self.linted_upstream()
-        (self.source / 'tests').mkdir(); (self.source / 'tests/repair_test.py').write_text('# approved added test\n')
-        self.git('add', 'tests/repair_test.py')
-        approved = self.git('diff', 'HEAD', '--binary')
-        path = self.root / 'approved-repair.patch'; path.write_bytes(approved)
-        config = json.loads(self.config.read_text()); config['requiredPatchSha256'] = worker.sha(approved); worker.atomic(self.config, config)
-        outside = self.root / 'outside'; outside.mkdir()
-        (linted / 'tests').symlink_to(outside)
-        for argv in (['add', 'tests'], ['commit', '-m', 'upstream symlinks tests']):
-            subprocess.run(['git', '-C', str(linted), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.new = subprocess.check_output(['git', '-C', str(linted), 'rev-parse', 'HEAD']).decode().strip()
-        self.git('update-ref', 'refs/remotes/origin/main', self.new)
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
-        with self.assertRaises(worker.UnsupportedRepair): worker.Worker(self.config, self.state, 'check', operation).main()
+        approved, _ = self.offset_repair()
+        linted = self.linted_upstream()
+        (self.source / "tests").mkdir()
+        (self.source / "tests/repair_test.py").write_text("# approved added test\n")
+        self.git("add", "tests/repair_test.py")
+        approved = self.git("diff", "HEAD", "--binary")
+        path = self.root / "approved-repair.patch"
+        path.write_bytes(approved)
+        config = json.loads(self.config.read_text())
+        config["requiredPatchSha256"] = worker.sha(approved)
+        worker.atomic(self.config, config)
+        outside = self.root / "outside"
+        outside.mkdir()
+        (linted / "tests").symlink_to(outside)
+        for argv in (["add", "tests"], ["commit", "-m", "upstream symlinks tests"]):
+            subprocess.run(
+                ["git", "-C", str(linted), *argv],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        self.new = (
+            subprocess.check_output(["git", "-C", str(linted), "rev-parse", "HEAD"])
+            .decode()
+            .strip()
+        )
+        self.git("update-ref", "refs/remotes/origin/main", self.new)
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json", {"operationId": operation, "phase": "checking"}
+        )
+        with self.assertRaises(worker.UnsupportedRepair):
+            worker.Worker(self.config, self.state, "check", operation).main()
         self.assertEqual(list(outside.iterdir()), [])
 
     def test_merged_repair_with_different_edits_is_refused(self):
         approved, _ = self.offset_repair()
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
-        instance = worker.Worker(self.config, self.state, 'check', operation)
-        oauth = self.source / 'oauth.py'; original = oauth.read_text()
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json", {"operationId": operation, "phase": "checking"}
+        )
+        instance = worker.Worker(self.config, self.state, "check", operation)
+        oauth = self.source / "oauth.py"
+        original = oauth.read_text()
         # Same context drift, but the repair line itself was altered: not the approved repair.
-        oauth.write_text(original.replace('approved-shared-source', 'approved-shared-source-altered'))
-        actual = self.git('diff', 'HEAD', '--binary')
-        with self.assertRaises(worker.UnsupportedRepair): instance.approved_repair(self.old, worker.sha(actual), actual)
+        oauth.write_text(
+            original.replace("approved-shared-source", "approved-shared-source-altered")
+        )
+        actual = self.git("diff", "HEAD", "--binary")
+        with self.assertRaises(worker.UnsupportedRepair):
+            instance.approved_repair(self.old, worker.sha(actual), actual)
         oauth.write_text(original)
 
     def test_candidate_hash_rollback_restores_the_distinct_current_repair_hash(self):
         approved, _ = self.offset_repair()
-        stage = self.check(); (stage / 'fail-verify').touch()
-        self.assertNotEqual(self.status()['qualification']['candidatePatchSha256'], worker.sha(approved))
+        stage = self.check()
+        (stage / "fail-verify").touch()
+        self.assertNotEqual(
+            self.status()["qualification"]["candidatePatchSha256"], worker.sha(approved)
+        )
         self.install()
-        self.assertEqual(self.status()['phase'], 'rolled_back')
-        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
-        self.assertEqual(self.git('diff', 'HEAD', '--binary'), approved)
+        self.assertEqual(self.status()["phase"], "rolled_back")
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+        self.assertEqual(self.git("diff", "HEAD", "--binary"), approved)
 
-    def test_approved_tree_proof_rejects_content_mode_binary_and_added_file_drift_without_git_mutation(self):
+    def test_approved_tree_proof_rejects_content_mode_binary_and_added_file_drift_without_git_mutation(
+        self,
+    ):
         approved, _ = self.offset_repair()
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
-        instance = worker.Worker(self.config, self.state, 'check', operation)
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json", {"operationId": operation, "phase": "checking"}
+        )
+        instance = worker.Worker(self.config, self.state, "check", operation)
+
         def metadata():
-            return (self.git('for-each-ref'), (self.source / '.git/index').read_bytes(),
-                (self.source / '.git/config').read_bytes(),
-                {str(path.relative_to(self.source)): (path.read_bytes(), path.stat().st_mtime_ns) for path in (self.source / '.git/objects').rglob('*') if path.is_file()})
+            return (
+                self.git("for-each-ref"),
+                (self.source / ".git/index").read_bytes(),
+                (self.source / ".git/config").read_bytes(),
+                {
+                    str(path.relative_to(self.source)): (
+                        path.read_bytes(),
+                        path.stat().st_mtime_ns,
+                    )
+                    for path in (self.source / ".git/objects").rglob("*")
+                    if path.is_file()
+                },
+            )
+
         before = metadata()
-        self.assertEqual(instance.approved_repair(self.old, worker.sha(approved), approved), approved)
+        self.assertEqual(
+            instance.approved_repair(self.old, worker.sha(approved), approved), approved
+        )
         self.assertEqual(metadata(), before)
-        files = ('oauth.py', 'repair-tool.py', 'provider.bin', 'shared_oauth_regression.py')
+        files = (
+            "oauth.py",
+            "repair-tool.py",
+            "provider.bin",
+            "shared_oauth_regression.py",
+        )
         for name in files:
-            path = self.source / name; original = path.read_bytes(); mode = path.stat().st_mode
+            path = self.source / name
+            original = path.read_bytes()
+            mode = path.stat().st_mode
             with self.subTest(path=name):
-                if name == 'repair-tool.py': path.chmod(0o644)
-                elif name == 'shared_oauth_regression.py': path.unlink()
-                else: path.write_bytes(original + b'unapproved byte')
-                actual = self.git('diff', 'HEAD', '--binary'); before = metadata()
-                with self.assertRaises(worker.UnsupportedRepair): instance.approved_repair(self.old, worker.sha(actual), actual)
+                if name == "repair-tool.py":
+                    path.chmod(0o644)
+                elif name == "shared_oauth_regression.py":
+                    path.unlink()
+                else:
+                    path.write_bytes(original + b"unapproved byte")
+                actual = self.git("diff", "HEAD", "--binary")
+                before = metadata()
+                with self.assertRaises(worker.UnsupportedRepair):
+                    instance.approved_repair(self.old, worker.sha(actual), actual)
                 self.assertEqual(metadata(), before)
-            path.write_bytes(original); path.chmod(mode)
+            path.write_bytes(original)
+            path.chmod(mode)
 
-    def test_missing_artifact_mode_remains_strict_when_upstream_moves_patch_headers(self):
+    def test_missing_artifact_mode_remains_strict_when_upstream_moves_patch_headers(
+        self,
+    ):
         self.offset_repair(artifact=False)
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
-        with self.assertRaises(worker.UnsupportedRepair): worker.Worker(self.config, self.state, 'check', operation).main()
-        self.assertEqual(self.status()['phase'], 'blocked')
-        self.assertEqual(self.status()['error'], 'repair_requires_review')
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json", {"operationId": operation, "phase": "checking"}
+        )
+        with self.assertRaises(worker.UnsupportedRepair):
+            worker.Worker(self.config, self.state, "check", operation).main()
+        self.assertEqual(self.status()["phase"], "blocked")
+        self.assertEqual(self.status()["error"], "repair_requires_review")
 
-    def test_candidate_repair_conflict_is_blocked_with_clear_reason_and_current_source_unchanged(self):
+    def test_candidate_repair_conflict_is_blocked_with_clear_reason_and_current_source_unchanged(
+        self,
+    ):
         approved, _ = self.offset_repair()
-        conflicting = self.root / 'conflicting-upstream'
-        self.git('worktree', 'add', '--detach', str(conflicting), self.new)
-        oauth = conflicting / 'oauth.py'
-        oauth.write_text(oauth.read_text().replace('unrepaired-shared-source', 'incompatible-upstream-source'))
-        subprocess.run(['git','-C',str(conflicting),'add','oauth.py'], check=True)
-        subprocess.run(['git','-C',str(conflicting),'commit','-m','incompatible upstream change'], check=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.new = subprocess.check_output(['git','-C',str(conflicting),'rev-parse','HEAD']).decode().strip()
-        self.git('update-ref', 'refs/remotes/origin/main', self.new)
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
-        with self.assertRaises(worker.UnsupportedRepair): worker.Worker(self.config, self.state, 'check', operation).main()
-        self.assertEqual(self.status()['phase'], 'blocked')
-        self.assertEqual(self.status()['error'], 'repair_requires_review')
-        self.assertIn('cannot be applied', self.status()['message'])
-        staging = next(item for item in self.status()['checks'] if item['id'] == 'staging')
-        self.assertEqual(staging['status'], 'failed')
-        self.assertIn('cannot be applied', staging['detail'])
-        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
-        self.assertEqual(self.git('diff', 'HEAD', '--binary'), approved)
-        self.assertNotIn('qualification', self.status())
+        conflicting = self.root / "conflicting-upstream"
+        self.git("worktree", "add", "--detach", str(conflicting), self.new)
+        oauth = conflicting / "oauth.py"
+        oauth.write_text(
+            oauth.read_text().replace(
+                "unrepaired-shared-source", "incompatible-upstream-source"
+            )
+        )
+        subprocess.run(["git", "-C", str(conflicting), "add", "oauth.py"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(conflicting),
+                "commit",
+                "-m",
+                "incompatible upstream change",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.new = (
+            subprocess.check_output(
+                ["git", "-C", str(conflicting), "rev-parse", "HEAD"]
+            )
+            .decode()
+            .strip()
+        )
+        self.git("update-ref", "refs/remotes/origin/main", self.new)
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json", {"operationId": operation, "phase": "checking"}
+        )
+        with self.assertRaises(worker.UnsupportedRepair):
+            worker.Worker(self.config, self.state, "check", operation).main()
+        self.assertEqual(self.status()["phase"], "blocked")
+        self.assertEqual(self.status()["error"], "repair_requires_review")
+        self.assertIn("cannot be applied", self.status()["message"])
+        staging = next(
+            item for item in self.status()["checks"] if item["id"] == "staging"
+        )
+        self.assertEqual(staging["status"], "failed")
+        self.assertIn("cannot be applied", staging["detail"])
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+        self.assertEqual(self.git("diff", "HEAD", "--binary"), approved)
+        self.assertNotIn("qualification", self.status())
 
     def test_approved_artifact_changes_invalidate_qualification_before_host_hooks(self):
         _, path = self.offset_repair()
-        stage = self.check(); path.write_bytes(path.read_bytes() + b'changed approved artifact')
+        stage = self.check()
+        path.write_bytes(path.read_bytes() + b"changed approved artifact")
         self.install(expect_error=True)
-        self.assertEqual((stage / 'hook-order.txt').read_text().splitlines(), ['regressions'])
-        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines(), ["regressions"]
+        )
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
 
-    def test_approved_artifact_rejects_wrong_original_hash_symlink_and_relative_path(self):
+    def test_approved_artifact_rejects_wrong_original_hash_symlink_and_relative_path(
+        self,
+    ):
         _, path = self.offset_repair()
         original = path.read_bytes()
-        for invalid in ('hash', 'symlink', 'relative'):
+        for invalid in ("hash", "symlink", "relative"):
             with self.subTest(invalid=invalid):
                 config = json.loads(self.config.read_text())
-                if invalid == 'hash': path.write_bytes(original + b'wrong original bytes')
-                elif invalid == 'symlink':
-                    target = self.root / 'actual-repair.patch'; target.write_bytes(original); target.chmod(0o600)
-                    path.unlink(); path.symlink_to(target)
-                else: config['approvedPatchFile'] = 'approved-repair.patch'; worker.atomic(self.config, config)
-                operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
-                with self.assertRaises(RuntimeError): worker.Worker(self.config, self.state, 'check', operation).main()
-                self.assertNotIn('qualification', self.status())
-                if path.is_symlink(): path.unlink()
-                path.write_bytes(original); path.chmod(0o600)
+                if invalid == "hash":
+                    path.write_bytes(original + b"wrong original bytes")
+                elif invalid == "symlink":
+                    target = self.root / "actual-repair.patch"
+                    target.write_bytes(original)
+                    target.chmod(0o600)
+                    path.unlink()
+                    path.symlink_to(target)
+                else:
+                    config["approvedPatchFile"] = "approved-repair.patch"
+                    worker.atomic(self.config, config)
+                operation = str(uuid.uuid4())
+                worker.atomic(
+                    self.state / "status.json",
+                    {"operationId": operation, "phase": "checking"},
+                )
+                with self.assertRaises(RuntimeError):
+                    worker.Worker(self.config, self.state, "check", operation).main()
+                self.assertNotIn("qualification", self.status())
+                if path.is_symlink():
+                    path.unlink()
+                path.write_bytes(original)
+                path.chmod(0o600)
 
     def test_staging_mirrors_what_a_live_reset_keeps_outside_git(self):
         # Built assets and leftover directories change the native workspace snapshot, so the
         # qualified runtime must be built with them, as the live install will be.
-        (self.source/'web_dist').mkdir(); (self.source/'web_dist/app.js').write_text('built\n')
-        (self.source/'leftover').mkdir()
+        (self.source / "web_dist").mkdir()
+        (self.source / "web_dist/app.js").write_text("built\n")
+        (self.source / "leftover").mkdir()
         stage = self.check()
-        self.assertEqual((stage/'source/web_dist/app.js').read_text(), 'built\n')
-        self.assertTrue((stage/'source/leftover').is_dir())
+        self.assertEqual((stage / "source/web_dist/app.js").read_text(), "built\n")
+        self.assertTrue((stage / "source/leftover").is_dir())
 
     def test_staging_is_complete_and_independent_of_installed_partial_clone(self):
-        self.git('tag', '-a', 'v0.1.0', self.old, '-m', 'installed release identity')
-        upstream = self.root / 'fixture-upstream'
+        self.git("tag", "-a", "v0.1.0", self.old, "-m", "installed release identity")
+        upstream = self.root / "fixture-upstream"
         self.source.rename(upstream)
         self.fixture_upstream = upstream
-        for key in ('uploadpack.allowFilter', 'uploadpack.allowAnySHA1InWant'):
-            subprocess.run(['git', '-C', str(upstream), 'config', key, 'true'], check=True)
-        subprocess.run(['git', 'clone', '--filter=tree:0', '--no-checkout', upstream.as_uri(), str(self.source)],
-                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.git('checkout', '--detach', self.old)
+        for key in ("uploadpack.allowFilter", "uploadpack.allowAnySHA1InWant"):
+            subprocess.run(
+                ["git", "-C", str(upstream), "config", key, "true"], check=True
+            )
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--filter=tree:0",
+                "--no-checkout",
+                upstream.as_uri(),
+                str(self.source),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.git("checkout", "--detach", self.old)
         # Publish the candidate AFTER the current checkout materialized. Its
         # new tree cannot have arrived incidentally with the old checkout.
-        (upstream / 'candidate-only.txt').write_text('new candidate tree')
-        subprocess.run(['git', '-C', str(upstream), 'add', '.'], check=True)
-        subprocess.run(['git', '-C', str(upstream), 'commit', '-m', 'candidate after partial clone'],
-                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.new = subprocess.check_output(['git', '-C', str(upstream), 'rev-parse', 'HEAD']).decode().strip()
-        subprocess.run(['git', '-C', str(upstream), 'tag', 'v9.0.0', self.new], check=True)
-        self.git('fetch', '--no-tags', '--filter=tree:0', 'origin', self.new)
-        tree = self.git('cat-file', '-p', self.new).decode().splitlines()[0].split()[1]
-        offline = dict(os.environ, GIT_NO_LAZY_FETCH='1')
-        missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-        self.assertNotEqual(missing.returncode, 0, 'The fixture must lack the candidate tree')
-        self.assertEqual(self.git('config', '--get', 'remote.origin.promisor').decode().strip(), 'true')
-        self.git('remote', 'set-url', 'origin', worker.OFFICIAL_UPSTREAM)
+        (upstream / "candidate-only.txt").write_text("new candidate tree")
+        subprocess.run(["git", "-C", str(upstream), "add", "."], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(upstream),
+                "commit",
+                "-m",
+                "candidate after partial clone",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.new = (
+            subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"])
+            .decode()
+            .strip()
+        )
+        subprocess.run(
+            ["git", "-C", str(upstream), "tag", "v9.0.0", self.new], check=True
+        )
+        self.git("fetch", "--no-tags", "--filter=tree:0", "origin", self.new)
+        tree = self.git("cat-file", "-p", self.new).decode().splitlines()[0].split()[1]
+        offline = dict(os.environ, GIT_NO_LAZY_FETCH="1")
+        missing = subprocess.run(
+            ["git", "-C", str(self.source), "cat-file", "-e", tree],
+            env=offline,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(
+            missing.returncode, 0, "The fixture must lack the candidate tree"
+        )
+        self.assertEqual(
+            self.git("config", "--get", "remote.origin.promisor").decode().strip(),
+            "true",
+        )
+        self.git("remote", "set-url", "origin", worker.OFFICIAL_UPSTREAM)
         operation = str(uuid.uuid4())
-        worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
-        instance = worker.Worker(self.config, self.state, 'check', operation)
-        target = self.root / 'independent-stage'
-        with (self.root / 'staging.log').open('w') as output:
+        worker.atomic(
+            self.state / "status.json", {"operationId": operation, "phase": "checking"}
+        )
+        instance = worker.Worker(self.config, self.state, "check", operation)
+        target = self.root / "independent-stage"
+        with (self.root / "staging.log").open("w") as output:
             instance.log = output
             instance.stage_source(target, self.new)
-        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
         self.assertEqual(worker.git_tag_refs(target), worker.git_tag_refs(self.source))
-        self.assertEqual(worker.git(target, 'tag', '--merged', 'HEAD', '--list', 'v[0-9]*').decode().strip(), 'v0.1.0')
-        self.assertEqual(worker.git(target, 'rev-list', '--count', 'v0.1.0..HEAD'), self.git('rev-list', '--count', 'v0.1.0..' + self.new))
-        self.assertFalse((target / '.git/shallow').exists())
-        still_missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-        self.assertNotEqual(still_missing.returncode, 0, 'Staging must not hydrate installed Git objects')
-        self.assertFalse((target / '.git/objects/info/alternates').exists())
-        self.assertFalse(list((target / '.git/objects/pack').glob('*.promisor')))
+        self.assertEqual(
+            worker.git(target, "tag", "--merged", "HEAD", "--list", "v[0-9]*")
+            .decode()
+            .strip(),
+            "v0.1.0",
+        )
+        self.assertEqual(
+            worker.git(target, "rev-list", "--count", "v0.1.0..HEAD"),
+            self.git("rev-list", "--count", "v0.1.0.." + self.new),
+        )
+        self.assertFalse((target / ".git/shallow").exists())
+        still_missing = subprocess.run(
+            ["git", "-C", str(self.source), "cat-file", "-e", tree],
+            env=offline,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(
+            still_missing.returncode,
+            0,
+            "Staging must not hydrate installed Git objects",
+        )
+        self.assertFalse((target / ".git/objects/info/alternates").exists())
+        self.assertFalse(list((target / ".git/objects/pack").glob("*.promisor")))
         shutil.rmtree(self.source)
         shutil.rmtree(upstream)
-        subprocess.run(['git', '-C', str(target), 'fsck', '--full'], env=offline, check=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(['git', '-C', str(target), 'reset', '--hard', self.new], env=offline, check=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertEqual((target / 'candidate-only.txt').read_text(), 'new candidate tree')
+        subprocess.run(
+            ["git", "-C", str(target), "fsck", "--full"],
+            env=offline,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        subprocess.run(
+            ["git", "-C", str(target), "reset", "--hard", self.new],
+            env=offline,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(
+            (target / "candidate-only.txt").read_text(), "new candidate tree"
+        )
 
-    def test_native_version_tag_changes_make_qualification_stale_before_host_hooks(self):
+    def test_native_version_tag_changes_make_qualification_stale_before_host_hooks(
+        self,
+    ):
         stage = self.check()
-        self.git('tag', 'v9.0.0', self.new)
+        self.git("tag", "v9.0.0", self.new)
         self.install(expect_error=True)
-        self.assertEqual((stage / 'hook-order.txt').read_text().splitlines(), ['regressions'])
-        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines(), ["regressions"]
+        )
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
 
     def test_staged_native_version_tag_changes_make_qualification_stale(self):
         stage = self.check()
-        subprocess.run(['git', '-C', str(stage / 'source'), 'tag', 'v9.0.0'], check=True)
+        subprocess.run(
+            ["git", "-C", str(stage / "source"), "tag", "v9.0.0"], check=True
+        )
         self.install(expect_error=True)
-        self.assertEqual((stage / 'hook-order.txt').read_text().splitlines(), ['regressions'])
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines(), ["regressions"]
+        )
 
     def test_shallow_installed_history_requires_installer_repair_before_staging(self):
-        upstream = self.root / 'fixture-upstream'
+        upstream = self.root / "fixture-upstream"
         self.source.rename(upstream)
-        subprocess.run(['git', 'clone', '--depth=1', upstream.as_uri(), str(self.source)],
-                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(
+            ["git", "clone", "--depth=1", upstream.as_uri(), str(self.source)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         operation = str(uuid.uuid4())
-        worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
-        instance = worker.Worker(self.config, self.state, 'check', operation)
-        target = self.root / 'blocked-stage'
-        with self.assertRaisesRegex(RuntimeError, 'complete version history'):
+        worker.atomic(
+            self.state / "status.json", {"operationId": operation, "phase": "checking"}
+        )
+        instance = worker.Worker(self.config, self.state, "check", operation)
+        target = self.root / "blocked-stage"
+        with self.assertRaisesRegex(RuntimeError, "complete version history"):
             instance.stage_source(target, self.new)
         self.assertFalse(target.exists())
 
     def test_qualifies_then_installs_exact_tree_with_durable_receipt(self):
-        stage=self.check()
-        self.assertEqual(self.git('rev-parse','HEAD').decode().strip(),self.old)
+        stage = self.check()
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
         self.assertFalse(self.receipt.exists())
-        receipt=json.loads((stage/'qualification.json').read_text())
-        self.assertEqual(receipt['revision'],self.new); self.assertEqual(receipt['checks'],{'realIntegration':True,'hostRegressions':True})
-        record=self.install()
-        self.assertEqual(self.status()['phase'],'succeeded'); self.assertFalse(self.status()['maintenance'])
-        self.assertEqual(record['status'],'complete'); self.assertEqual(self.git('rev-parse','HEAD').decode().strip(),self.new)
-        self.assertFalse((stage/'gate').exists()); self.assertEqual(json.loads(self.receipt.read_text()),receipt)
-        self.assertEqual((stage/'hook-order.txt').read_text().splitlines(),['regressions','quiescence','backup','install','verify','finish'])
+        receipt = json.loads((stage / "qualification.json").read_text())
+        self.assertEqual(receipt["revision"], self.new)
+        self.assertEqual(
+            receipt["checks"], {"realIntegration": True, "hostRegressions": True}
+        )
+        record = self.install()
+        self.assertEqual(self.status()["phase"], "succeeded")
+        self.assertFalse(self.status()["maintenance"])
+        self.assertEqual(record["status"], "complete")
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.new)
+        self.assertFalse((stage / "gate").exists())
+        self.assertEqual(json.loads(self.receipt.read_text()), receipt)
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines(),
+            ["regressions", "quiescence", "backup", "install", "verify", "finish"],
+        )
 
     def test_failed_verification_restores_previous_source_and_receipt(self):
-        stage=self.check(); previous={'private':'previous qualified revision'}; worker.atomic(self.receipt,previous)
-        (stage/'fail-verify').touch(); record=self.install()
-        self.assertEqual(self.status()['phase'],'rolled_back'); self.assertEqual(record['status'],'complete')
-        self.assertEqual(self.git('rev-parse','HEAD').decode().strip(),self.old)
-        self.assertEqual(json.loads(self.receipt.read_text()),previous); self.assertFalse((stage/'gate').exists())
-        self.assertEqual((stage/'hook-order.txt').read_text().splitlines()[-3:],['rollback','verify','finish'])
+        stage = self.check()
+        previous = {"private": "previous qualified revision"}
+        worker.atomic(self.receipt, previous)
+        (stage / "fail-verify").touch()
+        record = self.install()
+        self.assertEqual(self.status()["phase"], "rolled_back")
+        self.assertEqual(record["status"], "complete")
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+        self.assertEqual(json.loads(self.receipt.read_text()), previous)
+        self.assertFalse((stage / "gate").exists())
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines()[-3:],
+            ["rollback", "verify", "finish"],
+        )
 
-    def test_failed_rollback_verification_keeps_both_admission_gates_and_pending_request(self):
-        stage=self.check(); (stage/'fail-verify').touch(); (stage/'fail-rollback-verify').touch()
-        record=self.install(expect_error=True)
-        self.assertEqual(self.status()['phase'],'failed'); self.assertTrue(self.status()['maintenance'])
-        self.assertEqual(record['status'],'pending'); self.assertTrue((stage/'gate').exists())
+    def test_failed_rollback_verification_keeps_both_admission_gates_and_pending_request(
+        self,
+    ):
+        stage = self.check()
+        (stage / "fail-verify").touch()
+        (stage / "fail-rollback-verify").touch()
+        record = self.install(expect_error=True)
+        self.assertEqual(self.status()["phase"], "failed")
+        self.assertTrue(self.status()["maintenance"])
+        self.assertEqual(record["status"], "pending")
+        self.assertTrue((stage / "gate").exists())
 
     def test_uncertain_release_never_rolls_back_after_native_work_may_resume(self):
-        stage=self.check(); (stage/'fail-finish').touch(); record=self.install(expect_error=True)
-        self.assertEqual(self.status()['phase'],'failed'); self.assertTrue(self.status()['maintenance'])
-        self.assertEqual(self.status()['current']['revision'],self.new); self.assertEqual(record['status'],'pending')
-        self.assertEqual(self.git('rev-parse','HEAD').decode().strip(),self.new)
-        self.assertNotIn('rollback',(stage/'hook-order.txt').read_text().splitlines())
+        stage = self.check()
+        (stage / "fail-finish").touch()
+        record = self.install(expect_error=True)
+        self.assertEqual(self.status()["phase"], "failed")
+        self.assertTrue(self.status()["maintenance"])
+        self.assertEqual(self.status()["current"]["revision"], self.new)
+        self.assertEqual(record["status"], "pending")
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.new)
+        self.assertNotIn(
+            "rollback", (stage / "hook-order.txt").read_text().splitlines()
+        )
 
     def test_stale_source_rejects_before_hooks_and_allows_new_check(self):
-        stage=self.check(); self.git('reset','--hard',self.new)
-        record=self.install(expect_error=True)
-        self.assertEqual(self.status()['phase'],'blocked'); self.assertFalse(self.status()['maintenance'])
-        self.assertEqual(record['status'],'complete'); self.assertEqual((stage/'hook-order.txt').read_text().splitlines(),['regressions'])
+        stage = self.check()
+        self.git("reset", "--hard", self.new)
+        record = self.install(expect_error=True)
+        self.assertEqual(self.status()["phase"], "blocked")
+        self.assertFalse(self.status()["maintenance"])
+        self.assertEqual(record["status"], "complete")
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines(), ["regressions"]
+        )
 
-    def test_known_quiescence_refusal_clears_app_gate_but_unknown_failure_keeps_it(self):
-        stage=self.check(); (stage/'refuse').touch(); record=self.install()
-        self.assertEqual(self.status()['phase'],'blocked'); self.assertFalse(self.status()['maintenance']); self.assertEqual(record['status'],'complete')
-        (stage/'refuse').unlink(); (stage/'uncertain').touch(); record=self.install(expect_error=True)
-        self.assertEqual(self.status()['phase'],'failed'); self.assertTrue(self.status()['maintenance']); self.assertEqual(record['status'],'pending')
+    def test_known_quiescence_refusal_clears_app_gate_but_unknown_failure_keeps_it(
+        self,
+    ):
+        stage = self.check()
+        (stage / "refuse").touch()
+        record = self.install()
+        self.assertEqual(self.status()["phase"], "blocked")
+        self.assertFalse(self.status()["maintenance"])
+        self.assertEqual(record["status"], "complete")
+        (stage / "refuse").unlink()
+        (stage / "uncertain").touch()
+        record = self.install(expect_error=True)
+        self.assertEqual(self.status()["phase"], "failed")
+        self.assertTrue(self.status()["maintenance"])
+        self.assertEqual(record["status"], "pending")
 
-    def test_unanswered_maintenance_acquire_holds_the_app_gate_and_says_what_to_do(self):
+    def test_unanswered_maintenance_acquire_holds_the_app_gate_and_says_what_to_do(
+        self,
+    ):
         # Hermes's add-on may still take its lease, so the hook's exit is never the harmless 75.
-        stage=self.check(); (stage/'unanswered').touch(); record=self.install(expect_error=True)
-        status=self.status()
-        self.assertEqual((status['phase'],status['maintenance'],status['error'],record['status']),('failed',True,'install_requires_review','pending'))
-        self.assertEqual(status['message'],str(worker.MaintenanceUnanswered()))
-        self.assertIn('If Cancel appears, use it to restore Hermes',status['message'])
-        self.assertEqual((stage/'hook-order.txt').read_text().splitlines(),['regressions','quiescence'])
+        stage = self.check()
+        (stage / "unanswered").touch()
+        record = self.install(expect_error=True)
+        status = self.status()
+        self.assertEqual(
+            (status["phase"], status["maintenance"], status["error"], record["status"]),
+            ("failed", True, "install_requires_review", "pending"),
+        )
+        self.assertEqual(status["message"], str(worker.MaintenanceUnanswered()))
+        self.assertIn("If Cancel appears, use it to restore Hermes", status["message"])
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines(),
+            ["regressions", "quiescence"],
+        )
 
     def test_tampered_receipt_is_rejected_before_any_install_hook(self):
-        stage=self.check(); receipt=json.loads((stage/'qualification.json').read_text()); receipt['checks']['hostRegressions']=False
-        worker.atomic(stage/'qualification.json',receipt); self.install(expect_error=True)
-        self.assertEqual(self.git('rev-parse','HEAD').decode().strip(),self.old)
-        self.assertEqual((stage/'hook-order.txt').read_text().splitlines(),['regressions'])
+        stage = self.check()
+        receipt = json.loads((stage / "qualification.json").read_text())
+        receipt["checks"]["hostRegressions"] = False
+        worker.atomic(stage / "qualification.json", receipt)
+        self.install(expect_error=True)
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines(), ["regressions"]
+        )
 
     def test_preserved_repair_keeps_staged_added_regression_file_and_exact_diff(self):
-        added=self.source/'shared_oauth_regression.py'; added.write_text('# preserved host OAuth regression\n')
-        self.git('add',added.name)
-        repair=self.git('diff','HEAD','--binary'); digest=worker.sha(repair)
-        config=json.loads(self.config.read_text()); config['requiredPatchSha256']=digest; worker.atomic(self.config,config)
-        stage=self.check()
-        self.assertEqual(worker.git(stage/'source','diff','HEAD','--binary'),repair)
-        self.assertEqual(worker.git(stage/'source','ls-files',added.name).decode().strip(),added.name)
-        (stage/'fail-verify').touch(); self.install()
-        self.assertEqual(self.status()['phase'],'rolled_back')
-        self.assertEqual(self.git('diff','HEAD','--binary'),repair)
-        self.assertEqual(added.read_text(),'# preserved host OAuth regression\n')
+        added = self.source / "shared_oauth_regression.py"
+        added.write_text("# preserved host OAuth regression\n")
+        self.git("add", added.name)
+        repair = self.git("diff", "HEAD", "--binary")
+        digest = worker.sha(repair)
+        config = json.loads(self.config.read_text())
+        config["requiredPatchSha256"] = digest
+        worker.atomic(self.config, config)
+        stage = self.check()
+        self.assertEqual(
+            worker.git(stage / "source", "diff", "HEAD", "--binary"), repair
+        )
+        self.assertEqual(
+            worker.git(stage / "source", "ls-files", added.name).decode().strip(),
+            added.name,
+        )
+        (stage / "fail-verify").touch()
+        self.install()
+        self.assertEqual(self.status()["phase"], "rolled_back")
+        self.assertEqual(self.git("diff", "HEAD", "--binary"), repair)
+        self.assertEqual(added.read_text(), "# preserved host OAuth regression\n")
 
     def test_changed_staged_source_is_rejected_before_any_install_hook(self):
-        stage=self.check(); (stage/'source/version').write_text('changed after testing')
+        stage = self.check()
+        (stage / "source/version").write_text("changed after testing")
         self.install(expect_error=True)
-        self.assertEqual(self.git('rev-parse','HEAD').decode().strip(),self.old)
-        self.assertEqual((stage/'hook-order.txt').read_text().splitlines(),['regressions'])
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines(), ["regressions"]
+        )
 
     def test_no_update_is_an_idle_result_without_null_candidate_or_qualification(self):
-        self.git('update-ref','refs/remotes/origin/main',self.old)
-        operation=str(uuid.uuid4()); worker.atomic(self.state/'status.json',{'operationId':operation,'phase':'checking','checks':[],'message':'Checking'})
-        worker.Worker(self.config,self.state,'check',operation).main()
-        self.assertEqual(self.status()['phase'],'idle'); self.assertNotIn('candidate',self.status())
+        self.git("update-ref", "refs/remotes/origin/main", self.old)
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json",
+            {
+                "operationId": operation,
+                "phase": "checking",
+                "checks": [],
+                "message": "Checking",
+            },
+        )
+        worker.Worker(self.config, self.state, "check", operation).main()
+        self.assertEqual(self.status()["phase"], "idle")
+        self.assertNotIn("candidate", self.status())
         self.assertFalse(self.receipt.exists())
 
     def test_dependency_changes_cannot_be_qualified_using_the_old_interpreter(self):
-        self.git('checkout','--detach',self.new)
-        (self.source/'pm').mkdir(); (self.source/'pm/lock.json').write_text('{"dependency":"changed"}')
-        self.git('add','.'); self.git('commit','-m','changed dependency lock')
-        target=self.git('rev-parse','HEAD').decode().strip(); self.git('update-ref','refs/remotes/origin/main',target)
-        self.git('checkout','--detach',self.old)
-        operation=str(uuid.uuid4()); worker.atomic(self.state/'status.json',{'operationId':operation,'phase':'checking','checks':[],'message':'Checking'})
-        with self.assertRaises(worker.UnsupportedDependencies): worker.Worker(self.config,self.state,'check',operation).main()
-        self.assertEqual(self.status()['phase'],'blocked')
-        self.assertEqual(self.status()['error'],'dependencies_require_qualification')
-        self.assertFalse(self.receipt.exists()); self.assertEqual(self.git('rev-parse','HEAD').decode().strip(),self.old)
+        self.git("checkout", "--detach", self.new)
+        (self.source / "pm").mkdir()
+        (self.source / "pm/lock.json").write_text('{"dependency":"changed"}')
+        self.git("add", ".")
+        self.git("commit", "-m", "changed dependency lock")
+        target = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("update-ref", "refs/remotes/origin/main", target)
+        self.git("checkout", "--detach", self.old)
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json",
+            {
+                "operationId": operation,
+                "phase": "checking",
+                "checks": [],
+                "message": "Checking",
+            },
+        )
+        with self.assertRaises(worker.UnsupportedDependencies):
+            worker.Worker(self.config, self.state, "check", operation).main()
+        self.assertEqual(self.status()["phase"], "blocked")
+        self.assertEqual(self.status()["error"], "dependencies_require_qualification")
+        self.assertFalse(self.receipt.exists())
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
 
     def test_fixed_host_hook_changes_invalidate_qualification_before_install(self):
-        stage=self.check(); hook=self.root/'hook.py'; hook.write_text(hook.read_text()+'\n# changed installer hook\n')
+        stage = self.check()
+        hook = self.root / "hook.py"
+        hook.write_text(hook.read_text() + "\n# changed installer hook\n")
         self.install(expect_error=True)
-        self.assertEqual(self.git('rev-parse','HEAD').decode().strip(),self.old)
-        self.assertEqual((stage/'hook-order.txt').read_text().splitlines(),['regressions'])
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+        self.assertEqual(
+            (stage / "hook-order.txt").read_text().splitlines(), ["regressions"]
+        )
 
-    def test_managed_preparation_qualifies_changed_dependencies_and_binds_returned_launcher(self):
-        (self.app/'scripts/hermes-qualified-python.py').write_text(MANAGED_HELPER)
-        self.git('checkout','--detach',self.new); (self.source/'pm').mkdir(); (self.source/'pm/lock.json').write_text('{"dependency":"changed"}')
-        self.git('add','.'); self.git('commit','-m','changed dependency lock'); self.new=self.git('rev-parse','HEAD').decode().strip()
-        self.git('update-ref','refs/remotes/origin/main',self.new); self.git('checkout','--detach',self.old)
-        config=json.loads(self.config.read_text()); config.update(managedLauncher=str(self.root/'fixture-managed-launcher'),managedHome=str(self.root/'fixture-live-home'))
-        worker.atomic(self.config,config)
+    def test_managed_preparation_qualifies_changed_dependencies_and_binds_returned_launcher(
+        self,
+    ):
+        (self.app / "scripts/hermes-qualified-python.py").write_text(MANAGED_HELPER)
+        self.git("checkout", "--detach", self.new)
+        (self.source / "pm").mkdir()
+        (self.source / "pm/lock.json").write_text('{"dependency":"changed"}')
+        self.git("add", ".")
+        self.git("commit", "-m", "changed dependency lock")
+        self.new = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("update-ref", "refs/remotes/origin/main", self.new)
+        self.git("checkout", "--detach", self.old)
+        config = json.loads(self.config.read_text())
+        config.update(
+            managedLauncher=str(self.root / "fixture-managed-launcher"),
+            managedHome=str(self.root / "fixture-live-home"),
+        )
+        worker.atomic(self.config, config)
         # The disposable home installs only Python; the integration run borrows the live PM Chromium.
-        browser=self.root/'fixture-live-home/tools/chromium-1/chrome'; browser.parent.mkdir(parents=True)
-        browser.write_text('#!/bin/sh\n'); browser.chmod(0o700)
-        (browser.parents[1]/'facts.json').write_text(json.dumps({'packages':{'chromium':{'env':{'AGENT_BROWSER_EXECUTABLE_PATH':'{{store}}/chromium-1/chrome'}}}}))
+        browser = self.root / "fixture-live-home/tools/chromium-1/chrome"
+        browser.parent.mkdir(parents=True)
+        browser.write_text("#!/bin/sh\n")
+        browser.chmod(0o700)
+        (browser.parents[1] / "facts.json").write_text(
+            json.dumps(
+                {
+                    "packages": {
+                        "chromium": {
+                            "env": {
+                                "AGENT_BROWSER_EXECUTABLE_PATH": "{{store}}/chromium-1/chrome"
+                            }
+                        }
+                    }
+                }
+            )
+        )
         selected_browser, _, descriptor = self.select_browser()
         seen = self.capture_browser_environment()
-        stage=self.check(); qualification=self.status()['qualification']
-        self.assertEqual(json.loads(seen.read_text()), {'AGENT_BROWSER_EXECUTABLE_PATH': str(browser.resolve()),
-            'HERMES_COMPUTER_PROBE_BROWSER': str(selected_browser)})
-        self.assertEqual(json.loads((stage / 'qualification.json').read_text())['computerProbeBrowser'], descriptor)
-        self.assertEqual(qualification['runtimeMode'],'managed'); self.assertEqual(qualification['qualificationPython'],str(stage/'qualified-python'))
-        self.assertEqual(qualification['runtimeFingerprint']['dependenciesSha256'],'b'*64)
-        self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
-        self.assertFalse((self.root/'fixture-live-home/.hermes-update-in-progress').exists())
+        stage = self.check()
+        qualification = self.status()["qualification"]
+        self.assertEqual(
+            json.loads(seen.read_text()),
+            {
+                "AGENT_BROWSER_EXECUTABLE_PATH": str(browser.resolve()),
+                "HERMES_COMPUTER_PROBE_BROWSER": str(selected_browser),
+            },
+        )
+        self.assertEqual(
+            json.loads((stage / "qualification.json").read_text())[
+                "computerProbeBrowser"
+            ],
+            descriptor,
+        )
+        self.assertEqual(qualification["runtimeMode"], "managed")
+        self.assertEqual(
+            qualification["qualificationPython"], str(stage / "qualified-python")
+        )
+        self.assertEqual(
+            qualification["runtimeFingerprint"]["dependenciesSha256"], "b" * 64
+        )
+        self.assertEqual(self.install()["status"], "complete")
+        self.assertEqual(self.status()["phase"], "succeeded")
+        self.assertFalse(
+            (self.root / "fixture-live-home/.hermes-update-in-progress").exists()
+        )
 
     def managed_interpreters(self, bootstrap):
         """Managed qualification on a home with two native store interpreters. The launcher reports
         3.14.9; every configured interpreter starts as BOOTSTRAP, a version name or a path."""
-        (self.app/'scripts/hermes-qualified-python.py').write_text(MANAGED_HELPER)
-        home=self.root/'fixture-live-home'; tools=home/'tools'
-        pythons={}
-        for version in ('3.14.7','3.14.9'):
-            python=tools/('python-'+version)/'bin/python3'; python.parent.mkdir(parents=True,exist_ok=True)
-            python.write_text('#!/bin/sh\nexec '+shlex.quote(sys.executable)+' "$@"\n'); python.chmod(0o700)
-            pythons[version]=str(python)
-        launcher=self.root/'fixture-managed-launcher'
-        launcher.write_text('#!/bin/sh\nprintf \'["%s","-I"]\\n\' '+shlex.quote(pythons['3.14.9'])+'\n'); launcher.chmod(0o700)
-        browser=tools/'chromium-1/chrome'; browser.parent.mkdir(parents=True,exist_ok=True)
-        browser.write_text('#!/bin/sh\n'); browser.chmod(0o700)
-        (tools/'facts.json').write_text(json.dumps({'packages':{'chromium':{'env':{'AGENT_BROWSER_EXECUTABLE_PATH':'{{store}}/chromium-1/chrome'}}}}))
-        old=pythons.get(bootstrap,bootstrap)
-        config=json.loads(self.config.read_text())
-        config.update(managedLauncher=str(launcher),managedHome=str(home),qualificationPython=old,
-            hooks={**{name:[old,*argv[1:]] for name,argv in config['hooks'].items() if name!='regressions'},'regressions':[[old,*argv[1:]] for argv in config['hooks']['regressions']]})
-        worker.atomic(self.config,config)
+        (self.app / "scripts/hermes-qualified-python.py").write_text(MANAGED_HELPER)
+        home = self.root / "fixture-live-home"
+        tools = home / "tools"
+        pythons = {}
+        for version in ("3.14.7", "3.14.9"):
+            python = tools / ("python-" + version) / "bin/python3"
+            python.parent.mkdir(parents=True, exist_ok=True)
+            python.write_text(
+                "#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$@"\n'
+            )
+            python.chmod(0o700)
+            pythons[version] = str(python)
+        launcher = self.root / "fixture-managed-launcher"
+        launcher.write_text(
+            '#!/bin/sh\nprintf \'["%s","-I"]\\n\' '
+            + shlex.quote(pythons["3.14.9"])
+            + "\n"
+        )
+        launcher.chmod(0o700)
+        browser = tools / "chromium-1/chrome"
+        browser.parent.mkdir(parents=True, exist_ok=True)
+        browser.write_text("#!/bin/sh\n")
+        browser.chmod(0o700)
+        (tools / "facts.json").write_text(
+            json.dumps(
+                {
+                    "packages": {
+                        "chromium": {
+                            "env": {
+                                "AGENT_BROWSER_EXECUTABLE_PATH": "{{store}}/chromium-1/chrome"
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        old = pythons.get(bootstrap, bootstrap)
+        config = json.loads(self.config.read_text())
+        config.update(
+            managedLauncher=str(launcher),
+            managedHome=str(home),
+            qualificationPython=old,
+            hooks={
+                **{
+                    name: [old, *argv[1:]]
+                    for name, argv in config["hooks"].items()
+                    if name != "regressions"
+                },
+                "regressions": [
+                    [old, *argv[1:]] for argv in config["hooks"]["regressions"]
+                ],
+            },
+        )
+        worker.atomic(self.config, config)
         return config, pythons
 
     def assert_refreshed(self, before, stage, new):
-        old=before['qualificationPython']
-        after=json.loads(self.config.read_text())
-        expected=dict(before,qualificationPython=new,hooks={name:([[new,*argv[1:]] for argv in value] if name=='regressions' else [new,*value[1:]]) for name,value in before['hooks'].items()})
-        self.assertEqual(after,expected); self.assertEqual(self.config.stat().st_mode&0o777,0o600)
+        old = before["qualificationPython"]
+        after = json.loads(self.config.read_text())
+        expected = dict(
+            before,
+            qualificationPython=new,
+            hooks={
+                name: (
+                    [[new, *argv[1:]] for argv in value]
+                    if name == "regressions"
+                    else [new, *value[1:]]
+                )
+                for name, value in before["hooks"].items()
+            },
+        )
+        self.assertEqual(after, expected)
+        self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
         worker.check_config(after)
         # qualificationPython, each single hook, and each regression argv.
         # The finish hook still saw the old paths: the refresh follows its success.
-        self.assertEqual(json.loads((stage/'config-at-finish.json').read_text())['qualificationPython'],old)
-        self.assertIn('Interpreter path refresh: updated %d path(s)' % (len(before['hooks'])+len(before['hooks']['regressions'])),''.join(path.read_text() for path in self.state.glob('*.log')))
+        self.assertEqual(
+            json.loads((stage / "config-at-finish.json").read_text())[
+                "qualificationPython"
+            ],
+            old,
+        )
+        self.assertIn(
+            "Interpreter path refresh: updated %d path(s)"
+            % (len(before["hooks"]) + len(before["hooks"]["regressions"])),
+            "".join(path.read_text() for path in self.state.glob("*.log")),
+        )
 
-    def test_a_successful_install_refreshes_the_worker_interpreter_paths_after_finish(self):
-        before,pythons=self.managed_interpreters('3.14.7')
-        stage=self.check()
-        self.assertEqual(json.loads(self.config.read_text()),before)
-        self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
-        self.assert_refreshed(before,stage,pythons['3.14.9'])
+    def test_a_successful_install_refreshes_the_worker_interpreter_paths_after_finish(
+        self,
+    ):
+        before, pythons = self.managed_interpreters("3.14.7")
+        stage = self.check()
+        self.assertEqual(json.loads(self.config.read_text()), before)
+        self.assertEqual(self.install()["status"], "complete")
+        self.assertEqual(self.status()["phase"], "succeeded")
+        self.assert_refreshed(before, stage, pythons["3.14.9"])
 
-    def test_a_restored_install_refreshes_the_worker_interpreter_paths_after_finish(self):
-        before,pythons=self.managed_interpreters('3.14.7')
-        stage=self.check(); (stage/'fail-verify').touch()
-        self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'rolled_back')
-        self.assert_refreshed(before,stage,pythons['3.14.9'])
+    def test_a_restored_install_refreshes_the_worker_interpreter_paths_after_finish(
+        self,
+    ):
+        before, pythons = self.managed_interpreters("3.14.7")
+        stage = self.check()
+        (stage / "fail-verify").touch()
+        self.assertEqual(self.install()["status"], "complete")
+        self.assertEqual(self.status()["phase"], "rolled_back")
+        self.assert_refreshed(before, stage, pythons["3.14.9"])
 
     def test_a_recovered_install_refreshes_the_worker_interpreter_paths(self):
-        before,pythons=self.managed_interpreters('3.14.7')
-        stage=self.check(); qualification=self.status()['qualification']
+        before, pythons = self.managed_interpreters("3.14.7")
+        stage = self.check()
+        qualification = self.status()["qualification"]
         # A worker that died after the host hooks started, under its saved maintenance gate.
-        operation=str(uuid.uuid4())
-        worker.atomic(self.state/'status.json',{'operationId':operation,'phase':'failed','maintenance':True,'checks':[],'qualification':qualification,'message':'Interrupted'})
-        worker.atomic(stage/'recovery.json',{'operationId':operation,'hostHookStarted':True,'installStarted':True,'releaseStarted':False})
-        (stage/'gate').write_text('exclusive')
-        self.control('restart_service')
-        worker.Worker(self.config,self.state,'restart_service',operation).main()
-        self.assertEqual(self.status()['phase'],'succeeded'); self.assertFalse((stage/'gate').exists())
-        after=json.loads(self.config.read_text())
-        self.assertEqual(after['qualificationPython'],pythons['3.14.9']); self.assertEqual(after['hooks']['finish'][0],pythons['3.14.9'])
-        self.assertEqual(after['hooks']['finish'][1:],before['hooks']['finish'][1:])
+        operation = str(uuid.uuid4())
+        worker.atomic(
+            self.state / "status.json",
+            {
+                "operationId": operation,
+                "phase": "failed",
+                "maintenance": True,
+                "checks": [],
+                "qualification": qualification,
+                "message": "Interrupted",
+            },
+        )
+        worker.atomic(
+            stage / "recovery.json",
+            {
+                "operationId": operation,
+                "hostHookStarted": True,
+                "installStarted": True,
+                "releaseStarted": False,
+            },
+        )
+        (stage / "gate").write_text("exclusive")
+        self.control("restart_service")
+        worker.Worker(self.config, self.state, "restart_service", operation).main()
+        self.assertEqual(self.status()["phase"], "succeeded")
+        self.assertFalse((stage / "gate").exists())
+        after = json.loads(self.config.read_text())
+        self.assertEqual(after["qualificationPython"], pythons["3.14.9"])
+        self.assertEqual(after["hooks"]["finish"][0], pythons["3.14.9"])
+        self.assertEqual(after["hooks"]["finish"][1:], before["hooks"]["finish"][1:])
 
-    def test_hooks_left_on_an_older_interpreter_follow_even_when_qualification_python_is_current(self):
+    def test_hooks_left_on_an_older_interpreter_follow_even_when_qualification_python_is_current(
+        self,
+    ):
         # The live host: qualificationPython hand-corrected to 3.14.9, every hook still on 3.14.7.
-        before,pythons=self.managed_interpreters('3.14.7')
-        before['qualificationPython']=pythons['3.14.9']; worker.atomic(self.config,before)
-        self.check(); self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
-        after=json.loads(self.config.read_text())
-        self.assertEqual(after['qualificationPython'],pythons['3.14.9'])
-        self.assertEqual({argv[0] for name,argv in after['hooks'].items() if name!='regressions'},{pythons['3.14.9']})
-        self.assertEqual({argv[0] for argv in after['hooks']['regressions']},{pythons['3.14.9']})
+        before, pythons = self.managed_interpreters("3.14.7")
+        before["qualificationPython"] = pythons["3.14.9"]
+        worker.atomic(self.config, before)
+        self.check()
+        self.assertEqual(self.install()["status"], "complete")
+        self.assertEqual(self.status()["phase"], "succeeded")
+        after = json.loads(self.config.read_text())
+        self.assertEqual(after["qualificationPython"], pythons["3.14.9"])
+        self.assertEqual(
+            {argv[0] for name, argv in after["hooks"].items() if name != "regressions"},
+            {pythons["3.14.9"]},
+        )
+        self.assertEqual(
+            {argv[0] for argv in after["hooks"]["regressions"]}, {pythons["3.14.9"]}
+        )
         worker.check_config(after)
 
     def test_a_virtualenv_python_that_links_into_the_store_keeps_its_environment(self):
-        before,pythons=self.managed_interpreters('3.14.7')
-        venv=self.root/'hook-venv/bin'; venv.mkdir(parents=True); (venv/'python3').symlink_to(pythons['3.14.7'])
-        before['hooks']['finish']=[str(venv/'python3'),*before['hooks']['finish'][1:]]; worker.atomic(self.config,before)
-        self.check(); self.assertEqual(self.install()['status'],'complete')
-        after=json.loads(self.config.read_text())
-        self.assertEqual(after['hooks']['finish'][0],str(venv/'python3'))
-        self.assertEqual(after['hooks']['backup'][0],pythons['3.14.9'])
+        before, pythons = self.managed_interpreters("3.14.7")
+        venv = self.root / "hook-venv/bin"
+        venv.mkdir(parents=True)
+        (venv / "python3").symlink_to(pythons["3.14.7"])
+        before["hooks"]["finish"] = [
+            str(venv / "python3"),
+            *before["hooks"]["finish"][1:],
+        ]
+        worker.atomic(self.config, before)
+        self.check()
+        self.assertEqual(self.install()["status"], "complete")
+        after = json.loads(self.config.read_text())
+        self.assertEqual(after["hooks"]["finish"][0], str(venv / "python3"))
+        self.assertEqual(after["hooks"]["backup"][0], pythons["3.14.9"])
 
     def test_interpreters_written_through_a_linked_home_still_follow(self):
-        before,pythons=self.managed_interpreters('3.14.7')
-        linked=self.root/'linked-home'; linked.symlink_to(before['managedHome'])
-        home=before['managedHome']
-        before['hooks']['backup']=[str(linked/Path(before['hooks']['backup'][0]).relative_to(home)),*before['hooks']['backup'][1:]]
-        before['managedHome']=str(linked)
-        worker.atomic(self.config,before)
-        self.check(); self.assertEqual(self.install()['status'],'complete')
-        self.assertEqual(json.loads(self.config.read_text())['hooks']['backup'][0],pythons['3.14.9'])
+        before, pythons = self.managed_interpreters("3.14.7")
+        linked = self.root / "linked-home"
+        linked.symlink_to(before["managedHome"])
+        home = before["managedHome"]
+        before["hooks"]["backup"] = [
+            str(linked / Path(before["hooks"]["backup"][0]).relative_to(home)),
+            *before["hooks"]["backup"][1:],
+        ]
+        before["managedHome"] = str(linked)
+        worker.atomic(self.config, before)
+        self.check()
+        self.assertEqual(self.install()["status"], "complete")
+        self.assertEqual(
+            json.loads(self.config.read_text())["hooks"]["backup"][0], pythons["3.14.9"]
+        )
 
     def test_a_failed_release_keeps_the_worker_interpreter_paths_for_review(self):
-        before,_=self.managed_interpreters('3.14.7')
-        stage=self.check(); (stage/'fail-finish').touch(); self.install(expect_error=True)
-        self.assertEqual(self.status()['phase'],'failed'); self.assertEqual(json.loads(self.config.read_text()),before)
+        before, _ = self.managed_interpreters("3.14.7")
+        stage = self.check()
+        (stage / "fail-finish").touch()
+        self.install(expect_error=True)
+        self.assertEqual(self.status()["phase"], "failed")
+        self.assertEqual(json.loads(self.config.read_text()), before)
 
-    def test_a_system_bootstrap_interpreter_is_never_replaced_by_the_launcher_selection(self):
-        before,_=self.managed_interpreters(sys.executable)
-        self.check(); self.assertEqual(self.install()['status'],'complete')
-        self.assertEqual(json.loads(self.config.read_text()),before)
+    def test_a_system_bootstrap_interpreter_is_never_replaced_by_the_launcher_selection(
+        self,
+    ):
+        before, _ = self.managed_interpreters(sys.executable)
+        self.check()
+        self.assertEqual(self.install()["status"], "complete")
+        self.assertEqual(json.loads(self.config.read_text()), before)
 
     def test_a_failed_worker_interpreter_refresh_never_fails_a_released_update(self):
-        directory=self.root/'private-config'; directory.mkdir(mode=0o700)
-        self.config=Path(shutil.move(self.config,directory/'config.json'))
-        before,_=self.managed_interpreters('3.14.7')
+        directory = self.root / "private-config"
+        directory.mkdir(mode=0o700)
+        self.config = Path(shutil.move(self.config, directory / "config.json"))
+        before, _ = self.managed_interpreters("3.14.7")
         self.check()
         # The configuration directory refuses the atomic replacement.
         directory.chmod(0o500)
-        try: self.assertEqual(self.install()['status'],'complete')
-        finally: directory.chmod(0o700)
-        self.assertEqual(self.status()['phase'],'succeeded'); self.assertEqual(json.loads(self.config.read_text()),before)
-        self.assertIn('Interpreter path refresh: skipped after PermissionError',''.join(path.read_text() for path in self.state.glob('*.log')))
+        try:
+            self.assertEqual(self.install()["status"], "complete")
+        finally:
+            directory.chmod(0o700)
+        self.assertEqual(self.status()["phase"], "succeeded")
+        self.assertEqual(json.loads(self.config.read_text()), before)
+        self.assertIn(
+            "Interpreter path refresh: skipped after PermissionError",
+            "".join(path.read_text() for path in self.state.glob("*.log")),
+        )
 
-    def test_native_updater_claim_refuses_foreign_owner_and_never_removes_replacement(self):
-        home=self.root/'native-home'; home.mkdir(mode=0o700)
-        marker=home/'.hermes-update-in-progress'
-        marker.write_text('999999\n0\n'); marker.chmod(0o600)
-        with self.assertRaisesRegex(RuntimeError,'Another updater'):
-            with worker.NativeUpdateClaim(self.source,home): pass
-        self.assertEqual(marker.read_text(),'999999\n0\n')
+    def test_native_updater_claim_refuses_foreign_owner_and_never_removes_replacement(
+        self,
+    ):
+        home = self.root / "native-home"
+        home.mkdir(mode=0o700)
+        marker = home / ".hermes-update-in-progress"
+        marker.write_text("999999\n0\n")
+        marker.chmod(0o600)
+        with self.assertRaisesRegex(RuntimeError, "Another updater"):
+            with worker.NativeUpdateClaim(self.source, home):
+                pass
+        self.assertEqual(marker.read_text(), "999999\n0\n")
         marker.unlink()
-        with worker.NativeUpdateClaim(self.source,home) as claim:
-            claim.refresh(); claim.validate()
-            marker.write_text('999999\n0\n')
-            with self.assertRaisesRegex(RuntimeError,'claim changed'): claim.validate()
-        self.assertEqual(marker.read_text(),'999999\n0\n')
+        with worker.NativeUpdateClaim(self.source, home) as claim:
+            claim.refresh()
+            claim.validate()
+            marker.write_text("999999\n0\n")
+            with self.assertRaisesRegex(RuntimeError, "claim changed"):
+                claim.validate()
+        self.assertEqual(marker.read_text(), "999999\n0\n")
 
     def test_native_v2_claim_hands_off_with_creation_time_and_tolerates_delegates(self):
         # Marker v2: pid, started_at, ct:<creation time>, then optional delegate/run lines.
-        (self.source / "hermes_cli/update_lock.py").write_text(UPDATE_LOCK.replace(
-            'self.path.write_text(f"{os.getpid()}\\n{int(time.time())}\\n")',
-            'self.path.write_text(f"{os.getpid()}\\n1700000000\\n{_identity_line()}\\n")') + "def _identity_line(pid=None):\n    return 'ct:%d.000' % (pid or os.getpid())\n")
-        home = self.root / "native-home"; home.mkdir(mode=0o700)
+        (self.source / "hermes_cli/update_lock.py").write_text(
+            UPDATE_LOCK.replace(
+                'self.path.write_text(f"{os.getpid()}\\n{int(time.time())}\\n")',
+                'self.path.write_text(f"{os.getpid()}\\n1700000000\\n{_identity_line()}\\n")',
+            )
+            + "def _identity_line(pid=None):\n    return 'ct:%d.000' % (pid or os.getpid())\n"
+        )
+        home = self.root / "native-home"
+        home.mkdir(mode=0o700)
         marker = home / ".hermes-update-in-progress"
         with worker.NativeUpdateClaim(self.source, home) as claim:
             guardian = claim.owner_pid
             self.assertNotEqual(guardian, os.getpid())
-            self.assertEqual(marker.read_text(), f"{guardian}\n1700000000\nct:{guardian}.000\n")
-            claim.refresh(); claim.validate()
-            self.assertEqual(marker.read_text(), f"{guardian}\n1700000000\nct:{guardian}.000\n")
+            self.assertEqual(
+                marker.read_text(), f"{guardian}\n1700000000\nct:{guardian}.000\n"
+            )
+            claim.refresh()
+            claim.validate()
+            self.assertEqual(
+                marker.read_text(), f"{guardian}\n1700000000\nct:{guardian}.000\n"
+            )
             marker.write_text(marker.read_text() + "delegate:4242 ct:9.000\n")
-            claim.refresh(); claim.validate()
+            claim.refresh()
+            claim.validate()
             self.assertTrue(marker.read_text().endswith("delegate:4242 ct:9.000\n"))
             marker.write_text(f"{guardian}\n1700000000\nct:1.000\n")
-            with self.assertRaisesRegex(RuntimeError, "claim changed"): claim.validate()
+            with self.assertRaisesRegex(RuntimeError, "claim changed"):
+                claim.validate()
             marker.write_text(f"{guardian}\n1700000000\nct:{guardian}.000\n")
 
     def test_real_native_guardian_outlives_worker_and_orphan_hook(self):
-        native_source = Path(os.environ.get("HERMES_NATIVE_LOCK_SOURCE", str(Path(__file__).resolve().parents[1] / ".private/hermes-integrations-spike/source")))
-        if not (native_source / "hermes_cli/update_lock.py").exists(): self.skipTest("Set HERMES_NATIVE_LOCK_SOURCE to an actual prepared Hermes source")
-        home = self.root / "actual-native-lock-home"; home.mkdir(mode=0o700)
+        native_source = Path(
+            os.environ.get(
+                "HERMES_NATIVE_LOCK_SOURCE",
+                str(
+                    Path(__file__).resolve().parents[1]
+                    / ".private/hermes-integrations-spike/source"
+                ),
+            )
+        )
+        if not (native_source / "hermes_cli/update_lock.py").exists():
+            self.skipTest(
+                "Set HERMES_NATIVE_LOCK_SOURCE to an actual prepared Hermes source"
+            )
+        home = self.root / "actual-native-lock-home"
+        home.mkdir(mode=0o700)
         entered, resume = self.root / "guardian-entered", self.root / "guardian-resume"
         program = self.root / "guardian-test.py"
         program.write_text(r"""import fcntl,importlib.util,json,os,subprocess,sys
@@ -1276,100 +2387,210 @@ with w.NativeUpdateClaim(sys.argv[3],sys.argv[4]) as claim:
  Path(sys.argv[5]).write_text(json.dumps({'guardian':claim.owner_pid,'hook':child.pid}))
  child.wait()
 """)
-        child = subprocess.Popen([sys.executable, str(program), worker.__file__, str(self.state / "worker.lock"), str(native_source), str(home), str(entered), str(resume)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                str(program),
+                worker.__file__,
+                str(self.state / "worker.lock"),
+                str(native_source),
+                str(home),
+                str(entered),
+                str(resume),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         try:
             self.wait_for(entered.exists)
             guardian = json.loads(entered.read_text())["guardian"]
             marker = home / ".hermes-update-in-progress"
             self.assertEqual(int(marker.read_text().splitlines()[0]), guardian)
-            child.send_signal(signal.SIGTERM); child.wait(timeout=5)
+            child.send_signal(signal.SIGTERM)
+            child.wait(timeout=5)
             os.kill(guardian, 0)
             with self.assertRaisesRegex(RuntimeError, "Another updater"):
-                with worker.NativeUpdateClaim(native_source, home): pass
+                with worker.NativeUpdateClaim(native_source, home):
+                    pass
             with (self.state / "worker.lock").open("r+") as lock:
-                with self.assertRaises(BlockingIOError): fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             resume.touch()
             self.wait_for(lambda: not marker.exists())
             previous_mask = os.umask(0o077)
             try:
-                with worker.NativeUpdateClaim(native_source, home) as claim: claim.validate()
-            finally: os.umask(previous_mask)
+                with worker.NativeUpdateClaim(native_source, home) as claim:
+                    claim.validate()
+            finally:
+                os.umask(previous_mask)
         finally:
             resume.touch()
-            if child.poll() is None: child.terminate(); child.wait(timeout=5)
+            if child.poll() is None:
+                child.terminate()
+                child.wait(timeout=5)
 
     def test_native_best_effort_claim_without_owned_marker_is_rejected(self):
-        (self.source/'hermes_cli/update_lock.py').write_text(UPDATE_LOCK.replace('self.acquired=True; return True','return True'))
-        with self.assertRaisesRegex(RuntimeError,'claim is unavailable'):
-            with worker.NativeUpdateClaim(self.source,self.root/'native-home'): pass
+        (self.source / "hermes_cli/update_lock.py").write_text(
+            UPDATE_LOCK.replace("self.acquired=True; return True", "return True")
+        )
+        with self.assertRaisesRegex(RuntimeError, "claim is unavailable"):
+            with worker.NativeUpdateClaim(self.source, self.root / "native-home"):
+                pass
 
     def test_exact_wrapper_symlinks_are_preserved_and_unknown_source_is_blocked(self):
-        target=self.app/'src/hermes/dashboard.py'; target.write_text('# trusted dashboard wrapper')
-        gateway=self.app/'src/hermes/gateway_guard.py'; gateway.write_text('# trusted gateway wrapper')
-        computer=self.app/'src/hermes/computer_host.py'; computer.write_text('# trusted computer host')
-        link=self.source/'agent_interface_dashboard.py'; link.symlink_to(target)
-        gateway_link=self.source/'agent_interface_gateway.py'; gateway_link.symlink_to(gateway)
-        computer_link=self.source/'agent_interface_computer_host.py'; computer_link.symlink_to(computer)
-        stage=self.check(); self.install()
-        self.assertEqual(link.resolve(),target.resolve()); self.assertEqual(self.status()['phase'],'succeeded')
-        self.assertEqual(gateway_link.resolve(),gateway.resolve()); self.assertEqual(computer_link.resolve(),computer.resolve())
-        self.assertEqual(set(self.status()['qualification']['dashboardLink']),set(worker.MANAGED_WRAPPERS))
-        (self.source/'unknown.py').write_text('# unreviewed source')
-        with self.assertRaisesRegex(RuntimeError,'Untracked'): worker.source_state(self.source,target)
+        target = self.app / "src/hermes/dashboard.py"
+        target.write_text("# trusted dashboard wrapper")
+        gateway = self.app / "src/hermes/gateway_guard.py"
+        gateway.write_text("# trusted gateway wrapper")
+        computer = self.app / "src/hermes/computer_host.py"
+        computer.write_text("# trusted computer host")
+        link = self.source / "agent_interface_dashboard.py"
+        link.symlink_to(target)
+        gateway_link = self.source / "agent_interface_gateway.py"
+        gateway_link.symlink_to(gateway)
+        computer_link = self.source / "agent_interface_computer_host.py"
+        computer_link.symlink_to(computer)
+        stage = self.check()
+        self.install()
+        self.assertEqual(link.resolve(), target.resolve())
+        self.assertEqual(self.status()["phase"], "succeeded")
+        self.assertEqual(gateway_link.resolve(), gateway.resolve())
+        self.assertEqual(computer_link.resolve(), computer.resolve())
+        self.assertEqual(
+            set(self.status()["qualification"]["dashboardLink"]),
+            set(worker.MANAGED_WRAPPERS),
+        )
+        (self.source / "unknown.py").write_text("# unreviewed source")
+        with self.assertRaisesRegex(RuntimeError, "Untracked"):
+            worker.source_state(self.source, target)
 
     def test_every_installed_wrapper_link_is_a_managed_wrapper(self):
         # An installer link missing from MANAGED_WRAPPERS blocks every in-app update check.
-        root=Path(worker.__file__).resolve().parents[1]
-        files=[*root.glob('.agents/tools/*'),*root.glob('src/hermes/*.py'),*root.glob('scripts/*.py'),*root.glob('docs/*.md')]
-        named={name for path in files if path.is_file() for name in re.findall(r'agent_interface_[a-z_]+\.py',path.read_text())}
-        self.assertIn('agent_interface_computer_host.py',named)
-        self.assertLessEqual(named,set(worker.MANAGED_WRAPPERS))
-        for name,target in worker.MANAGED_WRAPPERS.items(): self.assertTrue((root/'src/hermes'/target).is_file(),name)
+        root = Path(worker.__file__).resolve().parents[1]
+        files = [
+            *root.glob(".agents/tools/*"),
+            *root.glob("src/hermes/*.py"),
+            *root.glob("scripts/*.py"),
+            *root.glob("docs/*.md"),
+        ]
+        named = {
+            name
+            for path in files
+            if path.is_file()
+            for name in re.findall(r"agent_interface_[a-z_]+\.py", path.read_text())
+        }
+        self.assertIn("agent_interface_computer_host.py", named)
+        self.assertLessEqual(named, set(worker.MANAGED_WRAPPERS))
+        for name, target in worker.MANAGED_WRAPPERS.items():
+            self.assertTrue((root / "src/hermes" / target).is_file(), name)
 
     def test_wrong_gateway_wrapper_target_blocks_source_qualification(self):
-        target=self.app/'src/hermes/dashboard.py'; target.write_text('# trusted dashboard wrapper')
-        (self.source/'agent_interface_gateway.py').symlink_to(target)
-        with self.assertRaisesRegex(RuntimeError,'Untracked'): worker.source_state(self.source,target)
+        target = self.app / "src/hermes/dashboard.py"
+        target.write_text("# trusted dashboard wrapper")
+        (self.source / "agent_interface_gateway.py").symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, "Untracked"):
+            worker.source_state(self.source, target)
 
-    def test_retains_two_probe_stages_and_the_newest_finished_backup_but_never_active_needed_or_unmarked_paths(self):
-        stage=self.check(); state=self.status(); instance=worker.Worker(self.config,self.state,'check',state['operationId'])
-        paths=[]
+    def test_retains_two_probe_stages_and_the_newest_finished_backup_but_never_active_needed_or_unmarked_paths(
+        self,
+    ):
+        stage = self.check()
+        state = self.status()
+        instance = worker.Worker(self.config, self.state, "check", state["operationId"])
+        paths = []
         for index in range(6):
-            operation=str(uuid.uuid4()); path=self.root/'stages'/('qualification-'+operation); path.mkdir(mode=0o700)
-            marker=path/'.agent-interface-upgrade-stage'; worker.atomic(marker,{'schemaVersion':1,'operationId':operation,'state':'completed'})
-            os.utime(marker,ns=(index+1,index+1)); paths.append(path)
+            operation = str(uuid.uuid4())
+            path = self.root / "stages" / ("qualification-" + operation)
+            path.mkdir(mode=0o700)
+            marker = path / ".agent-interface-upgrade-stage"
+            worker.atomic(
+                marker,
+                {"schemaVersion": 1, "operationId": operation, "state": "completed"},
+            )
+            os.utime(marker, ns=(index + 1, index + 1))
+            paths.append(path)
         # The oldest install finished its backup; two newer attempts did not (one refused, one cut off).
-        (paths[0]/'backup').mkdir(); (paths[0]/'backup/protected.json').write_text('{}')
-        (paths[1]/'.agent-interface-upgrade-install').touch(); (paths[2]/'backup').mkdir()
-        active=self.root/'stages'/('qualification-'+str(uuid.uuid4())); active.mkdir(mode=0o700)
-        worker.atomic(active/'.agent-interface-upgrade-stage',{'schemaVersion':1,'operationId':active.name.removeprefix('qualification-'),'state':'active'})
-        unrelated=self.root/'stages'/'qualification-unmarked'; unrelated.mkdir()
+        (paths[0] / "backup").mkdir()
+        (paths[0] / "backup/protected.json").write_text("{}")
+        (paths[1] / ".agent-interface-upgrade-install").touch()
+        (paths[2] / "backup").mkdir()
+        active = self.root / "stages" / ("qualification-" + str(uuid.uuid4()))
+        active.mkdir(mode=0o700)
+        worker.atomic(
+            active / ".agent-interface-upgrade-stage",
+            {
+                "schemaVersion": 1,
+                "operationId": active.name.removeprefix("qualification-"),
+                "state": "active",
+            },
+        )
+        unrelated = self.root / "stages" / "qualification-unmarked"
+        unrelated.mkdir()
         instance.retain_qualification_stages()
         # The finished backup stays as the recovery point; incomplete attempts never displace it.
-        self.assertTrue(stage.exists()); self.assertTrue(paths[0].exists()); self.assertFalse(paths[1].exists()); self.assertFalse(paths[2].exists())
-        self.assertFalse(paths[3].exists()); self.assertFalse(paths[4].exists()); self.assertTrue(paths[5].exists())
-        self.assertTrue(active.exists()); self.assertTrue(unrelated.exists())
+        self.assertTrue(stage.exists())
+        self.assertTrue(paths[0].exists())
+        self.assertFalse(paths[1].exists())
+        self.assertFalse(paths[2].exists())
+        self.assertFalse(paths[3].exists())
+        self.assertFalse(paths[4].exists())
+        self.assertTrue(paths[5].exists())
+        self.assertTrue(active.exists())
+        self.assertTrue(unrelated.exists())
         # A newer finished backup replaces it, but an open maintenance window keeps its own stage.
-        (paths[5]/'backup').mkdir(); (paths[5]/'backup/protected.json').write_text('{}')
-        instance.state=dict(instance.state, phase='failed', maintenance=True, qualification={'stage': str(paths[0])})
+        (paths[5] / "backup").mkdir()
+        (paths[5] / "backup/protected.json").write_text("{}")
+        instance.state = dict(
+            instance.state,
+            phase="failed",
+            maintenance=True,
+            qualification={"stage": str(paths[0])},
+        )
         instance.retain_qualification_stages()
-        self.assertTrue(paths[0].exists()); self.assertTrue(paths[5].exists())
-        instance.state=dict(instance.state, maintenance=False)
+        self.assertTrue(paths[0].exists())
+        self.assertTrue(paths[5].exists())
+        instance.state = dict(instance.state, maintenance=False)
         instance.retain_qualification_stages()
-        self.assertFalse(paths[0].exists()); self.assertTrue(paths[5].exists())
+        self.assertFalse(paths[0].exists())
+        self.assertTrue(paths[5].exists())
 
     def test_a_check_prunes_old_stages_then_refuses_to_stage_without_headroom(self):
-        old=[]
-        (self.root/'stages').mkdir(mode=0o700,exist_ok=True); os.chmod(self.root/'stages',0o700)
+        old = []
+        (self.root / "stages").mkdir(mode=0o700, exist_ok=True)
+        os.chmod(self.root / "stages", 0o700)
         for index in range(3):
-            operation=str(uuid.uuid4()); path=self.root/'stages'/('qualification-'+operation); path.mkdir(parents=True,mode=0o700)
-            worker.atomic(path/'.agent-interface-upgrade-stage',{'schemaVersion':1,'operationId':operation,'state':'completed'}); old.append(path)
-        usage=type('Usage',(),{'free':5*1024**3,'total':72*1024**3,'used':67*1024**3})()
-        with patch.object(worker.shutil,'disk_usage',return_value=usage):
-            operation=str(uuid.uuid4()); worker.atomic(self.state/'status.json',{'operationId':operation,'phase':'checking','checks':[],'message':'Checking'})
-            with self.assertRaises(Exception): worker.Worker(self.config,self.state,'check',operation).main()
-        self.assertEqual(self.status()['phase'],'failed')
-        self.assertFalse(list((self.root/'stages').glob('qualification-'+operation)))
-        self.assertEqual(sum(path.exists() for path in old),2)
+            operation = str(uuid.uuid4())
+            path = self.root / "stages" / ("qualification-" + operation)
+            path.mkdir(parents=True, mode=0o700)
+            worker.atomic(
+                path / ".agent-interface-upgrade-stage",
+                {"schemaVersion": 1, "operationId": operation, "state": "completed"},
+            )
+            old.append(path)
+        usage = type(
+            "Usage",
+            (),
+            {"free": 5 * 1024**3, "total": 72 * 1024**3, "used": 67 * 1024**3},
+        )()
+        with patch.object(worker.shutil, "disk_usage", return_value=usage):
+            operation = str(uuid.uuid4())
+            worker.atomic(
+                self.state / "status.json",
+                {
+                    "operationId": operation,
+                    "phase": "checking",
+                    "checks": [],
+                    "message": "Checking",
+                },
+            )
+            with self.assertRaises(Exception):
+                worker.Worker(self.config, self.state, "check", operation).main()
+        self.assertEqual(self.status()["phase"], "failed")
+        self.assertFalse(
+            list((self.root / "stages").glob("qualification-" + operation))
+        )
+        self.assertEqual(sum(path.exists() for path in old), 2)
 
-if __name__ == '__main__': unittest.main()
+
+if __name__ == "__main__":
+    unittest.main()

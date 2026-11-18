@@ -8,6 +8,7 @@ XCTest waits for crash reports after every UI test. On the Mac mini that wait re
 both as a launch argument and in the environment. The copy must sit beside the original,
 because an .xctestrun locates the built products relative to its own directory.
 """
+
 import pathlib
 import plistlib
 import sys
@@ -18,9 +19,17 @@ SETTING = "XCTCrashReportCollectionTimeout"
 def test_targets(run):
     version = run.get("__xctestrun_metadata__", {}).get("FormatVersion", 1)
     if version == 1:
-        return [value for key, value in run.items() if not key.startswith("__") and isinstance(value, dict)]
+        return [
+            value
+            for key, value in run.items()
+            if not key.startswith("__") and isinstance(value, dict)
+        ]
     if version == 2:
-        return [target for configuration in run.get("TestConfigurations", []) for target in configuration.get("TestTargets", [])]
+        return [
+            target
+            for configuration in run.get("TestConfigurations", [])
+            for target in configuration.get("TestTargets", [])
+        ]
     raise SystemExit(f"Unsupported xctestrun FormatVersion {version}.")
 
 
@@ -54,7 +63,10 @@ def main(argv):
     seconds = int(argv[3])
     if seconds <= 0:
         raise SystemExit("SECONDS must be positive.")
-    if source.resolve().parent != destination.resolve().parent or source.resolve() == destination.resolve():
+    if (
+        source.resolve().parent != destination.resolve().parent
+        or source.resolve() == destination.resolve()
+    ):
         raise SystemExit("Write the copy beside the original, under a different name.")
     with source.open("rb") as handle:
         run = plistlib.load(handle)

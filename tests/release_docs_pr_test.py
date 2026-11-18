@@ -1,4 +1,5 @@
 """Activation opens its docs PR from a temporary worktree, using fake gh and git on PATH."""
+
 import contextlib
 import io
 import json
@@ -61,12 +62,20 @@ class DocsPullRequest(unittest.TestCase):
             (self.bin / name).chmod(0o700)
         empty = work / "gitconfig"
         empty.write_text("")
-        environment = mock.patch.dict(os.environ, {
-            "PATH": str(self.bin) + os.pathsep + os.environ["PATH"], "GIT_CONFIG_GLOBAL": str(empty),
-            # Only local file remotes: a stray command can never reach a real repository.
-            "GIT_ALLOW_PROTOCOL": "file",
-            "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "Operator", "GIT_AUTHOR_EMAIL": "operator@example.test",
-            "GIT_COMMITTER_NAME": "Operator", "GIT_COMMITTER_EMAIL": "operator@example.test"})
+        environment = mock.patch.dict(
+            os.environ,
+            {
+                "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
+                "GIT_CONFIG_GLOBAL": str(empty),
+                # Only local file remotes: a stray command can never reach a real repository.
+                "GIT_ALLOW_PROTOCOL": "file",
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_AUTHOR_NAME": "Operator",
+                "GIT_AUTHOR_EMAIL": "operator@example.test",
+                "GIT_COMMITTER_NAME": "Operator",
+                "GIT_COMMITTER_EMAIL": "operator@example.test",
+            },
+        )
         environment.start()
         self.addCleanup(environment.stop)
         self.origin = work / "origin.git"
@@ -75,7 +84,9 @@ class DocsPullRequest(unittest.TestCase):
         self.git("clone", "--quiet", str(self.origin), str(seed))
         (seed / "docs/evidence").mkdir(parents=True)
         (seed / "docs/evidence/earlier.json").write_text("{}\n")
-        (seed / "docs/ValidationLedger.md").write_text("# Validation ledger\n\n## Earlier release\n")
+        (seed / "docs/ValidationLedger.md").write_text(
+            "# Validation ledger\n\n## Earlier release\n"
+        )
         (seed / ".gitignore").write_text(".private/\n")
         self.git("-C", str(seed), "add", ".")
         self.git("-C", str(seed), "commit", "--quiet", "-m", "Seed")
@@ -86,29 +97,74 @@ class DocsPullRequest(unittest.TestCase):
         self.git("-C", str(self.checkout), "switch", "--quiet", "-c", "feature")
         (self.checkout / "notes.txt").write_text("work in progress\n")
         self.seed = seed
-        saved = (release_app.ROOT, release_app.MANIFESTS, release_app.guarded, release_app.verify_release, release_app.remote)
+        saved = (
+            release_app.ROOT,
+            release_app.MANIFESTS,
+            release_app.guarded,
+            release_app.verify_release,
+            release_app.remote,
+        )
+
         def restore():
-            (release_app.ROOT, release_app.MANIFESTS, release_app.guarded, release_app.verify_release, release_app.remote) = saved
+            (
+                release_app.ROOT,
+                release_app.MANIFESTS,
+                release_app.guarded,
+                release_app.verify_release,
+                release_app.remote,
+            ) = saved
+
         self.addCleanup(restore)
         release_app.ROOT, release_app.MANIFESTS = self.checkout, work / "manifests"
-        release_app.remote = lambda host, program, payload: {"current": "/srv/app/releases/old", "workerSha256": "worker", "releaseBuilt": True}
+        release_app.remote = lambda host, program, payload: {
+            "current": "/srv/app/releases/old",
+            "workerSha256": "worker",
+            "releaseBuilt": True,
+        }
         release_app.guarded = lambda host, manifest, check: {"webBuild": "b" * 16}
-        release_app.verify_release = lambda manifest: ({"maintenanceCleared": True}, None)
+        release_app.verify_release = lambda manifest: (
+            {"maintenanceCleared": True},
+            None,
+        )
         self.prepare(NAME)
 
     def prepare(self, name):
-        release_app.save_manifest({"name": name, "status": "prepared", "host": "host",
-            "commit": "7fac68e44e7d" + "0" * 28, "origin": "https://app.example.test", "webBuild": "b" * 16,
-            "archiveSha256": "f" * 64, "hermesRevision": "1298c8e7" + "0" * 32, "qualification": "reused",
-            "pullRequest": 73, "helperChanged": True, "appBase": "/srv/app", "operationId": "op", "release": "/srv/app/releases/" + name,
-            "expectedRelease": "/srv/app/releases/old", "workerSha256": "worker"})
+        release_app.save_manifest(
+            {
+                "name": name,
+                "status": "prepared",
+                "host": "host",
+                "commit": "7fac68e44e7d" + "0" * 28,
+                "origin": "https://app.example.test",
+                "webBuild": "b" * 16,
+                "archiveSha256": "f" * 64,
+                "hermesRevision": "1298c8e7" + "0" * 32,
+                "qualification": "reused",
+                "pullRequest": 73,
+                "helperChanged": True,
+                "appBase": "/srv/app",
+                "operationId": "op",
+                "release": "/srv/app/releases/" + name,
+                "expectedRelease": "/srv/app/releases/old",
+                "workerSha256": "worker",
+            }
+        )
 
     def worktree_paths(self):
-        calls = [json.loads(line) for line in (self.bin / "git-calls.jsonl").read_text().splitlines()]
-        return [Path(call[call.index("--detach") + 1]) for call in calls if call[:2] == ["worktree", "add"]]
+        calls = [
+            json.loads(line)
+            for line in (self.bin / "git-calls.jsonl").read_text().splitlines()
+        ]
+        return [
+            Path(call[call.index("--detach") + 1])
+            for call in calls
+            if call[:2] == ["worktree", "add"]
+        ]
 
     def git(self, *args):
-        return subprocess.run([REAL_GIT, *args], check=True, capture_output=True, text=True).stdout.strip()
+        return subprocess.run(
+            [REAL_GIT, *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
 
     def run_tool(self, *argv):
         output = io.StringIO()
@@ -118,7 +174,11 @@ class DocsPullRequest(unittest.TestCase):
 
     def gh_calls(self):
         calls = self.bin / "gh-state/calls.jsonl"
-        return [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+        return (
+            [json.loads(line) for line in calls.read_text().splitlines()]
+            if calls.exists()
+            else []
+        )
 
     def creates(self):
         return [call for call in self.gh_calls() if call[:2] == ["pr", "create"]]
@@ -127,9 +187,15 @@ class DocsPullRequest(unittest.TestCase):
         return self.git("--git-dir", str(self.origin), "show", f"{BRANCH}:{path}")
 
     def assert_checkout_untouched(self):
-        self.assertEqual(self.git("-C", str(self.checkout), "branch", "--show-current"), "feature")
-        self.assertEqual(len(self.git("-C", str(self.checkout), "worktree", "list").splitlines()), 1)
-        self.assertEqual((self.checkout / "notes.txt").read_text(), "work in progress\n")
+        self.assertEqual(
+            self.git("-C", str(self.checkout), "branch", "--show-current"), "feature"
+        )
+        self.assertEqual(
+            len(self.git("-C", str(self.checkout), "worktree", "list").splitlines()), 1
+        )
+        self.assertEqual(
+            (self.checkout / "notes.txt").read_text(), "work in progress\n"
+        )
 
     def test_activation_opens_one_docs_pr_from_the_latest_main(self):
         # Main moved on after the operator's clone; the PR must start from its latest tip.
@@ -139,42 +205,88 @@ class DocsPullRequest(unittest.TestCase):
         self.git("-C", str(self.seed), "push", "--quiet", "origin", "HEAD:main")
         main = self.git("--git-dir", str(self.origin), "rev-parse", "main")
         output = self.run_tool("activate", NAME)
-        self.assertIn("Opened the docs PR: https://github.com/owner/repo/pull/99", output)
+        self.assertIn(
+            "Opened the docs PR: https://github.com/owner/repo/pull/99", output
+        )
         self.assertEqual(release_app.load_manifest(NAME)["status"], "recorded")
         [create] = self.creates()
         flags = dict(zip(create[2::2], create[3::2]))
-        self.assertEqual((flags["--base"], flags["--head"], flags["--title"]), ("main", BRANCH, "Record the #73 deployment"))
-        self.assertTrue(flags["--body"].startswith(f"Records the production release of #73 (`{NAME}`)."))
+        self.assertEqual(
+            (flags["--base"], flags["--head"], flags["--title"]),
+            ("main", BRANCH, "Record the #73 deployment"),
+        )
+        self.assertTrue(
+            flags["--body"].startswith(
+                f"Records the production release of #73 (`{NAME}`)."
+            )
+        )
         self.assertIn("`--accept-helper-change`", flags["--body"])
         self.assertIn("Hermes stayed at `1298c8e7`.", flags["--body"])
-        self.assertTrue(flags["--body"].endswith("\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n"))
-        self.assertEqual(self.git("--git-dir", str(self.origin), "rev-parse", BRANCH + "^"), main)
-        self.assertEqual(self.git("--git-dir", str(self.origin), "log", "-1", "--format=%s", BRANCH), "Record the #73 deployment")
-        self.assertEqual(sorted(self.git("--git-dir", str(self.origin), "diff", "--name-only", main, BRANCH).splitlines()),
-                         sorted([ENTRY, f"docs/evidence/production-{NAME}.json"]))
+        self.assertTrue(
+            flags["--body"].endswith(
+                "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n"
+            )
+        )
+        self.assertEqual(
+            self.git("--git-dir", str(self.origin), "rev-parse", BRANCH + "^"), main
+        )
+        self.assertEqual(
+            self.git("--git-dir", str(self.origin), "log", "-1", "--format=%s", BRANCH),
+            "Record the #73 deployment",
+        )
+        self.assertEqual(
+            sorted(
+                self.git(
+                    "--git-dir", str(self.origin), "diff", "--name-only", main, BRANCH
+                ).splitlines()
+            ),
+            sorted([ENTRY, f"docs/evidence/production-{NAME}.json"]),
+        )
         entry = self.branch_files(ENTRY)
         self.assertTrue(entry.startswith("# "))
         self.assertEqual(entry.count("app release 7fac68e"), 1)
-        self.assertEqual(self.branch_files("docs/ValidationLedger.md"), "# Validation ledger\n\n## Earlier release")
-        self.assertEqual(json.loads(self.branch_files(f"docs/evidence/production-{NAME}.json"))["release"], NAME)
+        self.assertEqual(
+            self.branch_files("docs/ValidationLedger.md"),
+            "# Validation ledger\n\n## Earlier release",
+        )
+        self.assertEqual(
+            json.loads(self.branch_files(f"docs/evidence/production-{NAME}.json"))[
+                "release"
+            ],
+            NAME,
+        )
         self.assert_checkout_untouched()
         # The worktree lived in the checkout's ignored .private, and is gone.
         worktrees = self.checkout / ".private/docs-pr-worktrees"
         [path] = self.worktree_paths()
         self.assertEqual(path.parent.parent, worktrees)
         self.assertEqual(list(worktrees.iterdir()), [])
-        self.assertNotIn(".private", self.git("-C", str(self.checkout), "status", "--porcelain", "--untracked-files=all"))
+        self.assertNotIn(
+            ".private",
+            self.git(
+                "-C",
+                str(self.checkout),
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+            ),
+        )
         # Rerunning finds the PR instead of pushing or opening another.
-        self.assertIn("already exists: https://github.com/owner/repo/pull/99", self.run_tool("record", NAME))
+        self.assertIn(
+            "already exists: https://github.com/owner/repo/pull/99",
+            self.run_tool("record", NAME),
+        )
         self.assertEqual(len(self.creates()), 1)
 
     def test_a_locked_docs_worktree_is_still_removed(self):
         write_records = release_app.write_records
+
         def lock_then_write(checkout, manifest):
             # As if git left the docs worktree locked, e.g. after an interrupted add.
             if "docs-pr-worktrees" in str(checkout):
                 self.git("-C", str(checkout), "worktree", "lock", str(checkout))
             return write_records(checkout, manifest)
+
         with unittest.mock.patch.object(release_app, "write_records", lock_then_write):
             self.assertIn("Opened the docs PR", self.run_tool("activate", NAME))
         self.assert_checkout_untouched()
@@ -184,10 +296,15 @@ class DocsPullRequest(unittest.TestCase):
         output = self.run_tool("activate", NAME)
         self.assertIn("Warning: the docs PR was not opened", output)
         self.assertIn(f"Retry with: release-app.py record {NAME}", output)
-        self.assertIn(f"gh pr create --base main --head {BRANCH} --title 'Record the #73 deployment'", output)
+        self.assertIn(
+            f"gh pr create --base main --head {BRANCH} --title 'Record the #73 deployment'",
+            output,
+        )
         self.assertEqual(release_app.load_manifest(NAME)["status"], "recorded")
         self.assertEqual(self.creates(), [])
-        self.assertTrue((self.checkout / f"docs/evidence/production-{NAME}.json").is_file())
+        self.assertTrue(
+            (self.checkout / f"docs/evidence/production-{NAME}.json").is_file()
+        )
         self.assert_checkout_untouched()
         (self.bin / "fail-push").unlink()
         self.assertIn("Opened the docs PR", self.run_tool("record", NAME))
@@ -200,9 +317,14 @@ class DocsPullRequest(unittest.TestCase):
         pushed = self.git("--git-dir", str(self.origin), "rev-parse", BRANCH)
         (self.bin / "gh-state/fail-gh").unlink()
         self.assertIn("Opened the docs PR", self.run_tool("record", NAME))
-        self.assertEqual(self.git("--git-dir", str(self.origin), "rev-parse", BRANCH), pushed)
+        self.assertEqual(
+            self.git("--git-dir", str(self.origin), "rev-parse", BRANCH), pushed
+        )
         self.assertEqual(len(self.creates()), 2, "The failed attempt and its retry")
-        self.assertEqual(json.loads((self.bin / "gh-state/prs.json").read_text()), {BRANCH: "https://github.com/owner/repo/pull/99"})
+        self.assertEqual(
+            json.loads((self.bin / "gh-state/prs.json").read_text()),
+            {BRANCH: "https://github.com/owner/repo/pull/99"},
+        )
 
     def test_records_already_on_main_need_no_pr(self):
         self.run_tool("activate", NAME, "--no-docs-pr")
@@ -213,47 +335,83 @@ class DocsPullRequest(unittest.TestCase):
         self.git("-C", str(self.seed), "add", ".")
         self.git("-C", str(self.seed), "commit", "--quiet", "-m", "Record by hand")
         self.git("-C", str(self.seed), "push", "--quiet", "origin", "HEAD:main")
-        self.assertIn("origin/main already records this release", self.run_tool("record", NAME))
+        self.assertIn(
+            "origin/main already records this release", self.run_tool("record", NAME)
+        )
         self.assertEqual(self.creates(), [])
-        self.assertEqual(self.git("--git-dir", str(self.origin), "branch", "--list", BRANCH), "")
+        self.assertEqual(
+            self.git("--git-dir", str(self.origin), "branch", "--list", BRANCH), ""
+        )
         self.assert_checkout_untouched()
 
     def test_a_release_recorded_only_in_the_archive_needs_no_pr(self):
         self.run_tool("activate", NAME, "--no-docs-pr")
         manifest = release_app.load_manifest(NAME)
         # Recorded by hand in the archive before entries had their own files, so no entry file exists.
-        (self.seed / "docs/evidence" / manifest["receiptName"]).write_text(manifest["productionReceipt"])
+        (self.seed / "docs/evidence" / manifest["receiptName"]).write_text(
+            manifest["productionReceipt"]
+        )
         archive = self.seed / "docs/ValidationLedger.md"
-        archive.write_text(archive.read_text() + f"[receipt](evidence/{manifest['receiptName']})\n")
+        archive.write_text(
+            archive.read_text() + f"[receipt](evidence/{manifest['receiptName']})\n"
+        )
         self.git("-C", str(self.seed), "add", ".")
-        self.git("-C", str(self.seed), "commit", "--quiet", "-m", "Record in the archive")
+        self.git(
+            "-C", str(self.seed), "commit", "--quiet", "-m", "Record in the archive"
+        )
         self.git("-C", str(self.seed), "push", "--quiet", "origin", "HEAD:main")
-        self.assertIn("origin/main already records this release", self.run_tool("record", NAME))
+        self.assertIn(
+            "origin/main already records this release", self.run_tool("record", NAME)
+        )
         self.assertEqual(self.creates(), [])
         self.assert_checkout_untouched()
 
     def test_an_entry_saved_for_the_archive_is_written_with_working_links(self):
-        saved = {"name": NAME, "receiptName": "old.json",
-                 "ledgerEntry": "## October 13 app release 7fac68e\n\nThe [production receipt](evidence/old.json) records it.\n"}
+        saved = {
+            "name": NAME,
+            "receiptName": "old.json",
+            "ledgerEntry": "## October 13 app release 7fac68e\n\nThe [production receipt](evidence/old.json) records it.\n",
+        }
         self.assertTrue(release_app.insert_ledger_entry(self.seed, saved))
-        self.assertEqual((self.seed / ENTRY).read_text(),
-                         "# October 13 app release 7fac68e\n\nThe [production receipt](../evidence/old.json) records it.\n")
+        self.assertEqual(
+            (self.seed / ENTRY).read_text(),
+            "# October 13 app release 7fac68e\n\nThe [production receipt](../evidence/old.json) records it.\n",
+        )
 
-    def test_a_second_release_of_the_same_commit_on_the_same_day_gets_its_own_pr_and_entry(self):
+    def test_a_second_release_of_the_same_commit_on_the_same_day_gets_its_own_pr_and_entry(
+        self,
+    ):
         self.assertIn("pull/99", self.run_tool("activate", NAME))
         second = NAME[:-7] + "235959Z"
         self.prepare(second)
-        self.assertIn("Opened the docs PR: https://github.com/owner/repo/pull/100", self.run_tool("activate", second))
+        self.assertIn(
+            "Opened the docs PR: https://github.com/owner/repo/pull/100",
+            self.run_tool("activate", second),
+        )
         heads = [dict(zip(call[2::2], call[3::2]))["--head"] for call in self.creates()]
         self.assertEqual(heads, [BRANCH, "docs/record-" + second])
         second_entry = "docs/ledger/20261013T235959Z-app-release-7fac68e4.md"
-        entry = self.git("--git-dir", str(self.origin), "show", f"docs/record-{second}:{second_entry}")
+        entry = self.git(
+            "--git-dir",
+            str(self.origin),
+            "show",
+            f"docs/record-{second}:{second_entry}",
+        )
         self.assertIn(f"(../evidence/production-{second}.json)", entry)
-        self.assertIn(f"(../evidence/production-{NAME}.json)", (self.checkout / ENTRY).read_text())
-        self.assertIn(f"(../evidence/production-{second}.json)", (self.checkout / second_entry).read_text())
+        self.assertIn(
+            f"(../evidence/production-{NAME}.json)", (self.checkout / ENTRY).read_text()
+        )
+        self.assertIn(
+            f"(../evidence/production-{second}.json)",
+            (self.checkout / second_entry).read_text(),
+        )
 
     def manifest(self, name, receipt):
-        return {"name": name, "receiptName": receipt, "ledgerEntry": f"# October 13 app release 7fac68e\n\n[receipt](../evidence/{receipt})\n"}
+        return {
+            "name": name,
+            "receiptName": receipt,
+            "ledgerEntry": f"# October 13 app release 7fac68e\n\n[receipt](../evidence/{receipt})\n",
+        }
 
     def test_the_ledger_write_skips_only_an_entry_for_the_same_release_or_receipt(self):
         first = self.manifest(NAME, "first.json")
@@ -263,14 +421,29 @@ class DocsPullRequest(unittest.TestCase):
         # Same commit, same day, later release: its own file.
         second = self.manifest(NAME[:-7] + "235959Z", "second.json")
         self.assertTrue(release_app.insert_ledger_entry(self.seed, second))
-        self.assertEqual(sorted(path.name for path in (self.seed / "docs/ledger").iterdir()),
-                         ["20261013T181252Z-app-release-7fac68e4.md", "20261013T235959Z-app-release-7fac68e4.md"])
+        self.assertEqual(
+            sorted(path.name for path in (self.seed / "docs/ledger").iterdir()),
+            [
+                "20261013T181252Z-app-release-7fac68e4.md",
+                "20261013T235959Z-app-release-7fac68e4.md",
+            ],
+        )
         # Recorded by hand under another name, or in the archive: not repeated.
-        (self.seed / "docs/ledger/20261013T240000Z-by-hand.md").write_text("[receipt](../evidence/third.json)\n")
-        self.assertFalse(release_app.insert_ledger_entry(self.seed, self.manifest(NAME[:-7] + "000001Z", "third.json")))
+        (self.seed / "docs/ledger/20261013T240000Z-by-hand.md").write_text(
+            "[receipt](../evidence/third.json)\n"
+        )
+        self.assertFalse(
+            release_app.insert_ledger_entry(
+                self.seed, self.manifest(NAME[:-7] + "000001Z", "third.json")
+            )
+        )
         archive = self.seed / "docs/ValidationLedger.md"
         archive.write_text(archive.read_text() + "[receipt](evidence/fourth.json)\n")
-        self.assertFalse(release_app.insert_ledger_entry(self.seed, self.manifest(NAME[:-7] + "000002Z", "fourth.json")))
+        self.assertFalse(
+            release_app.insert_ledger_entry(
+                self.seed, self.manifest(NAME[:-7] + "000002Z", "fourth.json")
+            )
+        )
         self.assertEqual(archive.read_text().count("Earlier release"), 1)
 
 

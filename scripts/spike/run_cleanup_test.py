@@ -1,4 +1,5 @@
 """The suite stops only the exact gateway Hermes recorded for its disposable home."""
+
 import json
 import signal
 import sys
@@ -27,12 +28,22 @@ class StopHomeGatewayTests(unittest.TestCase):
     def stop(self, record, live_start):
         (self.home / "gateway.pid").write_text(json.dumps(record))
         starts = iter([live_start, None])
-        with patch.object(run, "process_start_time", lambda pid: next(starts, None)), \
-             patch.object(run.os, "kill", lambda pid, sig: self.signals.append((pid, sig))):
+        with (
+            patch.object(run, "process_start_time", lambda pid: next(starts, None)),
+            patch.object(
+                run.os, "kill", lambda pid, sig: self.signals.append((pid, sig))
+            ),
+        ):
             return run.stop_home_gateway(self.home)
 
     def record(self, **changes):
-        return {"pid": 4242, "kind": "hermes-gateway", "start_time": 900, "hermes_home": str(self.home), **changes}
+        return {
+            "pid": 4242,
+            "kind": "hermes-gateway",
+            "start_time": 900,
+            "hermes_home": str(self.home),
+            **changes,
+        }
 
     def test_recorded_gateway_of_this_home_is_stopped(self):
         self.assertEqual(self.stop(self.record(), 900), 4242)
@@ -40,7 +51,9 @@ class StopHomeGatewayTests(unittest.TestCase):
 
     def test_reused_pid_foreign_home_or_other_kind_is_left_alone(self):
         self.assertIsNone(self.stop(self.record(), 901))
-        self.assertIsNone(self.stop(self.record(hermes_home="/home/nicolas/.hermes"), 900))
+        self.assertIsNone(
+            self.stop(self.record(hermes_home="/home/nicolas/.hermes"), 900)
+        )
         self.assertIsNone(self.stop(self.record(kind="hermes-dashboard"), 900))
         self.assertIsNone(self.stop(self.record(start_time=None), 900))
         self.assertEqual(self.signals, [])

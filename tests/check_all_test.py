@@ -1,6 +1,7 @@
 """check-all: the ports, the machine-wide lock, the node_modules and ruff guards, the Python decision, the
 summary parsing and the whole command, run against real processes, real sockets, real git and fake executables
 on PATH. Nothing here touches the network or the real check battery."""
+
 import ast
 import contextlib
 import fcntl
@@ -57,14 +58,20 @@ sys.stdin.read()
 
 class Holder:
     def __init__(self, case, *args):
-        self.process = subprocess.Popen([sys.executable, "-I", "-c", HOLDER, str(TOOLS), *map(str, args)], stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, text=True)
+        self.process = subprocess.Popen(
+            [sys.executable, "-I", "-c", HOLDER, str(TOOLS), *map(str, args)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
         case.addCleanup(self.stop)
         self.lines = []
         while not self.lines or self.lines[-1] != "held":
             line = self.process.stdout.readline()
             if not line:
-                raise AssertionError("holder exited before holding: " + repr(self.lines))
+                raise AssertionError(
+                    "holder exited before holding: " + repr(self.lines)
+                )
             self.lines.append(line.strip())
 
     def release(self):
@@ -100,7 +107,9 @@ class HeavySlotTest(TempCase):
         threading_release = threading.Timer(0.6, holder.release)
         threading_release.start()
         self.addCleanup(threading_release.cancel)
-        held, waited = check_all.acquire_slot(self.tmp, 1, self.info(), 10, note=waits.append)
+        held, waited = check_all.acquire_slot(
+            self.tmp, 1, self.info(), 10, note=waits.append
+        )
         self.addCleanup(held.release)
         self.assertGreaterEqual(waited, 0.5)
         self.assertEqual(len(waits), 1)
@@ -133,7 +142,9 @@ class HeavySlotTest(TempCase):
         with self.assertRaises(check_all.LockTimeout):
             check_all.acquire_slot(self.tmp, 1, self.info(), 0.2)
 
-    def test_a_process_holding_a_copy_of_the_descriptor_keeps_the_slot_after_release(self):
+    def test_a_process_holding_a_copy_of_the_descriptor_keeps_the_slot_after_release(
+        self,
+    ):
         # run_process hands the descriptors to the suite. Releasing the run's own copy must not unlock them, or a
         # suite that outlives its run would stop holding its slot.
         held, _ = check_all.acquire_slot(self.tmp, 1, self.info(), 1)
@@ -163,16 +174,26 @@ class PortTest(TempCase):
         sock.listen()
 
     def pick(self, seed="w", **kwargs):
-        held, port = check_all.pick_e2e_port(self.tmp, seed, base=BASE, pairs=PAIRS, **kwargs)
+        held, port = check_all.pick_e2e_port(
+            self.tmp, seed, base=BASE, pairs=PAIRS, **kwargs
+        )
         self.addCleanup(held.release)
         return port
 
     def test_a_free_pair_is_chosen_from_the_candidates_for_this_worktree(self):
         self.assertEqual(self.pick(), check_all.port_candidates("w", BASE, PAIRS)[0])
 
-    def test_the_same_worktree_gets_the_same_start_and_different_worktrees_usually_do_not(self):
-        self.assertEqual(check_all.port_candidates("w", BASE, PAIRS), check_all.port_candidates("w", BASE, PAIRS))
-        starts = {check_all.port_candidates(f"/worktrees/{name}", BASE, PAIRS)[0] for name in "abcdefgh"}
+    def test_the_same_worktree_gets_the_same_start_and_different_worktrees_usually_do_not(
+        self,
+    ):
+        self.assertEqual(
+            check_all.port_candidates("w", BASE, PAIRS),
+            check_all.port_candidates("w", BASE, PAIRS),
+        )
+        starts = {
+            check_all.port_candidates(f"/worktrees/{name}", BASE, PAIRS)[0]
+            for name in "abcdefgh"
+        }
         self.assertGreater(len(starts), 3)
 
     def test_candidates_are_disjoint_pairs_covering_the_whole_range(self):
@@ -190,7 +211,9 @@ class PortTest(TempCase):
         self.assertNotIn(first + 1, (chosen := self.pick(), chosen + 1))
         self.assertNotEqual(chosen, first)
 
-    def test_a_pair_another_run_holds_is_skipped_even_though_nothing_is_listening_yet(self):
+    def test_a_pair_another_run_holds_is_skipped_even_though_nothing_is_listening_yet(
+        self,
+    ):
         # The window the lock closes: the other run has chosen its port but its server has not bound it.
         holder = Holder(self, "port", self.tmp, "w", BASE, PAIRS)
         theirs = int(holder.lines[0])
@@ -199,7 +222,10 @@ class PortTest(TempCase):
         self.assertEqual(theirs, check_all.port_candidates("w", BASE, PAIRS)[0])
 
     def test_two_runs_that_start_together_get_different_pairs_that_share_no_port(self):
-        first, second = Holder(self, "port", self.tmp, "w", BASE, PAIRS), Holder(self, "port", self.tmp, "w", BASE, PAIRS)
+        first, second = (
+            Holder(self, "port", self.tmp, "w", BASE, PAIRS),
+            Holder(self, "port", self.tmp, "w", BASE, PAIRS),
+        )
         a, b = int(first.lines[0]), int(second.lines[0])
         self.assertTrue({a, a + 1}.isdisjoint({b, b + 1}))
 
@@ -232,12 +258,19 @@ class PortTest(TempCase):
             check_all.pick_e2e_port(self.tmp, "w", requested=BASE + 20)
         self.assertIn("locked by another check-all", str(raised.exception))
 
-    def test_adjacent_requested_pairs_cannot_share_a_port_before_either_server_binds(self):
+    def test_adjacent_requested_pairs_cannot_share_a_port_before_either_server_binds(
+        self,
+    ):
         port = BASE + 20
         held, _ = check_all.pick_e2e_port(self.tmp, "first", requested=port)
         self.addCleanup(held.release)
         for adjacent in (port - 1, port + 1):
-            with self.subTest(adjacent=adjacent), self.assertRaisesRegex(check_all.Refusal, "locked by another check-all"):
+            with (
+                self.subTest(adjacent=adjacent),
+                self.assertRaisesRegex(
+                    check_all.Refusal, "locked by another check-all"
+                ),
+            ):
                 check_all.pick_e2e_port(self.tmp, "second", requested=adjacent)
         # The lower pair acquired its first port before finding the shared one busy; that partial lease is gone.
         free = check_all.try_lock(self.tmp / f"e2e-port-{port - 1}.lock")
@@ -263,13 +296,38 @@ class NodeModulesTest(TempCase):
         return {"packages": {"": {"name": "app"}, **packages}}
 
     def test_drift_cases(self):
-        wanted = self.lock({"node_modules/a": {"version": "1.0.0"}, "node_modules/native": {"version": "2.0.0", "optional": True}})
+        wanted = self.lock(
+            {
+                "node_modules/a": {"version": "1.0.0"},
+                "node_modules/native": {"version": "2.0.0", "optional": True},
+            }
+        )
         cases = {
-            "identical, with the other platform's optional binary left out": (wanted, self.lock({"node_modules/a": {"version": "1.0.0"}}), []),
-            "a version moved": (wanted, self.lock({"node_modules/a": {"version": "0.9.0"}}), ["node_modules/a is 0.9.0 but package-lock.json has 1.0.0"]),
-            "a package was added to the lock": (self.lock({"node_modules/a": {"version": "1.0.0"}, "node_modules/b": {"version": "1.0.0"}}),
-                                               self.lock({"node_modules/a": {"version": "1.0.0"}}), ["node_modules/b is in package-lock.json but not installed"]),
-            "a package was removed from the lock": (self.lock({}), self.lock({"node_modules/a": {"version": "1.0.0"}}), ["node_modules/a is installed but not in package-lock.json"]),
+            "identical, with the other platform's optional binary left out": (
+                wanted,
+                self.lock({"node_modules/a": {"version": "1.0.0"}}),
+                [],
+            ),
+            "a version moved": (
+                wanted,
+                self.lock({"node_modules/a": {"version": "0.9.0"}}),
+                ["node_modules/a is 0.9.0 but package-lock.json has 1.0.0"],
+            ),
+            "a package was added to the lock": (
+                self.lock(
+                    {
+                        "node_modules/a": {"version": "1.0.0"},
+                        "node_modules/b": {"version": "1.0.0"},
+                    }
+                ),
+                self.lock({"node_modules/a": {"version": "1.0.0"}}),
+                ["node_modules/b is in package-lock.json but not installed"],
+            ),
+            "a package was removed from the lock": (
+                self.lock({}),
+                self.lock({"node_modules/a": {"version": "1.0.0"}}),
+                ["node_modules/a is installed but not in package-lock.json"],
+            ),
         }
         for name, (lock, installed, expected) in cases.items():
             with self.subTest(name):
@@ -283,7 +341,9 @@ class NodeModulesTest(TempCase):
         if installed is not False:
             home = (self.tmp / "shared") if link else root
             (home / "node_modules").mkdir(parents=True, exist_ok=True)
-            (home / "node_modules/.package-lock.json").write_text(json.dumps(installed or lock))
+            (home / "node_modules/.package-lock.json").write_text(
+                json.dumps(installed or lock)
+            )
             if link:
                 (root / "node_modules").symlink_to(home / "node_modules")
         return root
@@ -310,16 +370,27 @@ class NodeModulesTest(TempCase):
         (root / "node_modules/.package-lock.json").unlink()
         self.assertIn("did not install it", self.refusal(root))
 
-    def test_a_lockfile_changed_since_install_is_refused_with_the_package_and_the_fix(self):
-        root = self.checkout(installed=self.lock({"node_modules/a": {"version": "0.9.0"}}))
+    def test_a_lockfile_changed_since_install_is_refused_with_the_package_and_the_fix(
+        self,
+    ):
+        root = self.checkout(
+            installed=self.lock({"node_modules/a": {"version": "0.9.0"}})
+        )
         message = self.refusal(root)
-        self.assertIn("package-lock.json changed since node_modules was installed", message)
+        self.assertIn(
+            "package-lock.json changed since node_modules was installed", message
+        )
         self.assertIn("node_modules/a is 0.9.0", message)
         self.assertIn("npm ci", message)
 
     def test_a_long_drift_list_is_cut_short_with_a_count(self):
-        installed = self.lock({f"node_modules/p{index}": {"version": "1.0.0"} for index in range(6)})
-        self.assertIn("and 3 more", self.refusal(self.checkout(lock=self.lock({}), installed=installed)))
+        installed = self.lock(
+            {f"node_modules/p{index}": {"version": "1.0.0"} for index in range(6)}
+        )
+        self.assertIn(
+            "and 3 more",
+            self.refusal(self.checkout(lock=self.lock({}), installed=installed)),
+        )
 
     def test_an_unreadable_lockfile_is_refused_not_crashed_on(self):
         root = self.checkout()
@@ -329,14 +400,20 @@ class NodeModulesTest(TempCase):
     def test_a_matching_plain_install_passes_without_a_warning(self):
         self.assertEqual(check_all.check_install(self.checkout()), [])
 
-    def test_a_symlinked_node_modules_that_matches_runs_with_a_warning_naming_the_target(self):
+    def test_a_symlinked_node_modules_that_matches_runs_with_a_warning_naming_the_target(
+        self,
+    ):
         warnings = check_all.check_install(self.checkout(link=True))
         self.assertEqual(len(warnings), 1)
         self.assertIn("symlink", warnings[0])
         self.assertIn(str(self.tmp / "shared/node_modules"), warnings[0])
 
-    def test_a_symlinked_node_modules_from_a_checkout_with_another_lock_is_refused(self):
-        root = self.checkout(installed=self.lock({"node_modules/a": {"version": "9.9.9"}}), link=True)
+    def test_a_symlinked_node_modules_from_a_checkout_with_another_lock_is_refused(
+        self,
+    ):
+        root = self.checkout(
+            installed=self.lock({"node_modules/a": {"version": "9.9.9"}}), link=True
+        )
         self.assertIn("package-lock.json changed", self.refusal(root))
 
 
@@ -346,15 +423,20 @@ class FakeBootstrap(TempCase):
     def setUp(self):
         super().setUp()
         self.calls = self.tmp / "bootstrap-calls"
-        pip = script(self.tmp / "pip-template", """
+        pip = script(
+            self.tmp / "pip-template",
+            """
             import os, sys
             from pathlib import Path
             version = os.environ.get("FAKE_INSTALLS") or sys.argv[-1].split("==")[1]
             ruff = Path(__file__).resolve().parent / "ruff"
             ruff.write_text(f"#!{sys.executable}\\nprint('ruff {version}')\\n")
             ruff.chmod(0o700)
-        """)
-        self.python = script(self.tmp / "fake-python", """
+        """,
+        )
+        self.python = script(
+            self.tmp / "fake-python",
+            """
             import os, shutil, sys
             from pathlib import Path
             with open("@CALLS@", "a") as log:
@@ -365,7 +447,8 @@ class FakeBootstrap(TempCase):
                 print("no ensurepip", file=sys.stderr); sys.exit(1)
             bin = Path(sys.argv[3]) / "bin"; bin.mkdir(parents=True)
             shutil.copy("@PIP@", bin / "pip")
-        """.replace("@CALLS@", str(self.calls)).replace("@PIP@", str(pip)))
+        """.replace("@CALLS@", str(self.calls)).replace("@PIP@", str(pip)),
+        )
 
     def made(self):
         return len(self.calls.read_text().splitlines()) if self.calls.exists() else 0
@@ -375,7 +458,9 @@ class RuffTest(FakeBootstrap):
     def setUp(self):
         super().setUp()
         (self.tmp / "repo/.github").mkdir(parents=True)
-        (self.tmp / "repo/.github/requirements-ci.txt").write_text("pip-audit==2.10.1\nruff==0.17.3\n")
+        (self.tmp / "repo/.github/requirements-ci.txt").write_text(
+            "pip-audit==2.10.1\nruff==0.17.3\n"
+        )
         self.root, self.cache = self.tmp / "repo", self.tmp / "cache"
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
@@ -384,7 +469,12 @@ class RuffTest(FakeBootstrap):
         script(self.bin / "ruff", f"print('ruff {version}')\n")
 
     def find(self, **env):
-        return check_all.find_ruff(self.root, self.cache, {"PATH": str(self.bin), **env}, bootstrap_python=str(self.python))
+        return check_all.find_ruff(
+            self.root,
+            self.cache,
+            {"PATH": str(self.bin), **env},
+            bootstrap_python=str(self.python),
+        )
 
     def test_the_pin_comes_from_the_requirements_file_ci_installs(self):
         self.assertEqual(check_all.pinned_ruff(self.root), "0.17.3")
@@ -399,7 +489,9 @@ class RuffTest(FakeBootstrap):
         self.assertEqual(self.find(), str(self.bin / "ruff"))
         self.assertEqual(self.made(), 0)
 
-    def test_a_ruff_on_path_of_another_version_is_never_run_and_the_pinned_one_comes_from_a_cached_venv(self):
+    def test_a_ruff_on_path_of_another_version_is_never_run_and_the_pinned_one_comes_from_a_cached_venv(
+        self,
+    ):
         self.path_ruff("0.18.0")
         found = self.find()
         self.assertEqual(found, str(self.cache / "ruff-0.17.3/bin/ruff"))
@@ -412,7 +504,9 @@ class RuffTest(FakeBootstrap):
         self.assertEqual(self.made(), 1)
 
     def test_an_install_that_yields_another_version_is_refused_and_leaves_no_venv(self):
-        with self.assertRaisesRegex(check_all.Refusal, "reports 0.18.0, and this repository pins 0.17.3"):
+        with self.assertRaisesRegex(
+            check_all.Refusal, "reports 0.18.0, and this repository pins 0.17.3"
+        ):
             self.find(FAKE_INSTALLS="0.18.0")
         self.assertFalse((self.cache / "ruff-0.17.3").exists())
 
@@ -425,7 +519,9 @@ class RuffTest(FakeBootstrap):
 
     def test_a_venv_left_half_built_by_a_dead_run_is_rebuilt_not_trusted(self):
         (self.cache / "ruff-0.17.3/bin").mkdir(parents=True)
-        script(self.cache / "ruff-0.17.3/bin/ruff", "print('ruff 0.17.3')\n")  # no .complete mark
+        script(
+            self.cache / "ruff-0.17.3/bin/ruff", "print('ruff 0.17.3')\n"
+        )  # no .complete mark
         self.assertEqual(check_all.ruff_version(self.find()), "0.17.3")
         self.assertEqual(self.made(), 1)
 
@@ -438,8 +534,22 @@ class RuffTest(FakeBootstrap):
 
 class PythonDecisionTest(TempCase):
     def git(self, *args):
-        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false", *args],
-                              cwd=self.tmp, check=True, capture_output=True, text=True).stdout
+        return subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.test",
+                "-c",
+                "commit.gpgsign=false",
+                *args,
+            ],
+            cwd=self.tmp,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
 
     def commit(self, name, text="x"):
         path = self.tmp / name
@@ -456,12 +566,37 @@ class PythonDecisionTest(TempCase):
 
     def test_which_paths_count_as_python(self):
         cases = [
-            ("a Python file", ["tests/x_test.py"], True), ("the Hermes add-on", ["src/hermes/journal.txt"], True),
-            ("a script", ["scripts/build-worker.mjs"], True), ("a web-only change", ["src/App.tsx", "e2e/smoke.spec.ts", "package.json"], False),
-            ("nothing", [], False), ("a name that only contains the directory", ["docs/scripts/readme.md", "src/hermesx/a.ts"], False),
-            ("a tool the tests run", [".agents/tools/validate-ios.sh"], True), ("a shared file the tests read", ["src/shared/voice.ts"], True),
-            ("the voice previews the voice test lists", ["public/voice-previews/nova.mp3"], True),
-            ("neighbors of those inputs that no test reads", ["src/server/app.ts", "src/sharedx/a.ts", "public/icons/a.svg", "tests/app.test.ts"], False),
+            ("a Python file", ["tests/x_test.py"], True),
+            ("the Hermes add-on", ["src/hermes/journal.txt"], True),
+            ("a script", ["scripts/build-worker.mjs"], True),
+            (
+                "a web-only change",
+                ["src/App.tsx", "e2e/smoke.spec.ts", "package.json"],
+                False,
+            ),
+            ("nothing", [], False),
+            (
+                "a name that only contains the directory",
+                ["docs/scripts/readme.md", "src/hermesx/a.ts"],
+                False,
+            ),
+            ("a tool the tests run", [".agents/tools/validate-ios.sh"], True),
+            ("a shared file the tests read", ["src/shared/voice.ts"], True),
+            (
+                "the voice previews the voice test lists",
+                ["public/voice-previews/nova.mp3"],
+                True,
+            ),
+            (
+                "neighbors of those inputs that no test reads",
+                [
+                    "src/server/app.ts",
+                    "src/sharedx/a.ts",
+                    "public/icons/a.svg",
+                    "tests/app.test.ts",
+                ],
+                False,
+            ),
         ]
         for name, paths, expected in cases:
             with self.subTest(name):
@@ -469,9 +604,12 @@ class PythonDecisionTest(TempCase):
 
     def test_decisions(self):
         cases = [
-            ("never wins over a Python diff", "never", ["a.py"], False, False), ("always runs on a web diff", "always", ["a.ts"], False, True),
-            ("auto runs on a Python diff", "auto", ["a.py"], False, True), ("auto skips a web diff", "auto", ["a.ts"], False, False),
-            ("auto runs when git cannot say", "auto", None, False, True), ("naming py in --only beats auto's skip", "auto", ["a.ts"], True, True),
+            ("never wins over a Python diff", "never", ["a.py"], False, False),
+            ("always runs on a web diff", "always", ["a.ts"], False, True),
+            ("auto runs on a Python diff", "auto", ["a.py"], False, True),
+            ("auto skips a web diff", "auto", ["a.ts"], False, False),
+            ("auto runs when git cannot say", "auto", None, False, True),
+            ("naming py in --only beats auto's skip", "auto", ["a.ts"], True, True),
             ("never still beats naming py", "never", ["a.py"], True, False),
         ]
         for name, mode, paths, explicit, expected in cases:
@@ -481,7 +619,9 @@ class PythonDecisionTest(TempCase):
                 self.assertTrue(reason)
 
     def test_the_reason_for_skipping_names_the_base_so_a_stale_ref_is_noticed(self):
-        self.assertIn("origin/main", check_all.decide_py("auto", ["a.ts"], "origin/main")[1])
+        self.assertIn(
+            "origin/main", check_all.decide_py("auto", ["a.ts"], "origin/main")[1]
+        )
 
     def test_changed_paths_cover_committed_staged_unstaged_and_untracked_work(self):
         self.repo()
@@ -493,17 +633,30 @@ class PythonDecisionTest(TempCase):
         (self.tmp / "staged2.txt").write_text("y")
         self.git("add", "staged2.txt")
         (self.tmp / "scratch.py").write_text("untracked")
-        self.assertEqual(check_all.changed_paths(self.tmp, "origin/main"),
-                         ["docs/old.md", "scratch.py", "src/hermes/a.py", "staged.txt", "staged2.txt", "web/App.tsx"])
+        self.assertEqual(
+            check_all.changed_paths(self.tmp, "origin/main"),
+            [
+                "docs/old.md",
+                "scratch.py",
+                "src/hermes/a.py",
+                "staged.txt",
+                "staged2.txt",
+                "web/App.tsx",
+            ],
+        )
 
     def test_changes_on_the_base_after_the_branch_left_it_are_not_this_branchs(self):
         self.repo()
         self.commit("web/App.tsx")
         self.git("checkout", "-q", "main")
-        self.commit("scripts/other.py", "a different file, so git cannot read this as a rename")
+        self.commit(
+            "scripts/other.py", "a different file, so git cannot read this as a rename"
+        )
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.git("checkout", "-q", "feature")
-        self.assertEqual(check_all.changed_paths(self.tmp, "origin/main"), ["web/App.tsx"])
+        self.assertEqual(
+            check_all.changed_paths(self.tmp, "origin/main"), ["web/App.tsx"]
+        )
 
     def test_moving_a_python_file_away_still_counts_as_touching_python(self):
         self.repo()
@@ -526,13 +679,19 @@ class PythonDecisionTest(TempCase):
 
 
 def _text(node):
-    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+    return (
+        node.value
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        else None
+    )
 
 
 def _tidy(path):
     """A normalized posix path with "" for the repository root, or None when it leaves the repository."""
     path = posixpath.normpath(path) if path else "."
-    return "" if path == "." else None if path == ".." or path.startswith("../") else path
+    return (
+        "" if path == "." else None if path == ".." or path.startswith("../") else path
+    )
 
 
 def _up(path, steps=1):
@@ -551,44 +710,100 @@ def _resolver(tree, location, read_module, importing=()):
     def resolve(node):
         if isinstance(node, ast.Name):
             return bases.get(node.id)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Path" and len(node.args) == 1 and not node.keywords:
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Path"
+            and len(node.args) == 1
+            and not node.keywords
+        ):
             argument = node.args[0]
-            return location if isinstance(argument, ast.Name) and argument.id == "__file__" else None
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "resolve" and not node.args:
+            return (
+                location
+                if isinstance(argument, ast.Name) and argument.id == "__file__"
+                else None
+            )
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "resolve"
+            and not node.args
+        ):
             return resolve(node.func.value)
         if isinstance(node, ast.Attribute) and node.attr == "parent":
             return _up(resolve(node.value))
-        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "parents" \
-                and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, int) and node.slice.value >= 0:
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "parents"
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, int)
+            and node.slice.value >= 0
+        ):
             return _up(resolve(node.value.value), node.slice.value + 1)
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
             left, right = resolve(node.left), _text(node.right)
-            return None if left is None or not right or right.startswith("/") else _tidy(posixpath.join(left, right))
+            return (
+                None
+                if left is None or not right or right.startswith("/")
+                else _tidy(posixpath.join(left, right))
+            )
         return None
 
-    for node in ast.walk(tree):  # `from support import ROOT` means the ROOT that support.py defines
-        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module and "." not in node.module:
+    for node in ast.walk(
+        tree
+    ):  # `from support import ROOT` means the ROOT that support.py defines
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module
+            and "." not in node.module
+        ):
             for folder in (posixpath.dirname(location), "tests"):
                 module = posixpath.join(folder, node.module + ".py")
-                source = read_module(module) if module not in importing and module != location else None
+                source = (
+                    read_module(module)
+                    if module not in importing and module != location
+                    else None
+                )
                 if source is not None:
-                    imported = _resolver(ast.parse(source), module, read_module, (*importing, location))[1]
+                    imported = _resolver(
+                        ast.parse(source), module, read_module, (*importing, location)
+                    )[1]
                     for alias in node.names:
                         if alias.name in imported:
                             bases[alias.asname or alias.name] = imported[alias.name]
                     break
-    assignments = [(target.id, node.value) for node in ast.walk(tree) if isinstance(node, ast.Assign)
-                   for target in node.targets if isinstance(target, ast.Name)]
-    for _ in range(len(assignments)):  # a base may be defined from another that comes later in the walk
+    assignments = [
+        (target.id, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    ]
+    for _ in range(
+        len(assignments)
+    ):  # a base may be defined from another that comes later in the walk
         for name, value in assignments:
             path = resolve(value)
             if path is not None:
                 if bases.setdefault(name, path) != path:
-                    raise ValueError(f"{location} assigns {name} two different repository paths; give them different names")
+                    raise ValueError(
+                        f"{location} assigns {name} two different repository paths; give them different names"
+                    )
     return resolve, bases
 
 
-READ_METHODS = ("read_text", "read_bytes", "open", "exists", "is_file", "is_dir", "iterdir", "stat")
+READ_METHODS = (
+    "read_text",
+    "read_bytes",
+    "open",
+    "exists",
+    "is_file",
+    "is_dir",
+    "iterdir",
+    "stat",
+)
 
 
 def repository_reads(source, location, read_module=lambda path: None):
@@ -604,7 +819,11 @@ def repository_reads(source, location, read_module=lambda path: None):
     fixtures and are left out."""
     tree = ast.parse(source)
     resolve, _ = _resolver(tree, location, read_module)
-    chain_parts = {id(node.left) for node in ast.walk(tree) if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)}
+    chain_parts = {
+        id(node.left)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+    }
     found = set()
     for node in ast.walk(tree):
         path = None
@@ -612,16 +831,38 @@ def repository_reads(source, location, read_module=lambda path: None):
             function, argument = node.func, _text(node.args[0])
             if isinstance(function, ast.Name) and function.id == "load_source":
                 path = argument
-            elif isinstance(function, ast.Name) and function.id == "open" and not argument.startswith("/"):
+            elif (
+                isinstance(function, ast.Name)
+                and function.id == "open"
+                and not argument.startswith("/")
+            ):
                 path = _tidy(argument)
-            elif isinstance(function, ast.Attribute) and function.attr in ("glob", "rglob") and resolve(function.value) is not None:
+            elif (
+                isinstance(function, ast.Attribute)
+                and function.attr in ("glob", "rglob")
+                and resolve(function.value) is not None
+            ):
                 path = _tidy(posixpath.join(resolve(function.value), argument))
-        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in chain_parts:  # the whole chain only
+        elif (
+            isinstance(node, ast.BinOp)
+            and isinstance(node.op, ast.Div)
+            and id(node) not in chain_parts
+        ):  # the whole chain only
             path = resolve(node)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in READ_METHODS:
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in READ_METHODS
+        ):
             made = node.func.value  # Path("package.json").read_text(): a literal that names no base is relative to the root
-            if isinstance(made, ast.Call) and isinstance(made.func, ast.Name) and made.func.id == "Path" and len(made.args) == 1 and _text(made.args[0]) \
-                    and not _text(made.args[0]).startswith("/"):
+            if (
+                isinstance(made, ast.Call)
+                and isinstance(made.func, ast.Name)
+                and made.func.id == "Path"
+                and len(made.args) == 1
+                and _text(made.args[0])
+                and not _text(made.args[0]).startswith("/")
+            ):
                 path = _tidy(_text(made.args[0]))
         if path:
             found.add(path)
@@ -641,8 +882,16 @@ class PythonInputsTest(unittest.TestCase):
             temp = root / "package.json"
             computed = ROOT / name
         """)
-        self.assertEqual(repository_reads(source, "tests/voice_test.py"), {"src/hermes/voice.py", "src/shared/voice.ts", ".agents/tools/validate-ios.sh",
-                                                                           ".agents/tools", "public/voice-previews/*"})
+        self.assertEqual(
+            repository_reads(source, "tests/voice_test.py"),
+            {
+                "src/hermes/voice.py",
+                "src/shared/voice.ts",
+                ".agents/tools/validate-ios.sh",
+                ".agents/tools",
+                "public/voice-previews/*",
+            },
+        )
 
     def test_a_read_through_any_base_name_or_a_relative_literal_is_seen(self):
         source = textwrap.dedent("""
@@ -660,53 +909,125 @@ class PythonInputsTest(unittest.TestCase):
             absolute = open("/etc/hosts")
             fixture = self.repo / "package-lock.json"
         """)
-        self.assertEqual(repository_reads(source, "tests/some_test.py"), {"package.json", "tests/fixtures/a.json", "src/shared/x.json", "tsconfig.json",
-                                                                          "docs/Dependencies.md", "*.mjs"})
+        self.assertEqual(
+            repository_reads(source, "tests/some_test.py"),
+            {
+                "package.json",
+                "tests/fixtures/a.json",
+                "src/shared/x.json",
+                "tsconfig.json",
+                "docs/Dependencies.md",
+                "*.mjs",
+            },
+        )
 
-    def test_a_base_that_points_below_the_root_is_read_from_there_and_a_name_means_what_its_own_file_says(self):
+    def test_a_base_that_points_below_the_root_is_read_from_there_and_a_name_means_what_its_own_file_says(
+        self,
+    ):
         # scripts/spike/dashboard_contract_test.py sets ROOT to src/hermes; the same name in tests/ is the root.
         spike = 'ROOT = Path(__file__).resolve().parents[2] / "src/hermes"\nsource = (ROOT / "dashboard.py").read_text()\n'
-        self.assertEqual(repository_reads(spike, "scripts/spike/dashboard_contract_test.py"), {"src/hermes", "src/hermes/dashboard.py"})
+        self.assertEqual(
+            repository_reads(spike, "scripts/spike/dashboard_contract_test.py"),
+            {"src/hermes", "src/hermes/dashboard.py"},
+        )
         top = 'ROOT = Path(__file__).resolve().parents[1]\nsource = (ROOT / "dashboard.py").read_text()\n'
-        self.assertEqual(repository_reads(top, "tests/dashboard_test.py"), {"dashboard.py"})
-        self.assertEqual(repository_reads('ROOT = Path(__file__).resolve().parents[1]\n(ROOT / "package.json").read_text()\n', "scripts/x_test.py"),
-                         {"package.json"})
+        self.assertEqual(
+            repository_reads(top, "tests/dashboard_test.py"), {"dashboard.py"}
+        )
+        self.assertEqual(
+            repository_reads(
+                'ROOT = Path(__file__).resolve().parents[1]\n(ROOT / "package.json").read_text()\n',
+                "scripts/x_test.py",
+            ),
+            {"package.json"},
+        )
 
     def test_a_base_imported_from_a_sibling_module_means_what_that_module_defines(self):
-        modules = {"tests/support.py": 'ROOT = Path(__file__).resolve().parents[1]\n', "scripts/spike/support.py": 'ROOT = Path(__file__).resolve().parents[2] / "src/hermes"\n'}
+        modules = {
+            "tests/support.py": "ROOT = Path(__file__).resolve().parents[1]\n",
+            "scripts/spike/support.py": 'ROOT = Path(__file__).resolve().parents[2] / "src/hermes"\n',
+        }
         source = 'from support import ROOT as REPO, missing\nfrom elsewhere import ROOT\n(REPO / "package.json").read_text()\n(ROOT / "x").read_text()\n'
-        self.assertEqual(repository_reads(source, "tests/a_test.py", modules.get), {"package.json"})
-        self.assertEqual(repository_reads(source, "scripts/spike/a_test.py", modules.get), {"src/hermes/package.json"})
-        self.assertEqual(repository_reads(source, "scripts/b_test.py", modules.get), {"package.json"})  # no support.py beside it: the one in tests/
+        self.assertEqual(
+            repository_reads(source, "tests/a_test.py", modules.get), {"package.json"}
+        )
+        self.assertEqual(
+            repository_reads(source, "scripts/spike/a_test.py", modules.get),
+            {"src/hermes/package.json"},
+        )
+        self.assertEqual(
+            repository_reads(source, "scripts/b_test.py", modules.get), {"package.json"}
+        )  # no support.py beside it: the one in tests/
 
-    def test_a_base_that_climbs_out_of_the_repository_or_is_assigned_two_ways_is_not_guessed_at(self):
-        self.assertEqual(repository_reads('ROOT = Path(__file__).resolve().parents[5]\n(ROOT / "x.json").read_text()\n', "tests/x_test.py"), set())
+    def test_a_base_that_climbs_out_of_the_repository_or_is_assigned_two_ways_is_not_guessed_at(
+        self,
+    ):
+        self.assertEqual(
+            repository_reads(
+                'ROOT = Path(__file__).resolve().parents[5]\n(ROOT / "x.json").read_text()\n',
+                "tests/x_test.py",
+            ),
+            set(),
+        )
         outside = 'ROOT = Path(__file__).resolve().parents[1]\nopen("../elsewhere.json")\n(ROOT / ".." / "sibling").read_text()\n(ROOT / "a" / ".." / "b.json").read_text()\n'
         self.assertEqual(repository_reads(outside, "tests/x_test.py"), {"b.json"})
         with self.assertRaisesRegex(ValueError, "ROOT two different"):
-            repository_reads('ROOT = Path(__file__).resolve().parents[1]\nROOT = Path(__file__).resolve().parent\n', "tests/x_test.py")
+            repository_reads(
+                "ROOT = Path(__file__).resolve().parents[1]\nROOT = Path(__file__).resolve().parent\n",
+                "tests/x_test.py",
+            )
 
-    def test_every_repository_path_a_python_test_reads_is_an_input_that_makes_auto_run_py(self):
+    def test_every_repository_path_a_python_test_reads_is_an_input_that_makes_auto_run_py(
+        self,
+    ):
         # A test that reads src/shared/voice.ts must run when only that file changes. A new read outside the list
         # fails here, naming the test: add its directory to PYTHON_INPUT_DIRS in check_all.py.
-        files = sorted({path for pattern in ("tests/*.py", "scripts/*test*.py", "scripts/spike/*test*.py") for path in ROOT.glob(pattern)})
+        files = sorted(
+            {
+                path
+                for pattern in (
+                    "tests/*.py",
+                    "scripts/*test*.py",
+                    "scripts/spike/*test*.py",
+                )
+                for path in ROOT.glob(pattern)
+            }
+        )
         reads = {}
 
         def read_module(relative):
-            return (ROOT / relative).read_text() if (ROOT / relative).is_file() else None
+            return (
+                (ROOT / relative).read_text() if (ROOT / relative).is_file() else None
+            )
 
         for path in files:
-            for read in repository_reads(path.read_text(), path.relative_to(ROOT).as_posix(), read_module):
+            for read in repository_reads(
+                path.read_text(), path.relative_to(ROOT).as_posix(), read_module
+            ):
                 reads.setdefault(read, path.name)
         # The scan still sees reads, so it cannot pass by finding none.
-        self.assertGreaterEqual(set(reads), {"src/shared/voice.ts", "public/voice-previews", ".agents/tools/validate-ios.sh", "src/hermes/voice.py"})
+        self.assertGreaterEqual(
+            set(reads),
+            {
+                "src/shared/voice.ts",
+                "public/voice-previews",
+                ".agents/tools/validate-ios.sh",
+                "src/hermes/voice.py",
+            },
+        )
         uncovered = []
         for read, name in sorted(reads.items()):
             if read == "tests":
                 continue  # put on sys.path to import support.py; the .py files in it already count
             if "*" not in read and not (ROOT / read).exists():
                 continue  # a fragment joined to something other than the repository root
-            represent = read.replace("*", "x") if "*" in read else read + "/x" if (ROOT / read).is_dir() else read
+            represent = (
+                read.replace("*", "x")
+                if "*" in read
+                else read + "/x"
+                if (ROOT / read).is_dir()
+                else read
+            )
             if not check_all.python_touched([represent]):
                 uncovered.append(f"{read} (read by {name})")
         self.assertEqual(uncovered, [])
@@ -746,14 +1067,63 @@ RUFF_ONE = "F821 Undefined name `x`\n\nFound 1 error.\n"
 class SummaryParsingTest(unittest.TestCase):
     def test_each_tools_real_output_gives_its_counts(self):
         cases = [
-            ("test", VITEST_PASS, {"files": 196, "tests": 3296, "files_failed": 0, "files_skipped": 0, "tests_failed": 0, "tests_skipped": 0}, "196 files, 3296 tests"),
-            ("test", VITEST_FAIL, {"files": 2, "tests": 10, "files_failed": 1, "files_skipped": 0, "tests_failed": 1, "tests_skipped": 1}, "2 files, 10 tests, 1 failed, 1 skipped"),
-            ("test", VITEST_FAIL_COLORED, {"files": 2, "files_failed": 1, "files_skipped": 0}, ""),
+            (
+                "test",
+                VITEST_PASS,
+                {
+                    "files": 196,
+                    "tests": 3296,
+                    "files_failed": 0,
+                    "files_skipped": 0,
+                    "tests_failed": 0,
+                    "tests_skipped": 0,
+                },
+                "196 files, 3296 tests",
+            ),
+            (
+                "test",
+                VITEST_FAIL,
+                {
+                    "files": 2,
+                    "tests": 10,
+                    "files_failed": 1,
+                    "files_skipped": 0,
+                    "tests_failed": 1,
+                    "tests_skipped": 1,
+                },
+                "2 files, 10 tests, 1 failed, 1 skipped",
+            ),
+            (
+                "test",
+                VITEST_FAIL_COLORED,
+                {"files": 2, "files_failed": 1, "files_skipped": 0},
+                "",
+            ),
             ("e2e", PLAYWRIGHT_PASS, {"passed": 24, "tests": 24}, "24 tests"),
-            ("e2e", PLAYWRIGHT_FAIL, {"failed": 1, "skipped": 1, "passed": 1, "tests": 3}, "3 tests, 1 failed, 1 skipped"),
-            ("e2e", PLAYWRIGHT_FLAKY, {"flaky": 1, "passed": 23, "tests": 24}, "24 tests, 1 flaky"),
-            ("py", PY_PASS, {"files": 44, "passed": 44, "skipped": 0, "failed": 0}, "44 files"),
-            ("py", PY_FAIL, {"files": 4, "passed": 1, "skipped": 2, "failed": 1}, "4 files, 1 failed, 2 skipped"),
+            (
+                "e2e",
+                PLAYWRIGHT_FAIL,
+                {"failed": 1, "skipped": 1, "passed": 1, "tests": 3},
+                "3 tests, 1 failed, 1 skipped",
+            ),
+            (
+                "e2e",
+                PLAYWRIGHT_FLAKY,
+                {"flaky": 1, "passed": 23, "tests": 24},
+                "24 tests, 1 flaky",
+            ),
+            (
+                "py",
+                PY_PASS,
+                {"files": 44, "passed": 44, "skipped": 0, "failed": 0},
+                "44 files",
+            ),
+            (
+                "py",
+                PY_FAIL,
+                {"files": 4, "passed": 1, "skipped": 2, "failed": 1},
+                "4 files, 1 failed, 2 skipped",
+            ),
             ("build", BUILD_PASS, {"modules": 886}, "886 modules"),
             ("lint", LINT_FAIL, {"errors": 1, "warnings": 2}, "1 error, 2 warnings"),
             ("typecheck", TSC_FAIL, {"errors": 2}, "2 errors"),
@@ -767,25 +1137,39 @@ class SummaryParsingTest(unittest.TestCase):
                     self.assertEqual(check_all.describe_counts(check, counts), text)
 
     def test_clean_runs_and_unrecognized_output_have_no_counts(self):
-        for check, output in (("lint", "\n> oxlint\n\n"), ("typecheck", ""), ("ruff", "All checks passed!\n"), ("test", "unrelated"), ("e2e", "Error: no browsers"),
-                              ("py", "Not a discovered Python test file:\n  x"), ("build", "Error: failed")):
+        for check, output in (
+            ("lint", "\n> oxlint\n\n"),
+            ("typecheck", ""),
+            ("ruff", "All checks passed!\n"),
+            ("test", "unrelated"),
+            ("e2e", "Error: no browsers"),
+            ("py", "Not a discovered Python test file:\n  x"),
+            ("build", "Error: failed"),
+        ):
             with self.subTest(check):
                 self.assertEqual(check_all.parse_counts(check, output), {})
                 self.assertEqual(check_all.describe_counts(check, {}), "")
 
     def test_a_line_in_a_test_name_that_looks_like_a_summary_is_not_one(self):
         output = "  ✓  1 [chromium] › a › 3 passed through the gate (10ms)\n  1 passed (1s)\n"
-        self.assertEqual(check_all.parse_counts("e2e", output), {"passed": 1, "tests": 1})
+        self.assertEqual(
+            check_all.parse_counts("e2e", output), {"passed": 1, "tests": 1}
+        )
 
 
 class CacheDirTest(unittest.TestCase):
     def test_the_override_wins_and_the_default_is_per_user_outside_any_checkout(self):
-        self.assertEqual(check_all.cache_dir({"CHECK_ALL_HOME": "/x/y"}, home="/h"), Path("/x/y"))
+        self.assertEqual(
+            check_all.cache_dir({"CHECK_ALL_HOME": "/x/y"}, home="/h"), Path("/x/y")
+        )
         default = check_all.cache_dir({}, home="/h")
         self.assertTrue(str(default).startswith("/h/"))
         self.assertTrue(str(default).endswith("agent-interface/check-all"))
         if sys.platform != "darwin":
-            self.assertEqual(check_all.cache_dir({"XDG_CACHE_HOME": "/x/cache"}, home="/h"), Path("/x/cache/agent-interface/check-all"))
+            self.assertEqual(
+                check_all.cache_dir({"XDG_CACHE_HOME": "/x/cache"}, home="/h"),
+                Path("/x/cache/agent-interface/check-all"),
+            )
 
 
 # What Playwright's web server is to the browser suite: a process in a session of its own that listens on E2E_PORT
@@ -871,9 +1255,11 @@ fs.writeFileSync(process.env.FAKE_REPORT, JSON.stringify({ npm: own, grandchild:
 console.log("  4 passed (3s)");
 """
 PASSING = {
-    "run typecheck": {"out": ""}, "run lint": {"out": ""},
+    "run typecheck": {"out": ""},
+    "run lint": {"out": ""},
     "test": {"out": " Test Files  3 passed (3)\n      Tests  12 passed (12)\n"},
-    "run build": {"out": "✓ 10 modules transformed.\n"}, "run test:e2e": {"out": "  4 passed (3s)\n"},
+    "run build": {"out": "✓ 10 modules transformed.\n"},
+    "run test:e2e": {"out": "  4 passed (3s)\n"},
     "run test:py": {"out": "2 passed, 0 skipped, 0 failed in 1.0s (Python 3.14.0)\n"},
 }
 
@@ -883,11 +1269,22 @@ class CommandTest(TempCase):
 
     def setUp(self):
         super().setUp()
-        self.root, self.cache, self.bin = self.tmp / "checkout", self.tmp / "cache", self.tmp / "bin"
-        for path in (self.root / ".github", self.root / "node_modules", self.root / "dist/client", self.bin):
+        self.root, self.cache, self.bin = (
+            self.tmp / "checkout",
+            self.tmp / "cache",
+            self.tmp / "bin",
+        )
+        for path in (
+            self.root / ".github",
+            self.root / "node_modules",
+            self.root / "dist/client",
+            self.bin,
+        ):
             path.mkdir(parents=True)
         (self.root / ".github/requirements-ci.txt").write_text("ruff==0.17.3\n")
-        lock = json.dumps({"packages": {"": {}, "node_modules/a": {"version": "1.0.0"}}})
+        lock = json.dumps(
+            {"packages": {"": {}, "node_modules/a": {"version": "1.0.0"}}}
+        )
         (self.root / "package-lock.json").write_text(lock)
         (self.root / "node_modules/.package-lock.json").write_text(lock)
         (self.root / "dist/client/index.html").write_text("<html>")
@@ -896,13 +1293,16 @@ class CommandTest(TempCase):
         self.set_plan(PASSING)
         script(self.bin / "npm", FAKE_NPM)
         self.fake_node(True, "v24.0.0")
-        script(self.bin / "ruff", """
+        script(
+            self.bin / "ruff",
+            """
             import json, os, sys
             if sys.argv[1:] == ["--version"]: print("ruff 0.17.3"); sys.exit(0)
             if sys.argv[1:] != ["check", "."]: print("UNPLANNED ruff call: " + " ".join(sys.argv[1:]), file=sys.stderr); sys.exit(97)
             with open(os.environ["FAKE_LOG"], "a") as log: log.write(json.dumps({"call": "ruff check .", "port": None}) + "\\n")
             print(os.environ.get("FAKE_RUFF_OUT", "All checks passed!")); sys.exit(int(os.environ.get("FAKE_RUFF_RC", "0")))
-        """)
+        """,
+        )
         self.git("init", "-q", "-b", "main")
         (self.root / "README.md").write_text("x")
         self.git("add", "README.md")
@@ -911,33 +1311,69 @@ class CommandTest(TempCase):
 
     def fake_node(self, ok, version):
         """The one call the tool makes: `node --input-type=module -e SCRIPT`. Any other arguments exit 97."""
-        script(self.bin / "node", f"""
+        script(
+            self.bin / "node",
+            f"""
             import json, sys
             if sys.argv[1:3] != ["--input-type=module", "-e"] or len(sys.argv) != 4:
                 print("UNPLANNED node call: " + " ".join(sys.argv[1:]), file=sys.stderr); sys.exit(97)
             print(json.dumps({{'ok': {ok!r}, 'version': {version!r}, 'range': '^24'}}))
-        """)
+        """,
+        )
 
     def git(self, *args):
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false", *args], cwd=self.root, check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.test",
+                "-c",
+                "commit.gpgsign=false",
+                *args,
+            ],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        )
 
     def set_plan(self, plan):
         self.plan.write_text(json.dumps(plan))
 
     def env(self, **extra):
-        return {"PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin", "FAKE_LOG": str(self.log), "FAKE_PLAN": str(self.plan),
-                "HOME": str(self.tmp), "CHECK_ALL_HOME": str(self.cache), **extra}
+        return {
+            "PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            "FAKE_LOG": str(self.log),
+            "FAKE_PLAN": str(self.plan),
+            "HOME": str(self.tmp),
+            "CHECK_ALL_HOME": str(self.cache),
+            **extra,
+        }
 
     def run_main(self, *argv, root=None, **extra):
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.dict(os.environ, self.env(**extra), clear=True), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = check_all.main(list(argv), root=root or self.root, cache=self.cache, close_inherited=False)
+        with (
+            mock.patch.dict(os.environ, self.env(**extra), clear=True),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            code = check_all.main(
+                list(argv),
+                root=root or self.root,
+                cache=self.cache,
+                close_inherited=False,
+            )
         return code, out.getvalue(), err.getvalue()
 
     def calls(self):
         if not self.log.exists():
             return []
-        return [json.loads(line) for line in self.log.read_text().splitlines() if '"call"' in line]
+        return [
+            json.loads(line)
+            for line in self.log.read_text().splitlines()
+            if '"call"' in line
+        ]
 
     def names(self):
         return [call["call"] for call in self.calls()]
@@ -948,17 +1384,40 @@ class CommandTest(TempCase):
     def test_every_check_runs_in_order_and_one_table_summarizes_them(self):
         code, out, _ = self.run_main("--py", "always")
         self.assertEqual(code, 0)
-        self.assertEqual(self.names(), ["run typecheck", "run lint", "ruff check .", "test", "run build", "run test:e2e", "run test:py"])
+        self.assertEqual(
+            self.names(),
+            [
+                "run typecheck",
+                "run lint",
+                "ruff check .",
+                "test",
+                "run build",
+                "run test:e2e",
+                "run test:py",
+            ],
+        )
         self.assertIn("3 files, 12 tests", self.row(out, "test"))
         self.assertIn("4 tests", self.row(out, "e2e"))
         self.assertIn("2 files", self.row(out, "py"))
         self.assertIn("10 modules", self.row(out, "build"))
         self.assertIn("All 7 checks passed", out)
-        self.assertEqual({call["cwd"] for call in self.calls() if "cwd" in call}, {str(self.root)})
-        self.assertEqual({call["no_color"] for call in self.calls() if "cwd" in call}, {"1"})
+        self.assertEqual(
+            {call["cwd"] for call in self.calls() if "cwd" in call}, {str(self.root)}
+        )
+        self.assertEqual(
+            {call["no_color"] for call in self.calls() if "cwd" in call}, {"1"}
+        )
 
     def test_a_failure_stops_the_rest_shows_the_output_tail_and_exits_nonzero(self):
-        self.set_plan({**PASSING, "run lint": {"rc": 1, "out": "src/a.ts:3:1: error eslint(no-undef): 'x' is not defined\n"}})
+        self.set_plan(
+            {
+                **PASSING,
+                "run lint": {
+                    "rc": 1,
+                    "out": "src/a.ts:3:1: error eslint(no-undef): 'x' is not defined\n",
+                },
+            }
+        )
         code, out, err = self.run_main("--py", "always")
         self.assertEqual(code, 1)
         self.assertEqual(self.names(), ["run typecheck", "run lint"])
@@ -970,10 +1429,29 @@ class CommandTest(TempCase):
         self.assertIn("FAILED: lint", out)
 
     def test_keep_going_runs_the_rest_but_not_an_e2e_whose_build_failed(self):
-        self.set_plan({**PASSING, "run build": {"rc": 1, "out": "boom\n"}, "run typecheck": {"rc": 2, "out": "src/zz.ts(1,7): error TS2322: bad\n"}})
+        self.set_plan(
+            {
+                **PASSING,
+                "run build": {"rc": 1, "out": "boom\n"},
+                "run typecheck": {
+                    "rc": 2,
+                    "out": "src/zz.ts(1,7): error TS2322: bad\n",
+                },
+            }
+        )
         code, out, _ = self.run_main("--keep-going", "--py", "always")
         self.assertEqual(code, 1)
-        self.assertEqual(self.names(), ["run typecheck", "run lint", "ruff check .", "test", "run build", "run test:py"])
+        self.assertEqual(
+            self.names(),
+            [
+                "run typecheck",
+                "run lint",
+                "ruff check .",
+                "test",
+                "run build",
+                "run test:py",
+            ],
+        )
         self.assertIn("build did not pass", self.row(out, "e2e"))
         self.assertIn("FAILED: typecheck, build", out)
 
@@ -984,9 +1462,14 @@ class CommandTest(TempCase):
         self.run_main("--skip", "e2e,py,ruff,build")
         self.assertEqual(self.names(), ["run typecheck", "run lint", "test"])
 
-    def test_unknown_check_names_and_an_empty_selection_are_refused_with_the_valid_names(self):
-        for argv, message in ((("--only", "tset"), "--only takes names from"), (("--skip", "lint,nope"), "--skip takes names from"),
-                              (("--only", "lint", "--skip", "lint"), "Nothing to run")):
+    def test_unknown_check_names_and_an_empty_selection_are_refused_with_the_valid_names(
+        self,
+    ):
+        for argv, message in (
+            (("--only", "tset"), "--only takes names from"),
+            (("--skip", "lint,nope"), "--skip takes names from"),
+            (("--only", "lint", "--skip", "lint"), "Nothing to run"),
+        ):
             with self.subTest(argv):
                 code, _, err = self.run_main(*argv)
                 self.assertEqual(code, 2)
@@ -998,7 +1481,10 @@ class CommandTest(TempCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.names(), ["test"])
         self.assertIn("skipped", self.row(out, "py"))
-        self.assertIn("no changes to Python or a file the Python tests read against origin/main", self.row(out, "py"))
+        self.assertIn(
+            "no changes to Python or a file the Python tests read against origin/main",
+            self.row(out, "py"),
+        )
         self.assertIn("All 1 checks passed", out)
 
     def test_py_auto_runs_when_the_diff_touches_scripts(self):
@@ -1006,7 +1492,9 @@ class CommandTest(TempCase):
         (self.root / "scripts/tool.mjs").write_text("x")
         self.git("add", "scripts/tool.mjs")
         self.git("commit", "-q", "-m", "script")
-        self.run_main("--skip", "typecheck,lint,ruff,test,build,e2e")  # py is not named, so only the diff can run it
+        self.run_main(
+            "--skip", "typecheck,lint,ruff,test,build,e2e"
+        )  # py is not named, so only the diff can run it
         self.assertEqual(self.names(), ["run test:py"])
 
     def test_py_auto_runs_when_the_diff_touches_a_file_the_python_tests_read(self):
@@ -1028,7 +1516,12 @@ class CommandTest(TempCase):
         self.assertEqual(self.names(), ["ruff check ."])
 
     def test_a_ruff_failure_is_reported_with_its_count(self):
-        code, out, _ = self.run_main("--only", "ruff", FAKE_RUFF_RC="1", FAKE_RUFF_OUT="F821 bad\n\nFound 2 errors.")
+        code, out, _ = self.run_main(
+            "--only",
+            "ruff",
+            FAKE_RUFF_RC="1",
+            FAKE_RUFF_OUT="F821 bad\n\nFound 2 errors.",
+        )
         self.assertEqual(code, 1)
         self.assertIn("2 errors", self.row(out, "ruff"))
 
@@ -1036,24 +1529,34 @@ class CommandTest(TempCase):
         self.run_main()
         ports = {call["call"]: call["port"] for call in self.calls() if "cwd" in call}
         port = int(ports.pop("run test:e2e"))
-        self.assertTrue(check_all.PORT_BASE <= port < check_all.PORT_BASE + 2 * check_all.PORT_PAIRS)
+        self.assertTrue(
+            check_all.PORT_BASE <= port < check_all.PORT_BASE + 2 * check_all.PORT_PAIRS
+        )
         self.assertEqual(set(ports.values()), {None})
         # Both leases are let go with the run: the next one can take the same pair and the only heavy slot.
-        lease, _ = check_all.pick_e2e_port(self.cache / "locks", str(self.root), requested=port)
+        lease, _ = check_all.pick_e2e_port(
+            self.cache / "locks", str(self.root), requested=port
+        )
         lease.release()
         slot, _ = check_all.acquire_slot(self.cache / "locks", 1, {"check": "x"}, 0.2)
         slot.release()
 
-    def test_a_pass_whose_counts_cannot_be_read_says_so_but_a_clean_lint_has_nothing_to_count(self):
+    def test_a_pass_whose_counts_cannot_be_read_says_so_but_a_clean_lint_has_nothing_to_count(
+        self,
+    ):
         self.set_plan({**PASSING, "test": {"out": "the output changed shape\n"}})
         code, out, _ = self.run_main("--only", "lint,test")
         self.assertEqual(code, 0)
-        self.assertTrue(self.row(out, "test").endswith("counts unknown"), self.row(out, "test"))
+        self.assertTrue(
+            self.row(out, "test").endswith("counts unknown"), self.row(out, "test")
+        )
         self.assertTrue(self.row(out, "lint").endswith("-"), self.row(out, "lint"))
         self.assertNotIn("counts unknown", self.row(out, "lint"))
 
     def test_a_port_the_caller_set_is_honored_when_free_and_refused_when_not(self):
-        free = BASE + 24  # past the candidate pairs, so it is only ever used because the caller asked
+        free = (
+            BASE + 24
+        )  # past the candidate pairs, so it is only ever used because the caller asked
         self.run_main("--only", "e2e", E2E_PORT=str(free))
         self.assertEqual([call["port"] for call in self.calls()], [str(free)])
         with socket.socket() as busy:
@@ -1096,14 +1599,18 @@ class CommandTest(TempCase):
         self.assertIn("symlink", err)
         self.assertIn("Warning: node_modules is a symlink", out)
 
-    def test_a_node_outside_the_supported_range_is_refused_with_the_switch_command(self):
+    def test_a_node_outside_the_supported_range_is_refused_with_the_switch_command(
+        self,
+    ):
         self.fake_node(False, "v22.1.0")
         code, _, err = self.run_main("--only", "lint")
         self.assertEqual(code, 2)
         self.assertIn("node v22.1.0 is outside", err)
         self.assertIn("fnm use", err)
 
-    def test_a_hung_check_is_killed_and_reported_as_a_timeout_with_its_lock_released(self):
+    def test_a_hung_check_is_killed_and_reported_as_a_timeout_with_its_lock_released(
+        self,
+    ):
         pidfile = self.tmp / "hung.pid"
         self.set_plan({**PASSING, "test": {"sleep": 30, "pidfile": str(pidfile)}})
         code, out, _ = self.run_main("--only", "test", "--check-timeout", "1.5")
@@ -1122,21 +1629,29 @@ class CommandTest(TempCase):
         held, _ = check_all.acquire_slot(self.cache / "locks", 1, {"check": "x"}, 0.2)
         held.release()
 
-    def test_a_run_queues_behind_a_heavy_holder_and_shows_the_wait_apart_from_the_run(self):
+    def test_a_run_queues_behind_a_heavy_holder_and_shows_the_wait_apart_from_the_run(
+        self,
+    ):
         holder = Holder(self, "slot", self.cache / "locks", 1, "e2e", "/w/other")
         timer = threading.Timer(1.0, holder.release)
         timer.start()
         self.addCleanup(timer.cancel)
         code, out, err = self.run_main("--only", "test")
         self.assertEqual(code, 0)
-        self.assertIn("test: queued for a heavy slot (1 total), held by e2e in /w/other", err)
+        self.assertIn(
+            "test: queued for a heavy slot (1 total), held by e2e in /w/other", err
+        )
         queued, run = self.row(out, "test").split()[2:4]
         self.assertTrue(queued.endswith("s") and float(queued[:-1]) >= 0.8, queued)
-        self.assertLess(0 if run == "-" else float(run[:-1]), 0.8)  # the fake test is quick; the wait is not counted as run time
+        self.assertLess(
+            0 if run == "-" else float(run[:-1]), 0.8
+        )  # the fake test is quick; the wait is not counted as run time
 
     def test_light_checks_do_not_queue_behind_a_heavy_holder(self):
         Holder(self, "slot", self.cache / "locks", 1, "e2e", "/w/other")
-        code, _, _ = self.run_main("--only", "typecheck,lint,ruff,build", "--lock-timeout", "0.2")
+        code, _, _ = self.run_main(
+            "--only", "typecheck,lint,ruff,build", "--lock-timeout", "0.2"
+        )
         self.assertEqual(code, 0)
 
     def test_giving_up_the_queue_exits_75_and_names_the_holder_and_runs_nothing(self):
@@ -1149,21 +1664,55 @@ class CommandTest(TempCase):
 
     def test_heavy_slots_can_be_raised_by_flag_or_environment(self):
         Holder(self, "slot", self.cache / "locks", 2, "py", "/w/other")
-        self.assertEqual(self.run_main("--only", "test", "--lock-timeout", "0.3", "--heavy-slots", "2")[0], 0)
-        self.assertEqual(self.run_main("--only", "test", "--lock-timeout", "0.3", CHECK_ALL_HEAVY_SLOTS="2")[0], 0)
+        self.assertEqual(
+            self.run_main(
+                "--only", "test", "--lock-timeout", "0.3", "--heavy-slots", "2"
+            )[0],
+            0,
+        )
+        self.assertEqual(
+            self.run_main(
+                "--only", "test", "--lock-timeout", "0.3", CHECK_ALL_HEAVY_SLOTS="2"
+            )[0],
+            0,
+        )
         self.assertEqual(self.run_main("--only", "test", "--heavy-slots", "0")[0], 2)
 
     def spawn(self, *argv, **extra):
-        driver = ("import sys; sys.path.insert(0, sys.argv[1]); import check_all; "
-                  "sys.exit(check_all.main(sys.argv[4:], root=__import__('pathlib').Path(sys.argv[2]), cache=__import__('pathlib').Path(sys.argv[3])))")
-        process = subprocess.Popen([sys.executable, "-I", "-c", driver, str(TOOLS), str(self.root), str(self.cache), *argv], env=self.env(**extra),
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        driver = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import check_all; "
+            "sys.exit(check_all.main(sys.argv[4:], root=__import__('pathlib').Path(sys.argv[2]), cache=__import__('pathlib').Path(sys.argv[3])))"
+        )
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                driver,
+                str(TOOLS),
+                str(self.root),
+                str(self.cache),
+                *argv,
+            ],
+            env=self.env(**extra),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         self.addCleanup(lambda: process.poll() is None and process.kill())
         return process
 
     def intervals(self, call):
-        starts = [entry["at"] for entry in map(json.loads, self.log.read_text().splitlines()) if entry.get("call") == call]
-        ends = [entry["at"] for entry in map(json.loads, self.log.read_text().splitlines()) if entry.get("done") == call]
+        starts = [
+            entry["at"]
+            for entry in map(json.loads, self.log.read_text().splitlines())
+            if entry.get("call") == call
+        ]
+        ends = [
+            entry["at"]
+            for entry in map(json.loads, self.log.read_text().splitlines())
+            if entry.get("done") == call
+        ]
         return sorted(zip(starts, ends))
 
     def test_two_runs_started_together_never_run_heavy_suites_at_the_same_time(self):
@@ -1173,24 +1722,41 @@ class CommandTest(TempCase):
         self.assertEqual([run.returncode for run in runs], [0, 0])
         (first_start, first_end), (second_start, _) = self.intervals("test")
         self.assertGreaterEqual(second_start, first_end)
-        queued = [next(line for line in out.splitlines() if line.startswith("test ")).split()[2] for out, _ in outputs]
-        self.assertEqual(sorted(value == "-" for value in queued), [False, True])  # exactly one waited
+        queued = [
+            next(line for line in out.splitlines() if line.startswith("test ")).split()[
+                2
+            ]
+            for out, _ in outputs
+        ]
+        self.assertEqual(
+            sorted(value == "-" for value in queued), [False, True]
+        )  # exactly one waited
         self.assertGreater(first_end - first_start, 0.9)
 
     def test_two_runs_with_room_for_both_overlap_but_pick_different_browser_ports(self):
-        self.set_plan({**PASSING, "run test:e2e": {"sleep": 1.0, "out": "  4 passed (1s)\n"}})
-        runs = [self.spawn("--only", "e2e", CHECK_ALL_HEAVY_SLOTS="2") for _ in range(2)]
+        self.set_plan(
+            {**PASSING, "run test:e2e": {"sleep": 1.0, "out": "  4 passed (1s)\n"}}
+        )
+        runs = [
+            self.spawn("--only", "e2e", CHECK_ALL_HEAVY_SLOTS="2") for _ in range(2)
+        ]
         for run in runs:
             run.communicate(timeout=30)
         self.assertEqual([run.returncode for run in runs], [0, 0])
         ports = [int(call["port"]) for call in self.calls()]
-        self.assertTrue({ports[0], ports[0] + 1}.isdisjoint({ports[1], ports[1] + 1}), ports)
+        self.assertTrue(
+            {ports[0], ports[0] + 1}.isdisjoint({ports[1], ports[1] + 1}), ports
+        )
         (a_start, a_end), (b_start, b_end) = self.intervals("run test:e2e")
-        self.assertLess(b_start, a_end)  # they really overlapped, so the ports were chosen under contention
+        self.assertLess(
+            b_start, a_end
+        )  # they really overlapped, so the ports were chosen under contention
 
     def test_a_terminated_run_kills_its_check_and_frees_its_locks(self):
         pidfile = self.tmp / "e2e.pid"
-        self.set_plan({**PASSING, "run test:e2e": {"sleep": 30, "pidfile": str(pidfile)}})
+        self.set_plan(
+            {**PASSING, "run test:e2e": {"sleep": 30, "pidfile": str(pidfile)}}
+        )
         process = self.spawn("--only", "e2e")
         deadline = time.monotonic() + 15
         while not pidfile.exists() and time.monotonic() < deadline:
@@ -1218,15 +1784,38 @@ class CommandTest(TempCase):
         """Run the e2e check through a fake that starts a listening web server in its own session, as Playwright does.
         Returns (process, server pid, port, the lock files of the port pair and the heavy slot)."""
         pidfile = self.tmp / "server.pid"
-        self.set_plan({**PASSING, "run test:e2e": {"sleep": 60, "server": str(pidfile), "server_source": SERVER, **step}})
+        self.set_plan(
+            {
+                **PASSING,
+                "run test:e2e": {
+                    "sleep": 60,
+                    "server": str(pidfile),
+                    "server_source": SERVER,
+                    **step,
+                },
+            }
+        )
         process = self.spawn("--only", "e2e", *argv)
-        self.wait_for(lambda: pidfile.exists() and pidfile.read_text(), "the web server to listen")
+        self.wait_for(
+            lambda: pidfile.exists() and pidfile.read_text(), "the web server to listen"
+        )
         port = int(self.calls()[0]["port"])
         locks = self.cache / "locks"
-        self.addCleanup(lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text())))
+        self.addCleanup(
+            lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text()))
+        )
         # A failed SIGKILL assertion must not leave its detached fake npm holding descriptors.
         self.addCleanup(self.kill_quietly, int(self.calls()[0]["pid"]))
-        return process, int(pidfile.read_text()), port, [locks / f"e2e-port-{port}.lock", locks / "heavy-0.lock", locks / f"e2e-port-{port + 1}.lock"]
+        return (
+            process,
+            int(pidfile.read_text()),
+            port,
+            [
+                locks / f"e2e-port-{port}.lock",
+                locks / "heavy-0.lock",
+                locks / f"e2e-port-{port + 1}.lock",
+            ],
+        )
 
     def wait_for(self, condition, what, seconds=20):
         deadline = time.monotonic() + seconds
@@ -1256,15 +1845,25 @@ class CommandTest(TempCase):
                 held = check_all.try_lock(lock)
                 if held:
                     held.release()
-                    self.assertIn(lock, seen_held, f"{lock.name} was free before the stop began")
-                    self.assertFalse(self.alive(pid), f"{lock.name} was released while the web server still ran")
-                    self.assertTrue(check_all.can_bind(port), f"{lock.name} was released while the web server still listened")
+                    self.assertIn(
+                        lock, seen_held, f"{lock.name} was free before the stop began"
+                    )
+                    self.assertFalse(
+                        self.alive(pid),
+                        f"{lock.name} was released while the web server still ran",
+                    )
+                    self.assertTrue(
+                        check_all.can_bind(port),
+                        f"{lock.name} was released while the web server still listened",
+                    )
                     return
                 seen_held.add(lock)
             self.assertLess(time.monotonic(), deadline, "the locks were never released")
             time.sleep(0.02)
 
-    def test_ctrl_c_stops_the_suite_gracefully_so_the_web_server_goes_too_and_the_locks_free_after(self):
+    def test_ctrl_c_stops_the_suite_gracefully_so_the_web_server_goes_too_and_the_locks_free_after(
+        self,
+    ):
         process, pid, port, locks = self.start_e2e_with_server(shutdown_delay=1.0)
         process.send_signal(signal.SIGINT)
         self.assert_locks_free_only_after_the_server_is_gone(locks, pid, port)
@@ -1272,7 +1871,9 @@ class CommandTest(TempCase):
         self.assertEqual(process.returncode, 130)
         self.assertIn("stopped by SIGINT", err)
 
-    def test_sigterm_stops_the_suite_gracefully_so_the_web_server_goes_too_and_the_locks_free_after(self):
+    def test_sigterm_stops_the_suite_gracefully_so_the_web_server_goes_too_and_the_locks_free_after(
+        self,
+    ):
         process, pid, port, locks = self.start_e2e_with_server(shutdown_delay=1.0)
         process.send_signal(signal.SIGTERM)
         self.assert_locks_free_only_after_the_server_is_gone(locks, pid, port)
@@ -1280,18 +1881,31 @@ class CommandTest(TempCase):
         self.assertEqual(process.returncode, 130)
         self.assertIn("stopped by SIGTERM", err)
 
-    def test_a_check_timeout_stops_the_suite_gracefully_so_the_web_server_goes_too_and_the_locks_free_after(self):
-        process, pid, port, locks = self.start_e2e_with_server("--check-timeout", "1.5", shutdown_delay=1.0)
+    def test_a_check_timeout_stops_the_suite_gracefully_so_the_web_server_goes_too_and_the_locks_free_after(
+        self,
+    ):
+        process, pid, port, locks = self.start_e2e_with_server(
+            "--check-timeout", "1.5", shutdown_delay=1.0
+        )
         self.assert_locks_free_only_after_the_server_is_gone(locks, pid, port)
         out, _ = process.communicate(timeout=15)
         self.assertEqual(process.returncode, 1)
         self.assertIn("TIMEOUT", self.row(out, "e2e"))
 
-    def test_a_second_ctrl_c_does_not_wait_out_the_grace_for_a_suite_that_ignores_the_first(self):
+    def test_a_second_ctrl_c_does_not_wait_out_the_grace_for_a_suite_that_ignores_the_first(
+        self,
+    ):
         pidfile = self.tmp / "stubborn.pid"
-        self.set_plan({**PASSING, "test": {"sleep": 60, "pidfile": str(pidfile), "ignore_sigint": True}})
+        self.set_plan(
+            {
+                **PASSING,
+                "test": {"sleep": 60, "pidfile": str(pidfile), "ignore_sigint": True},
+            }
+        )
         process = self.spawn("--only", "test")
-        self.wait_for(lambda: pidfile.exists() and pidfile.read_text(), "the suite to start")
+        self.wait_for(
+            lambda: pidfile.exists() and pidfile.read_text(), "the suite to start"
+        )
         pid = int(pidfile.read_text())
         self.addCleanup(self.kill_quietly, pid)
         process.send_signal(signal.SIGINT)
@@ -1301,11 +1915,15 @@ class CommandTest(TempCase):
         process.communicate(timeout=5)
         self.wait_for(lambda: not self.alive(pid), "the suite to be killed")
 
-    def test_killing_check_all_with_sigkill_leaves_its_suite_holding_the_slot_and_ports_until_the_suite_ends(self):
+    def test_killing_check_all_with_sigkill_leaves_its_suite_holding_the_slot_and_ports_until_the_suite_ends(
+        self,
+    ):
         # Only the suite's own process (npm, here the fake) is handed the descriptors; Node does not pass them on to
         # Playwright's runner or its web server. That is enough, since npm lives until the runner exits.
         process, pid, port, locks = self.start_e2e_with_server()
-        suite = int(self.calls()[0]["pid"])  # the fake npm, started in a session of its own
+        suite = int(
+            self.calls()[0]["pid"]
+        )  # the fake npm, started in a session of its own
         process.kill()
         process.communicate(timeout=5)
         locks_dir = self.cache / "locks"
@@ -1319,7 +1937,9 @@ class CommandTest(TempCase):
         self.wait_for(lambda: not self.alive(suite), "the suite to die")
         held, _ = check_all.acquire_slot(locks_dir, 1, {"check": "second run"}, 2)
         held.release()
-        lease = check_all.try_lock(locks[0])  # the port pair's lock; the orphaned web server still listens, as no flock can stop
+        lease = check_all.try_lock(
+            locks[0]
+        )  # the port pair's lock; the orphaned web server still listens, as no flock can stop
         self.assertIsNotNone(lease)
         lease.release()
 
@@ -1333,30 +1953,67 @@ class CommandTest(TempCase):
         npm.write_text(f"#!{node}\n" + textwrap.dedent(NODE_NPM))
         npm.chmod(0o700)
         probe, report = script(self.tmp / "probe", LOCK_PROBE), self.tmp / "report.json"
-        driver = ("import sys; sys.path.insert(0, sys.argv[1]); import check_all; "
-                  "sys.exit(check_all.main(sys.argv[4:], root=__import__('pathlib').Path(sys.argv[2]), cache=__import__('pathlib').Path(sys.argv[3])))")
-        result = subprocess.run([sys.executable, "-I", "-c", LEAKY_LAUNCHER, driver, str(TOOLS), str(self.root), str(self.cache), *argv],
-                                env=self.env(FAKE_PROBE=str(probe), FAKE_REPORT=str(report)), capture_output=True, text=True, timeout=60, check=False)
+        driver = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import check_all; "
+            "sys.exit(check_all.main(sys.argv[4:], root=__import__('pathlib').Path(sys.argv[2]), cache=__import__('pathlib').Path(sys.argv[3])))"
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                LEAKY_LAUNCHER,
+                driver,
+                str(TOOLS),
+                str(self.root),
+                str(self.cache),
+                *argv,
+            ],
+            env=self.env(FAKE_PROBE=str(probe), FAKE_REPORT=str(report)),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(report.read_text())
 
-    def test_the_locks_stay_below_descriptor_16_whatever_the_launcher_left_open_so_only_npm_holds_them(self):
+    def test_the_locks_stay_below_descriptor_16_whatever_the_launcher_left_open_so_only_npm_holds_them(
+        self,
+    ):
         # libuv marks descriptors 0 to 15 close-on-exec, so locks at 3, 4 and 5 stay with npm. With 3 to 20 inherited
         # open, locks opened after them land at 21 and up, which Node hands to every child: the runner, its workers and
         # Playwright's web server, any of which could hold the slot for good.
         report = self.run_with_leaky_launcher("--only", "e2e")
-        self.assertEqual(report["npm"], [3, 4, 5])  # the heavy slot and both ports, the lowest numbers there are
+        self.assertEqual(
+            report["npm"], [3, 4, 5]
+        )  # the heavy slot and both ports, the lowest numbers there are
         self.assertEqual(report["grandchild"], [], "a child of npm still holds a lock")
 
-    def test_a_lock_descriptor_node_would_pass_on_is_refused_before_anything_starts(self):
+    def test_a_lock_descriptor_node_would_pass_on_is_refused_before_anything_starts(
+        self,
+    ):
         marker = self.tmp / "started"
-        script(self.tmp / "suite", "from pathlib import Path\nPath(%r).write_text('x')\n" % str(marker))
+        script(
+            self.tmp / "suite",
+            "from pathlib import Path\nPath(%r).write_text('x')\n" % str(marker),
+        )
         held = check_all.try_lock(self.tmp / "x.lock")
         self.addCleanup(held.release)
-        high = fcntl.fcntl(held.fd, fcntl.F_DUPFD, 16)  # the same lock file at the first descriptor number Node would pass on
+        high = fcntl.fcntl(
+            held.fd, fcntl.F_DUPFD, 16
+        )  # the same lock file at the first descriptor number Node would pass on
         self.addCleanup(os.close, high)
         with self.assertRaisesRegex(RuntimeError, rf"\[{high}\] are 16 or higher"):
-            check_all.run_process([str(self.tmp / "suite")], self.tmp, dict(os.environ), self.tmp / "log", 5, False, inherit=[held.fd, high])
+            check_all.run_process(
+                [str(self.tmp / "suite")],
+                self.tmp,
+                dict(os.environ),
+                self.tmp / "log",
+                5,
+                False,
+                inherit=[held.fd, high],
+            )
         self.assertFalse(marker.exists())
 
     def test_a_slot_held_by_a_killed_run_names_the_live_suite_not_the_dead_run(self):
@@ -1366,7 +2023,9 @@ class CommandTest(TempCase):
         process.communicate(timeout=5)
         self.assertNotEqual(process.pid, suite)
         with self.assertRaises(check_all.LockTimeout) as caught:
-            check_all.acquire_slot(self.cache / "locks", 1, {"check": "second run"}, 0.3)
+            check_all.acquire_slot(
+                self.cache / "locks", 1, {"check": "second run"}, 0.3
+            )
         named = int(re.search(r"pid (\d+)", str(caught.exception)).group(1))
         self.assertEqual(named, suite)
         self.assertTrue(self.alive(named))
@@ -1374,18 +2033,30 @@ class CommandTest(TempCase):
         # The port pair's lock file names the suite too.
         self.assertEqual(check_all.read_info(locks[0])["pid"], suite)
         self.assertEqual(check_all.read_info(locks[2])["pid"], suite)
-        self.assertEqual(check_all.read_info(locks[1])["check"], "e2e")  # the rest of the holder's description is kept
+        self.assertEqual(
+            check_all.read_info(locks[1])["check"], "e2e"
+        )  # the rest of the holder's description is kept
 
     def test_a_stop_that_the_suite_ignores_kills_it_only_after_the_grace(self):
-        script(self.tmp / "stubborn", """
+        script(
+            self.tmp / "stubborn",
+            """
             import signal, sys, time
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             print("ready", flush=True)
             time.sleep(60)
-        """)
+        """,
+        )
         with mock.patch.object(check_all, "STOP_GRACE", 1.0):
             started = time.monotonic()
-            code, output = check_all.run_process([str(self.tmp / "stubborn")], self.tmp, dict(os.environ), self.tmp / "log", 0.3, False)
+            code, output = check_all.run_process(
+                [str(self.tmp / "stubborn")],
+                self.tmp,
+                dict(os.environ),
+                self.tmp / "log",
+                0.3,
+                False,
+            )
             took = time.monotonic() - started
         self.assertIsNone(code)
         self.assertIn("ready", output)
@@ -1393,9 +2064,13 @@ class CommandTest(TempCase):
         # The child sleeps 60 s, so waiting for it to finish would take 60. Half of that tells the two apart on a machine many times slower.
         self.assertLess(took, 30)
 
-    def test_a_stop_returns_only_when_a_descendant_that_ignores_it_and_closed_its_output_is_gone_too(self):
+    def test_a_stop_returns_only_when_a_descendant_that_ignores_it_and_closed_its_output_is_gone_too(
+        self,
+    ):
         # No pipe holds run_process open for this one, so only the stop itself can make it wait for the group.
-        script(self.tmp / "parent", """
+        script(
+            self.tmp / "parent",
+            """
             import signal, subprocess, sys, time
             from pathlib import Path
             child = subprocess.Popen([sys.executable, "-c", "import signal, time; signal.signal(signal.SIGINT, signal.SIG_IGN); time.sleep(60)"],
@@ -1403,15 +2078,29 @@ class CommandTest(TempCase):
             Path(sys.argv[1]).write_text(str(child.pid))
             signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
             time.sleep(60)
-        """)
+        """,
+        )
         pidfile = self.tmp / "descendant.pid"
-        self.addCleanup(lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text())))
+        self.addCleanup(
+            lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text()))
+        )
         with mock.patch.object(check_all, "STOP_GRACE", 1.0):
-            check_all.run_process([str(self.tmp / "parent"), str(pidfile)], self.tmp, dict(os.environ), self.tmp / "log", 0.5, False)
+            check_all.run_process(
+                [str(self.tmp / "parent"), str(pidfile)],
+                self.tmp,
+                dict(os.environ),
+                self.tmp / "log",
+                0.5,
+                False,
+            )
         self.assertFalse(self.alive(int(pidfile.read_text())))
 
-    def test_a_stop_that_the_suite_honors_ends_at_once_with_its_own_cleanup_not_a_kill(self):
-        script(self.tmp / "polite", """
+    def test_a_stop_that_the_suite_honors_ends_at_once_with_its_own_cleanup_not_a_kill(
+        self,
+    ):
+        script(
+            self.tmp / "polite",
+            """
             import signal, sys, time
             from pathlib import Path
             def clean(signum, frame):
@@ -1420,11 +2109,19 @@ class CommandTest(TempCase):
             signal.signal(signal.SIGINT, clean)
             print("ready", flush=True)
             time.sleep(60)
-        """)
+        """,
+        )
         marker = self.tmp / "cleanup-marker"
         with mock.patch.object(check_all, "STOP_GRACE", 60.0):
             started = time.monotonic()
-            code, _ = check_all.run_process([str(self.tmp / "polite"), str(marker)], self.tmp, dict(os.environ), self.tmp / "log", 0.3, False)
+            code, _ = check_all.run_process(
+                [str(self.tmp / "polite"), str(marker)],
+                self.tmp,
+                dict(os.environ),
+                self.tmp / "log",
+                0.3,
+                False,
+            )
             took = time.monotonic() - started
         self.assertIsNone(code)
         self.assertEqual(marker.read_text(), "cleaned up")
@@ -1432,7 +2129,12 @@ class CommandTest(TempCase):
         self.assertLess(took, 30)
 
     def test_the_command_file_runs_and_describes_itself(self):
-        result = subprocess.run([str(TOOLS / "check-all"), "--help"], capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            [str(TOOLS / "check-all"), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         self.assertEqual(result.returncode, 0)
         text = " ".join(result.stdout.split())
         self.assertIn("--heavy-slots", text)
