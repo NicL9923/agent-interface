@@ -66,6 +66,19 @@ lists known gaps and supported platforms. The lockfile retains every published
 optional native package: macOS arm64 and Linux x64/arm64 with GNU and musl libc.
 Do not omit optional dependencies when installing the checker.
 
+## Type-aware linting
+
+Verified November 17, 2026 against the
+[Oxlint type-aware guide](https://oxc.rs/docs/guide/usage/linter/type-aware.html).
+`.oxlintrc.json` sets `options.typeAware`, so `npm run lint` also runs the
+`typescript/*` rules that need type information. Oxlint 1.92 and later find the
+`tsrs-lint` launcher that the pinned tsrs package installs in `node_modules/.bin`
+and prefer it over `tsgolint`. Do not install `oxlint-tsgolint`: without
+`tsrs-lint` the run fails with "Failed to find type-aware linter executable"
+instead of quietly switching engines. `npm run typecheck` stays on `tsrs --noEmit`
+because `oxlint --type-check` also checks `.agents/tools` files that `tsconfig.json`
+does not include.
+
 # App state and authentication
 
 Hermes owns conversations and execution. The app SQLite database stores identities,

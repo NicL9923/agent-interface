@@ -1,11 +1,9 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "ignorePatterns": [
-    "dist/**",
-    "ios/**",
-    "public/**",
-    "build/**"
-  ],
+  "options": {
+    "typeAware": true
+  },
+  "ignorePatterns": ["dist/**", "ios/**", "public/**", "build/**"],
   "rules": {
     "no-unused-vars": [
       "warn",
@@ -24,13 +22,13 @@
       }
     ],
     "unicorn/no-useless-spread": "off",
-    "unicorn/no-new-array": "off"
+    "unicorn/no-new-array": "off",
+    "typescript/no-floating-promises": "warn",
+    "typescript/no-misused-promises": "warn"
   },
   "overrides": [
     {
-      "files": [
-        ".agents/tools/*.js"
-      ],
+      "files": [".agents/tools/*.js"],
       "rules": {
         "no-unused-expressions": "off"
       }
