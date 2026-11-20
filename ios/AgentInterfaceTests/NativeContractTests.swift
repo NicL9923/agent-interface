@@ -3612,6 +3612,24 @@ extension NativeContractTests {
         XCTAssertEqual(said, [])
     }
 
+    /// Review finding 4, the other half: the app answering that Hermes is down is one loss going on.
+    /// Applied apart, clearing the app's flag would end it and the Hermes loss would wait a new grace period.
+    func testAnAppLossThatTurnsIntoAHermesLossIsOneLoss() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        // Timer: the outage timer never wakes, as when it runs late.
+        value.outagePause = { _ in try await Task.sleep(for: .seconds(3_600)) }
+        await value.refreshBootstrap()
+        server.failBootstrap(status: 503); await value.refreshBootstrap()
+        time += .seconds(3.5)
+        server.failBootstrap(status: 200); server.disconnect()
+        await value.refreshBootstrap()
+        XCTAssertFalse(value.appUnavailable); XCTAssertFalse(value.householdConnected)
+        XCTAssertTrue(value.appOutage.shown, "The household has been down for 3.5 seconds")
+        XCTAssertEqual(value.appOutage.recoveries, 0, "Nothing came back")
+    }
+
     /// Review finding 1: a Stop confirmed in a dialog posted without rechecking the connection.
     func testAStopIsNotSentAfterTheChatOrTheNetworkIsLost() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }

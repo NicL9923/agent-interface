@@ -19,4 +19,11 @@ xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface \
   -only-testing:AgentInterfaceTests/NativeContractTests/testConversationOutagePreservesDraftAndTranscriptWhileDisablingSendUntilRecovery \
   -only-testing:AgentInterfaceTests/NativeContractTests/testRuntimeDisconnectKeepsKnownRosterAndCurrentDraft \
   -only-testing:AgentInterfaceTests/NativeContractTests/testPollingKeepsRefreshingBootstrapWhileTheServerIsDisconnectedOrFailing \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAHermesDownRosterWithoutTheOpenChatKeepsItOpenUntilHermesAnswers \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testABootstrapThatAnswersPastTheGracePeriodBeforeTheTimerRunsShowsAndSaysNothing \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAnAppLossThatTurnsIntoAHermesLossIsOneLoss \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAStopIsNotSentAfterTheChatOrTheNetworkIsLost \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAnUncertainSendIsNotRetriedWhileTheChatOrTheNetworkIsDown \
   > /dev/null 2>&1

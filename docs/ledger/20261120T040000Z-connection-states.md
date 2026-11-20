@@ -427,7 +427,12 @@ appeared, so the header avatar is still easing into its dim.
 Each line was broken with `~/.agents/tools/mutate.py` and the tests in
 [`ios-tests.sh`](../evidence/2026-11-19-connection-states/mutants/ios-tests.sh) run, all under
 `mac-heavy-lock.sh`. The lists and the tool's output are the `ios-*` files in
-[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 63 mutants, 63 caught.
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 63 mutants, 63 caught. The review
+round's lists are the `ios-review-*` files, run by
+[`ios-review-run.sh`](../evidence/2026-11-19-connection-states/mutants/ios-review-run.sh) with the
+review's tests added to `ios-tests.sh`. It also ran the three earlier lists whose files the round
+changed, on the review's code, after three of their targets were moved to the new lines: 28 of 28
+caught. The round's own 20 were all caught, one of them after a new test, below.
 
 | File                                | Mutants | Result    |
 | ----------------------------------- | ------- | --------- |
@@ -438,6 +443,13 @@ Each line was broken with `~/.agents/tools/mutate.py` and the tests in
 | `AppStore+Conversation.swift`       | 3       | 3 caught  |
 | `ConnectionCopy`                    | 9       | 9 caught  |
 | `AvatarView`, `Models`, `APIClient` | 4       | 4 caught  |
+| Review: `AppStore.swift`            | 4       | 4 caught  |
+| Review: `HomeStates.swift`          | 1       | 1 caught  |
+| Review: `AppStore+Outage.swift`     | 3       | 3 caught  |
+| Review: `AppStore+Polling.swift`    | 7       | 7 caught  |
+| Review: `AppStore+Session.swift`    | 1       | 1 caught  |
+| Review: `AppStore+Sending.swift`    | 3       | 3 caught  |
+| Review: `PreferencesView.swift`     | 1       | 1 caught  |
 
 Survivors on the way, and what was done:
 
@@ -447,18 +459,31 @@ Survivors on the way, and what was done:
   id, already decides, so it was removed.
 - A new chat's failures starting the waits over (`first ? 1`). Once `select` no longer cleared them,
   this is what does; the chat-switch test now checks the new chat's first wait is a second.
+- Review: holding `updateActivity` while the bootstrap and `appUnavailable` change. Clearing the flag
+  before the bootstrap is assigned already fixes finding 4, so the hold survived. It matters when the
+  app answers that Hermes is down: applied apart, the loss ends and the Hermes loss waits a new grace
+  period, where the web sees one loss. `testAnAppLossThatTurnsIntoAHermesLossIsOneLoss` now catches it.
+- Review: `PreferencesView.swift` is a view, so its mutant ran by hand through `mutate.py --replace` and
+  the new UI test ([`ios-review-settings.out`](../evidence/2026-11-19-connection-states/mutants/ios-review-settings.out)).
+  The tool's first try stopped before any mutation, because its unchanged run failed the test's own
+  guard that the chat opens before the fixture's loss; the second try ran it.
 
 ### Checks
 
-| Check                          | Command                                                                                                   | Result                                                                                          |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Connection tests while writing | `validate-ios.sh … test -only-testing:` the five new classes, `NativeContractTests`, `FixedWaitRuleTests` | passed, 205 tests                                                                               |
-| Mutants                        | `ios-run.sh`, then the two changed lists again                                                            | 63 of 63 caught                                                                                 |
-| Connection UI tests            | `validate-ios.sh … test -only-testing:AgentInterfaceUITests/ConnectionStateFlowTests`                     | passed, 4 tests                                                                                 |
-| Native unit suite              | `validate-ios.sh SIMULATOR test`                                                                          | passed: 858 tests, 2 skipped                                                                    |
-| Native UI suite                | the same run, then the seven classes it had not reached                                                   | passed: 94, then 66 with 2 skipped                                                              |
-| Web battery                    | `.agents/tools/check-all --keep-going`, Node 24.22.2                                                      | typecheck, lint, ruff, build, py passed; test 5 failed of 4,204; e2e 3 failed of 178, 3 skipped |
-| Web format                     | `npm run format:check`                                                                                    | passed                                                                                          |
+| Check                              | Command                                                                                                       | Result                                                                                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Connection tests while writing     | `validate-ios.sh … test -only-testing:` the five new classes, `NativeContractTests`, `FixedWaitRuleTests`     | passed, 205 tests                                                                                                   |
+| Mutants                            | `ios-run.sh`, then the two changed lists again                                                                | 63 of 63 caught                                                                                                     |
+| Connection UI tests                | `validate-ios.sh … test -only-testing:AgentInterfaceUITests/ConnectionStateFlowTests`                         | passed, 4 tests                                                                                                     |
+| Native unit suite                  | `validate-ios.sh SIMULATOR test`                                                                              | passed: 858 tests, 2 skipped                                                                                        |
+| Native UI suite                    | the same run, then the seven classes it had not reached                                                       | passed: 94, then 66 with 2 skipped                                                                                  |
+| Web battery                        | `.agents/tools/check-all --keep-going`, Node 24.22.2                                                          | typecheck, lint, ruff, build, py passed; test 5 failed of 4,204; e2e 3 failed of 178, 3 skipped                     |
+| Web format                         | `npm run format:check`                                                                                        | passed                                                                                                              |
+| Review: failing first              | `validate-ios.sh … test -only-testing:` the 10 new and changed tests, on `b7cb59c9` with the new tests        | 9 unit tests failed with 20 failures, the UI test failed at the room's Send, each for the finding's reason          |
+| Review: connection tests           | the five connection classes, `NativeContractTests`, `FixedWaitRuleTests`, `ConnectionStateFlowTests`          | unit passed, 217 tests; UI 4 of 5, the new test's Settings step used the wrong navigation; fixed, then passed alone |
+| Review: mutants                    | `ios-review-run.sh`, then `ios-review-appstore` again after the new test; `PreferencesView.swift` by hand     | 46 of 47, then 47 of 47; 1 of 1                                                                                     |
+| Review: native unit suite          | `validate-ios.sh SIMULATOR test -only-testing:AgentInterfaceTests`                                            | passed: 870 tests, 2 skipped                                                                                        |
+| Review: UI classes the fixes touch | `ConnectionStateFlowTests`, `ExperienceFlowTests`, `NativeFlowTests`, `SettingsPolishTests`, `ShellFlowTests` | passed: 51 tests                                                                                                    |
 
 The full run stopped at its 2-hour limit while it was in `ScreenshotTourTests`, after 94 UI tests had
 passed and none had failed. `ScreenshotTourTests` produces evidence only, and the README leaves it out of
@@ -472,20 +497,46 @@ The web battery ran on `9301c603` with this change, before `811804ec` (the fifth
 fix) was merged in. That commit changes only web files and the native app has no live-updates notice,
 so nothing here was run again for it.
 
+The review round's checks ran on the Mac mini, iOS 27.0 simulator "iPhone 17" (`0915E0B2`), the earlier
+simulator having been removed. The unit suite and the UI classes ran in one run on the final code. The
+round changed no web file, so the web battery was not run again.
+
 The 8 web failures are this Mac's, and all 8 fail the same way at `9301c603` in a separate worktree:
 `tests/direct-routes.test.ts` (2) and `tests/native-contract.test.ts` (1) need a second loopback address
 the Mac does not have, `tests/upgrades.test.ts` (2) runs `scripts/hermes-upgrade-worker.py` with a
 Python that rejects its syntax, and the 3 WebKit cases in `e2e/smoke.spec.ts` (lines 40, 811 and 856)
 fail on this host's WebKit. No web source changed here.
 
+### Review
+
+GPT-6.2 Sol, high effort, reviewed the iOS change from source at `bd781222`: six P2 and two P3
+findings. All eight were fixed. Each
+fix has a test that went red on `b7cb59c9`, the code before the fixes, for the reason the finding
+gave; [`ios-review-before-fix.out`](../evidence/2026-11-19-connection-states/mutants/ios-review-before-fix.out)
+is that run. A fix that added a store property has a test that cannot compile against the old code,
+so its red run is the mutant that puts the old expression back.
+
+| Finding                                                                                                                                                        | Fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Failing-first test                                                                                                                                                                                                             |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1. Send and Stop could write after a loss. Offline left `connected` true until a read failed, and Stop and the uncertain-send retry did not check again.       | `connected` reads `householdReachable`, which adds the network. `send` checks `connected` for a retry too. Stop goes through the new `stopWork`, which checks the open chat and the connection as it posts. The Cmd+. dialog still closes when stopping becomes unavailable: that leaves Stop disabled with its reason as the VoiceOver hint, the web's state, and a dialog left open could offer only Cancel. The earlier note that a dialog has no room for a reason was wrong; the choice now rests on the web's state. | `testAnOfflineDeviceRefusesWritesFromTheFirstMoment`, `testAnUncertainSendIsNotRetriedWhileTheChatOrTheNetworkIsDown` (red before); `testAStopIsNotSentAfterTheChatOrTheNetworkIsLost` (mutants)                               |
+| 2. The poll read a failed chat every 1.5 seconds, dropping its retry, and kept reading while offline. Coming back online queued a read while the app was away. | While the open chat's reads fail (`chatReadWaits`), the poll leaves it to its retry. Coming back online reads only while the app is in the foreground, and returning to the app reads it at once.                                                                                                                                                                                                                                                                                                                          | `testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt` (red before). `testPollingKeepsRefreshingBootstrapWhileTheServerIsDisconnectedOrFailing` expected the poll to clear the chat; it now releases the retry.                |
+| 3. VoiceOver heard a failed poll during the grace period, then the outage again.                                                                               | `chatErrorShown` is the banner's rule, and the chat announces only errors it shows. The store's outage announcer says the rest.                                                                                                                                                                                                                                                                                                                                                                                            | `testAFailedPollIsTheNoticesNewsAndOtherErrorsAreTheBanners` (mutant)                                                                                                                                                          |
+| 4. A changed bootstrap that answered past the grace period, before the timer ran, showed the loss and said "Connected again."                                  | The bootstrap and the cleared `appUnavailable` are applied with `updateActivity` held, then the outages are recomputed once.                                                                                                                                                                                                                                                                                                                                                                                               | `testABootstrapThatAnswersPastTheGracePeriodBeforeTheTimerRunsShowsAndSaysNothing` (red before); `testAnAppLossThatTurnsIntoAHermesLossIsOneLoss` (mutant, see below)                                                          |
+| 5. One chat's failed read disabled a healthy group room's Send and Stop and made Settings say Hermes was reconnecting.                                         | Group rooms and the Settings row read `householdReachable`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `ConnectionStateFlowTests.testOneChatsFailedReadsLeaveGroupChatsAndSettingsLive` (red before, at the room's Send; the Settings half went red by mutant); `testOneChatsFailedReadLeavesTheHouseholdReachable` (mutant)          |
+| 6. A Hermes-down bootstrap kept the old roster whole, so an assistant made private stayed listed with its saved chat.                                          | The web's `rosterFrom`: membership from a nonempty roster, activity carried only for rows it keeps, for 30 seconds from the first stale roster, and the removal cleanup for rows it drops. A roster that lists nobody still keeps the rows. While Hermes is down the open chat stays open, as on the web, instead of another being picked.                                                                                                                                                                                 | `testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps`, `testAHermesDownRosterWithoutTheOpenChatKeepsItOpenUntilHermesAnswers` (red before). The mock server gained `listWhileDown` and `hideFamilyBot`. |
+| 7. The notice said the draft was kept while a send on its way left the box empty.                                                                              | `hasDraft` reads `composerDraft`, what the box shows, and the tray's uploads.                                                                                                                                                                                                                                                                                                                                                                                                                                              | `testTheNoticeClaimsNoDraftWhileTheMessageBoxShowsItEmptyForASend` (red before)                                                                                                                                                |
+| 8. A working chat that recovered just after its notice showed brought its activity row back while the notice stayed out its second.                            | `activityRowShown` hides the row while a loss is on screen, lingering included, as the web does. The composer reads `activity`, which follows the recovery at once.                                                                                                                                                                                                                                                                                                                                                        | `testTheActivityRowWaitsForTheNoticeToGoAndTheComposerDoesNot` (mutant)                                                                                                                                                        |
+
 ### Not done
 
-- No independent review of the iOS change has run.
+- No independent review of the review round's fixes has run. The first review's findings are in
+  "Review" above.
+- `chatErrorShown` and `activityRowShown` are tested in the store. The two lines in
+  `ConversationView.swift` that read them, the banner's announcement and the activity row, have no UI
+  test: XCTest cannot hear VoiceOver, and the row's moment is a 1-second linger.
 - A real phone, real VoiceOver and a real network: not run. Announcements were checked through the
   store's injected `announce`, and the network loss through the fixture.
 - iPad was not captured or run through the new UI tests. Its sidebar reads the same `listedActivity`
   and household outage as the phone's home.
-- The remaining differences in `ios/Parity.md`: no live-updates notice, the whole roster kept while
-  Hermes is down, and the poll reading bootstrap every 1.5 seconds while Hermes is down.
-- A group chat open while the selected assistant's last read failed keeps its writes refused until that
-  assistant's chat is read again, as `appUnavailable` refused them before.
+- The remaining differences in `ios/Parity.md`: no live-updates notice, and the poll reading
+  bootstrap every 1.5 seconds while Hermes is down.

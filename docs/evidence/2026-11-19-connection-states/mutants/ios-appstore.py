@@ -17,7 +17,7 @@ MUTANTS = [
     ),
     # Coming back online waits out the retry.
     (
-        "      if !deviceOffline, readFailedFor != nil, readFailedFor == followedBotId { requestConversationRefresh() }\n",
+        "      if !deviceOffline, !suspended, chatReadWaits { requestConversationRefresh() }\n",
         "",
     ),
 ]

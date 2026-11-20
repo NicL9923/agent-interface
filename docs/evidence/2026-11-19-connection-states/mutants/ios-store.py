@@ -29,8 +29,8 @@ MUTANTS = [
     ),
     # Spaces count as a draft.
     (
-        "(!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty",
-        "(!draft.text.isEmpty",
+        "(!shown.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty",
+        "(!shown.text.isEmpty",
     ),
     # The announcement's news includes the draft, so typing repeats it.
     (

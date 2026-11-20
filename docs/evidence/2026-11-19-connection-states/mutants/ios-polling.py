@@ -19,8 +19,8 @@ MUTANTS = [
     ),
     # A stale roster's rows dim at once.
     (
-        "          value.bots = carryActivity(value.bots, from: previous.bots)",
-        "          _ = previous",
+        "          let carried = carryActivity(value.bots, from: previous.bots)",
+        "          let carried = value.bots",
     ),
     # Hermes is never counted as reached.
     ("        if value.connection.connected { everConnected = true }\n", ""),
