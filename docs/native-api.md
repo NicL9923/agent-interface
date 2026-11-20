@@ -944,6 +944,24 @@ nothing else; the add-on fixes the session, so the app sends only microphone aud
 (24 kHz mono PCM), the tool loop's events, and `conversation.item.truncate` when
 the person speaks over the voice.
 
+### Chat style
+
+`chatStyle` (`"bubbles"` or `"classic"`) and `ownBubble` (`"tint"` or `"solid"`) are
+optional `Preferences` fields; servers before them omit both. Read an absent
+`chatStyle` as `"bubbles"` and an absent `ownBubble` as `"tint"`. They are per person
+and sync to every device like `theme`. `PATCH /api/preferences` answers 400 for any
+other value, with the field's name in `details[].path`. An omitted value keeps the
+saved one, so a client that predates them cannot clear them; send the default
+explicitly to go back to it.
+
+In `"bubbles"`, each run of a reply's consecutive prose blocks (paragraphs, lists,
+block quotes and headings) shares one bubble, and every other block (a table, code
+block, image, card or thematic break) stands alone at the column's width. `"classic"`
+shows replies flat. In both, the person's own bubble fits its text at the trailing
+edge. `"solid"` fills it with the assistant's avatar color at OKLCH lightness capped at
+0.52, chroma and hue kept, under white text; a chat without an avatar color uses the
+tint.
+
 <!-- Main assistant: begin -->
 
 ### Main assistant and check-ins

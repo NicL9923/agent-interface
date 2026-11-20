@@ -779,6 +779,20 @@ in the long-press menu of a reply or your own message opens it in a sheet where 
 select any part and copy it; a reply shows there as rendered, without Markdown marks.
 Code blocks are colored by language, and tables can be copied as Markdown or CSV.
 
+Replies read in bubbles. Each run of a reply's paragraphs, lists, quotes and headings
+sits in one bubble up to 600 px wide, about 77 characters a line, while tables, code,
+images and cards stay full width between them, so a reply can read bubble, table,
+bubble. Progress lines, tool work and cards keep their own look, and a reply that is
+still arriving groups the same way, so nothing moves when it is saved. A table wider
+than the chat fades at each side that has more to scroll to. Your own messages hug
+their text at the right edge. In Settings, **Chat style** switches between **Bubbles**
+and **Classic**, which shows replies as flat text across the column, and **Your
+messages** chooses **Tinted** or **Solid color**. Solid fills your messages with the
+assistant's avatar color, darkened where needed so white text keeps at least 4.5:1
+contrast; a chat without an avatar color, such as one with a photo, keeps the tint.
+Both are saved with your preferences, like Appearance, so they follow you to your other
+devices. Group chats keep their own layout.
+
 When a reply fails, **Retry** under it sends your message again without touching
 your draft. A failed turn can be retried once, by anyone, from any device: a second
 tap, tab or phone gets the first retry's result instead of starting another turn.
