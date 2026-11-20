@@ -13,6 +13,8 @@ final class ChatBubblesTests: XCTestCase {
       case .block(.table, _): "table"
       case .block(.code, _): "code"
       case .block(.rule, _): "rule"
+      case .block(.list, _): "list"
+      case .block(.quote, _): "quote"
       case .block: "other block"
       case .inline: "inline"
       case .cards(let cards): "cards \(cards.count)"
@@ -29,6 +31,20 @@ final class ChatBubblesTests: XCTestCase {
     XCTAssertEqual(shape("```swift\nlet level = 0.18\n```\n\nThat reads the north gate."), ["code", "bubble 1"])
     XCTAssertEqual(shape("Morning.\n\n---\n\nEvening."), ["bubble 1", "rule", "bubble 1"])
     XCTAssertEqual(shape("Here:\n\n```sh\nls\n```\n\n\(table)"), ["bubble 1", "code", "table"])
+  }
+  /// A list or quote that holds a code block, table or rule renders full width, as in Classic, with its
+  /// structure intact. Prose around it still forms bubbles, and a list of plain prose stays in one.
+  func testAListOrQuoteHoldingAFullWidthBlockLeavesTheBubble() throws {
+    let steps = "Before the fix:\n\n1. Stop the gate.\n2. Run this:\n\n   ```sh\n   gate reset\n   ```\n\nThen it reopens."
+    XCTAssertEqual(shape(steps), ["bubble 1", "list", "bubble 1"])
+    let segments = ReplyBubbles.segments(ReplyCards.parse(steps), streaming: false)
+    guard segments.count == 3, case .block(.list(let list), _) = segments[1].kind else { return XCTFail("Expected the list as a block") }
+    XCTAssertEqual(list.items.count, 2, "The list keeps both items")
+    XCTAssertEqual(list.items[1].blocks, [.paragraph("Run this:"), .code(language: "sh", text: "gate reset")])
+    XCTAssertEqual(shape("- Gate\n  - Nested\n\n    | A | B |\n    | --- | --- |\n    | 1 | 2 |"), ["list"], "A table deeper in the list counts")
+    XCTAssertEqual(shape("Note:\n\n> Run\n>\n> ```\n> ls\n> ```"), ["bubble 1", "quote"])
+    XCTAssertEqual(shape("> Morning.\n>\n> ---\n>\n> Evening."), ["quote"])
+    XCTAssertEqual(shape("Plain:\n\n- North\n- South\n\n> Check the gate first."), ["bubble 3"])
   }
   func testCardsSplitTheReplyAndKeepTheirOwnBlock() {
     let card = #"{"version":1,"cards":[{"id":"feed","type":"checklist","title":"Feed","items":[{"id":"hay","text":"Hay"}]}]}"#

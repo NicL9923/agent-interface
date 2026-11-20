@@ -111,9 +111,10 @@ enum OKLab {
 /// a block that keeps the full column width.
 struct ReplySegment: Identifiable {
   enum Kind {
-    /// Consecutive paragraphs, lists, quotes and headings. Blocks from `settled` on may still change.
+    /// Consecutive paragraphs, headings, and lists and quotes of prose. Blocks from `settled` on may
+    /// still change.
     case bubble([MarkdownBlock], settled: Int)
-    /// A table, code block, rule or anything else Markdown that is not prose.
+    /// A table, code block, rule, a list or quote holding one, or anything else that is not prose.
     case block(MarkdownBlock, settled: Bool)
     case inline(InlineDocument)
     case cards([ReplyCard])
@@ -124,10 +125,15 @@ struct ReplySegment: Identifiable {
 }
 
 enum ReplyBubbles {
-  /// Prose sits in a bubble. Everything else, including any block a later parser adds, stays out.
+  /// Prose sits in a bubble. Everything else, including any block a later parser adds, stays out. A
+  /// list or quote is prose only when everything inside it is, so one holding a code block, table or
+  /// rule renders full width as in the classic style, its structure intact. Images are inline links
+  /// in this parser, so they stay prose.
   static func isProse(_ block: MarkdownBlock) -> Bool {
     switch block {
-    case .paragraph, .heading, .list, .quote: true
+    case .paragraph, .heading: true
+    case .list(let list): list.items.allSatisfy { $0.blocks.allSatisfy(isProse) }
+    case .quote(let blocks): blocks.allSatisfy(isProse)
     case .code, .rule, .table: false
     }
   }
