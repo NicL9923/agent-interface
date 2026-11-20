@@ -120,6 +120,10 @@ struct Preferences: Codable, Equatable {
   var checkIns: CheckInSettings?
   var mainSuggestionDismissed: Bool?
   // --- End main assistant ---
+  /// "bubbles" or "classic", and "tint" or "solid". Servers before them omit both, and an absent or
+  /// unknown value reads as the default; see `ChatStyle` and `OwnBubble` in ChatBubbles.swift.
+  var chatStyle: String?
+  var ownBubble: String?
 }
 struct Capability: Codable, Equatable {
   var supported: Bool

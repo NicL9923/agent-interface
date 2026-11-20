@@ -205,16 +205,25 @@ enum ReplyCards {
 /// UI. Everything else, such as a person's message, is plain text.
 struct ReplyContentView: View {
   var message: Message
+  /// Set for an assistant answer in the bubbles style: whether this message ends the reply, so its
+  /// last bubble carries the tail. Nil renders the reply flat, as the classic style does.
+  var bubbles: Bool? = nil
   var body: some View {
     if message.isReply {
       let streaming = message.id.hasSuffix("-inflight")
-      ForEach(ReplyCards.parse(message.text, inlineUi: message.role == "assistant" && !message.isProgressLine, cached: !streaming)) { part in
-        if let markdown = part.markdown { MarkdownView(text: markdown, streaming: streaming) }
-        if let inline = part.inline { InlineUiView(document: inline) }
-        if let cards = part.cards { ForEach(cards) { card in InteractiveReplyCard(card: card, messageId: message.id) } }
+      let parts = ReplyCards.parse(message.text, inlineUi: message.role == "assistant" && !message.isProgressLine, cached: !streaming)
+      if let endsReply = bubbles {
+        BubbledReplyView(segments: ReplyBubbles.segments(parts, streaming: streaming), messageId: message.id, endsReply: endsReply)
+      } else {
+        ForEach(parts) { part in
+          if let markdown = part.markdown { MarkdownView(text: markdown, streaming: streaming) }
+          if let inline = part.inline { InlineUiView(document: inline) }
+          if let cards = part.cards { ForEach(cards) { card in InteractiveReplyCard(card: card, messageId: message.id) } }
+        }
       }
     } else {
-      Text(message.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+      // Hugs its words, so the person's bubble does too.
+      Text(message.text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
     }
   }
 }

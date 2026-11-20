@@ -241,6 +241,9 @@ import XCTest
     let dark = launch(["AGENT_INTERFACE_UI_ROUTINE_RUNS": "1", "AGENT_INTERFACE_UI_THEME": "dark"])
     let failed = dark.buttons["routineRun-rr-cert-1"]
     XCTAssertTrue(failed.waitForExistence(timeout: 15))
+    // The first run sits above the first message, so it can open under the header; bring it into view.
+    let header = dark.buttons["botProfile"]
+    for _ in 0..<4 where header.exists && failed.frame.minY < header.frame.maxY { dark.scrollViews["conversationTranscript"].swipeDown() }
     try capture(dark, "routine-runs-dark-collapsed")
     failed.tapWhenReady()
     XCTAssertTrue(dark.buttons["routineRunSave"].waitUntilHittable())
@@ -290,6 +293,69 @@ import XCTest
     work.tapWhenReady()
     XCTAssertTrue(app.buttons["Tool calls"].waitForExistence(timeout: 5))
     try capture(app, "progress-expanded")
+  }
+
+  /// Chat style is a saved setting that applies at once: Bubbles sets the answer's prose inside its
+  /// bubble, Classic lays it flat at the column edge, and the choice is still there when Settings reopens.
+  func testChatStyleSettingSwitchesTheTranscript() throws {
+    let app = launch(["AGENT_INTERFACE_UI_PROGRESS": "1"])
+    let answer = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "It will be")).firstMatch
+    XCTAssertTrue(answer.waitForExistence(timeout: 15), app.debugDescription)
+    let bubbled = answer.frame.minX
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    let style = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Chat style")).firstMatch
+    for _ in 0..<6 where !style.canTap { app.swipeUp() }
+    style.tapWhenReady()
+    app.buttons["Classic"].tapWhenReady()
+    XCTAssertTrue(waitFor { style.label.contains("Classic") || (style.value as? String) == "Classic" }, style.debugDescription)
+    app.buttons["Close"].tapWhenReady()
+    if !answer.waitForExistence(timeout: 3) { app.buttons["bot.ranch"].tapWhenReady() }
+    XCTAssertTrue(answer.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(waitFor { answer.frame.minX < bubbled - 8 }, "Classic moves the prose out of the bubble: \(answer.frame.minX) vs \(bubbled)")
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    for _ in 0..<6 where !style.canTap { app.swipeUp() }
+    XCTAssertTrue(style.label.contains("Classic") || (style.value as? String) == "Classic", "The saved choice comes back: \(style.label)")
+  }
+
+  /// The chat styles for visual review: Bubbles and Classic, tinted and solid own messages, light and
+  /// dark, and one at an accessibility text size. Runs only when screenshots are written.
+  func testChatBubbleScreens() throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    func shoot(_ name: String, _ environment: [String: String], arguments: [String] = [], ready: String = "turnWork") throws {
+      let app = XCUIApplication()
+      app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+      for (key, value) in environment { app.launchEnvironment[key] = value }
+      app.launchArguments += arguments
+      app.launch()
+      let device = app.frame.width > 700 ? "ipad" : "iphone"
+      XCTAssertTrue(app.descendants(matching: .any)[ready].waitForExistence(timeout: 15), app.debugDescription)
+      try capture(app, "\(device)-\(name)")
+      app.scrollViews["conversationTranscript"].swipeDown()
+      try capture(app, "\(device)-\(name)-start")
+      app.scrollViews["conversationTranscript"].swipeUp(); app.scrollViews["conversationTranscript"].swipeUp()
+      try capture(app, "\(device)-\(name)-end")
+      app.terminate()
+    }
+    // The app's own theme setting, which every simulator honors, rather than the device appearance.
+    for theme in ["light", "dark"] {
+      for (style, own) in [("bubbles", "tint"), ("bubbles", "solid"), ("classic", "tint"), ("classic", "solid")] {
+        try shoot("progress-\(style)-\(own)-\(theme)", ["AGENT_INTERFACE_UI_PROGRESS": "1", "AGENT_INTERFACE_UI_THEME": theme,
+          "AGENT_INTERFACE_UI_CHAT_STYLE": style, "AGENT_INTERFACE_UI_OWN_BUBBLE": own])
+      }
+      try shoot("work-bubbles-solid-\(theme)", ["AGENT_INTERFACE_UI_WORK": "1", "AGENT_INTERFACE_UI_THEME": theme,
+        "AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid"])
+      // The end of the chat against the floating composer, and a list that holds a code block.
+      for style in ["bubbles", "classic"] {
+        try shoot("nested-code-\(style)-\(theme)", ["AGENT_INTERFACE_UI_NESTED_CODE": "1", "AGENT_INTERFACE_UI_THEME": theme,
+          "AGENT_INTERFACE_UI_CHAT_STYLE": style], ready: "Copy code")
+      }
+    }
+    try shoot("progress-bubbles-accessibility-xl", ["AGENT_INTERFACE_UI_PROGRESS": "1"],
+      arguments: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])
   }
 
   func testAdvancedWorkKeepsReasoningInsideTheFold() throws {

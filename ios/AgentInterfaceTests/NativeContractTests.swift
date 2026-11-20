@@ -823,6 +823,23 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertNil(object["modelFavorites"])
     }
 
+    /// Chat style choices go out with the settings save and come back as what the server saved.
+    func testSettingsSaveSendsChatStyleChoices() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var preferences = try XCTUnwrap(value.bootstrap?.preferences)
+        XCTAssertEqual(preferences.chatStyleChoice, .bubbles)
+        preferences.chatStyleChoice = .classic
+        preferences.ownBubbleChoice = .solid
+        value.queuePreferences(preferences)
+        try await until { !value.preferencesSaving }
+        let request = try XCTUnwrap(server.requests.last { $0.url?.path == "/api/preferences" })
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(FakeExchange.body(request))) as? [String: Any])
+        XCTAssertEqual(object["chatStyle"] as? String, "classic")
+        XCTAssertEqual(object["ownBubble"] as? String, "solid")
+        XCTAssertEqual(value.bootstrap?.preferences.chatStyleChoice, .classic)
+        XCTAssertEqual(value.bootstrap?.preferences.ownBubbleChoice, .solid)
+    }
+
     func testAdvancedRoutineOverridesRoundTripAndClearExplicitly() throws {
         let source = Data(#"{"id":"abc123","botId":"bot","name":"Morning","prompt":"","schedule":"1h","enabled":false,"skills":["weather"],"model":"saved","provider":"configured","script":"reports/morning.py","noAgent":true,"enabledToolsets":[],"contextFrom":["self","def456"]}"#.utf8)
         var routine = try JSONDecoder().decode(Routine.self, from: source)

@@ -408,6 +408,8 @@ struct ConversationView: View {
         .environment(\.transcriptUserId, store.bootstrap?.user.id)
         .environment(\.transcriptSharedChat, bot.othersCanWrite)
         .environment(\.transcriptOwnRows, store.ownRows)
+        .environment(\.chatBubbles, chatPreferences.chatStyleChoice == .bubbles)
+        .environment(\.ownBubbleFill, ownBubbleFill)
         .environment(\.sentAnchor, anchoredMessage)
         .environment(\.scrollTranscript, { id in
           openingCard = nil
@@ -765,6 +767,12 @@ struct ConversationView: View {
     ComposerView(bot: bot, focused: $composerFocused) { latestTrigger += 1 }
   }
   private var advanced: Bool { store.bootstrap?.preferences.presentation == "advanced" }
+  private var chatPreferences: Preferences { store.bootstrap?.preferences ?? Preferences() }
+  /// The person's messages take the assistant's drawn color when they chose Solid; a portrait keeps the tint.
+  private var ownBubbleFill: Color? {
+    guard chatPreferences.ownBubbleChoice == .solid, let tint = SolidBubble.tint(bot.avatar), let fill = SolidBubble.fill(tint) else { return nil }
+    return Color(hex: fill)
+  }
   private func loadEarlier(_ proxy: ScrollViewProxy) {
     let first = store.conversation?.messages.first?.id
     // The scroll position holds the turn in view while history is added above it. Before the
@@ -805,32 +813,40 @@ struct MessageView: View {
   @Environment(\.transcriptUserId) private var userId
   @Environment(\.transcriptSharedChat) private var sharedChat
   @Environment(\.transcriptOwnRows) private var ownRows
-  @Environment(\.colorScheme) private var scheme
   @Environment(\.foundMessage) private var foundMessage
   @Environment(\.sentAnchor) private var sentAnchor
+  @Environment(\.chatBubbles) private var chatBubbles
+  @Environment(\.ownBubbleFill) private var ownBubbleFill
   private var bubble: Bool { message.role == "user" && !message.isAgentExchange }
   private var scheduled: Bool { message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity }
   /// The person's own words, which sit on the right with their time beneath.
   private var own: Bool { message.role == "user" && !scheduled && !message.isInternalActivity }
+  /// An assistant answer in the bubbles style. Progress lines, activity and agent exchanges stay flat.
+  private var replyBubbles: Bool {
+    chatBubbles && message.role == "assistant" && !message.isProgressLine && !message.isAgentExchange
+      && !message.isInternalActivity && !message.isToolActivity
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      VStack(alignment: .leading, spacing: 10) {
-        if !continued && !message.isAgentExchange && !label.isEmpty {
+      if bubble {
+        // A person's bubble sits at the trailing edge, with any name above it on that side.
+        if !continued && !label.isEmpty {
           Text(label).font(.caption.weight(.semibold)).foregroundStyle(Palette.messageMetadata)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        if message.isAgentExchange {
-          AgentExchangeView(message: message, recipient: recipient)
-        } else if !message.isToolActivity {
-          ReplyContentView(message: message).modifier(ProgressLineStyle(on: message.isProgressLine))
+        // Solid applies only to the signed-in person's own words, never another member's.
+        PersonBubble(solid: own && label.isEmpty ? ownBubbleFill : nil, found: foundMessage == message.id) {
+          VStack(alignment: .leading, spacing: 10) { content }.padding(.vertical, 10).padding(.horizontal, 14)
         }
-        ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
-        if let replyFiles, !message.id.hasSuffix("-inflight") { ReplyFilesView(artifacts: replyFiles) }
-      }.padding(bubble ? 14 : 0).background(
-        bubble ? Palette.user(scheme) : Color.clear,
-        in: RoundedRectangle(cornerRadius: 14)
-      )
-        // The outline hugs the message itself, inside a person's indent.
-        .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 14).stroke(Palette.accent, lineWidth: 2) } }
+      } else {
+        VStack(alignment: .leading, spacing: 10) {
+          if !continued && !message.isAgentExchange && !label.isEmpty {
+            Text(label).font(.caption.weight(.semibold)).foregroundStyle(Palette.messageMetadata)
+          }
+          content
+        }
+          .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 14).stroke(Palette.accent, lineWidth: 2) } }
+      }
       if own && message.steered == true {
         Text("Added to the current task").font(.caption).foregroundStyle(Palette.messageMetadata)
           .frame(maxWidth: .infinity, alignment: .trailing).accessibilityIdentifier("steeredLabel")
@@ -841,7 +857,6 @@ struct MessageView: View {
             && !message.text.isEmpty)
       }
     }
-      .padding(.leading, message.role == "user" && !message.isInternalActivity ? 32 : 0)
       .modifier(SendingMessage(delivery: delivery))
       .background {
         if sentAnchor == message.id {
@@ -850,6 +865,15 @@ struct MessageView: View {
       }
       .modifier(ReplyActions(message: message))
       .accessibilityElement(children: .contain)
+  }
+  @ViewBuilder private var content: some View {
+    if message.isAgentExchange {
+      AgentExchangeView(message: message, recipient: recipient)
+    } else if !message.isToolActivity {
+      ReplyContentView(message: message, bubbles: replyBubbles ? endsRun : nil).modifier(ProgressLineStyle(on: message.isProgressLine))
+    }
+    ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
+    if let replyFiles, !message.id.hasSuffix("-inflight") { ReplyFilesView(artifacts: replyFiles) }
   }
   /// Replies and a person's own messages carry a time line. Streaming replies do not until they settle.
   private var showsMeta: Bool {
