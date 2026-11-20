@@ -544,7 +544,8 @@ struct ConversationView: View {
   private func jumpButton(_ proxy: ScrollViewProxy) -> some View {
     let label = unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages")"
     return Button { jumpToLatest(proxy) } label: {
-      Label(label, systemImage: "arrow.down").font(.subheadline).padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial, in: Capsule())
+      Label(label, systemImage: "arrow.down").font(.subheadline).padding(.horizontal, 16).padding(.vertical, 10)
+        .glassSurface(Capsule(), interactive: true)
     }.accessibilityLabel(unseen == 0 ? label : label + ", jump to latest")
       .accessibilityIdentifier("jumpToLatest").padding(12).transition(.opacity)
   }

@@ -150,6 +150,24 @@ function readSlot(form: HTMLFormElement, input: HTMLTextAreaElement): ComposerSl
     letterSpacing: style.letterSpacing,
   };
 }
+// On a phone the transcript runs under the message box, which floats over it (see "floats over the
+// transcript" in styles.css). The panel carries the area's height, so the transcript can end just above it.
+function useComposerOverlap(footer: React.RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const area = footer.current,
+      panel = area?.closest<HTMLElement>(".conversation-panel");
+    if (!area || !panel) return;
+    const measure = () =>
+      panel.style.setProperty("--composer-overlap", `${area.getBoundingClientRect().height}px`);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(area);
+    return () => {
+      observer?.disconnect();
+      panel.style.removeProperty("--composer-overlap");
+    };
+  }, [footer]);
+}
 // The whole conversation accepts dropped files. Drops elsewhere are refused so the browser never navigates away to the file.
 function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files: File[]) => void) {
   const [panel, setPanel] = useState<HTMLElement | null>(null);
@@ -344,6 +362,7 @@ export const Composer = memo(function Composer({
   ];
   const footer = useRef<HTMLElement>(null);
   const drop = useFileDrop(footer, addFiles);
+  useComposerOverlap(footer);
   // After a declined approval the message box asks what to do instead, until Hermes accepts the next message.
   const declinedStep = useDeclined(botId);
   // Only a receipt arriving after the decline counts: the one already showing belongs to an earlier message. A typed
