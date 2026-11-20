@@ -1,5 +1,8 @@
 # November 20 chat review fixes on the web
 
+The reaction answers work this entry describes was removed before the pull request; see
+`20261120T062940Z-reaction-answers-removed.md`.
+
 Branch `t3/research-openbot-chat-bubbles`, from `8bb38de9` through the merge of origin/main
 `d6b53105`. Node v24.22.2 on LaptopServer (Fedora). Hermes did not take part; the server tests use
 the in-memory store and the fake runtime, the UI tests the mocked client API, and the browser checks
