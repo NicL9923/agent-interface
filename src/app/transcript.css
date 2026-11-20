@@ -296,6 +296,12 @@
       right: 8px;
       width: auto;
     }
+    /* What floats over the transcript must stay above the phone's message box, whose area styles.css raises to 4,
+       and which can cover most of a short view. Here, not in styles.css: this layer outranks the base layer. */
+    .transcript-frame .find-bar,
+    .transcript-frame .quote-selection {
+      z-index: 5;
+    }
   }
   ::highlight(find-match) {
     background-color: color-mix(in srgb, var(--attention) 30%, transparent);

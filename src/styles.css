@@ -1710,6 +1710,7 @@
     .transcript-frame .computer-peek {
       bottom: calc(12px + var(--composer-overlap, 0px));
     }
+    /* Find in chat and the Quote button float above it at 5, in transcript.css. */
     .composer-area {
       position: relative;
       z-index: 4;
@@ -1718,11 +1719,6 @@
     }
     .composer-area > * {
       pointer-events: auto;
-    }
-    /* What floats over the transcript must stay above the box, which can cover most of a short view. */
-    .transcript-frame .find-bar,
-    .transcript-frame .quote-selection {
-      z-index: 5;
     }
     .composer {
       padding: 4px;
