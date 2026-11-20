@@ -517,16 +517,10 @@ const changeStreams = new Map();
 const changed = (botId) => {
   for (const stream of changeStreams.get(botId) ?? []) stream.write("data: change\n\n");
 };
-const reactionFixture = process.env.PREVIEW_REACTIONS === "1";
-// Another member already reacted to the latest reply, so a reaction sent here joins theirs.
-if (reactionFixture)
-  conversations.kitchen.messages.push({
-    id: "k63-jordan-heart",
-    role: "user",
-    sender: { id: "jordan", name: "Jordan" },
-    text: "\u2764",
-    createdAt: new Date(Date.UTC(2026, 8, 22, 18, 5)).toISOString(),
-  });
+// PREVIEW_REACTIONS=1: Kitchen companion ends on a reply, so it offers React. PREVIEW_REACTIONS=stale also has
+// another member write before the send arrives, so the server's `answer_stale` refusal and its notice show.
+const reactionFixture = ["1", "stale"].includes(process.env.PREVIEW_REACTIONS ?? "");
+const staleReactions = process.env.PREVIEW_REACTIONS === "stale";
 if (process.env.PREVIEW_ARRIVALS === "1") {
   let arrival = 0;
   setInterval(() => {
@@ -1639,6 +1633,32 @@ const handle = async (request, response) => {
       secureFlowSettled(conversation, "declined");
       return setTimeout(() => json(response, { status: "ok" }), 700);
     }
+    // The server's guard on a reaction answer (src/server/conversation-routes.ts): it is sent only while
+    // the reply it names still ends the chat. PREVIEW_REACTIONS=stale has Jordan write first, so it never does.
+    const answerMatch =
+      request.method === "POST" && body.answering !== undefined
+        ? /^\/bots\/([^/]+)\/messages$/.exec(path)
+        : null;
+    if (answerMatch) {
+      const botId = decodeURIComponent(answerMatch[1]),
+        chat = conversations[botId];
+      if (staleReactions && chat) {
+        chat.messages.push({
+          id: `stale-${Date.now()}`,
+          role: "user",
+          sender: { id: "jordan", name: "Jordan" },
+          text: "Actually, make it the south gate.",
+          createdAt: new Date().toISOString(),
+        });
+        changed(botId);
+      }
+      if (chat?.messages.at(-1)?.id !== body.answering)
+        return json(
+          response,
+          { error: "The chat moved on, so your reaction was not sent.", code: "answer_stale" },
+          409,
+        );
+    }
     // PREVIEW_REACTIONS=1: a message to Kitchen companion, such as a reaction answer, is held for
     // PREVIEW_SEND_DELAY ms (default 2500) so its sending state shows, then saved and accepted. No turn runs.
     if (
@@ -1859,6 +1879,7 @@ const handle = async (request, response) => {
             "imageGeneration",
             "portraitGeneration",
             "liveVoice",
+            "reactionAnswers",
           ].map((key) => [key, { supported: true }]),
         ),
       });

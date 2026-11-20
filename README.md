@@ -782,8 +782,11 @@ Code blocks are colored by language, and tables can be copied as Markdown or CSV
 Replies read in bubbles. Each run of a reply's paragraphs, lists, quotes and headings
 sits in one bubble up to 600 px wide, about 77 characters a line, while tables, code,
 images and cards stay full width between them, so a reply can read bubble, table,
-bubble. Progress lines, tool work and cards keep their own look, and a reply that is
-still arriving groups the same way, so nothing moves when it is saved. A table wider
+bubble. A list or quote that holds code, a table or an image stays full width too, as in
+Classic. Progress lines, tool work and cards keep their own look. A reply that is still
+arriving groups the same way, so saving it usually moves nothing. A link whose definition
+comes later in the reply redraws the reply once that definition arrives, which clears a
+selection inside it. A table wider
 than the chat fades at each side that has more to scroll to. Your own messages hug
 their text at the right edge. In Settings, **Chat style** switches between **Bubbles**
 and **Classic**, which shows replies as flat text across the column, and **Your
@@ -793,14 +796,13 @@ contrast; a chat without an avatar color, such as one with a photo, keeps the ti
 Both are saved with your preferences, like Appearance, so they follow you to your other
 devices. Group chats keep their own layout.
 
-On the web, to answer the latest reply with one tap, use **React** in its actions and
-pick 👍, ❤️, 😂, 🎉 or 👎. The emoji is sent as your message, the same as typing it, and
-shows as a small chip under the reply instead of as a message of its own; another member's
-reaction shows their name beside it. A lone one of those emoji you type after a reply
-shows the same way. React appears only while you could send, on a reply that is still
-the last message, and a reaction can't be taken back. Your draft stays as it is. If a
-reaction can't be confirmed, it shows as an ordinary message with **Retry**. Group
-chats don't offer reactions.
+On the web, to answer the reply that ends the chat with one tap, use **React** in its
+actions and pick 👍, ❤️, 😂, 🎉 or 👎. The emoji is sent as your message, the same as
+typing it, and shows as an ordinary message. React appears only while you could send, on a
+reply that is still the last message, including one that only holds files. If someone
+else wrote in the meantime, the reaction is not sent: the chat refreshes and says "The chat
+moved on, so your reaction was not sent." A reaction can't be taken back, and your draft
+stays as it is whatever happens to the reaction. Group chats don't offer reactions.
 
 When a reply fails, **Retry** under it sends your message again without touching
 your draft. A failed turn can be retried once, by anyone, from any device: a second
@@ -828,8 +830,10 @@ that message. On a wide web window with a mouse or trackpad, a long chat also sh
 **message rail** at its right edge: one tick for each message a person sent among the
 loaded messages, with the turn in view marked. Hovering or focusing a tick previews the
 message and the start of its reply; choosing one brings that message to the top of the
-view. The rail is one tab stop, moved with Up, Down, Home and End. It does not appear
-on phones. A status area above the message box gathers send problems, the
+view. When more ticks exist than fit, the rail shows the ones around the turn you are
+reading, with a chevron above or below where more are hidden. The rail is one tab stop;
+Up, Down, Home and End reach every loaded message you sent, and a reaction gets no tick.
+It does not appear on phones. A status area above the message box gathers send problems, the
 interrupted-task review, waiting decisions with **Review**, and connection trouble,
 most urgent first.
 

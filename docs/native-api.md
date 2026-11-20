@@ -969,45 +969,47 @@ tint.
 
 ### Reaction answers
 
-A person can answer the assistant's latest reply with one emoji. A reaction is an
-ordinary message: send it with `POST /api/bots/:id/messages` like any other, with the
-emoji as the whole `text`, no attachments and no `draftBaseRevision`, so the server
-clears only a draft that is empty or the same emoji. Nothing else is stored, and no
-route or field marks it. `src/shared/reactions.ts` holds the rule below; the web uses
-it as written.
+A person can answer the reply that ends the chat with one emoji. A reaction is an
+ordinary message in every respect: it draws an ordinary row for whoever sent it, find
+in chat and search find it, history pages, scroll anchoring and read positions treat it
+as any message, and it counts toward unread. Nothing about it depends on the messages
+around it. `src/shared/reactions.ts` holds the rules below; the web uses them as written.
 
 The set, in picker order: 👍 (Thumbs up), ❤️ (Heart), 😂 (Laugh), 🎉 (Celebrate),
-👎 (Thumbs down). Compare texts trimmed and with every U+FE0F variation selector
-removed, so U+2764 alone is the heart.
+👎 (Thumbs down). A message's text is a reaction when, trimmed and with every U+FE0F
+variation selector removed, it is exactly one emoji of the set, so U+2764 alone is the
+heart. Two reasons to read that from a message, and only these: the message rail gives
+a person's message that is a reaction and has no files no tick, and prompt recall skips
+it.
 
-A message is shown as a reaction when all of these hold:
+Offer **React** in the action row of the conversation's last message when it is a
+settled assistant reply: `role` `assistant`, not `interim`, not activity (read origins
+as `withMessageOrigins` does, so a reply to an agent's prompt is activity), with text or
+files, and not still streaming. Offer it on a reply that has only files too, even
+though Copy, Listen, Save and Quote need words. Offer it only while the composer could
+send: nothing pending or sending, no turn running or starting, the assistant reachable,
+an interrupted task reviewed, and the `reactionAnswers` capability supported. A server
+without the guard below omits that capability; hide React there. Group chats do not
+offer reactions.
 
-1. A person sent it, this person or another household member: a `user` message whose
-   origin is human or absent, never a scheduled prompt or other activity.
-2. It has no files.
-3. Its text, compared as above, is one emoji of the set.
-4. The nearest earlier message that is neither a tool row nor itself a reaction is an
-   assistant reply that is not a progress line: `role` `assistant`, not `interim`, not
-   activity, with text or files. A tool row is a `tool` message, or an `assistant`
-   message with no text and no files. Read origins as `withMessageOrigins` does, so a
-   reply to an agent's prompt is activity, not a reply.
+Send the choice with `POST /api/bots/:id/messages` like any other message, with the
+emoji as the whole `text`, `attachments: []`, and `answering` set to the ID of the
+reply it answers. Leave out `draftBaseRevision` and `retryOf`. Like a retry, an
+answering send never reads, merges, clears or restores the sender's draft: not when it
+is accepted, refused, retried, discarded or reconciled later. A resend of an uncertain
+answer with `reviewedUncertain: true` carries the same `answering`. The server answers
+400 `Invalid request` with `details[].path` `["answering"]` when `answering` comes with
+text that is not exactly one emoji of the set, with files, with `draftBaseRevision` or
+with `retryOf`, and 400 on `POST /api/bots/:id/steer`.
 
-Read the loaded messages in order; the first loaded message is never a reaction,
-since what it follows is unknown. Reactions in a row all answer the same reply, so
-several members can react to one reply.
-
-A reaction draws no row. Its emoji shows as a chip under the reply it answers, above
-that reply's meta row, with another member's name as visible text. Its accessible
-name is "You reacted thumbs up" or "Jordan reacted thumbs up". Chips are not
-controls; a sent reaction cannot be removed. While the send is on its way the chip is
-faint and marked busy. A send that ends without a receipt shows as an ordinary
-message row with its usual Retry, not as a chip.
-
-Offer the picker only on the latest reply, only while that reply is the last message
-apart from reactions to it, with no tool row after it, and only while the composer
-could send: nothing pending or sending, no turn running or starting, the assistant
-reachable, and an interrupted task reviewed. A reaction is still a real message for
-unread state and the home preview. Group chats do not offer reactions.
+The server reads the conversation's last turn fresh, never from a read shared with
+other callers, and admits the answer only when no turn is running and the last message's
+ID equals `answering`. Otherwise it answers 409 with `code: "answer_stale"`, records
+nothing and sends nothing to Hermes, so one member who still sees "Open the north
+gate?" cannot approve "Open the south gate?" with one tap. The same request ID can be
+sent again once the reply ends the chat again. On `answer_stale`, leave the draft
+alone, read the conversation again, and tell the person "The chat moved on, so your
+reaction was not sent." as an alert that assistive tech announces.
 
 <!-- Main assistant: begin -->
 
