@@ -407,11 +407,16 @@ export const Composer = memo(function Composer({
       kind: "send",
       node: (
         <div className="notice" role="status">
+          {/* A reaction never came from the draft, so discarding one puts nothing back into it. */}
           {confirmDiscard ? (
-            <span>
-              The message may still arrive. Its text goes back into the draft, so sending it again
-              could deliver it twice.
-            </span>
+            pending.answering !== undefined ? (
+              <span>The reaction may still arrive. Your draft stays as it is.</span>
+            ) : (
+              <span>
+                The message may still arrive. Its text goes back into the draft, so sending it again
+                could deliver it twice.
+              </span>
+            )
           ) : (
             <span>Checking whether your last message arrived…</span>
           )}
@@ -426,7 +431,9 @@ export const Composer = memo(function Composer({
                     discard();
                   }}
                 >
-                  Discard and keep my text in the draft
+                  {pending.answering !== undefined
+                    ? "Stop checking"
+                    : "Discard and keep my text in the draft"}
                 </button>
                 <button type="button" onClick={() => setConfirmDiscard(false)}>
                   Cancel

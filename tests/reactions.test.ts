@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../src/shared/types";
-import { REACTIONS, reactionAnswers, reactionOf } from "../src/shared/reactions";
+import { REACTIONS, answerableReply, isReactionMessage, reactionOf } from "../src/shared/reactions";
 
 const person = (id: string, text: string, extra: Partial<Message> = {}): Message => ({
   id,
@@ -16,11 +16,6 @@ const reply = (id: string, text: string, extra: Partial<Message> = {}): Message 
   ...extra,
 });
 const question = reply("a", "Want me to add it to the list?");
-/** What each message answers: the reply's ID, or undefined when it is an ordinary message. */
-const answered = (messages: Message[]) => {
-  const answers = reactionAnswers(messages);
-  return Object.fromEntries(messages.map((message) => [message.id, answers.get(message.id)]));
-};
 
 describe("reactionOf", () => {
   // The iOS app and the web picker send these; the order is the picker's.
@@ -47,89 +42,50 @@ describe("reactionOf", () => {
   });
 });
 
-describe("reactionAnswers", () => {
-  it("takes a person's lone reaction after a reply as an answer to it, whitespace and all", () => {
-    expect(answered([question, person("r", "  👍 \n")])).toMatchObject({ r: "a" });
+describe("isReactionMessage", () => {
+  // It reads only the message, so a page boundary, find or another member's copy of the chat cannot change it.
+  it("takes a person's message of one reaction as one, wherever it sits", () => {
+    expect(isReactionMessage(person("r", "  👍 \n"))).toBe(true);
+    expect(
+      isReactionMessage(person("r", "\u2764", { sender: { id: "two", name: "Jordan" } })),
+    ).toBe(true);
   });
 
-  it("takes a reaction without its variation selector the same way", () => {
-    expect(answered([question, person("r", "\u2764")])).toMatchObject({ r: "a" });
-  });
-
-  it("leaves a message with a file as a message", () => {
+  it("leaves a message with a file, an emoji outside the set and an assistant's emoji as messages", () => {
     const file = { id: "f", name: "gate.jpg", mime: "image/jpeg" };
-    expect(answered([question, person("r", "👍", { files: [file] })]).r).toBeUndefined();
+    expect(isReactionMessage(person("r", "👍", { files: [file] }))).toBe(false);
+    expect(isReactionMessage(person("r", "🔥"))).toBe(false);
+    expect(isReactionMessage(reply("r", "👍"))).toBe(false);
+  });
+});
+
+describe("answerableReply", () => {
+  it("is the reply that ends the chat, with words or with files alone", () => {
+    expect(answerableReply([person("q", "Add salt?"), question])).toBe("a");
+    const file = { id: "f", name: "list.pdf", mime: "application/pdf" };
+    expect(answerableReply([person("q", "The list?"), reply("f", "", { files: [file] })])).toBe(
+      "f",
+    );
   });
 
-  it("leaves a scheduled prompt as a prompt, even when its text is a reaction", () => {
-    const scheduled = person("r", "👍", {
-      sender: undefined,
-      origin: { kind: "scheduled", visibility: "conversation" },
-    });
-    expect(answered([question, scheduled]).r).toBeUndefined();
+  it("is nothing once anything else ends the chat", () => {
+    expect(answerableReply([question, person("r", "👍")])).toBeUndefined();
+    expect(answerableReply([question, { id: "t", role: "tool", text: "ran" }])).toBeUndefined();
+    expect(answerableReply([])).toBeUndefined();
   });
 
-  it("leaves a lone emoji outside the set as a message", () => {
-    expect(answered([question, person("r", "🔥")]).r).toBeUndefined();
+  it("is nothing for a progress line, a live reply or a call without words", () => {
+    expect(answerableReply([reply("p", "Checking the list…", { interim: true })])).toBeUndefined();
+    expect(answerableReply([person("q", "Hi"), reply("s-inflight", "Writ")])).toBeUndefined();
+    const call = reply("c", "", { toolCall: { id: "c", name: "list", status: "completed" } });
+    expect(answerableReply([person("q", "Hi"), call])).toBeUndefined();
   });
 
-  it("leaves a reaction after a person's message as a message", () => {
-    expect(answered([question, person("q", "Yes please"), person("r", "👍")]).r).toBeUndefined();
-  });
-
-  it("leaves a reaction after a progress line as a message", () => {
-    const progress = reply("p", "Checking the list…", { interim: true });
-    expect(answered([progress, person("r", "👍")]).r).toBeUndefined();
-  });
-
-  it("looks past tool rows that follow the reply", () => {
-    const messages = [
-      question,
-      { id: "tool", role: "tool", text: "ran", toolName: "shell" } as Message,
-      reply("call", "", { toolCall: { id: "c", name: "list", status: "completed" } }),
-      person("r", "👍"),
-    ];
-    expect(answered(messages).r).toBe("a");
-  });
-
-  it("answers the same reply with reactions in a row from different members", () => {
-    const messages = [
-      question,
-      person("mine", "👍"),
-      person("theirs", "🎉", { sender: { id: "two", name: "Jordan" } }),
-    ];
-    expect(answered(messages)).toMatchObject({ mine: "a", theirs: "a" });
-  });
-
-  it("leaves an emoji as a message once anything but a reply comes between", () => {
-    const messages = [
-      question,
-      person("r1", "👍"),
-      reply("b", "Added."),
-      person("r2", "❤️"),
-      person("words", "Thanks"),
-      person("r3", "😂"),
-    ];
-    expect(answered(messages)).toEqual({
-      a: undefined,
-      r1: "a",
-      b: undefined,
-      r2: "b",
-      words: undefined,
-      r3: undefined,
-    });
-  });
-
-  // Nothing before the window is read, so its first message cannot be shown as an answer to it.
-  it("leaves the first message as a message", () => {
-    expect(answered([person("r", "👍")]).r).toBeUndefined();
-  });
-
-  it("does not answer a reply that went to an agent's prompt, which the chat files as activity", () => {
+  it("is nothing for a reply to an agent's prompt, which the chat files as activity", () => {
     const agent = person("prompt", "Check the barn", {
       sender: undefined,
       origin: { kind: "agent", visibility: "activity" },
     });
-    expect(answered([agent, reply("b", "Barn is fine."), person("r", "👍")]).r).toBeUndefined();
+    expect(answerableReply([agent, reply("b", "Barn is fine.")])).toBeUndefined();
   });
 });

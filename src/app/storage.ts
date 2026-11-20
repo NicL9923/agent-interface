@@ -49,6 +49,8 @@ export type Pending = {
   reviewedInterruption: boolean;
   /** The draft revision this message was written on, so the server clears a draft whose final edits were never saved. */
   draftBaseRevision?: number;
+  /** The reply a reaction answers. Such a send never reads, merges, clears or restores the draft. */
+  answering?: string;
 };
 // Every key this app keeps in browser storage. The names are persisted: renaming one orphans what a
 // browser already saved, such as a request whose outcome is uncertain and must be retried, not resent.

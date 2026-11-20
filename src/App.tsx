@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ActivityState, Bot, FileRef, Preferences, SubmissionReceipt } from "./shared/types";
+import type {
+  ActivityState,
+  Bot,
+  Capability,
+  FileRef,
+  Preferences,
+  SubmissionReceipt,
+} from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
 import { api } from "./client-api";
 import type { GroupCatalog, GroupRoom } from "./shared/collaboration";
@@ -353,6 +360,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     reviewed,
     connectionLost,
     setError,
+    onAnswerStale: history.refresh,
   });
   useDraftPersistence({
     draft,
@@ -687,9 +695,9 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const sendMessage = useStableCallback(() =>
     send((request) => history.anchorSend(request.requestId)),
   );
-  // A reaction shows on the reply it answers, not as a row a send could anchor, so the view follows the end.
-  const sendReaction = useStableCallback((emoji: string) => {
-    void send(() => history.jumpToLatest(), emoji);
+  // A reaction is an ordinary message that names the reply it answers, so it anchors as any send does.
+  const sendReaction = useStableCallback((emoji: string, answering: string) => {
+    void send((request) => history.anchorSend(request.requestId), { text: emoji, answering });
   });
   const refreshSession = useStableCallback(() => void session.refresh());
   const reconnect = useStableCallback(() => void session.reconnect());
@@ -995,8 +1003,10 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       : reported;
   const active = ["thinking", "working", "waiting", "blocked"].includes(reported);
   // A reaction is offered when the message box could send: nothing on its way, no turn running or starting,
-  // and the assistant reachable. See reactable in Conversation.tsx for which reply shows it.
+  // and the assistant reachable, and only by a server that checks the answer against the chat's end (an
+  // older one omits the capability). See reactTo in Conversation.tsx for which reply shows it.
   const canReact =
+    !!(boot.capabilities.reactionAnswers as Capability | undefined)?.supported &&
     !pending &&
     !sending &&
     !connectionLost &&

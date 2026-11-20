@@ -1,10 +1,10 @@
 import type { Message } from "./types";
-import { isConversationReply, isHumanMessage, withMessageOrigins } from "./message-origin";
+import { isConversationReply, withMessageOrigins } from "./message-origin";
 
 /**
- * Reaction answers: a person answers the assistant's reply with one emoji, and the emoji shows on that
- * reply instead of as a message of its own. A reaction is an ordinary message; nothing about it is
- * stored apart from its text. docs/native-api.md#reaction-answers states the rule for other clients.
+ * Reaction answers: a person answers the reply that ends the chat with one emoji. A reaction is an
+ * ordinary message in every way; the send names the reply in `answering`, and the server admits it only
+ * while that reply still ends the chat. docs/native-api.md#reaction-answers states the rule for other clients.
  */
 
 /** The reactions offered, in the order the picker shows them. `name` is what the choice means. */
@@ -18,7 +18,7 @@ export const REACTIONS = [
 export type Reaction = (typeof REACTIONS)[number];
 
 /** Emoji compare without U+FE0F, so a heart typed as U+2764 alone matches the offered ❤️. */
-const bare = (text: string) => text.trim().replace(/\uFE0F/gu, "");
+const bare = (text: string) => text.trim().replace(/️/gu, "");
 const byBare = new Map<string, Reaction>(
   REACTIONS.map((reaction) => [bare(reaction.emoji), reaction]),
 );
@@ -27,56 +27,21 @@ const byBare = new Map<string, Reaction>(
 export const reactionOf = (text: string): Reaction | undefined => byBare.get(bare(text));
 
 /**
- * A row the transcript does not show as a message: a tool result, or an assistant row with no words
- * and no files, which carries a tool call or reasoning. A reaction looks past these to its reply.
+ * A person's message that is one emoji of the set and nothing else. It reads only the message, never
+ * its neighbors, so every client and every page of history agrees on it. It is still a message: the
+ * transcript, find, unread and search treat it as one. Only the message rail and prompt recall pass over it.
  */
-const isToolRow = (message: Message) =>
-  message.role === "tool" ||
-  (message.role === "assistant" && !message.text.trim() && !message.files?.length);
-
-/** What the reaction rule finds in a list of messages. */
-export type ReactionReading = {
-  /** Each reaction answer's ID, mapped to the ID of the reply it answers. */
-  answers: Map<string, string>;
-  /**
-   * The reply a reaction sent now would answer, when it is the last message apart from reactions to
-   * it. A tool row after it leaves none, since the reply is then no longer what the chat ends with.
-   */
-  latest?: string;
-};
+export const isReactionMessage = (message: Message) =>
+  message.role === "user" && !message.files?.length && reactionOf(message.text) !== undefined;
 
 /**
- * Which messages are reaction answers, and which reply a new one would answer. A message is a
- * reaction answer when a person sent it, it has no files, its text is one reaction, and the nearest
- * earlier message that is neither a tool row nor a reaction is an assistant reply, not a progress
- * line. Several reactions in a row, from one member or several, answer the same reply.
- *
- * Only `messages` are read, so the first loaded message is never a reaction: what it follows is not known.
+ * The reply a reaction sent now would answer: the chat's last message, when it is a settled assistant
+ * reply with words or files, not a progress line or activity. Only the last message is read, with the
+ * origins its prompt gives it; the server checks the same last message when the answer arrives.
  */
-export function readReactions(messages: readonly Message[]): ReactionReading {
-  const answers = new Map<string, string>();
-  // The reply a reaction here would answer, or undefined when the last shown message is not one.
-  let reply: string | undefined;
-  let latest: string | undefined;
-  // Origins decide what is activity: a reply to an agent's or diagnostic prompt is not a conversation reply.
-  for (const message of withMessageOrigins(messages)) {
-    if (isToolRow(message)) {
-      latest = undefined;
-      continue;
-    }
-    if (
-      reply &&
-      isHumanMessage(message) &&
-      !message.files?.length &&
-      reactionOf(message.text) !== undefined
-    ) {
-      answers.set(message.id, reply);
-      continue;
-    }
-    reply = latest = isConversationReply(message) ? message.id : undefined;
-  }
-  return { answers, latest };
+export function answerableReply(messages: readonly Message[]): string | undefined {
+  const last = messages.at(-1);
+  if (!last || last.role !== "assistant" || last.id.endsWith("-inflight")) return undefined;
+  const reply = withMessageOrigins(messages).at(-1)!;
+  return isConversationReply(reply) ? reply.id : undefined;
 }
-
-/** Each reaction answer's ID, mapped to the reply it answers. See readReactions. */
-export const reactionAnswers = (messages: readonly Message[]) => readReactions(messages).answers;

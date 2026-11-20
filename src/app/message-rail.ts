@@ -1,6 +1,6 @@
 import type { Message } from "../shared/types";
 import { isConversationReply, messageOrigin } from "../shared/message-origin";
-import { reactionAnswers } from "../shared/reactions";
+import { isReactionMessage } from "../shared/reactions";
 import { ANCHOR_GAP } from "./scroll-follow";
 import { isHumanMessage } from "./transcript-logic";
 import { replySnippet } from "./reply-announcement";
@@ -40,15 +40,15 @@ const startsTurn = (message: Message) =>
 
 /**
  * The rail's entries: every message a person sent, theirs or another member's, never a scheduled prompt,
- * tool row or reply. A reaction answer is drawn on its reply, not as a message, so it gets no tick either.
+ * tool row or reply. A reaction, one emoji of the set, is a tap rather than a question to find again, so
+ * it gets no tick either; the turn it would start still ends the tick before it.
  */
 export function railEntries(messages: Message[]): RailEntry[] {
   const entries: RailEntry[] = [];
-  const reactions = reactionAnswers(messages);
   let open: RailEntry | undefined;
   for (const message of messages) {
     if (startsTurn(message)) open = undefined;
-    if (reactions.has(message.id)) continue;
+    if (isReactionMessage(message)) continue;
     if (isHumanMessage(message)) {
       open = {
         id: message.id,

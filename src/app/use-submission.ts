@@ -12,6 +12,7 @@ import {
   submissionKey,
 } from "./storage";
 import type { Draft, Pending } from "./storage";
+import { answerStaleMessage } from "../shared/errors";
 import { contentHash } from "./draft-merge";
 import { restoreSent } from "./sent-echo";
 /**
@@ -33,6 +34,7 @@ export function useSubmission({
   reviewed,
   connectionLost,
   setError,
+  onAnswerStale,
 }: {
   botId: string;
   userId?: string;
@@ -43,6 +45,8 @@ export function useSubmission({
   reviewed: boolean;
   connectionLost: boolean;
   setError: (message: string) => void;
+  /** The server refused a reaction because the chat moved on; the conversation should be read again. */
+  onAnswerStale?: () => void;
 }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [receipt, setReceipt] = useState<SubmissionReceipt | null>(null);
@@ -85,8 +89,10 @@ export function useSubmission({
         : current,
     );
   };
-  // A refused message goes back into its draft, in front of anything that replaced it meanwhile.
+  // A refused message goes back into its draft, in front of anything that replaced it meanwhile. A
+  // reaction never came from the draft, so it never goes into it.
   const refused = (user: string, request: Pending) => {
+    if (request.answering !== undefined) return;
     markSent(user, request, false);
     const key = draftKey(user, request.botId);
     const saved = localRead<Draft>(key);
@@ -125,10 +131,12 @@ export function useSubmission({
           setPending(null);
           localRemove(key);
         } else if (result.status === "accepted") {
-          clearSavedDraft(userId, pending);
+          if (pending.answering === undefined) {
+            clearSavedDraft(userId, pending);
+            clearSent(userId, pending);
+          }
           setPending(null);
           localRemove(key);
-          clearSent(userId, pending);
         }
       } catch {
         /* Unknown submission stays pending until a reliable reconciliation. */
@@ -143,14 +151,29 @@ export function useSubmission({
       clearInterval(timer);
     };
   }, [pending, userId, botId, sending]);
+  // The server refused a reaction because its reply no longer ends the chat: nothing was sent, so the
+  // send is forgotten, the draft is left alone, and the chat is read again to show where it went.
+  const stale = (request: Pending, cause: unknown) => {
+    if (!(cause instanceof ApiError) || cause.code !== "answer_stale" || !userId) return false;
+    if (activeBotRef.current === request.botId) {
+      setPending(null);
+      setReceipt(null);
+      setError(answerStaleMessage);
+    }
+    localRemove(submissionKey(userId, request.botId));
+    onAnswerStale?.();
+    return true;
+  };
   /**
    * Sends the draft. `onStart` hears the request once it is on its way, such as to anchor the view to it.
-   * With `reaction`, sends that emoji instead, as an ordinary message, and leaves the draft as it is: the
-   * request names no draft revision, so the server clears only a draft that is empty or the same emoji
-   * (see clearSubmittedDraft). Refused, the emoji goes into the draft as any refused message does.
+   * With `answer`, sends that reaction to the reply `answering` names instead. Like a retry, it never
+   * reads, merges, clears or restores the draft, whether it is accepted, refused, retried or discarded.
    */
-  const send = async (onStart?: (request: Pending) => void, reaction?: string) => {
-    const fromDraft = reaction === undefined;
+  const send = async (
+    onStart?: (request: Pending) => void,
+    answer?: { text: string; answering: string },
+  ) => {
+    const fromDraft = answer === undefined;
     if (
       !userId ||
       connectionLost ||
@@ -174,9 +197,10 @@ export function useSubmission({
       : {
           requestId: crypto.randomUUID(),
           botId,
-          text: reaction,
+          text: answer.text,
           attachments: [],
           reviewedInterruption: reviewed,
+          answering: answer.answering,
         };
     localSave(submissionKey(userId, botId), request);
     // The draft is the sent copy only when it is what was sent.
@@ -205,6 +229,7 @@ export function useSubmission({
       }
     } catch (e) {
       if (epoch !== identityEpoch.current) return;
+      if (stale(request, e)) return;
       if (e instanceof ApiError && e.status < 500) {
         refused(userId, request);
         if (activeBotRef.current === request.botId) setPending(null);
@@ -230,6 +255,7 @@ export function useSubmission({
         if (current()) setReceipt(result);
       })
       .catch((e) => {
+        if (epoch !== identityEpoch.current || stale(request, e)) return;
         if (current()) setError(e.message);
       })
       .finally(() => {
