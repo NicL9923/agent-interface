@@ -268,6 +268,28 @@ export function PreferencesDialog({
                   <option value="dark">Dark</option>
                 </NativeSelect>
               </label>
+              <label className="settings-row">
+                <span className="row-label">Chat style</span>
+                <NativeSelect
+                  value={prefs.chatStyle ?? "bubbles"}
+                  onChange={(event) =>
+                    save({ chatStyle: event.target.value as "bubbles" | "classic" })
+                  }
+                >
+                  <option value="bubbles">Bubbles</option>
+                  <option value="classic">Classic</option>
+                </NativeSelect>
+              </label>
+              <label className="settings-row">
+                <span className="row-label">Your messages</span>
+                <NativeSelect
+                  value={prefs.ownBubble ?? "tint"}
+                  onChange={(event) => save({ ownBubble: event.target.value as "tint" | "solid" })}
+                >
+                  <option value="tint">Tinted</option>
+                  <option value="solid">Solid color</option>
+                </NativeSelect>
+              </label>
               <Switch
                 label="Advanced details"
                 detail="Reasoning, tool inputs and the model menu"

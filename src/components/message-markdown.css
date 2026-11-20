@@ -11,6 +11,55 @@
 .message-markdown > :last-child {
   margin-bottom: 0;
 }
+/* The bubbles chat style: each run of a reply's prose sits in a bubble that hugs its text, and every other
+   block, such as a table, code or a card, stays a block of its own at the column's full width. */
+.message-markdown.reply-bubbles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.message-markdown.reply-bubbles > * {
+  margin-block: 0;
+}
+.message-markdown.reply-bubbles > :not(.reply-bubble) {
+  align-self: stretch;
+  min-width: 0;
+}
+/* Two blocks in a row keep the space they have in a flat reply. */
+.message-markdown.reply-bubbles > :not(.reply-bubble) + :not(.reply-bubble) {
+  margin-top: calc(1em - 6px);
+}
+.message-markdown.reply-bubbles > hr {
+  margin-block: 0.5em;
+}
+.reply-bubble {
+  min-width: 0;
+  max-width: min(100%, 600px);
+  padding: 9px 15px;
+  /* Transparent, so forced colors and increased contrast can draw the bubble's edge. */
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background: var(--reply-bubble);
+  line-height: 1.6;
+}
+.reply-bubble > :first-child {
+  margin-top: 0;
+}
+.reply-bubble > :last-child {
+  margin-bottom: 0;
+}
+/* Where a bubble meets another block of its reply, its leading corner on that side tightens. The reply's
+   last bubble ends in the person's bubble's tail, mirrored. */
+.reply-bubbles > .reply-bubble:not(:first-child) {
+  border-start-start-radius: 8px;
+}
+.reply-bubbles > .reply-bubble:not(:last-child) {
+  border-end-start-radius: 8px;
+}
+.reply-bubbles > .reply-bubble:last-child {
+  border-end-start-radius: 4px;
+}
 .message-markdown img,
 .message-markdown video {
   max-width: 100%;
@@ -92,6 +141,10 @@
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
+/* The rail color nearly matches a bubble's fill; the page color reads as a chip on it in both themes. */
+.reply-bubble :not(pre) > code {
+  background: var(--surface);
+}
 .markdown-code-block {
   margin: 1em 0;
   min-width: 0;
@@ -145,6 +198,47 @@
 .markdown-table-scroll {
   max-width: 100%;
   overflow-x: auto;
+}
+/* A table wider than the column fades at each edge that has more to scroll to. MarkdownTable sets the
+   sides. A mask would clip the focus ring, so the frame around the table draws it instead. */
+.markdown-table-scroll[data-fade] {
+  --fade-left: 0px;
+  --fade-right: 0px;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--fade-left),
+    #000 calc(100% - var(--fade-right)),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--fade-left),
+    #000 calc(100% - var(--fade-right)),
+    transparent
+  );
+}
+.markdown-table-scroll[data-fade~="left"] {
+  --fade-left: 40px;
+}
+.markdown-table-scroll[data-fade~="right"] {
+  --fade-right: 40px;
+}
+@supports selector(:has(*)) {
+  .markdown-table-frame:has(> .markdown-table-scroll:focus-visible) {
+    outline: 3px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .message-markdown .markdown-table-scroll:focus-visible {
+    outline: none;
+  }
+}
+@media (forced-colors: active) {
+  .markdown-table-scroll[data-fade] {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 .message-markdown table {
   width: max-content;

@@ -9,6 +9,7 @@ import {
   StreamingMarkdown,
   blocksAgree,
   bubbleRuns,
+  fadeSides,
   parseBlock,
   sameBlock,
   streamingBlocks,
@@ -912,6 +913,37 @@ describe("reply bubbles", () => {
       root.render(createElement(MessageMarkdown, { text: mixed, bubbles: true })),
     );
     expect(container.textContent).toBe(flat);
+  });
+});
+
+describe("a table wider than the reply", () => {
+  it("fades each side that has more to scroll to, left to right and right to left", () => {
+    expect(fadeSides(0, 0, "ltr")).toBe("");
+    expect(fadeSides(0, 200, "ltr")).toBe("right");
+    expect(fadeSides(100, 200, "ltr")).toBe("left right");
+    expect(fadeSides(200, 200, "ltr")).toBe("left");
+    // Right to left, the start is at scrollLeft 0 and the end at minus the overflow.
+    expect(fadeSides(0, 200, "rtl")).toBe("left");
+    expect(fadeSides(-200, 200, "rtl")).toBe("right");
+    // Zoomed, a table scrolled to its end can stop a fraction of a pixel short; that is not more to see.
+    expect(fadeSides(199.6, 200, "ltr")).toBe("left");
+    expect(fadeSides(0.4, 200, "ltr")).toBe("right");
+  });
+  it("updates the fade as the reader scrolls the table", async () => {
+    await act(async () =>
+      root.render(createElement(MessageMarkdown, { text: "| a | b |\n| --- | --- |\n| 1 | 2 |" })),
+    );
+    const scroller = container.querySelector<HTMLElement>(".markdown-table-scroll")!;
+    expect(scroller.dataset.fade).toBeUndefined();
+    Object.defineProperties(scroller, {
+      scrollWidth: { configurable: true, value: 600 },
+      clientWidth: { configurable: true, value: 300 },
+    });
+    scroller.dispatchEvent(new Event("scroll"));
+    expect(scroller.dataset.fade).toBe("right");
+    scroller.scrollLeft = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    expect(scroller.dataset.fade).toBe("left");
   });
 });
 

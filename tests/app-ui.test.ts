@@ -3780,3 +3780,75 @@ describe("reply announcements", () => {
     expect(announcement()).toBe("");
   });
 });
+
+describe("chat style", () => {
+  it("saves the chat style and own-message fill from Settings, and a classic reply drops its bubbles", async () => {
+    for (const [method, open] of [
+      ["showModal", true],
+      ["close", false],
+    ] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, method, {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.open = open;
+        },
+      });
+    conversation.messages = [
+      {
+        id: "u",
+        role: "user",
+        text: "Which gates need batteries?",
+        createdAt: "2026-10-01T11:00:00Z",
+      },
+      {
+        id: "a",
+        role: "assistant",
+        text: "Here:\n\n| Gate | Battery |\n| --- | --- |\n| North | 14% |\n\nSwap the north one first.",
+        createdAt: "2026-10-01T11:01:00Z",
+      },
+    ];
+    vi.mocked(write).mockImplementation(
+      async <T>(path: string, value?: unknown) => (path === "/preferences" ? value : {}) as T,
+    );
+    try {
+      await render();
+      const reply = () => container.querySelector(".message-assistant .message-markdown")!;
+      expect(reply().querySelectorAll(":scope > .reply-bubble")).toHaveLength(2);
+      await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
+      await act(async () =>
+        [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+          .find((item) => item.textContent === "Settings")!
+          .click(),
+      );
+      await loaded();
+      const choose = async (label: string, value: string) => {
+        const select = [...container.querySelectorAll(".settings-row")]
+          .find((row) => row.querySelector(".row-label")?.textContent === label)!
+          .querySelector("select")!;
+        select.value = value;
+        await act(async () => select.dispatchEvent(new Event("change", { bubbles: true })));
+      };
+      await choose("Chat style", "classic");
+      expect(write).toHaveBeenLastCalledWith(
+        "/preferences",
+        expect.objectContaining({ chatStyle: "classic" }),
+        "PATCH",
+      );
+      // Classic shows the reply flat: its paragraphs sit directly in the reply.
+      expect(reply().querySelector(".reply-bubble")).toBeNull();
+      expect(reply().querySelectorAll(":scope > p")).toHaveLength(2);
+      await choose("Your messages", "solid");
+      expect(write).toHaveBeenLastCalledWith(
+        "/preferences",
+        expect.objectContaining({ chatStyle: "classic", ownBubble: "solid" }),
+        "PATCH",
+      );
+      // The chat carries the choice to its stylesheet; without it, Solid would change nothing.
+      expect(container.querySelector<HTMLElement>(".conversation-panel")!.dataset.ownBubble).toBe(
+        "solid",
+      );
+    } finally {
+      vi.mocked(write).mockReset().mockResolvedValue({});
+    }
+  });
+});

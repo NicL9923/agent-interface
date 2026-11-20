@@ -79,6 +79,15 @@
       --user: color-mix(in oklab, var(--tint-wash) 60%, #2a3a2e);
     }
   }
+  /* A person's solid bubble takes the assistant's own color, darkened until white text and links keep 4.5:1. */
+  .conversation-panel[data-tint][data-own-bubble="solid"] .message-user > .message-bubble {
+    --accent: #fff;
+    background: oklch(from var(--bot-tint) min(l, 0.52) c h);
+    color: #fff;
+  }
+  .conversation-panel[data-tint][data-own-bubble="solid"] .message-user > .message-bubble .file-link {
+    border-color: color-mix(in srgb, #fff 50%, transparent);
+  }
   .conversation-panel[data-tint] .chat-header-identity {
     background-image: linear-gradient(to bottom, var(--tint-wash), transparent);
   }

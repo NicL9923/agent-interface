@@ -472,6 +472,7 @@ export const Conversation = memo(function Conversation({
                     <Turns
                       blocks={blocks}
                       advanced={advanced}
+                      bubbles={prefs.chatStyle !== "classic"}
                       unavailable={connectionLost}
                       disconnected={connectionShown}
                       name={selected.name}
@@ -783,6 +784,8 @@ function HistoryEdge({
 type TurnProps = {
   block: Turn;
   advanced: boolean;
+  /** Reply prose sits in bubbles; see the person's chat style. */
+  bubbles: boolean;
   name: string;
   botId: string;
   userId: string;
@@ -952,6 +955,7 @@ function sameTurn(a: Turn, b: Turn) {
 }
 const sameTurnProps = (a: TurnProps, b: TurnProps) =>
   a.advanced === b.advanced &&
+  a.bubbles === b.bubbles &&
   a.unavailable === b.unavailable &&
   a.disconnected === b.disconnected &&
   a.name === b.name &&
@@ -975,6 +979,7 @@ const sameFiles = (a: TurnProps["files"], b: TurnProps["files"]) =>
 const TurnView = memo(function TurnView({
   block,
   advanced,
+  bubbles,
   unavailable,
   disconnected,
   name,
@@ -1121,6 +1126,7 @@ const TurnView = memo(function TurnView({
         {reply ? (
           <ReplyMarkdown
             live={streaming}
+            bubbles={bubbles && !progress && message.role === "assistant"}
             text={message.text}
             botId={botId}
             messageId={message.id}

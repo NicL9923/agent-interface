@@ -22,6 +22,8 @@
   --danger: #a33c32;
   --attention: #9b6733;
   --user: #e7eee4;
+  /* A reply's prose bubble. It follows the theme, since --ink and --surface do. */
+  --reply-bubble: color-mix(in oklab, var(--ink) 7%, var(--surface));
   color-scheme: light;
 }
 /* A page leaving for the back-forward cache shows nothing of its account if it is shown again before
@@ -618,9 +620,29 @@ a {
   margin-bottom: 14px;
 }
 .message-bubble {
-  padding: 15px 20px;
+  padding: 14px 19px;
   background: var(--user);
+  /* Transparent, so forced colors and increased contrast can draw the bubble's edge. */
+  border: 1px solid transparent;
   border-radius: 18px 18px 4px 18px;
+}
+/* A person's bubble hugs its words at the trailing edge, and another member's name sits over it. */
+.message-user:has(> .message-bubble) {
+  margin-left: 0;
+}
+.message-user > .message-bubble {
+  width: fit-content;
+  max-width: min(86%, 560px);
+  margin-inline-start: auto;
+}
+.message-user:has(> .message-bubble) > .message-attribution {
+  justify-content: flex-end;
+}
+@media (prefers-contrast: more) {
+  .message-bubble,
+  .reply-bubble {
+    border-color: var(--message-meta);
+  }
 }
 .message-attribution {
   display: flex;

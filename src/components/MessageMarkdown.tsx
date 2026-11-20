@@ -206,10 +206,50 @@ const components: Components = {
   },
 };
 
+/**
+ * The sides of a sideways scroller that have more to scroll to, as `data-fade` names them, or "" when
+ * it all shows. Right to left, scrollLeft runs from 0 at the start to minus the overflow at the end.
+ */
+export function fadeSides(
+  scrollLeft: number,
+  overflow: number,
+  direction: string,
+): "" | "left" | "right" | "left right" {
+  const fromLeft = direction === "rtl" ? overflow + scrollLeft : scrollLeft;
+  const left = fromLeft > 1,
+    right = fromLeft < overflow - 1;
+  return left && right ? "left right" : left ? "left" : right ? "right" : "";
+}
+
 /** A reply's table, with copies a spreadsheet or another chat can take. */
 function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
   const table = useRef<HTMLTableElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("");
+  // Set on the element itself, so scrolling never re-renders the reply.
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    const update = () => {
+      const sides = fadeSides(
+        element.scrollLeft,
+        element.scrollWidth - element.clientWidth,
+        getComputedStyle(element).direction,
+      );
+      if (sides) element.dataset.fade = sides;
+      else delete element.dataset.fade;
+    };
+    update();
+    element.addEventListener("scroll", update, { passive: true });
+    // A narrower column, or a row arriving while the reply streams, changes the overflow.
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
+    observer?.observe(element);
+    if (table.current) observer?.observe(table.current);
+    return () => {
+      element.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, []);
   async function copy(format: "Markdown" | "CSV") {
     const rows = table.current ? tableRows(table.current) : [];
     try {
@@ -223,10 +263,18 @@ function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
   }
   return (
     <div className="markdown-table">
-      <div className="markdown-table-scroll" tabIndex={0} role="region" aria-label="Table">
-        <table ref={table} {...props}>
-          {children}
-        </table>
+      <div className="markdown-table-frame">
+        <div
+          className="markdown-table-scroll"
+          ref={scroller}
+          tabIndex={0}
+          role="region"
+          aria-label="Table"
+        >
+          <table ref={table} {...props}>
+            {children}
+          </table>
+        </div>
       </div>
       <div className="markdown-table-actions">
         <button type="button" onClick={() => void copy("Markdown")}>
