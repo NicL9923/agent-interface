@@ -1,0 +1,4 @@
+mac-heavy-lock: time=1795211363.3992741108 queued request=20272 job=python3 directory=nic-01ab5df4-e42b478efb039494
+mac-heavy-lock: time=1795211363.5657360554 acquired request=20272 owner=20289 wait_s=0.169
+1 of 1 mutations caught
+mac-heavy-lock: time=1795211479.7399969101 finished request=20272 hold_s=116.174 exit=0

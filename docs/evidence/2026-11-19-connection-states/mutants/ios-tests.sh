@@ -20,10 +20,17 @@ xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface \
   -only-testing:AgentInterfaceTests/NativeContractTests/testRuntimeDisconnectKeepsKnownRosterAndCurrentDraft \
   -only-testing:AgentInterfaceTests/NativeContractTests/testPollingKeepsRefreshingBootstrapWhileTheServerIsDisconnectedOrFailing \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps \
-  -only-testing:AgentInterfaceTests/NativeContractTests/testAHermesDownRosterWithoutTheOpenChatKeepsItOpenUntilHermesAnswers \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAHermesDownRosterWithoutTheOpenChatLeavesItAndOpensNoOther \
   -only-testing:AgentInterfaceTests/NativeContractTests/testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt \
   -only-testing:AgentInterfaceTests/NativeContractTests/testABootstrapThatAnswersPastTheGracePeriodBeforeTheTimerRunsShowsAndSaysNothing \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAnAppLossThatTurnsIntoAHermesLossIsOneLoss \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAStopIsNotSentAfterTheChatOrTheNetworkIsLost \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAnUncertainSendIsNotRetriedWhileTheChatOrTheNetworkIsDown \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAutomaticReadsWaitForTheNetworkTheForegroundAndTheSameSession \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testACancelledReadThatDisplacedTheRetrySetsItAgain \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAnOpenAssistantRemovedWhileHermesIsDownLeavesAndAReadOnItsWayCannotBringItBack \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAnAssistantThatLeavesTakesItsDeliveredNotificationsWithIt \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAChatWriteIsNotSentWhileTheChatOrTheNetworkIsDown \
+  -only-testing:AgentInterfaceTests/SystemSurfaceTests/testARosterThatDropsAnAssistantWhileHermesIsDownPrunesItFromTheSystemSurfaces \
+  -only-testing:AgentInterfaceTests/StoreRequestsTests/testAHouseholdWriteChecksTheConnectionAsItStartsAndOneChatsFailureIsNotIt \
   > /dev/null 2>&1

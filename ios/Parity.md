@@ -142,11 +142,14 @@ section lists the tests and mutants.
   bootstrap once what is down, and it is read again after 1, 2, 4, 8, 16 and then every 30 seconds,
   not while the app is in the background, the device is offline or the chat is off screen. The poll
   leaves it to that retry. Opening it, returning to the app, coming back online, pull to refresh and
-  Reconnect now read it at once. Group chats and Settings follow the household, not that chat.
+  Reconnect now read it at once. Reads nobody asked for, from the poll, a stream notice or a retry,
+  are checked as they set out and wait for the network and the foreground. Group chats, making a
+  group, a room's settings and Settings follow the household, not that chat.
 - Who is on the roster is the server's word even while Hermes is down, as the web's `rosterFrom`
-  takes it: an assistant made private leaves with its saved chat. A row the roster keeps carries its
-  activity for 30 seconds from the first stale roster. A roster that missed Hermes and lists nobody
-  keeps the rows as they were, and the open chat stays open until Hermes answers for it.
+  takes it: an assistant made private leaves with its saved chat, its delivered notifications, and its
+  place on the widgets, in Spotlight and Siri and among the notification pictures. A row the roster
+  keeps carries its activity for 30 seconds from the first stale roster. A roster that missed Hermes
+  and lists nobody keeps the rows as they were, and while Hermes is down no other chat is chosen.
 - A disconnected avatar has no badge and a lighter dim that eases over 400 ms. Home captions no
   assistant with the loss; the header's status pill says it once. The chat's activity row is hidden
   while the loss shows, and a chat that never loaded says so.
@@ -160,6 +163,9 @@ Differences that remain, and why:
   web's Stop has no confirmation; native's Cmd+. asks first, and that question closes when stopping
   becomes unavailable. That leaves the web's state, Stop disabled with its reason as the hint,
   instead of a dialog that could offer only Cancel. The stop itself checks the connection again.
+- While Hermes is down, the web keeps a chat whose assistant the roster dropped selected, with its full
+  connection panel, until its next read is refused. Native closes it at once, as it does while Hermes
+  is up, because the phone's chat screen has no assistant to show and leaving drops any read on its way.
 - VoiceOver hears each change as one announcement, including "Connected again.", rather than from a
   live region that empties after 5 seconds.
 - After failed bootstraps the poll waits 1, 2, 4, 8, 16, then 30 seconds; the web stops its retries
