@@ -32,7 +32,7 @@ Each test written to protect a line was run against a hand-broken copy of that l
 
 ## Visual checks
 
-Built client from `9ce55e9a`'s sources, served by `PREVIEW_PORT=3421 node .agents/tools/preview-app.mjs`, driven with `playwright-cli` in Chromium. Screenshots are in `.private/chat-bubbles/`, which Git ignores.
+A client built before two last edits in `9ce55e9a`, served by `PREVIEW_PORT=3421 node .agents/tools/preview-app.mjs`, driven with `playwright-cli` in Chromium. Screenshots are in `.private/chat-bubbles/`, which Git ignores.
 
 - Ranch hand at 1440 and 390 px, light and dark, Bubbles and Classic, Tinted and Solid: 16 shots named `<width>-<theme>-<style>-<fill>.png`. Measured at 1440 px: reply bubbles 600 px wide holding 77 characters a line; the table reply's corners read 18/18/18/8 px, then the table, then 8/18/18/4 px; the gap around the table is 6 px.
 - Table fade with a wide table injected through a Playwright route at 320, 390 and 1440 px: `right` at the start, `left right` after three ArrowRight presses with the region focused, `left` at the end. No page overflow at 320 px.
@@ -41,5 +41,7 @@ Built client from `9ce55e9a`'s sources, served by `PREVIEW_PORT=3421 node .agent
 - `STREAM_CHARS=12 SAVE_DELAY_MS=1500 npx tsx .agents/tools/streaming-preview.ts 4190`: the answer grouped as bubble, code, table, bubble while it streamed, and every block kept its offset and size when it was saved. The caret sat 2 px after the last character, on its line, inside a bubble.
 - Kitchen companion: 40 rows, 20 reply bubbles, find in chat highlighted 21 matches inside bubbles, and a selection inside a bubble showed Quote.
 - `PREVIEW_PROGRESS=1`: progress lines stay flat. A group chat shows no bubbles.
+
+The two edits that came after these captures were not captured again: another member's name moves to the trailing edge only over a bubble, so a scheduled prompt's label stays put, and bubbles apply only to assistant rows, so a scheduled prompt renders flat as before. The unit and UI suites above ran on them.
 
 Not exercised: Safari and Firefox, a physical phone, a screen reader, and the iOS app.
