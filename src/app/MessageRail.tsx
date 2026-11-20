@@ -123,10 +123,13 @@ export const MessageRail = memo(function MessageRail({
     const row = lastRow(view);
     if (!row || Math.abs(offsetOf(view, row) - last.offset) > 0.5) locate(view, width);
   };
+  // Read by the observers below, which outlive a render. While the rail is hidden they do no work.
+  const shownNow = useRef(false);
+  shownNow.current = shown;
   const readActive = useRef(() => {});
   readActive.current = () => {
     const view = scroll.current;
-    if (!view) return;
+    if (!view || !shownNow.current) return;
     if (!places.current || places.current.ids !== ids.current)
       locate(view, view.firstElementChild?.getBoundingClientRect().width ?? 0);
     const at = activeTick(places.current!.list, view.scrollTop, view.clientHeight, atTrueEnd(view));
@@ -149,36 +152,41 @@ export const MessageRail = memo(function MessageRail({
       scrollbar,
     };
     setLayout((previous) => (sameLayout(previous, next) ? previous : next));
-    if (!railShown({ ...next, count: ids.current.length })) return;
+    // Nothing keeps the positions current while the rail is hidden, so it measures them all when it shows again.
+    if (!railShown({ ...next, count: ids.current.length })) {
+      shownNow.current = false;
+      places.current = null;
+      return;
+    }
+    shownNow.current = true;
     revalidate(view, box.width, check);
     readActive.current();
   };
-  // Each turn in the column is watched for size changes; see `resized` below. Turns come and go with the
-  // messages and run cards, so the watched set follows the column's children without reading any layout.
+  // Each turn in the column is watched for size changes while the rail shows; see `resized` below. Turns
+  // and run cards come and go without a message changing, so the column's mutations add and drop them.
   const turnObserver = useRef<ResizeObserver>(undefined);
   const watched = useRef(new Set<Element>());
-  const observeTurns = useRef(() => {});
-  observeTurns.current = () => {
+  const watch = (turn: Node) => {
     const observer = turnObserver.current;
+    if (!observer || !(turn instanceof Element) || watched.current.has(turn)) return;
+    observer.observe(turn);
+    watched.current.add(turn);
+  };
+  const unwatch = (turn: Node) => {
+    if (!(turn instanceof Element) || !watched.current.delete(turn)) return;
+    turnObserver.current?.unobserve(turn);
+  };
+  // All at once only when the rail shows or hides, or the observer starts.
+  const watchAll = useRef(() => {});
+  watchAll.current = () => {
     const column = scroll.current?.firstElementChild;
-    if (!observer || !column) return;
-    for (const turn of watched.current)
-      if (turn.parentElement !== column) {
-        observer.unobserve(turn);
-        watched.current.delete(turn);
-      }
-    for (const turn of column.children)
-      if (!watched.current.has(turn)) {
-        observer.observe(turn);
-        watched.current.add(turn);
-      }
+    if (shownNow.current && column) for (const turn of column.children) watch(turn);
+    else for (const turn of watched.current) unwatch(turn);
   };
   // New messages, or an earlier page, change what overflows. Whether they moved any sent message is
   // revalidate's to tell: new IDs measure all, and anything else checks the last sent message alone.
-  useLayoutEffect(() => {
-    observeTurns.current();
-    measure.current();
-  }, [entries]);
+  useLayoutEffect(() => measure.current(), [entries]);
+  useLayoutEffect(() => watchAll.current(), [shown]);
   useEffect(() => {
     const view = scroll.current;
     if (!view) return;
@@ -195,6 +203,10 @@ export const MessageRail = memo(function MessageRail({
     const media = typeof matchMedia === "function" ? matchMedia(HOVER_QUERY) : undefined;
     const changed = () => measure.current();
     media?.addEventListener?.("change", changed);
+    /** A turn that ends above the last sent message: a change to it can move messages above that one and not it. */
+    const above = (node: Node, last: Element) =>
+      !node.contains(last) &&
+      !!(node.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING);
     // The view, the column and each turn in it. A turn that ends above the last sent message makes the
     // positions stale. The last turn, where a reply streams, and the column growing with it, do not:
     // the render that grew them already checked the last sent message.
@@ -204,12 +216,7 @@ export const MessageRail = memo(function MessageRail({
       for (const { target } of entries ?? []) {
         if (target === view) check = true;
         // The column and the last turn hold the last sent message, so they pass here.
-        else if (
-          last &&
-          !target.contains(last) &&
-          target.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING
-        )
-          stale.current = true;
+        else if (last && above(target, last)) stale.current = true;
       }
       measure.current(check);
     };
@@ -218,12 +225,41 @@ export const MessageRail = memo(function MessageRail({
     observer?.observe(view);
     if (view.firstElementChild) observer?.observe(view.firstElementChild);
     turnObserver.current = observer;
-    observeTurns.current();
-    // A run card can join the column without a message changing.
+    watchAll.current();
+    // A turn or run card that joins, leaves or moves above the last sent message moves the messages after it,
+    // and the browser may report only the column's new size, or nothing at all when the height is the same.
     const joined =
       typeof MutationObserver === "undefined"
         ? undefined
-        : new MutationObserver(() => observeTurns.current());
+        : new MutationObserver((records) => {
+            if (!shownNow.current) return;
+            const column = view.firstElementChild;
+            const last = lastRow(view);
+            let shifted = false;
+            for (const { addedNodes, removedNodes, nextSibling } of records) {
+              for (const node of removedNodes) unwatch(node);
+              for (const node of addedNodes)
+                if (node.parentNode === column) {
+                  watch(node);
+                  if (last && above(node, last)) shifted = true;
+                }
+              // A removed turn sat just before its next sibling. One whose sibling went too may have sat anywhere.
+              if (
+                last &&
+                removedNodes.length &&
+                nextSibling &&
+                (nextSibling.parentNode !== column ||
+                  nextSibling.contains(last) ||
+                  above(nextSibling, last))
+              )
+                shifted = true;
+            }
+            // With no last sent message on the page, the positions are of messages that left.
+            if (!last || shifted) {
+              stale.current = true;
+              measure.current();
+            }
+          });
     if (view.firstElementChild) joined?.observe(view.firstElementChild, { childList: true });
     return () => {
       cancelAnimationFrame(frame);

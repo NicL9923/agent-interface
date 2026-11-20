@@ -6,7 +6,8 @@ import { App } from "../src/App";
 import { api, write } from "../src/client-api";
 import { ANCHOR_GAP } from "../src/app/scroll-follow";
 import { defaultPreferences } from "../src/shared/types";
-import type { Bootstrap, Conversation, Message } from "../src/shared/types";
+import type { Bootstrap, Conversation, Message, Preferences } from "../src/shared/types";
+import type { RoutineRun } from "../src/shared/routine-runs";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
@@ -184,8 +185,28 @@ describe("a chat with more sent messages than ticks fit", () => {
   // A reflow can move messages in the middle of the chat and leave the last one where it was.
   let moved: (index: number) => number = () => 0;
   let column = 900;
-  const top = (index: number) => 100 + index * 200 + shift + moved(index);
+  // A routine run card, shown before Question 31's turn and as tall as `card`, pushes every message from there down.
+  let card = 0;
+  const cardShown = () => !!container.querySelector('[data-run-id="r1"]');
+  const top = (index: number) =>
+    100 + index * 200 + shift + moved(index) + (index >= 30 && cardShown() ? card : 0);
+  // One message a minute, so the card's run falls between the 30th and the 31st turn.
+  const at = (minute: number) => new Date(Date.UTC(2026, 9, 6, 0, minute)).toISOString();
+  const runs: RoutineRun[] = [
+    {
+      id: "r1",
+      routineId: "feed",
+      routineName: "Feed check",
+      startedAt: at(29.5),
+      finishedAt: at(29.5),
+      status: "succeeded",
+      previewOnly: false,
+      preview: "The bins are full.",
+    },
+  ];
   let rowReads = 0;
+  // The rail's reads of the column's children: a scan of every turn.
+  let childScans = () => 0;
   let resized: ((entries?: { target: Element }[]) => void)[] = [];
   let observed = new Set<Element>();
   /** What a browser reports: a size change of each element given that the rail observes. */
@@ -198,6 +219,12 @@ describe("a chat with more sent messages than ticks fit", () => {
   const turnOf = (id: string) =>
     container.querySelector(`[data-message-id="${id}"]`)!.closest(".conversation-turn")!;
   function longLayout() {
+    // Read through to the real list; only the rail reads the column's children.
+    const children = vi.spyOn(Element.prototype, "children", "get");
+    childScans = () =>
+      children.mock.contexts.filter((element) =>
+        (element as Element).classList.contains("transcript-content"),
+      ).length;
     vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(top(count) + 400);
     vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(608);
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
@@ -244,6 +271,7 @@ describe("a chat with more sent messages than ticks fit", () => {
     shift = 0;
     moved = () => 0;
     column = 900;
+    card = 0;
     resized = [];
     observed = new Set();
     vi.stubGlobal(
@@ -266,10 +294,19 @@ describe("a chat with more sent messages than ticks fit", () => {
     conversation = {
       ...conversation,
       messages: Array.from({ length: count }, (_, index) => [
-        prompt(`q${index}`, `Question ${index + 1}`),
-        answer(`a${index}`, `Answer ${index + 1}`),
+        { ...prompt(`q${index}`, `Question ${index + 1}`), createdAt: at(index) },
+        { ...answer(`a${index}`, `Answer ${index + 1}`), createdAt: at(index + 0.5) },
       ]).flat(),
     };
+    const served = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path: string, ...rest) =>
+      path === "/bots/shared/routine-runs"
+        ? ({ runs, unavailable: [] } as never)
+        : served(path, ...rest),
+    );
+    vi.mocked(write).mockImplementation(
+      async (path: string, body?: unknown) => (path === "/preferences" ? body : {}) as never,
+    );
     longLayout();
     await act(async () => root.render(createElement(App)));
     await advance(20);
@@ -362,6 +399,7 @@ describe("a chat with more sent messages than ticks fit", () => {
     await advance(400);
     expect(reply()).toBe("Counting");
     rowReads = 0;
+    const scans = childScans();
     await act(async () => stream.emit("inflight", live("Counting the herd")));
     await advance(400);
     expect(reply()).toBe("Counting the herd");
@@ -369,6 +407,8 @@ describe("a chat with more sent messages than ticks fit", () => {
     await resize(turnOf("s1-inflight"), transcript().firstElementChild!);
     // The reported case read all 64 sent messages. Checking the last one tells that none of them moved.
     expect(rowReads).toBeLessThanOrEqual(1);
+    // Nor does an update walk every turn to see which ones to watch: no turn came or went.
+    expect(childScans()).toBe(scans);
     expect(current()).toBe("Jump to: Question 64");
   });
 
@@ -399,9 +439,12 @@ describe("a chat with more sent messages than ticks fit", () => {
       activity: { state: "done" },
       version: "2",
     };
+    rowReads = 0;
     await act(async () => FakeEventSource.notifyAll());
     await advance(1500);
     expect(container.querySelector('[data-message-id="q64"]')).not.toBeNull();
+    // New IDs measure every sent message once, and the turns that changed below the last one are no reason for more.
+    expect(rowReads).toBeLessThanOrEqual(count + 1);
     expect(names()).toHaveLength(20);
     expect(current()).toBe("Jump to: Question 65");
   });
@@ -414,6 +457,68 @@ describe("a chat with more sent messages than ticks fit", () => {
     // Question 31 moves from 6100 up to 5950, above the line at 6002; Question 41 on stays put.
     moved = (index) => (index >= 30 && index < 40 ? -150 : 0);
     await resize(turnOf("a29"), turnOf("a39"));
+    expect(current()).toBe("Jump to: Question 31");
+  });
+
+  // The reviewer's case: hiding a routine whose card sits above the last sent message moves that message up, and the
+  // browser reports only the column's new size, which also holds the last sent message.
+  it("marks the turn the reading line meets after a routine card above the last sent message is hidden", async () => {
+    card = 150;
+    await act(async () => resized.forEach((callback) => callback()));
+    await scrollTo(5950);
+    // The line at 6152 is above Question 31, which the card pushed down to 6250.
+    expect(current()).toBe("Jump to: Question 30");
+    const summary = container.querySelector<HTMLButtonElement>(
+      '[data-run-id="r1"] .routine-run-summary',
+    )!;
+    await act(async () => summary.click());
+    await advance(20);
+    const hide = [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-run-id="r1"] button'),
+    ].find((button) => button.textContent === "Hide this routine in chat")!;
+    await act(async () => hide.click());
+    await advance(20);
+    const saved = vi
+      .mocked(write)
+      .mock.calls.filter(([path]) => path === "/preferences")
+      .at(-1)![1] as Preferences;
+    expect(saved.hiddenRoutineRuns).toEqual([{ botId: "shared", routineId: "feed" }]);
+    expect(cardShown()).toBe(false);
+    await resize(transcript().firstElementChild!);
+    // Question 31 is back at 6100, above the line.
+    expect(current()).toBe("Jump to: Question 31");
+    // Undo brings the card back above it.
+    const undo = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Undo",
+    )!;
+    await act(async () => undo.click());
+    await advance(20);
+    expect(cardShown()).toBe(true);
+    await resize(transcript().firstElementChild!);
+    expect(current()).toBe("Jump to: Question 30");
+  });
+
+  it("watches no turn while the rail is hidden, and marks the turn in view once it shows again", async () => {
+    const turns = () => [...observed].filter((target) => target.matches(".conversation-turn"));
+    expect(turns().length).toBeGreaterThan(0);
+    // A touch screen replaces the mouse: the rail goes away.
+    stubMatchMedia((query) => query === "(prefers-reduced-motion: reduce)");
+    await resize(transcript());
+    expect(container.querySelector('nav[aria-label="Messages you sent in this chat"]')).toBeNull();
+    expect(turns()).toEqual([]);
+    // Scrolling, and turns above the last sent message moving, cost nothing while it is hidden.
+    rowReads = 0;
+    moved = (index) => (index >= 30 && index < 40 ? -150 : 0);
+    await scrollTo(5800);
+    expect(rowReads).toBe(0);
+    // The mouse is back: every turn is watched again, and the positions are read fresh.
+    stubMatchMedia(
+      (query) =>
+        query === "(prefers-reduced-motion: reduce)" ||
+        query === "(hover: hover) and (pointer: fine)",
+    );
+    await resize(transcript());
+    expect(turns()).toContain(turnOf("a29"));
     expect(current()).toBe("Jump to: Question 31");
   });
 
