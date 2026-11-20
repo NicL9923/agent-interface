@@ -220,6 +220,8 @@
           FixtureProtocol.preferences["presentation"] = environment["AGENT_INTERFACE_UI_WORK_PRESENTATION"] ?? "simple"
           FixtureProtocol.messages = TranscriptFixtures.progress
         }
+        // A reply whose list holds a code block, then the person's follow-up and a short answer last.
+        if environment["AGENT_INTERFACE_UI_NESTED_CODE"] == "1" { FixtureProtocol.messages = TranscriptFixtures.nestedCode }
         if environment["AGENT_INTERFACE_UI_RETRY"] != nil { FixtureProtocol.messages = TranscriptFixtures.failed }
         if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
           FixtureProtocol.preferences["presentation"] = presentation
@@ -1541,6 +1543,16 @@
          "text": "### Saturday looks good\n\nIt will be **68 degrees** at the 7 PM start, dropping to 47 overnight, with a **10% chance of rain**. I would keep the dance in the barn and leave the doors open.\n\n| Link | Purpose |\n| --- | --- |\n| Sign-up form | Names and dishes |\n| Carpool sheet | Rides from town |\n\nBoth links are live. Explicit fixture, nothing was created."],
       ]
     }
+    static var nestedCode: [[String: Any]] { [
+      ["id": "nested-ask", "role": "user", "text": "How do I reset the north gate?", "createdAt": "2026-10-01T15:00:00.000Z",
+       "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "nested-steps", "role": "assistant", "createdAt": "2026-10-01T15:00:20.000Z",
+       "text": "Here is the reset.\n\n1. Stop the gate at the panel.\n2. Run this from the barn laptop:\n\n   ```sh\n   gate reset --north\n   ```\n\n3. Wait for the green light.\n\nIt reopens on its own after that."],
+      ["id": "nested-follow-up", "role": "user", "text": "Done, the light is green. Will it close again tonight?", "createdAt": "2026-10-01T15:04:00.000Z",
+       "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "nested-answer", "role": "assistant", "createdAt": "2026-10-01T15:04:08.000Z",
+       "text": "Yes. It closes at 9 PM on its usual schedule, and the evening check confirms it."],
+    ] }
     static var failed: [[String: Any]] { [
       ["id": "retry-prompt", "role": "user", "text": "Is the north gate closed?", "sender": ["id": "native-test", "name": "Local test member"]],
       ["id": "retry-tool", "role": "tool", "text": "Weather service timed out.", "toolCall": ["id": "retry-call", "name": "gate_status", "status": "failed", "error": "Timed out"]],

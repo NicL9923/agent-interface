@@ -323,7 +323,7 @@ import XCTest
   /// dark, and one at an accessibility text size. Runs only when screenshots are written.
   func testChatBubbleScreens() throws {
     try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
-    func shoot(_ name: String, _ environment: [String: String], arguments: [String] = []) throws {
+    func shoot(_ name: String, _ environment: [String: String], arguments: [String] = [], ready: String = "turnWork") throws {
       let app = XCUIApplication()
       app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
       app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
@@ -332,7 +332,7 @@ import XCTest
       app.launchArguments += arguments
       app.launch()
       let device = app.frame.width > 700 ? "ipad" : "iphone"
-      XCTAssertTrue(app.buttons["turnWork"].waitForExistence(timeout: 15), app.debugDescription)
+      XCTAssertTrue(app.descendants(matching: .any)[ready].waitForExistence(timeout: 15), app.debugDescription)
       try capture(app, "\(device)-\(name)")
       app.scrollViews["conversationTranscript"].swipeDown()
       try capture(app, "\(device)-\(name)-start")
@@ -348,6 +348,11 @@ import XCTest
       }
       try shoot("work-bubbles-solid-\(theme)", ["AGENT_INTERFACE_UI_WORK": "1", "AGENT_INTERFACE_UI_THEME": theme,
         "AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid"])
+      // The end of the chat against the floating composer, and a list that holds a code block.
+      for style in ["bubbles", "classic"] {
+        try shoot("nested-code-\(style)-\(theme)", ["AGENT_INTERFACE_UI_NESTED_CODE": "1", "AGENT_INTERFACE_UI_THEME": theme,
+          "AGENT_INTERFACE_UI_CHAT_STYLE": style], ready: "Copy code")
+      }
     }
     try shoot("progress-bubbles-accessibility-xl", ["AGENT_INTERFACE_UI_PROGRESS": "1"],
       arguments: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])
