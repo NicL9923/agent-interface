@@ -6,7 +6,8 @@ import {
   resetStreamHealth,
   streamUp,
   useStreamsDown,
-  useStreamsUp,
+  useStreamsLive,
+  type StreamsLive,
 } from "../src/app/stream-health";
 import { mountRoot } from "./ui-harness";
 
@@ -31,30 +32,30 @@ const advance = (ms: number) =>
 const report = (name: string, up: boolean | undefined) => act(async () => reportStream(name, up));
 
 // Live updates are back only when the streams say so. One that is closed says nothing.
-describe("streams up", () => {
-  let up: boolean[];
+describe("streams live", () => {
+  let up: StreamsLive[];
   function UpProbe({ names }: { names: string[] }) {
-    up.push(useStreamsUp(names));
+    up.push(useStreamsLive(names));
     return null;
   }
   beforeEach(() => {
     up = [];
   });
 
-  it("is true only while every named stream has heard from the server, and not for one that is closed", async () => {
+  it("is up only while every named stream has heard from the server, and closed while one is not open", async () => {
     const { render } = mountRoot();
     await render(createElement(UpProbe, { names: ["household", "chat:shared"] }));
-    expect(up.at(-1)).toBe(false);
+    expect(up.at(-1)).toBe("closed");
     await report("household", true);
-    expect(up.at(-1)).toBe(false);
+    expect(up.at(-1)).toBe("closed");
     await report("chat:shared", true);
-    expect(up.at(-1)).toBe(true);
+    expect(up.at(-1)).toBe("up");
     await report("chat:shared", false);
-    expect(up.at(-1)).toBe(false);
+    expect(up.at(-1)).toBe("waiting");
     await report("chat:shared", true);
     // Closed, as when the page hides: not down, and not up either.
     await report("household", undefined);
-    expect(up.at(-1)).toBe(false);
+    expect(up.at(-1)).toBe("closed");
   });
 });
 

@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
-import { connectionCopy, needsSetup } from "../src/components/ConnectionPanel";
+import { createElement } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ConnectionAnnouncer,
+  connectionCopy,
+  needsSetup,
+  RESTORED_MS,
+} from "../src/components/ConnectionPanel";
+import type { StreamsLive } from "../src/app/stream-health";
 import type { RuntimeStatus } from "../src/shared/types";
+import { advance, mountRoot, type Mount } from "./ui-harness";
 
 // What the connection notice and the app's live region say. The rules a person would notice broken:
 // it never mentions a draft that does not exist, it says one line until a loss lasts, and the most
@@ -86,5 +94,54 @@ describe("what the connection notice says", () => {
     expect(needsSetup({ connected: true, code: "unauthorized" } as RuntimeStatus)).toBe(false);
     // A code that names an Object.prototype member is no setup state.
     expect(needsSetup(down("toString"))).toBe(false);
+  });
+});
+
+// Live updates whose notice ended while one stream had still to be heard from are announced as back
+// once it is, but only for the same streams, still open, with no warning said in between.
+describe("what the live region says when live updates return in parts", () => {
+  let mount: Mount;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mount = mountRoot();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const say = (props: { shown?: boolean; live: StreamsLive; scope?: string; ends?: number }) =>
+    mount.render(
+      createElement(ConnectionAnnouncer, {
+        shown: props.shown ?? false,
+        liveRecoveries: props.ends ?? 1,
+        live: props.live,
+        liveScope: props.scope ?? "household chat:a",
+        connection: { connected: true } as RuntimeStatus,
+        liveOnly: true,
+      }),
+    );
+  const said = () => mount.container.querySelector("[data-connection-announcer]")!.textContent;
+  const partReturn = async () => {
+    await say({ shown: true, live: "waiting", ends: 0 });
+    await say({ live: "waiting" });
+    expect(said()).toBe("");
+  };
+
+  it("says they are back when the last stream is", async () => {
+    await partReturn();
+    await say({ live: "up" });
+    expect(said()).toBe("Live updates are back.");
+    await advance(RESTORED_MS);
+    expect(said()).toBe("");
+  });
+
+  it.each<[string, { shown?: boolean; live: StreamsLive; scope?: string }]>([
+    ["a stream closes, as when the page hides", { live: "closed" }],
+    ["the person opens another chat", { live: "waiting", scope: "household chat:b" }],
+    ["another warning is said", { shown: true, live: "waiting" }],
+  ])("says nothing once %s before the rest return", async (_name, between) => {
+    await partReturn();
+    await say(between);
+    await say({ live: "up", scope: between.scope });
+    expect(said()).toBe("");
   });
 });

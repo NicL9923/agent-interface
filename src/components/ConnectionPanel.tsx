@@ -4,6 +4,7 @@ import { Avatar } from "./Avatar";
 import { Icon } from "./Icon";
 import { When } from "./When";
 import { fire } from "../app/fire";
+import type { StreamsLive } from "../app/stream-health";
 
 type Copy = { title: string; detail?: string; setup?: boolean };
 /** What waiting cannot fix: someone has to set the installation up or repair it. */
@@ -259,8 +260,9 @@ export const RESTORED_MS = 5_000;
  * second its notice lingers on screen. `recoveries` and `liveRecoveries` count the losses, and the
  * stretches without live updates, that were on screen and came back (see `useOutage`), so a notice that
  * goes because the person opened another chat is no news. Live updates count as back only while
- * `liveUp`: their notice also goes when a stream is closed, as on a hidden page, or when the stream
- * that returned leaves another still down. Something that comes back while another
+ * `live` is `up`: their notice also goes when a stream is closed, as on a hidden page, or when the
+ * stream that returned leaves another still down. That one is said once the others are back, as long
+ * as the same streams stay open and nothing else is being warned of meanwhile. Something that comes back while another
  * warning is being said is not kept to say later: by then it would be old news, said as that warning
  * went. Typing the first word of a draft adds a sentence to the notice on screen, and the announcement
  * stays as it was said.
@@ -269,13 +271,17 @@ export function ConnectionAnnouncer({
   shown,
   recoveries = 0,
   liveRecoveries = 0,
-  liveUp = false,
+  live = "closed",
+  liveScope = "",
   ...state
 }: ConnectionState & {
   shown: boolean;
   recoveries?: number;
   liveRecoveries?: number;
-  liveUp?: boolean;
+  /** Where the streams the live-updates notice watches stand (see `useStreamsLive`). */
+  live?: StreamsLive;
+  /** Which streams those are, so a return that waits on the rest is dropped when they change. */
+  liveScope?: string;
 }) {
   // What is said, held from the moment the connection's own news last changed.
   const news = shown ? spoken(connectionCopy({ ...state, hasDraft: false })) : "";
@@ -285,21 +291,26 @@ export function ConnectionAnnouncer({
   const [restored, setRestored] = useState("");
   const clear = useRef<ReturnType<typeof setTimeout>>(undefined);
   const counted = useRef({ recoveries, liveRecoveries });
+  // The streams whose notice ended while one of them had still to be heard from.
+  const partly = useRef<string | undefined>(undefined);
   useEffect(() => {
     const was = counted.current;
     counted.current = { recoveries, liveRecoveries };
+    if (liveRecoveries > was.liveRecoveries && live === "waiting") partly.current = liveScope;
+    if (shown || live === "closed" || partly.current !== liveScope) partly.current = undefined;
     const back =
       recoveries > was.recoveries
         ? "Connected again."
-        : liveRecoveries > was.liveRecoveries && liveUp
+        : (liveRecoveries > was.liveRecoveries || partly.current !== undefined) && live === "up"
           ? "Live updates are back."
           : "";
+    if (back) partly.current = undefined;
     if (!back && !shown) return;
     clearTimeout(clear.current);
     // A warning being said now takes the place of anything that came back.
     setRestored(shown ? "" : back);
     if (!shown) clear.current = setTimeout(() => setRestored(""), RESTORED_MS);
-  }, [shown, recoveries, liveRecoveries, liveUp]);
+  }, [shown, recoveries, liveRecoveries, live, liveScope]);
   useEffect(() => () => clearTimeout(clear.current), []);
   return (
     <p className="sr-only" role="status" data-connection-announcer="">
