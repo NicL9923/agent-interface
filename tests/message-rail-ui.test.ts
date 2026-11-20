@@ -3,12 +3,12 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { api } from "../src/client-api";
+import { api, write } from "../src/client-api";
 import { ANCHOR_GAP } from "../src/app/scroll-follow";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation, Message } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
+import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async (original) =>
   (await import("./helpers/request-mock")).withRequest(
@@ -290,6 +290,20 @@ describe("a chat with more sent messages than ticks fit", () => {
     expect(transcript().scrollTop).toBe(top(38) - ANCHOR_GAP);
   });
 
+  it("keeps a tick that Tab reached in the window while the reader scrolls away from it", async () => {
+    const stop = rail().querySelector<HTMLButtonElement>('button[tabindex="0"]')!;
+    expect(stop.getAttribute("aria-label")).toBe("Jump to: Question 64");
+    // Tab, not a key move or a click: the window has to follow focus from its first focus event.
+    await act(async () => stop.focus());
+    await scrollTo(0);
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Jump to: Question 64");
+    expect(rail().contains(document.activeElement)).toBe(true);
+    // Once focus leaves, the window goes back to the turn in view.
+    await act(async () => transcript().focus());
+    await advance(20);
+    expect(names()).toContain("Jump to: Question 1");
+  });
+
   it("reads where each message sits once, not on every scroll", async () => {
     await scrollTo(4000);
     rowReads = 0;
@@ -297,6 +311,74 @@ describe("a chat with more sent messages than ticks fit", () => {
     expect(rowReads).toBe(0);
     // The active tick still follows the reader: 5800 puts the line at 5800 + 202, Question 30's top.
     expect(current()).toBe("Jump to: Question 30");
+  });
+
+  it("measures no sent message again while a reply streams below the last one", async () => {
+    // The last question's answer is still being written.
+    conversation = {
+      ...conversation,
+      messages: conversation.messages.slice(0, -1),
+      activity: { state: "working", runId: "run" },
+    };
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(1500);
+    const stream = [...FakeEventSource.streams].find((item) =>
+      item.url.startsWith("/api/bots/shared/events"),
+    )!;
+    await act(async () => stream.connect());
+    const live = (text: string) =>
+      JSON.stringify({
+        botId: "shared",
+        message: { id: "s1-inflight", role: "assistant", text },
+        activity: { state: "working", runId: "run" },
+        toolCalls: [],
+      });
+    const reply = () =>
+      container.querySelector('[data-message-id="s1-inflight"] .message-markdown')?.textContent;
+    await act(async () => stream.emit("inflight", live("Counting")));
+    await advance(400);
+    expect(reply()).toBe("Counting");
+    rowReads = 0;
+    await act(async () => stream.emit("inflight", live("Counting the herd")));
+    await advance(400);
+    expect(reply()).toBe("Counting the herd");
+    // The reported case read all 64 sent messages. Checking the last one tells that none of them moved.
+    expect(rowReads).toBeLessThanOrEqual(1);
+    expect(current()).toBe("Jump to: Question 64");
+  });
+
+  // The row shown while a send is on its way and the saved row that replaces it have different IDs, and the chat keeps
+  // its count of sent messages. Tick positions and the turn in view have to follow the new ID.
+  it("marks a sent message as the turn in view once its saved row replaces the one shown while it was on its way", async () => {
+    await scrollTo(top(count));
+    vi.mocked(write).mockImplementation(
+      async <T>(path: string, body?: unknown) =>
+        (path === "/bots/shared/messages"
+          ? {
+              requestId: (body as { requestId: string }).requestId,
+              status: "accepted",
+              runId: "run",
+              turn: "started",
+            }
+          : {}) as T,
+    );
+    await typeInto(container.querySelector("textarea")!, "Question 65");
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click(),
+    );
+    await advance(50);
+    expect(current()).toBe("Jump to: Question 65");
+    conversation = {
+      ...conversation,
+      messages: [...conversation.messages, prompt("q64", "Question 65")],
+      activity: { state: "done" },
+      version: "2",
+    };
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(1500);
+    expect(container.querySelector('[data-message-id="q64"]')).not.toBeNull();
+    expect(names()).toHaveLength(20);
+    expect(current()).toBe("Jump to: Question 65");
   });
 
   it("measures again once something above the messages changes size", async () => {

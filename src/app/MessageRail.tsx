@@ -69,9 +69,16 @@ export const MessageRail = memo(function MessageRail({
   const nav = useRef<HTMLElement>(null);
   const hiddenId = useId();
   const shown = railShown({ ...layout, count: entries.length });
-  // One array per list of entries, so the position cache below can tell when the entries changed.
-  const entryIds = useMemo(() => entries.map((entry) => entry.id), [entries]);
+  // One array per ordered list of sent messages, so the position cache below can tell when they changed.
+  // A streaming reply rebuilds the entries on every update while their IDs stay the same; the array stays too.
   const ids = useRef<string[]>([]);
+  const entryIds = useMemo(() => {
+    const next = entries.map((entry) => entry.id);
+    const previous = ids.current;
+    return next.length === previous.length && next.every((id, at) => id === previous[at])
+      ? previous
+      : next;
+  }, [entries]);
   ids.current = entryIds;
   // The window's first entry, kept so ticks hold still while the anchor stays inside them.
   const [windowStart, setWindowStart] = useState<number>();
@@ -136,9 +143,9 @@ export const MessageRail = memo(function MessageRail({
     revalidate(view);
     readActive.current();
   };
-  // New messages, or an earlier page, change both what overflows and where each message sits.
+  // New messages, or an earlier page, change what overflows. Whether they moved any sent message is
+  // revalidate's to tell: new IDs measure all, and anything else checks the last sent message alone.
   useLayoutEffect(() => {
-    places.current = null;
     measure.current();
   }, [entries]);
   useEffect(() => {
@@ -276,6 +283,8 @@ export const MessageRail = memo(function MessageRail({
                 setDismissedId(undefined);
               }}
               onFocus={(event) => {
+                // Tab arrives here with no key move, and the window has to keep this tick from then on.
+                setRoverId(entry.id);
                 setFocus({ id: entry.id, visible: focusVisible(event.target) });
                 setDismissedId(undefined);
               }}
