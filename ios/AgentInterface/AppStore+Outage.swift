@@ -71,10 +71,13 @@ extension AppStore {
     readFailedFor = nil
   }
 
-  /// Words or files wait in the open chat's message box. Only then does the notice say the draft is kept.
+  /// Words or files show in the open chat's message box. Only then does the notice say the draft is kept.
+  /// A message on its way shows in the transcript and leaves the box empty (`composerDraft`); files still
+  /// uploading show in the tray beside it.
   var hasDraft: Bool {
-    followedBotId != nil
-      && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachments.isEmpty
+    let shown = composerDraft
+    return followedBotId != nil
+      && (!shown.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !shown.attachments.isEmpty
         || uploads.items.contains { $0.botId == selectedBotId })
   }
   /// What the connection notice says now. The household's loss speaks for both while it is on
@@ -88,6 +91,12 @@ extension AppStore {
   /// while home is live, which says so itself.
   var connectionCardShown: Bool {
     bootstrap != nil && connectionShown && !(offlineSavedAt != nil && householdConnected && !deviceOffline)
+  }
+  /// The open chat's error banner shows `error`. A failed poll is the connection notice's news: it waits
+  /// out the grace period with the notice, and once the notice shows the error would only repeat it.
+  /// VoiceOver hears only the errors this shows; `announceConnection` says the rest, once.
+  var chatErrorShown: Bool {
+    error != nil && (connectionError == nil || !(connectionCardShown || connectionPending))
   }
   /// Why Send and Stop are refused for the connection, for VoiceOver: a disabled button gives no
   /// reason on a touch screen. During the grace period the chat still looks connected, so the
@@ -145,6 +154,10 @@ extension AppStore {
     }
     if first { Task { await self.refreshBootstrap() } }
   }
+  /// The open chat's reads are failing, so its retry decides when it is read next, with the waits of
+  /// `ReadRetry`; the poll would read it every pass. Opening it, returning to the app, coming back online,
+  /// pull to refresh and Reconnect now still read it at once.
+  var chatReadWaits: Bool { readFailedFor != nil && readFailedFor == followedBotId }
   /// A conversation read succeeded, or the chat changed: the failures and their retry are over.
   func conversationReadsRecovered() {
     readRetry?.cancel()

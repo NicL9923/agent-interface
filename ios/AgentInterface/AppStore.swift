@@ -154,8 +154,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     didSet {
       guard deviceOffline != oldValue else { return }
       updateActivity()
-      // Back online: a chat whose read failed reads at once instead of waiting out its retry.
-      if !deviceOffline, readFailedFor != nil, readFailedFor == followedBotId { requestConversationRefresh() }
+      // Back online: a chat whose read failed reads at once instead of waiting out its retry. Not while
+      // the app is away; returning reads it then.
+      if !deviceOffline, !suspended, chatReadWaits { requestConversationRefresh() }
     }
   }
   /// The household's loss and the open chat's, as the screen shows them; see `AppStore+Outage.swift`.
@@ -301,11 +302,11 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var earlierFilesFailure: String?
   var loadingEarlier = false
   var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
-  /// Whether the open chat can act now: what gates Send, Stop and every write. A failed read of the
-  /// chat refuses them from the first moment, though the chat shows it only once `chatOutage` does.
+  /// Whether the open chat can act now: what gates Send, Stop and every write in it. A lost network or
+  /// a failed read of the chat refuses them from the first moment, though the chat shows the loss only
+  /// once an outage does. The household's own controls read `householdReachable`.
   var connected: Bool {
-    bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired
-      && !cachedChats.contains(selectedBotId ?? "") && !chatReadFailed
+    householdReachable && !cachedChats.contains(selectedBotId ?? "") && !chatReadFailed
   }
   /// The open chat's latest read failed.
   var chatReadFailed: Bool { readFailedFor != nil && readFailedFor == selectedBotId }
@@ -316,9 +317,13 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   internal(set) var activity: ActivityState = .disconnected
   /// The open assistant's activity as home lists it, which only the household's own loss changes.
   internal(set) var listedActivity: ActivityState = .idle
+  /// Set while several inputs of the connection's state change as one, so the outages never see the
+  /// state between them; see `refreshBootstrap`.
+  @ObservationIgnored var activityHeld = false
   /// Every input of the connection's state changed or may have: recompute the outages, then what
   /// the chat shows of its assistant.
   func updateActivity() {
+    guard !activityHeld else { return }
     updateOutages()
     let known = conversation?.activity.state ?? bot?.activity ?? .idle
     // A sign-in that ended, no household yet, or a chat still showing its saved copy are no outage
@@ -329,6 +334,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if known != listedActivity { listedActivity = known }
   }
   var active: Bool { activity.active }
+  /// The chat's activity row, which says what the assistant is doing. A lost connection is the notice's
+  /// news, so the row stays hidden while one is on screen, including the second its notice lingers
+  /// after the connection is back. The composer reads `activity`, which follows a recovery at once.
+  var activityRowShown: Bool { !connectionShown && ![.idle, .done, .disconnected].contains(activity) }
   /// Chats read on this device since the roster last said otherwise; see `UnreadChats`.
   private(set) var readHere = UnreadChats()
   /// Whether home shows this assistant's chat as unread. The chat on screen never is.

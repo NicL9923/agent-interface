@@ -7,8 +7,9 @@ import XCTest
 @MainActor final class ConnectionStateFlowTests: XCTestCase {
   override func setUp() { continueAfterFailure = false }
   /// Launches on the open chat, losing `loss` `after` seconds from now on the clock the simulator shares.
-  private func launch(_ loss: String, after seconds: TimeInterval = 10) -> (XCUIApplication, Date) {
+  private func launch(_ loss: String, after seconds: TimeInterval = 10, _ switches: [String] = []) -> (XCUIApplication, Date) {
     let app = XCUIApplication()
+    for name in switches { app.launchEnvironment["AGENT_INTERFACE_UI_" + name] = "1" }
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
@@ -85,6 +86,28 @@ import XCTest
     app.navigationBars.buttons.firstMatch.tapWhenReady()
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertFalse(app.descendants(matching: .any)["homeSync"].exists, "Home says nothing is lost")
+  }
+
+  /// Review finding 5: the chat whose reads failed stayed selected, so its loss disabled a healthy group
+  /// room's Send and made Settings say Hermes was reconnecting.
+  func testOneChatsFailedReadsLeaveGroupChatsAndSettingsLive() throws {
+    let (app, lostAt) = launch("chat", ["GROUP"])
+    _ = openChat(app, before: lostAt)
+    XCTAssertTrue(app.staticTexts["Can't refresh this chat"].waitForExistence(timeout: 30), app.debugDescription)
+    app.navigationBars.buttons.firstMatch.tapWhenReady()
+    app.buttons["room.fixture-room"].tapWhenReady(timeout: 15)
+    let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
+    XCTAssertTrue(composer.waitForExistence(timeout: 10), app.debugDescription)
+    composer.typeWhenFocused("Who has the truck?")
+    let send = app.buttons["Send to group"]
+    XCTAssertTrue(send.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(send.isEnabled, "One assistant's chat says nothing about the household's rooms")
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tapWhenReady() }
+    app.openSettingsFromProfileMenu()
+    let hermes = app.buttons["Hermes updates"]
+    for _ in 0..<5 where !hermes.canTap { app.swipeUp() }
+    XCTAssertTrue(hermes.canTap, app.debugDescription)
+    XCTAssertTrue(hermes.label.contains("Connected"), "Bootstrap found Hermes well: \(hermes.label)")
   }
 
   func testOfflineWaitsItsGracePeriodThenSaysSoWithoutARetry() throws {

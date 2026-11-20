@@ -520,6 +520,75 @@ final class ConnectionCopyTests: XCTestCase {
     value.updateActivity()
     XCTAssertEqual(said, heard, "The draft's first word is no news about the connection")
   }
+
+  /// Review finding 1: with a healthy household, going offline left `connected` true until a read failed.
+  func testAnOfflineDeviceRefusesWritesFromTheFirstMoment() async throws {
+    let value = try store()
+    value.deviceOffline = true
+    XCTAssertFalse(value.connected, "Nothing can be written without a network")
+    XCTAssertEqual(value.connectionReason, AppStore.checkingConnection, "Send says why before the notice shows")
+    XCTAssertEqual(value.activity, .working, "The chat still shows what Hermes last said during the grace period")
+    value.deviceOffline = false
+    XCTAssertTrue(value.connected)
+  }
+
+  /// Review finding 5: one chat's failed read is that chat's; the household's controls stay live.
+  func testOneChatsFailedReadLeavesTheHouseholdReachable() async throws {
+    let value = try store()
+    value.readFailedFor = "ranch"
+    XCTAssertFalse(value.connected, "The chat's own writes wait")
+    XCTAssertTrue(value.householdReachable, "Group rooms and Settings read the household")
+    value.deviceOffline = true
+    XCTAssertFalse(value.householdReachable, "Offline, the household can take no write either")
+  }
+
+  /// Review finding 8: a working chat that recovered right after its notice showed brought its activity row
+  /// back while the notice stayed out its minimum second.
+  func testTheActivityRowWaitsForTheNoticeToGoAndTheComposerDoesNot() async throws {
+    let value = try store()
+    XCTAssertTrue(value.activityRowShown)
+    value.readFailedFor = "ranch"
+    XCTAssertTrue(value.activityRowShown, "During the grace period the chat shows what Hermes last said")
+    try await move(to: 3_000, value)
+    XCTAssertFalse(value.activityRowShown)
+    value.readFailedFor = nil
+    XCTAssertTrue(value.active, "The composer has the recovered activity at once")
+    XCTAssertFalse(value.activityRowShown, "The row stays hidden while the notice lingers")
+    try await move(to: 4_000, value)
+    XCTAssertTrue(value.activityRowShown)
+  }
+
+  /// Review finding 3: VoiceOver heard a failed poll during the grace period, and again from the notice.
+  /// The chat announces only the errors its banner shows.
+  func testAFailedPollIsTheNoticesNewsAndOtherErrorsAreTheBanners() async throws {
+    let value = try store()
+    value.readFailedFor = "ranch"
+    value.reportPoll(APIError(message: "Hermes timed out. Try again.", status: 502), .chat)
+    XCTAssertNotNil(value.error)
+    XCTAssertFalse(value.chatErrorShown, "Hidden with the loss during the grace period")
+    try await move(to: 3_000, value)
+    XCTAssertFalse(value.chatErrorShown, "The notice says it")
+    value.report(APIError(message: "The file is too large.", status: 413))
+    XCTAssertTrue(value.chatErrorShown, "A failed action is the banner's")
+    value.error = nil
+    value.readFailedFor = nil
+    try await move(to: 4_000, value)
+    value.reportPoll(APIError(message: "Checking a send failed.", status: 503), .submissions)
+    XCTAssertTrue(value.chatErrorShown, "A failed poll with no loss being timed is the banner's")
+  }
+
+  /// Review finding 7: with a send on its way the composer is empty, but the notice still said the draft was kept.
+  func testTheNoticeClaimsNoDraftWhileTheMessageBoxShowsItEmptyForASend() async throws {
+    let value = try store()
+    value.draft.text = "Water the north field"
+    value.pendings["ranch"] = PendingSubmission(requestId: "request", botId: "ranch", text: "Water the north field", attachments: [], reviewedInterruption: false)
+    value.sendingRequests["ranch"] = "request"
+    XCTAssertEqual(value.composerDraft.text, "", "The composer shows the box empty while the message is on its way")
+    XCTAssertFalse(value.hasDraft)
+    // Words typed after the send are a draft again.
+    value.sendingRequests["ranch"] = nil
+    XCTAssertTrue(value.hasDraft)
+  }
 }
 
 // What a lost connection does to an assistant's avatar and caption, and what a failed read says.

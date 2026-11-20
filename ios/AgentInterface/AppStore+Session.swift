@@ -46,6 +46,8 @@ extension AppStore {
   /// Retries a launch that could not reach the server. Called when the app returns to the foreground.
   func resume() async {
     suspended = false
+    // A chat whose read failed waits for no retry: returning reads it at once. The poll leaves it alone.
+    if chatReadWaits, !deviceOffline, !sessionExpired { requestConversationRefresh() }
     // The network may have changed while the app was away.
     if !sessionExpired { api?.checkRoutes(force: true) }
     if bootstrap != nil {

@@ -272,7 +272,7 @@ struct ComposerView: View {
     Task {
       defer { stopping = false }
       do {
-        try await store.perform("/bots/\(APIClient.component(bot.id))/stop", [String: String]())
+        guard try await store.stopWork(bot.id) else { return }
         await store.refreshConversation()
       } catch { store.buzz(.failed); store.report(error) }
     }

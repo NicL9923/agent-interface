@@ -23,6 +23,10 @@ extension AppStore {
   /// `connected`, a chat still showing its saved copy does not count, so home goes live as
   /// soon as the roster does, even when the last chat opened has not been reopened yet.
   var householdConnected: Bool { bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired }
+  /// The household can take a write now: `householdConnected`, with a network. What gates the household's
+  /// own controls, such as a group room's Send and Stop, which one assistant's failed chat read says
+  /// nothing about. `connected` adds the open chat's own state.
+  var householdReachable: Bool { householdConnected && !deviceOffline }
   func householdConnectionLost(offline: Bool) -> Bool { offline || (!householdConnected && !sessionExpired) }
   /// Why a new assistant cannot be created now, or nil when it can.
   var assistantSetupBlock: String? {

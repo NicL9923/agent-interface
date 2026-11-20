@@ -256,7 +256,7 @@ struct GroupCreateView: View {
           }
         }
       }
-      Button(pending == nil ? "Create group" : "Retry saved group request") { Task { await create() } }.accessibilityIdentifier(pending == nil ? "createGroup" : "retryGroupRequest").disabled(busy || !store.connected || pending == nil && (botIds.count < 2 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+      Button(pending == nil ? "Create group" : "Retry saved group request") { Task { await create() } }.accessibilityIdentifier(pending == nil ? "createGroup" : "retryGroupRequest").disabled(busy || !store.householdReachable || pending == nil && (botIds.count < 2 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
     }.navigationTitle(pending == nil ? "New group" : "Finish creating group").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
       .task { pending = GroupCreation.pending(scope: store.scope) }
   }
@@ -346,12 +346,12 @@ struct GroupConversationView: View {
       }
       if state?.driver_status?.working == true || !(state?.driver_status?.pending_actions.isEmpty ?? true) {
         Section {
-          if state?.driver_status?.working == true { Button("Stop discussion", role: .destructive) { Task { await stop() } }.disabled(busy || !canSend || !store.connected) }
+          if state?.driver_status?.working == true { Button("Stop discussion", role: .destructive) { Task { await stop() } }.disabled(busy || !canSend || !store.householdReachable) }
           ForEach(state?.driver_status?.pending_actions ?? []) { action in
             if action.kind == "approval" {
               HStack(spacing: 8) { assistantAvatar(action.member_id); Text("\(requester(action)) requests approval").font(.subheadline.bold()) }
               Text(action.approval?.description ?? action.approval?.command ?? "An assistant needs approval")
-              HStack { Button("Allow once") { Task { await decide(action, "once") } }; Button("Deny") { Task { await decide(action, "deny") } } }.buttonStyle(.bordered).disabled(busy || !canSend || !store.connected)
+              HStack { Button("Allow once") { Task { await decide(action, "once") } }; Button("Deny") { Task { await decide(action, "deny") } } }.buttonStyle(.bordered).disabled(busy || !canSend || !store.householdReachable)
             } else { Text("The last turn from \(requester(action)) is unconfirmed. Open this group in Hermes to review it before retrying.").font(.footnote) }
           }
         }
@@ -424,7 +424,7 @@ struct GroupConversationView: View {
       if let pending {
         Text(pending.text).font(.footnote).textSelection(.enabled)
         Text("This message may have arrived. Retry the same saved message to check without sending a duplicate.").font(.caption).foregroundStyle(.secondary)
-        Button("Retry same saved message") { Task { await send() } }.buttonStyle(.accentProminent).disabled(busy || !canSend || !store.connected)
+        Button("Retry same saved message") { Task { await send() } }.buttonStyle(.accentProminent).disabled(busy || !canSend || !store.householdReachable)
       } else {
         if let query = GroupMentions.query(in: draft), canSend {
           let members = GroupMentions.suggestions(for: query, members: room.members)
@@ -440,7 +440,7 @@ struct GroupConversationView: View {
             .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
             .accessibilityLabel("Message the group").focused($composerFocused).accessibilityIdentifier("groupComposer").onChange(of: draft) { _, value in UserDefaults.standard.set(value, forKey: key + ":draft") }
           // A draft saved before the input limit existed can be longer; it stays editable but cannot send.
-          let ready = !busy && canSend && store.connected && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && GroupLimits.fits(draft, GroupLimits.message)
+          let ready = !busy && canSend && store.householdReachable && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && GroupLimits.fits(draft, GroupLimits.message)
           Button { Task { await send() } } label: {
             Image(systemName: busy ? "hourglass" : "arrow.up").font(.headline).frame(width: 44, height: 44)
               .foregroundStyle(ready ? Palette.surface(scheme) : Palette.muted)

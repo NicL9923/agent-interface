@@ -140,7 +140,13 @@ section lists the tests and mutants.
   only when the message box holds words or files.
 - One chat's failed read stays in that chat: only its notice and header avatar show it, it asks
   bootstrap once what is down, and it is read again after 1, 2, 4, 8, 16 and then every 30 seconds,
-  not while the app is in the background, the device is offline or the chat is off screen.
+  not while the app is in the background, the device is offline or the chat is off screen. The poll
+  leaves it to that retry. Opening it, returning to the app, coming back online, pull to refresh and
+  Reconnect now read it at once. Group chats and Settings follow the household, not that chat.
+- Who is on the roster is the server's word even while Hermes is down, as the web's `rosterFrom`
+  takes it: an assistant made private leaves with its saved chat. A row the roster keeps carries its
+  activity for 30 seconds from the first stale roster. A roster that missed Hermes and lists nobody
+  keeps the rows as they were, and the open chat stays open until Hermes answers for it.
 - A disconnected avatar has no badge and a lighter dim that eases over 400 ms. Home captions no
   assistant with the loss; the header's status pill says it once. The chat's activity row is hidden
   while the loss shows, and a chat that never loaded says so.
@@ -150,14 +156,10 @@ Differences that remain, and why:
 - Native has no "Live updates are delayed" notice, because it has no notice for a stopped change
   stream at all: once the chat's stream has been silent for 60 seconds, the poll reads the chat on
   every 1.5-second pass.
-- While Hermes is down, native keeps the whole previous roster, as before. The web takes the server's
-  membership and carries only each row's activity. Native compares rosters only while Hermes is
-  connected to clear the saved copies of an assistant that left, so taking membership during an
-  outage needs that cleanup reworked first. A stale roster with Hermes connected keeps each row's
-  activity for 30 seconds, as on the web.
 - A disabled button has no tooltip on a touch screen, so Send's reason is its VoiceOver hint. The
-  Stop confirmation is a system dialog with no room for a reason line, so it closes when stopping
-  becomes unavailable.
+  web's Stop has no confirmation; native's Cmd+. asks first, and that question closes when stopping
+  becomes unavailable. That leaves the web's state, Stop disabled with its reason as the hint,
+  instead of a dialog that could offer only Cancel. The stop itself checks the connection again.
 - VoiceOver hears each change as one announcement, including "Connected again.", rather than from a
   live region that empties after 5 seconds.
 - After failed bootstraps the poll waits 1, 2, 4, 8, 16, then 30 seconds; the web stops its retries

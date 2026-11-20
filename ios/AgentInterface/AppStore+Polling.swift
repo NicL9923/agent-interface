@@ -41,7 +41,7 @@ extension AppStore {
     watchRoster()
     watchConversation()
     await refreshBootstrap(ifDue: true)
-    if followedBotId != nil, conversationDue { await refreshConversation() }
+    if followedBotId != nil, conversationDue, !chatReadWaits { await refreshConversation() }
     await reconcilePending()
     // Files added while the connection was down start once it returns, as on the web.
     if connected, !uploads.uploading, uploads.items.contains(where: { $0.status == .queued }) {
@@ -238,14 +238,16 @@ extension AppStore {
       defer { updateActivity() }
       var applied = false
       if response.value != nil {
-        if let previous = bootstrap, previous.user.id == value.user.id, !value.connection.connected {
-          value.bots = previous.bots
-        } else if let previous = bootstrap, previous.user.id == value.user.id {
-          value.bots = carryActivity(value.bots, from: previous.bots)
+        // The web's `rosterFrom`. Who is on the roster is the server's word even while Hermes is down:
+        // it filters its last roster for each member, so an assistant made private goes at once. A
+        // bootstrap that missed Hermes and lists no roster at all keeps the rows as they were.
+        if let previous = bootstrap, previous.user.id == value.user.id {
+          let carried = carryActivity(value.bots, from: previous.bots)
+          value.bots = !value.connection.connected && value.bots.isEmpty ? previous.bots : carried
         } else {
           staleRosterSince = nil
         }
-        if let previous = bootstrap, previous.user.id == value.user.id, value.connection.connected,
+        if let previous = bootstrap, previous.user.id == value.user.id,
           Set(previous.bots.map(\.id)) != Set(value.bots.map(\.id)) {
           let removed = Set(previous.bots.map(\.id)).subtracting(value.bots.map(\.id))
           if !removed.isEmpty {
@@ -267,7 +269,13 @@ extension AppStore {
         // After any account change above, which starts the outages over.
         bootstrapAnswered = true
         if value.connection.connected { everConnected = true }
+        // The answer and the app's availability change as one. Assigned apart, a bootstrap answering
+        // past a grace period whose timer has not run yet would show the loss it ends, then say it is over.
+        activityHeld = true
+        if appUnavailable { appUnavailable = false }
         if bootstrap != value { bootstrap = value; applied = true }
+        activityHeld = false
+        updateActivity()
         // A stale roster is read whole each time, so the end of its carry is judged on it.
         appliedBootstrapTag = staleRosterSince == nil ? response.etag : nil
       }
@@ -283,7 +291,9 @@ extension AppStore {
       loadPendings(value.bots)
       if let open = selectedBotId, value.connection.connected, !value.bots.contains(where: { $0.id == open }) {
         await leave(open)
-      } else if !stayHome, selectedBotId == nil || !value.bots.contains(where: { $0.id == selectedBotId }) {
+      } else if !stayHome, selectedBotId == nil {
+        // A chat off a connected roster left above. While Hermes is down the open chat stays, as on
+        // the web, until Hermes answers for it.
         let last: String? = read(key(.selected))
         let next =
           value.bots.first { $0.id == last }?.id ?? value.bots.first {

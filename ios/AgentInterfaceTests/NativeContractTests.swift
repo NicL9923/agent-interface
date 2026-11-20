@@ -35,6 +35,13 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     private var botHidden = false
     private var extraBot = false
     func addFamilyBot() { lock.withLock { extraBot = true } }
+    /// While Hermes is down, the server lists its last roster, filtered for this member, with every row
+    /// marked `disconnected`. Without this the down roster is empty, as when the server has none.
+    private var listedWhileDown = false
+    func listWhileDown() { lock.withLock { listedWhileDown = true } }
+    /// Family's owner made it private: it leaves this member's roster.
+    private var familyHidden = false
+    func hideFamilyBot() { lock.withLock { familyHidden = true } }
     private var assistantsChanged = 0
     private var history: [String]?
     private var heldOnce: Set<String> = []
@@ -203,11 +210,12 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         guard try await eventually({ lock.withLock { held[path] != nil } }) else { throw URLError(.timedOut) }
     }
     func bootstrapData() -> Data {
-        let (isConnected, hidden, extra, stale) = lock.withLock { (connected, botHidden, extraBot, rosterStale) }
-        let activity = stale ? "disconnected" : "idle"
+        let (isConnected, hidden, extra, stale, listed) = lock.withLock { (connected, botHidden, extraBot && !familyHidden, rosterStale, listedWhileDown) }
+        let activity = stale || !isConnected ? "disconnected" : "idle"
         let family: [String: Any] = ["id": "family", "name": "Family", "model": "test", "shared": true, "activity": activity]
-        var bots: [[String: Any]] = !isConnected ? [] : hidden ? [family] : [["id": "bot", "name": "Bot", "model": "test", "shared": true, "activity": activity]]
-        if isConnected && extra && !hidden { bots.append(family) }
+        let lists = isConnected || listed
+        var bots: [[String: Any]] = !lists ? [] : hidden ? [family] : [["id": "bot", "name": "Bot", "model": "test", "shared": true, "activity": activity]]
+        if lists && extra && !hidden { bots.append(family) }
         return Self.json(["user": ["id": user, "name": user, "email": "\(user)@example.test", "picture": NSNull()],
                    "household": [], "preferences": ["presentation": "simple", "theme": "system", "favorites": [], "sections": [], "followBots": []],
                    "bots": bots,
@@ -1341,6 +1349,8 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         var time = ContinuousClock.now
         value.now = { time }
+        let pauses = HeldPauses()
+        value.readRetryPause = { try await pauses.pause($0) }
         _ = await value.pollOnce()
         let bootstraps = { server.requestCount("/api/bootstrap") }
         server.disconnect(); await value.refreshBootstrap()
@@ -1361,6 +1371,10 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try await until { bootstraps() == expected }
         XCTAssertFalse(value.appUnavailable, "Bootstrap found the app and Hermes well")
         server.failConversation(false)
+        // The poll leaves the chat to its retry, whose read clears it.
+        try await until { pauses.waiting == 1 }
+        pauses.release()
+        try await until { value.readFailedFor == nil }
         time += .seconds(1.5); _ = await value.pollOnce()
         XCTAssertEqual(bootstraps(), expected, "A chat's own loss clears without another bootstrap")
         XCTAssertTrue(value.connected)
@@ -3508,5 +3522,133 @@ extension NativeContractTests {
         server.staleRoster(false); await value.refreshBootstrap()
         server.staleRoster(); time += .seconds(60); await value.refreshBootstrap()
         XCTAssertEqual(activity(), .idle)
+    }
+
+    /// Review finding 6: native kept the previous roster whole while Hermes was down, so an assistant
+    /// made private stayed listed with its saved chat.
+    func testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        server.addFamilyBot(); await value.refreshBootstrap()
+        value.conversationCache["family"] = value.conversation
+        value.recentChats = ["bot", "family"]
+        // Family is made private by its owner, then Hermes goes down: the server lists only Bot.
+        server.listWhileDown(); server.disconnect()
+        server.hideFamilyBot()
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.bots.map(\.id), ["bot"], "Who is on the roster is the server's word")
+        XCTAssertNil(value.conversationCache["family"], "The assistant that left takes its saved chat with it")
+        XCTAssertEqual(value.recentChats, ["bot"])
+        XCTAssertEqual(value.bootstrap?.bots.first?.activity, .idle, "A row it keeps keeps what it was doing")
+        time += .seconds(30); await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.bots.first?.activity, .disconnected, "Thirty seconds after the first stale roster, the server's word stands")
+    }
+
+    /// Review finding 6, the open chat: while Hermes is down the web keeps the chat on screen, and native
+    /// does not pick another.
+    func testAHermesDownRosterWithoutTheOpenChatKeepsItOpenUntilHermesAnswers() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.addFamilyBot(); await value.refreshBootstrap()
+        server.listWhileDown(); server.disconnect(); server.hideBot()
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.bots.map(\.id), ["family"])
+        XCTAssertNil(value.conversationCache["bot"])
+        XCTAssertEqual(value.selectedBotId, "bot", "No other chat is chosen while Hermes is down")
+    }
+
+    /// Review finding 2: the poll read a failed chat on every 1.5-second pass, dropping its retry, and
+    /// kept reading while offline; coming back online read even while the app was away.
+    func testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        let pauses = HeldPauses()
+        value.readRetryPause = { try await pauses.pause($0) }
+        _ = await value.pollOnce()
+        server.failConversation()
+        time += .seconds(1.5); _ = await value.pollOnce()
+        try await until { pauses.waiting == 1 }
+        let reads = conversationReads(server)
+        for _ in 0..<3 { time += .seconds(1.5); _ = await value.pollOnce() }
+        XCTAssertEqual(conversationReads(server), reads, "The poll leaves the failed chat to its retry")
+        XCTAssertEqual(pauses.cancelled, 0, "and keeps the retry's wait")
+        value.deviceOffline = true
+        pauses.release()
+        try await until { value.readRetry == nil }
+        for _ in 0..<3 { time += .seconds(1.5); _ = await value.pollOnce() }
+        XCTAssertEqual(conversationReads(server), reads, "Nothing reads while offline")
+        value.suspended = true
+        value.deviceOffline = false
+        // Absence check: a read queued while away would reach the server within this window.
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(conversationReads(server), reads, "Coming back online while away reads nothing")
+        await value.resume()
+        try await until { conversationReads(server) == reads + 1 }
+        // Absence check: the poll that resuming starts would read again within this window.
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(conversationReads(server), reads + 1, "Returning reads once")
+    }
+
+    /// Review finding 4: a changed bootstrap that answered just past the grace period, before the timer
+    /// ran, showed the loss and then said it was over.
+    func testABootstrapThatAnswersPastTheGracePeriodBeforeTheTimerRunsShowsAndSaysNothing() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        // Timer: the outage timer never wakes, as when it runs late.
+        value.outagePause = { _ in try await Task.sleep(for: .seconds(3_600)) }
+        var said: [String] = []
+        value.announce = { said.append($0) }
+        await value.refreshBootstrap()
+        server.failBootstrap(status: 503); await value.refreshBootstrap()
+        XCTAssertTrue(value.appOutage.pending)
+        time += .seconds(3.5)
+        server.failBootstrap(status: 200); server.addFamilyBot()
+        await value.refreshBootstrap()
+        XCTAssertFalse(value.appUnavailable)
+        XCTAssertFalse(value.appOutage.shown, "The app answered, so nothing shows")
+        XCTAssertEqual(value.appOutage.recoveries, 0)
+        XCTAssertEqual(said, [])
+    }
+
+    /// Review finding 1: a Stop confirmed in a dialog posted without rechecking the connection.
+    func testAStopIsNotSentAfterTheChatOrTheNetworkIsLost() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let pauses = HeldPauses()
+        value.readRetryPause = { try await pauses.pause($0) }
+        let stops = { server.requestCount("/api/bots/bot/stop") }
+        server.failConversation(); await value.refreshConversation()
+        var sent = try await value.stopWork("bot")
+        XCTAssertFalse(sent, "Not while the chat's read fails")
+        server.failConversation(false); await value.refreshConversation()
+        value.deviceOffline = true
+        sent = try await value.stopWork("bot")
+        XCTAssertFalse(sent, "Not while the device is offline")
+        value.deviceOffline = false
+        sent = try await value.stopWork("family")
+        XCTAssertFalse(sent, "Only the chat on screen")
+        sent = try await value.stopWork("bot")
+        XCTAssertTrue(sent)
+        XCTAssertEqual(stops(), 1)
+    }
+
+    /// Review finding 1: retrying an uncertain send did not recheck the connection.
+    func testAnUncertainSendIsNotRetriedWhileTheChatOrTheNetworkIsDown() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let pauses = HeldPauses()
+        value.readRetryPause = { try await pauses.pause($0) }
+        let sends = { server.requestCount("/api/bots/bot/messages") }
+        value.pending = PendingSubmission(requestId: "request", botId: "bot", text: "Send this", attachments: [], reviewedInterruption: false)
+        server.failConversation(); await value.refreshConversation()
+        await value.send(reviewedUncertain: true)
+        XCTAssertEqual(sends(), 0, "Not while the chat's read fails")
+        server.failConversation(false); await value.refreshConversation()
+        value.deviceOffline = true
+        await value.send(reviewedUncertain: true)
+        XCTAssertEqual(sends(), 0, "Not while the device is offline")
+        value.deviceOffline = false
+        await value.send(reviewedUncertain: true)
+        XCTAssertEqual(sends(), 1, "Sent once both are back")
     }
 }

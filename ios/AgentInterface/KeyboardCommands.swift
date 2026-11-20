@@ -78,8 +78,9 @@ private struct StopShortcut: ViewModifier {
       .onChange(of: store.keyboardCommand) { _, command in
         if command?.kind == .stop, store.viewingBotId == bot.id, canStop { confirming = true }
       }
-      // A question open when the connection goes would send a stop nobody can deliver. A system
-      // dialog cannot hold a reason line, so it closes; Stop then says why it is unavailable.
+      // A question open when the connection goes would offer a stop nobody can deliver. It closes,
+      // which leaves the web's state: Stop disabled, with its reason as the VoiceOver hint. Left open
+      // it would offer only Cancel. The stop itself rechecks the connection too (`stopWork`).
       .onChange(of: canStop) { _, can in if !can { confirming = false } }
       .confirmationDialog("Stop \(bot.name)'s work?", isPresented: $confirming, titleVisibility: .visible) {
         Button("Stop work", role: .destructive, action: stop)

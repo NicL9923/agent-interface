@@ -167,7 +167,8 @@ struct ConversationView: View {
     .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false; speech.reset() }
     .onChange(of: findQuery) { _, _ in findTarget = nil }
     .onChange(of: store.error) { _, error in
-      if visible, let error { AccessibilityNotification.Announcement(error).post() }
+      // Only an error the banner shows: a failed poll is the connection's news, said once by the store.
+      if visible, store.chatErrorShown, let error { AccessibilityNotification.Announcement(error).post() }
     }
     .task(id: "\(findOpen):\(findQuery)") { await searchHistory() }
     // Handoff to another device, and the assistant on screen for Siri.
@@ -197,9 +198,8 @@ struct ConversationView: View {
       Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reloading this chat…")
         .font(.caption).foregroundStyle(.secondary).padding(8).accessibilityIdentifier("chatSavedCopy")
     }
-    // A failed poll is the connection notice's news: it waits out the grace period with the notice,
-    // and once the notice shows the error would only repeat it.
-    if let error = store.error, store.connectionError == nil || !(store.connectionCardShown || store.connectionPending) {
+    // A failed poll waits with the connection notice and gives way to it; see `chatErrorShown`.
+    if let error = store.error, store.chatErrorShown {
       ErrorBanner(message: error, dismiss: { store.dismissError() }).padding(.horizontal).padding(.bottom, 8)
     }
     if store.sessionExpired {
@@ -469,7 +469,7 @@ struct ConversationView: View {
           runUndo.show(UndoToast(message: "Hid \(run.routineName) runs from this chat", change: .routineRuns(botId: bot.id, routineId: run.routineId)))
         })
       // The row says what the assistant is doing. A lost connection is the notice's news, not the assistant's.
-      if ![.idle, .done, .disconnected].contains(store.activity) { liveActivity }
+      if store.activityRowShown { liveActivity }
       // A request this device just settled keeps its line a moment after Hermes stops listing it.
       ForEach(SettledRequests.shared.lingering(botId: bot.id, listed: Set((store.conversation?.attention ?? []).map(\.id)))) { SettledReceiptRow(text: $0.text) }
       // Questions and secure requests come before approvals, as on the web.
