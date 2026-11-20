@@ -232,15 +232,21 @@ const compare = (page: Page, settled: boolean) =>
     };
     const layered = read("layered");
     const unlayered = read("unlayered");
-    let moved = [...layered].filter(([key, value]) => unlayered.get(key) !== value);
+    // Both reads' keys: generated content that only one cascade draws leaves its keys out of the other.
+    let moved = [...new Set([...layered.keys(), ...unlayered.keys()])].filter(
+      (key) => layered.get(key) !== unlayered.get(key),
+    );
     if (moved.length) {
       const again = read("layered");
-      moved = moved.filter(([key, value]) => again.get(key) === value);
+      moved = moved.filter((key) => again.get(key) === layered.get(key));
     }
     swap("layered", true);
+    const shown = (value: string | undefined) => value ?? "(not drawn)";
     return {
       count: layered.size,
-      moved: moved.map(([key, value]) => `${key} ${value} -> ${unlayered.get(key)} without layers`),
+      moved: moved.map(
+        (key) => `${key} ${shown(layered.get(key))} -> ${shown(unlayered.get(key))} without layers`,
+      ),
     };
   }, settled);
 
@@ -317,3 +323,36 @@ for (const view of VIEWS) {
     }
   });
 }
+
+// The guard's own check: a pseudo-element that only one cascade draws has to read as a difference, whichever one it is.
+test("the guard sees generated content that only one cascade draws", async ({ page }) => {
+  await signIn(page);
+  // Added to a built sheet: the page's content security policy refuses a stylesheet from anywhere else.
+  await page.evaluate(() => {
+    const sheet = document.querySelector<HTMLLinkElement>("link[rel=stylesheet]")!.sheet!;
+    for (const rule of [
+      // Before layers the more specific base rule drew it; in layers the component rule hides it.
+      "@layer base { .probe-a .probe::before { content: 'a'; } }",
+      "@layer components { .probe::before { content: none; } }",
+      // Before layers the more specific component rule hid it; in layers the motion rule draws it.
+      "@layer components { .probe-b .probe::after { content: none; } }",
+      "@layer motion { .probe::after { content: 'b'; } }",
+    ])
+      sheet.insertRule(rule, sheet.cssRules.length);
+    for (const name of ["probe-a", "probe-b"]) {
+      const outer = document.body.appendChild(document.createElement("div"));
+      outer.className = name;
+      outer.appendChild(document.createElement("span")).className = "probe";
+    }
+  });
+  await prepare(page);
+  const { moved } = await compare(page, true);
+  const content = (side: string) =>
+    moved.filter((line) => line.includes(`> div.${side}:`) && / content /.test(line));
+  expect(content("probe-a")).toEqual([
+    expect.stringMatching(/span\.probe:0::before content \(not drawn\) -> "a" without layers$/),
+  ]);
+  expect(content("probe-b")).toEqual([
+    expect.stringMatching(/span\.probe:0::after content "b" -> \(not drawn\) without layers$/),
+  ]);
+});
