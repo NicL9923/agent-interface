@@ -354,10 +354,30 @@ const onlyImages = (element: ReactElement) => {
   );
   return parts.length > 0 && parts.every((part) => isValidElement(part) && tagOf(part) === "img");
 };
+/** Blocks that keep the column's full width wherever they sit. Images render as links, but keep their tag. */
+const fullWidthTags = new Set(["pre", "table", "img", "hr", "video", "audio", "iframe"]);
+/** Prose containers whose content can hold a full-width block, such as a fence under a list item. */
+const holderTags = new Set(["ul", "ol", "blockquote"]);
+const holdsFullWidth = (children: ReactNode): boolean =>
+  Children.toArray(children).some(
+    (part) =>
+      isValidElement(part) &&
+      (fullWidthTags.has(tagOf(part) ?? "") ||
+        holdsFullWidth((part.props as { children?: ReactNode }).children)),
+  );
+/**
+ * A piece is prose, and reads in a bubble, when it is a paragraph, list, quote or heading. A paragraph of
+ * images alone is media, and a list or quote that holds code, a table, media or a rule anywhere inside is
+ * one full-width block, as Classic shows it, so code is never squeezed into a bubble.
+ * docs/native-api.md#chat-bubbles states the rule for the app.
+ */
 function pieceKind(node: ReactNode, tag: string | undefined): PieceKind {
   if (typeof node === "string") return /\S/.test(node) ? "prose" : "space";
   if (!isValidElement(node) || !tag || !proseTags.has(tag)) return "block";
-  return tag === "p" && onlyImages(node) ? "block" : "prose";
+  if (tag === "p") return onlyImages(node) ? "block" : "prose";
+  return holderTags.has(tag) && holdsFullWidth((node.props as { children?: ReactNode }).children)
+    ? "block"
+    : "prose";
 }
 /**
  * One block of a reply parsed into its top-level pieces, each carrying the block's context, so a

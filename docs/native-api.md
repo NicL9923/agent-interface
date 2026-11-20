@@ -956,8 +956,13 @@ explicitly to go back to it.
 
 In `"bubbles"`, each run of a reply's consecutive prose blocks (paragraphs, lists,
 block quotes and headings) shares one bubble, and every other block (a table, code
-block, image, card or thematic break) stands alone at the column's width. `"classic"`
-shows replies flat. In both, the person's own bubble fits its text at the trailing
+block, image, card or thematic break) stands alone at the column's width. Read the
+reply's top-level blocks only. A paragraph holding only images is an image. A list or
+block quote is prose only while nothing inside it, at any depth, is a fenced or
+indented code block, a card, a table, an image, other media or a thematic break; one
+that holds any of them is a single full-width block, drawn as `"classic"` draws it
+with its list or quote intact, and the prose before and after it still forms bubbles.
+Inline code, links and nested lists keep a list prose. `"classic"` shows replies flat. In both, the person's own bubble fits its text at the trailing
 edge. `"solid"` fills it with the assistant's avatar color at OKLCH lightness capped at
 0.52, chroma and hue kept, under white text; a chat without an avatar color uses the
 tint.

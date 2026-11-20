@@ -851,6 +851,35 @@ describe("reply bubbles", () => {
       layout(["Look:\n\n![Barn](https://example.test/barn.png)\n\n---\n\nThat is the barn."]),
     ).toEqual(["bubble:p", "p", "hr", "bubble:p"]);
   });
+  // A list or quote that holds code, a table, media or a rule reads as one full-width block, as in Classic.
+  it("keeps a list or quote that holds a full-width block out of bubbles, with prose around it in them", () => {
+    expect(
+      layout([
+        "First:\n\n1. Open the gate\n2. Run this:\n\n   ```sh\n   gate open\n   ```\n\nThen wait.",
+      ]),
+    ).toEqual(["bubble:p", "ol", "bubble:p"]);
+    expect(layout(["> | Gate | Battery |\n> | --- | --- |\n> | North | 14% |\n\nDone."])).toEqual([
+      "blockquote",
+      "bubble:p",
+    ]);
+    expect(layout(["- The barn: ![Barn](https://example.test/barn.png)\n- Hay"])).toEqual(["ul"]);
+    expect(layout(["- One\n\n  ---\n\n- Two"])).toEqual(["ul"]);
+    // Inline code and nested lists are still prose.
+    expect(layout(["- Run `gate open`\n  - then wait\n\n> Quoted **words**"])).toEqual([
+      "bubble:ul,blockquote",
+    ]);
+  });
+  it("renders a list with nested code at full width, keeping it a list", async () => {
+    const text = "Steps:\n\n- Run this:\n\n  ```sh\n  gate open\n  ```\n- Wait";
+    await act(async () =>
+      root.render(createElement(ReplyMarkdown, { text, live: false, bubbles: true })),
+    );
+    const list = container.querySelector(".message-markdown > ul")!;
+    expect(list.closest(".reply-bubble")).toBeNull();
+    expect(list.querySelectorAll(":scope > li")).toHaveLength(2);
+    expect(list.querySelector("li pre")).not.toBeNull();
+    expect(container.querySelector(".reply-bubble")!.textContent).toBe("Steps:");
+  });
   it("splits a block where a fence interrupts its paragraph", () => {
     expect(layout(["Run:\n```sh\nls\n```\nThen look."])).toEqual(["bubble:p", "pre", "bubble:p"]);
   });
