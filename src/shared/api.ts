@@ -109,6 +109,11 @@ export interface MessageRequest {
    * after a failed turn. Never sent with draftBaseRevision: a retry leaves the draft untouched.
    */
   retryOf?: string;
+  /**
+   * The assistant reply this reaction answers. The text is then exactly one reaction, with no files, no
+   * draftBaseRevision and no retryOf; 409 `answer_stale` when the reply no longer ends the chat or a turn runs.
+   */
+  answering?: string;
 }
 export interface DraftSave {
   text: string;

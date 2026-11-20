@@ -4213,6 +4213,24 @@ describe("Hermes conversation and roster read costs", () => {
     await runtime.conversation("shared", { window: { turns: 20 }, timing: older });
     expect(older).toEqual({ shared: false, hermes: expect.any(Number) });
   });
+  it("answers a fresh read from Hermes itself, never joining a read another caller started", async () => {
+    await runtime.status();
+    snapshot.messages = [{ row_id: 1, role: "user", text: "Hi" }];
+    const opens = () => calls.filter((call) => call.method === "agent-interface.open").length;
+    const before = opens();
+    const shared: ReadTiming = {},
+      fresh: ReadTiming = {};
+    // The guard on a reaction answer reads this way, so a read seconds old never admits a stale answer.
+    await Promise.all([
+      runtime.conversation("shared", { window: { turns: 1 }, timing: shared }),
+      runtime.conversation("shared", { window: { turns: 1 }, fresh: true, timing: fresh }),
+    ]);
+    expect(opens() - before).toBe(2);
+    expect(fresh).toEqual({ shared: false, hermes: expect.any(Number) });
+  });
+  it("advertises reaction answers, so the app offers React only to a server that checks them", async () => {
+    expect((await runtime.capabilities()).reactionAnswers).toEqual({ supported: true });
+  });
   it("reads write-check state without history and asks Hermes to cut a window", async () => {
     await runtime.submit(input());
     await runtime.conversation("shared", { history: false });

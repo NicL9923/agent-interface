@@ -101,6 +101,8 @@ const keys = [
   "portraitGeneration",
   "avatarMetadata",
   "liveVoice",
+  // The server's own guard on a send's `answering` reply (conversation-routes.ts), so an app can offer React.
+  "reactionAnswers",
 ] as const;
 // The voice plugin's state changes outside this socket, as when someone enables it, so it is read again this often.
 const LIVE_VOICE_MS = 30_000;
@@ -1732,9 +1734,9 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
       }
     },
     conversation(botId, options = {}) {
-      // Write checks and activity summaries need current state, not history. Never shared.
+      // Write checks and activity summaries need current state, not history. Never shared, nor is a fresh read.
       if (options.timing) options.timing.shared = false;
-      if (options.history === false) return readConversation(botId, options);
+      if (options.history === false || options.fresh) return readConversation(botId, options);
       const now = Date.now(),
         generation = generationOf(botId);
       for (const [key, entry] of sharedReads)

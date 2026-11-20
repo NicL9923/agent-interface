@@ -222,7 +222,9 @@ export type CapabilityKey =
   | "portraitGeneration"
   | "avatarMetadata"
   /** Live Talk: Hermes can mint OpenAI Realtime sessions on its ChatGPT sign-in. */
-  | "liveVoice";
+  | "liveVoice"
+  /** The server checks a send's `answering` reply against the chat's end, so clients may offer React. */
+  | "reactionAnswers";
 export type Capabilities = Record<CapabilityKey, Capability>;
 /** Refuses with a 409 unless the runtime of `botId`, or the default runtime for undefined, supports `key`. */
 export type RequireCapability = (key: CapabilityKey, botId: string | undefined) => Promise<void>;
@@ -443,6 +445,8 @@ export interface ConversationOptions {
   };
   /** false reads current state, approvals and requests without history, as write checks need. */
   history?: false;
+  /** Reads Hermes now, never joining or leaving a read other callers share, as a check of the chat's end needs. */
+  fresh?: true;
   /** Filled by the runtime with how it served this read, for Server-Timing. Never part of the result. */
   timing?: ReadTiming;
 }
@@ -538,6 +542,12 @@ export interface Submission {
   draftBaseRevision?: number;
   /** The user message this one retries. A retry never reads, merges or clears the sender's draft. */
   retryOf?: string;
+  /**
+   * The assistant reply this reaction answers, by message ID. The text is then exactly one reaction
+   * (src/shared/reactions.ts), and the server admits it only while that reply ends the chat and no turn
+   * runs. Like a retry, an answer never reads, merges or clears the sender's draft.
+   */
+  answering?: string;
   /**
    * Spoken in live Talk. A new turn runs on Hermes's voice route (`auxiliary.voice_chat`), which
    * sets its own reasoning effort; a steer joins the running turn unchanged. Only the server sets it,

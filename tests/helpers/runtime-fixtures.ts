@@ -81,6 +81,7 @@ export function capabilitiesFixture(changes: Partial<Capabilities> = {}): Capabi
     portraitGeneration: unsupported,
     avatarMetadata: unsupported,
     liveVoice: unsupported,
+    reactionAnswers: unsupported,
     ...changes,
   };
 }

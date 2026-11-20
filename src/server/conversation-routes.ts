@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   approvalNotPendingMessage,
   interruptionPendingMessage,
+  answerStaleMessage,
   submissionConflictMessage,
 } from "../shared/errors.js";
 import {
@@ -14,8 +15,10 @@ import {
   windowFiles,
 } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
+import { REACTIONS, reactionOf } from "../shared/reactions.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
 import type {
+  ActivityState,
   Approval,
   ApprovalChoice,
   ApprovalScope,
@@ -54,6 +57,8 @@ import { shownMessages } from "./conversation-view.js";
 
 // Longer than the runtime shares one history read among readers.
 const sharedReadMargin = 60000;
+/** A turn is running or waiting on someone, so a new message would join it rather than start one. */
+const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
 
 /**
  * The least time between two live updates on a `?inflight=1` or `?inflight=2` stream. `?inflight=1` sends the
@@ -672,6 +677,7 @@ export function installConversationRoutes(
       reviewedUncertain: z.boolean().default(false),
       draftBaseRevision: z.number().int().min(0).optional(),
       retryOf: z.string().min(1).max(512).optional(),
+      answering: z.string().min(1).max(512).optional(),
     })
     .refine((v) => !!v.text.trim() || !!v.attachments.length, {
       message: "Message cannot be empty",
@@ -679,6 +685,23 @@ export function installConversationRoutes(
     // A retry resends an earlier message and must never be matched to, or clear, a draft.
     .refine((v) => v.retryOf === undefined || v.draftBaseRevision === undefined, {
       message: "A retry is not written on a draft",
+    })
+    // A reaction answer is one tap on a reply: one emoji of the set, and nothing of the draft's.
+    .refine((v) => v.answering === undefined || reactionOf(v.text) !== undefined, {
+      path: ["answering"],
+      message: `An answer's text is exactly one of ${REACTIONS.map((r) => r.emoji).join(" ")}`,
+    })
+    .refine((v) => v.answering === undefined || !v.attachments.length, {
+      path: ["answering"],
+      message: "An answer carries no files",
+    })
+    .refine((v) => v.answering === undefined || v.draftBaseRevision === undefined, {
+      path: ["answering"],
+      message: "An answer is not written on a draft",
+    })
+    .refine((v) => v.answering === undefined || v.retryOf === undefined, {
+      path: ["answering"],
+      message: "An answer is not a retry",
     });
   // Shared with live Talk, whose spoken requests are ordinary messages from the person speaking.
   // phases records when the request reached Hermes and was admitted, for Server-Timing and the send's timing log.
@@ -692,6 +715,8 @@ export function installConversationRoutes(
     const { reviewedInterruption, reviewedUncertain, ...message } = body;
     if (message.retryOf !== undefined && explicitSteering)
       throw httpError(400, "Retry a message by sending it, not by steering");
+    if (message.answering !== undefined && explicitSteering)
+      throw httpError(400, "Answer a reply by sending, not by steering");
     const { requesterId } = target;
     let input: Submission = {
       ...message,
@@ -739,14 +764,25 @@ export function installConversationRoutes(
     await requireCapability("chat", input.botId);
     const fast = (await runtime.canonicalSubmit?.(input.botId)) === true;
     // A retry reads the window that starts at its message, which also proves the message is still there.
+    // An answer reads the chat's last turn itself: a read shared with other callers may be seconds old,
+    // and one member may still see a question the chat has already moved past.
     const conversation =
       input.retryOf !== undefined
         ? await runtime.conversation(input.botId, { window: { start: input.retryOf } })
-        : fast
-          ? undefined
-          : await runtime.conversation(input.botId, { history: false });
+        : input.answering !== undefined
+          ? await runtime.conversation(input.botId, { window: { turns: 1 }, fresh: true })
+          : fast
+            ? undefined
+            : await runtime.conversation(input.botId, { history: false });
     if (conversation?.activity.state === "interrupted" && !reviewedInterruption)
       throw httpError(409, interruptionPendingMessage);
+    // Nothing is recorded, so the same request can be sent once the reply ends the chat again.
+    if (
+      input.answering !== undefined &&
+      (activeStates.includes(conversation!.activity.state) ||
+        conversation!.messages.at(-1)?.id !== input.answering)
+    )
+      throw httpError(409, answerStaleMessage, { code: "answer_stale" });
     if (input.retryOf !== undefined) {
       const redact = await redactAgents(store, roster, input.senderId);
       const target = conversation!.messages.find((message) => message.id === input.retryOf);
@@ -755,7 +791,7 @@ export function installConversationRoutes(
       if (!target || target.role !== "user" || (origin && origin.kind !== "human"))
         throw httpError(400, "That message is no longer in this conversation");
       // Steering the retried text into a running turn would answer a different question.
-      if (["thinking", "working", "waiting", "blocked"].includes(conversation!.activity.state))
+      if (activeStates.includes(conversation!.activity.state))
         throw httpError(409, "Wait for the current reply to finish before retrying");
       // A retry carries exactly its failed turn's ID, so one turn has one request everywhere.
       if (
@@ -768,10 +804,7 @@ export function installConversationRoutes(
         );
     }
     const steering =
-      explicitSteering ||
-      ["thinking", "working", "waiting", "blocked"].includes(
-        conversation?.activity.state ?? "idle",
-      );
+      explicitSteering || activeStates.includes(conversation?.activity.state ?? "idle");
     // Steering is the assistant's runtime's to support: one that queues messages for the next turn refuses it.
     if (steering || fast) await requireCapability("steering", input.botId);
     // The first retry of a failed turn claims it; any later one, from anyone, follows that request.
