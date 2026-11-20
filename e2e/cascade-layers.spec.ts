@@ -306,7 +306,13 @@ async function force(cdp: CDPSession, state: string | null) {
   });
   await Promise.all(
     nodeIds.map((nodeId) =>
-      cdp.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: state ? [state] : [] }),
+      cdp
+        .send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: state ? [state] : [] })
+        // A control the page removed since the list was read, as the command palette does with its results, has
+        // no state to force and is not read either. Any other protocol error still fails the test.
+        .catch((error: unknown) => {
+          if (!/Could not find node with given id/.test(String(error))) throw error;
+        }),
     ),
   );
 }

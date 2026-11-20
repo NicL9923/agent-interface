@@ -120,3 +120,10 @@ are removed. Nothing in the guard is excused in either browser.
 
 The one WebKit failure is `e2e/smoke.spec.ts:811`, as on main. The three skips are the ones WebKit
 had before this branch.
+
+Run 44829906738 on `0739c9a0` then gave 279 passed, 3 skipped, 1 flaky and 1 failed in 14.9
+minutes. The failure is `e2e/smoke.spec.ts:811` in WebKit. The flaky one was a guard test in
+Chromium, the command palette in the wide light view: the DevTools protocol refused to force a
+state on a control the palette had removed since the list of controls was read. `force` now passes
+over a control that is gone and still fails on any other protocol error. The guard then passed
+twice over in Chromium, 90 of 90 (`.private/webkit/chromium-guard-repeat.log`).
