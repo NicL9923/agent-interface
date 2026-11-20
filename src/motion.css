@@ -209,6 +209,8 @@
   color: var(--ink);
   box-shadow: 0 2px 8px #0003;
 }
+/* The app's button hover, restated here: the base layer's rule loses to this layer. */
+.computer-peek-close:hover:enabled { background: var(--accent-soft); }
 @media (max-width: 620px) {
   .computer-peek { right: 12px; bottom: 12px; width: 132px; }
   /* Above the phone's floating message box, which the transcript runs under. */

@@ -112,7 +112,10 @@ async function richChat(page: Page) {
   await page.getByText("Which gate first?").waitFor();
 }
 
-const EXTRA: Screen[] = [
+/** A screen, and routes it needs before sign-in, which reads the chat last open. They take precedence over `fixtures`. */
+type GuardScreen = [...Screen, ((page: Page) => Promise<void>)?];
+
+const EXTRA: GuardScreen[] = [
   [
     "a chat with a table, an approval, a question, an attachment and Find in chat",
     async (page) => {
@@ -144,6 +147,37 @@ const EXTRA: Screen[] = [
         document.getSelection()!.addRange(range);
       });
       await page.locator(".quote-selection").waitFor();
+    },
+  ],
+  // The live computer's Watch button sits in the activity line, whose own button rule used to outrank its class.
+  [
+    "a chat with the assistant at the computer",
+    async (page) => {
+      await assistants(page)
+        .getByRole("button", { name: /Ranch Hand/ })
+        .click();
+      // The peek is a Watch button too; this one is in the activity line.
+      await page
+        .locator(".activity-status")
+        .getByRole("button", { name: "Watch Ranch Hand on the computer" })
+        .waitFor();
+    },
+    async (page) => {
+      await page.route(/\/api\/bots\/ranch\/conversation/, async (route) => {
+        const body = await (await fresh(route)).json();
+        await route.fulfill({
+          json: {
+            ...body,
+            messages: [{ id: "lx-c1", role: "user", text: "Order more feed online." }],
+            approvals: [],
+            attention: [],
+            activity: { state: "working", runId: "lx-run" },
+            toolCalls: [{ id: "lx-call", name: "browser_navigate", status: "running" }],
+          },
+        });
+      });
+      // The peek beside it asks for the desktop, which this server has none of. Left waiting, it logs no error.
+      await page.route(/\/api\/computer\/desktop/, () => {});
     },
   ],
   [
@@ -296,13 +330,14 @@ for (const view of VIEWS) {
       hasTouch: "touch" in view,
       isMobile: "touch" in view,
     });
-    for (const [name, reach] of [...SCREENS, ...EXTRA]) {
+    for (const [name, reach, before] of [...SCREENS, ...EXTRA] as GuardScreen[]) {
       test(`${name} reads the same without cascade layers`, async ({ page, browserName }) => {
         await page.emulateMedia({
           colorScheme: view.colorScheme,
           reducedMotion: view.reducedMotion,
         });
         await fixtures(page);
+        await before?.(page);
         await signIn(page);
         await reach(page);
         await prepare(page);

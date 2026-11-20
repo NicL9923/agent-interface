@@ -84,6 +84,12 @@
     color: var(--ink);
     font-size: 0.8125rem;
   }
+  /* The activity line's small borderless buttons, as before cascade layers, when its button rule outranked the one above. */
+  .activity-status .activity-watch {
+    border: 0;
+    font-size: 0.6875rem;
+    padding: 3px 8px;
+  }
   /* The app's button hover, restated here: the base layer's rule loses to this layer. */
   .activity-watch:hover:enabled {
     background: var(--accent-soft);

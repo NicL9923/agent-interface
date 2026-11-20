@@ -134,8 +134,8 @@
     font-size: 0.75rem;
     color: var(--muted);
   }
+  /* Its margin is the activity copy's, 5 px above each line. */
   .activity-live p {
-    margin: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
