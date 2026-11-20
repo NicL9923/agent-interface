@@ -15,6 +15,12 @@ import { SCREENS, type Screen } from "./screens.js";
 
 const LAYERED = ["base", "components", "motion"];
 
+// Chromium only. Which rule wins between layers is the CSS cascade's answer for these stylesheets, the same in every
+// engine, so one engine reads it. This one can also force hover, focus and press on every control. In Playwright's
+// WebKit the routes that give the richer screens their content never reach the page, so those screens time out, and
+// e2e/stylesheet-order.spec.ts already reads the plain screens there.
+test.skip(({ browserName }) => browserName !== "chromium", "The cascade guard reads Chromium only");
+
 /** The server's answer in full: a read the client already holds would come back as an empty 304. */
 const fresh = (route: Route) => {
   const headers = { ...route.request().headers() };
