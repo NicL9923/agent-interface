@@ -138,6 +138,9 @@ beforeEach(() => {
   };
   vi.mocked(api).mockImplementation(async (path) => {
     if (path === "/computer") return status as never;
+    throw new Error("Unexpected request " + path);
+  });
+  vi.mocked(write).mockImplementation(async (path, body) => {
     if (path === "/computer/desktop")
       return {
         path: `/api/computer/desktop/ws?ticket=desktop-${++ticket}`,
@@ -151,9 +154,6 @@ beforeEach(() => {
         target: "nicolas@hermes",
         expiresAt: "future",
       } as never;
-    throw new Error("Unexpected request " + path);
-  });
-  vi.mocked(write).mockImplementation(async (path, body) => {
     if (path === "/computer/control")
       status = {
         ...status,
@@ -316,7 +316,7 @@ describe("shared computer", () => {
   it("starts watching and only enables desktop input after an explicit successful takeover", async () => {
     const desktop = await connectedDesktop();
     expect(desktop.viewOnly).toBe(true);
-    expect(write).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalledWith("/computer/control", expect.anything());
     await click("Take over");
     expect(write).toHaveBeenCalledWith("/computer/control", {
       action: "take",
@@ -340,13 +340,15 @@ describe("shared computer", () => {
     const replacement = mocks.desktops.at(-1)!;
     expect(replacement).not.toBe(desktop);
     expect(replacement.viewOnly).toBe(true);
-    expect(write).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(write).mock.calls.filter(([path]) => path === "/computer/control"),
+    ).toHaveLength(1);
     expect(
       vi
-        .mocked(api)
+        .mocked(write)
         .mock.calls.filter(([path]) => path === "/computer/desktop")
         .at(-1)?.[1],
-    ).toEqual(expect.objectContaining({ body: JSON.stringify({ viewerId: "viewer-1" }) }));
+    ).toEqual({ viewerId: "viewer-1" });
     await act(async () => replacement.dispatchEvent(new Event("connect")));
     expect(button("Take over").disabled).toBe(false);
     expect(button("Hand back").disabled).toBe(false);
@@ -389,22 +391,19 @@ describe("shared computer", () => {
     await render();
     expect(
       vi
-        .mocked(api)
+        .mocked(write)
         .mock.calls.filter(([path]) => path === "/computer/desktop")
         .at(-1)?.[1],
-    ).toEqual(expect.objectContaining({ body: JSON.stringify({ viewerId: "viewer-1" }) }));
+    ).toEqual({ viewerId: "viewer-1" });
     await render(true, "different-user");
-    expect(api).toHaveBeenLastCalledWith(
-      "/computer/desktop",
-      expect.objectContaining({ body: "{}" }),
-    );
+    expect(write).toHaveBeenLastCalledWith("/computer/desktop", { viewerId: undefined });
   });
 
   it("shows independent terminal availability and supports keyboard-operated tabs", async () => {
     status = { ...status, available: false, reason: "The desktop packages need installing." };
     await render();
     expect(container.textContent).toContain(status.reason);
-    expect(api).not.toHaveBeenCalledWith("/computer/desktop", expect.anything());
+    expect(write).not.toHaveBeenCalledWith("/computer/desktop", expect.anything());
     const tab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
     await act(async () =>
       tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
@@ -429,16 +428,19 @@ describe("shared computer", () => {
   });
 
   it("stops automatic retries for expired authentication and offers reconnect", async () => {
-    vi.mocked(api).mockImplementation(async (path) => {
-      if (path === "/computer") return status as never;
-      throw new ApiError("Sign in again to use the computer.", 401);
+    vi.mocked(write).mockImplementation(async (path) => {
+      if (path === "/computer/desktop")
+        throw new ApiError("Sign in again to use the computer.", 401);
+      return status as never;
     });
     await render();
-    const calls = vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/desktop").length;
+    const calls = vi
+      .mocked(write)
+      .mock.calls.filter(([path]) => path === "/computer/desktop").length;
     await act(async () => vi.advanceTimersByTimeAsync(6000));
-    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/desktop")).toHaveLength(
-      calls,
-    );
+    expect(
+      vi.mocked(write).mock.calls.filter(([path]) => path === "/computer/desktop"),
+    ).toHaveLength(calls);
     expect(button("Reconnect")).toBeDefined();
   });
 });
@@ -496,7 +498,8 @@ describe("system terminal", () => {
     await act(async () => replacement.open());
     expect(replacement.sent).not.toContainEqual(expect.objectContaining({ type: "input" }));
     expect(client.sent).not.toContainEqual({ type: "input", data: "disconnected-command\r" });
-    expect(write).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalledWith("/computer/control", expect.anything());
+    expect(write).not.toHaveBeenCalledWith("/computer/terminal/end", expect.anything());
   });
 
   describe("opened from an assistant's terminal card", () => {
@@ -594,12 +597,12 @@ describe("system terminal", () => {
   it("requires an explicit shell-ending action and passes its session identity", async () => {
     const client = await connectedTerminal();
     await click("End shell");
-    expect(write).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalledWith("/computer/terminal/end", expect.anything());
     expect(container.textContent).toContain("Running commands will stop");
     await click("End this shell");
-    expect(write).toHaveBeenCalledExactlyOnceWith("/computer/terminal/end", {
-      sessionId: "private-shell",
-    });
+    expect(
+      vi.mocked(write).mock.calls.filter(([path]) => path === "/computer/terminal/end"),
+    ).toEqual([["/computer/terminal/end", { sessionId: "private-shell" }]]);
     expect(client.readyState).toBe(3);
     expect(container.textContent).toContain("Your shell has ended");
   });
@@ -618,7 +621,7 @@ describe("terminal confirmation", () => {
     });
   }
   const ticketRequests = () =>
-    vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/terminal").length;
+    vi.mocked(write).mock.calls.filter(([path]) => path === "/computer/terminal").length;
 
   it("asks for a fresh Google sign-in before the first shell and opens it after confirming", async () => {
     status.terminal = { ...status.terminal, confirmationRequired: true };
@@ -653,8 +656,8 @@ describe("terminal confirmation", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(client.readyState).toBe(1);
     expect(container.textContent).not.toContain("Confirm it's you");
-    const fallback = vi.mocked(api).getMockImplementation()!;
-    vi.mocked(api).mockImplementation(async (path, init) =>
+    const fallback = vi.mocked(write).getMockImplementation()!;
+    vi.mocked(write).mockImplementation(async (path, body, method, init) =>
       path === "/computer/terminal"
         ? Promise.reject(
             new ApiError(
@@ -663,12 +666,12 @@ describe("terminal confirmation", () => {
               "reauthentication_required",
             ),
           )
-        : fallback(path, init),
+        : fallback(path, body, method, init),
     );
     await act(async () => client.close());
     await act(async () => vi.advanceTimersByTimeAsync(2500));
     expect(container.textContent).toContain("Confirm it's you");
-    vi.mocked(api).mockImplementation(fallback);
+    vi.mocked(write).mockImplementation(fallback);
     await click("Confirm local member one");
     expect(write).toHaveBeenCalledWith("/auth/confirm", { member: "one" });
     expect(Socket.instances).toHaveLength(2);

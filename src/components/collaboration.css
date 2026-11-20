@@ -1,150 +1,151 @@
-.agent-exchange {
-  padding: 12px 16px;
-  border-inline-start: 2px solid var(--line);
-  background: var(--surface);
-  border-radius: 0 12px 12px 0;
-  min-width: 0;
-}
-.agent-exchange-label {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  font-size: 0.8125rem;
-  margin-bottom: 8px;
-}
-.agent-exchange-route {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0 6px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.agent-exchange-person {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 100%;
-}
-.agent-exchange-person > [aria-hidden] {
-  display: inline-flex;
-  justify-content: center;
-  flex: none;
-}
-.agent-exchange-route .avatar-wrap {
-  flex: none;
-}
-.agent-exchange-route strong {
-  min-width: 0;
-}
-.agent-exchange-unknown {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  color: var(--muted);
-  flex: none;
-}
-.agent-exchange-footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  margin-top: 8px;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-.agent-exchange-footer:empty {
-  display: none;
-}
-.agent-exchange-open {
-  min-height: 36px;
-}
-.agent-exchange-group {
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 4px 12px;
-}
-.agent-exchange-group > summary {
-  min-height: 44px;
-  padding: 8px 0;
-  cursor: pointer;
-  font-size: 0.8125rem;
-  overflow-wrap: anywhere;
-}
-.agent-exchange-routes {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 8px;
-  vertical-align: middle;
-}
-.agent-exchange-count {
-  display: inline-block;
-  margin-inline-start: 8px;
-  color: var(--muted);
-}
-.agent-exchange-group > summary > .danger,
-.agent-exchange-group > summary > .muted {
-  margin-inline-start: 8px;
-}
-.agent-exchange-group > summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-.agent-exchange-messages {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 8px 0;
-}
-.agent-exchange-messages > .message {
-  margin: 0;
-}
-.conversation-turn > .agent-exchange-group {
-  margin-bottom: 28px;
-}
-.agent-exchange pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 0.8rem;
-}
-.message-agent {
-  background: transparent;
-  padding: 0;
-}
-.routine-results-dialog {
-  width: min(760px, calc(100vw - 32px));
-  max-height: 85dvh;
-  overflow: auto;
-  padding: 24px;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-}
-.routine-results-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
-}
-.routine-results-dialog .panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.routine-results-dialog label {
-  margin-top: 16px;
-}
-.routine-output {
-  margin-top: 20px;
-  overflow-wrap: anywhere;
-}
-/*
+@layer components {
+  .agent-exchange {
+    padding: 12px 16px;
+    border-inline-start: 2px solid var(--line);
+    background: var(--surface);
+    border-radius: 0 12px 12px 0;
+    min-width: 0;
+  }
+  .agent-exchange-label {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    font-size: 0.8125rem;
+    margin-bottom: 8px;
+  }
+  .agent-exchange-route {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0 6px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .agent-exchange-person {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .agent-exchange-person > [aria-hidden] {
+    display: inline-flex;
+    justify-content: center;
+    flex: none;
+  }
+  .agent-exchange-route .avatar-wrap {
+    flex: none;
+  }
+  .agent-exchange-route strong {
+    min-width: 0;
+  }
+  .agent-exchange-unknown {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    color: var(--muted);
+    flex: none;
+  }
+  .agent-exchange-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin-top: 8px;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .agent-exchange-footer:empty {
+    display: none;
+  }
+  .agent-exchange-open {
+    min-height: 36px;
+  }
+  .agent-exchange-group {
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 4px 12px;
+  }
+  .agent-exchange-group > summary {
+    min-height: 44px;
+    padding: 8px 0;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    overflow-wrap: anywhere;
+  }
+  .agent-exchange-routes {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 8px;
+    vertical-align: middle;
+  }
+  .agent-exchange-count {
+    display: inline-block;
+    margin-inline-start: 8px;
+    color: var(--muted);
+  }
+  .agent-exchange-group > summary > .danger,
+  .agent-exchange-group > summary > .muted {
+    margin-inline-start: 8px;
+  }
+  .agent-exchange-group > summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+  .agent-exchange-messages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 8px 0;
+  }
+  .agent-exchange-messages > .message {
+    margin: 0;
+  }
+  .conversation-turn > .agent-exchange-group {
+    margin-bottom: 28px;
+  }
+  .agent-exchange pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 0.8rem;
+  }
+  .message-agent {
+    background: transparent;
+    padding: 0;
+  }
+  .routine-results-dialog {
+    width: min(760px, calc(100vw - 32px));
+    max-height: 85dvh;
+    overflow: auto;
+    padding: 24px;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+  }
+  .routine-results-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.55);
+  }
+  .routine-results-dialog .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .routine-results-dialog label {
+    margin-top: 16px;
+  }
+  .routine-output {
+    margin-top: 20px;
+    overflow-wrap: anywhere;
+  }
+  /*
  * The group composer sticks to the end of the panel, so it shows whole only when it fits the panel's content box,
  * less its 20px top margin, which counts while the room is scrolled to its start. As in .composer-area, the draft
  * scrolls inside its box before Send leaves the screen: the message box is capped at the content box's height
@@ -154,349 +155,352 @@
  * conversation (`--group-notes`, its measured height) counts in both: the draft gives up that height, and the
  * panel keeps room for it, so the composer does not lie over the explanation of a send that failed.
  */
-.group-panel {
-  padding: 24px clamp(16px, 4vw, 48px);
-  overflow: auto;
-  flex: 1;
-  container-type: size;
-  --group-chrome: 76px;
-  min-height: calc(44px + var(--group-chrome) + 48px + var(--group-notes, 0px));
-}
-.group-panel:has(.group-composer > .group-thread) {
-  --group-chrome: 150px;
-}
-.composer.group-composer textarea {
-  max-height: min(
-    200px,
-    30vh,
-    max(44px, calc(100cqh - var(--group-chrome) - var(--group-notes, 0px)))
-  );
-}
-/* Holds its children's margins, so its height is the room the notes take. GroupChats.tsx reports it as --group-notes. */
-.group-notes {
-  display: flow-root;
-}
-.group-panel button:not(.send-button) {
-  font-size: 0.8125rem;
-  padding: 7px 12px;
-}
-.group-panel > section {
-  max-width: 860px;
-}
-.group-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-}
-.group-heading h3 {
-  margin: 0 0 4px;
-}
-.group-heading p {
-  margin: 0;
-  font-size: 0.8125rem;
-}
-.group-heading button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-.group-message {
-  padding: 16px 12px;
-  border-bottom: 1px solid var(--line);
-  border-radius: 8px;
-}
-.group-message.own {
-  background: var(--user);
-}
-.group-message.selected {
-  background: var(--accent-soft);
-  outline: 1px solid var(--accent);
-  box-shadow: inset 3px 0 var(--accent);
-}
-.group-message .message-attribution {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 0.875rem;
-  color: var(--ink);
-}
-.group-speaker,
-.group-requester {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.group-speaker {
-  min-width: 0;
-}
-.group-thread-context {
-  border-left: 2px solid var(--accent);
-  padding-left: 10px;
-  font-size: 0.8125rem;
-  color: var(--message-meta);
-}
-.group-requester {
-  font-size: 0.875rem;
-}
-.group-message .message-attribution time {
-  font-size: 0.75rem;
-  color: var(--muted);
-  font-weight: 400;
-}
-.group-panel button.group-reply {
-  border: 0;
-  padding: 2px 0;
-  font-size: 0.8125rem;
-  color: var(--accent);
-}
-.group-panel button.group-reply:hover:enabled {
-  background: transparent;
-  color: var(--accent);
-}
-.group-panel .group-more {
-  margin-top: 12px;
-}
-/* Two classes, so `.composer`'s `position: relative` in styles.css cannot undo the sticking. */
-.composer.group-composer {
-  margin-top: 20px;
-  position: sticky;
-  bottom: 0;
-}
-.composer.group-composer {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "thread" "input" "lead";
-}
-.composer.group-composer > .group-thread {
-  grid-area: thread;
-}
-.composer.group-composer .composer-tools {
-  margin-left: 0;
-  justify-self: stretch;
-  justify-content: space-between;
-  padding: 0 4px 2px 10px;
-}
-.group-status {
-  font-size: 0.8125rem;
-  color: var(--muted);
-}
-.group-thread {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 0.8125rem;
-  color: var(--message-meta);
-  margin: 0 0 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
-}
-.group-thread span {
-  min-width: 0;
-}
-.group-thread strong {
-  display: block;
-  color: var(--ink);
-}
-.group-thread small {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  margin-top: 4px;
-  font-size: inherit;
-}
-.group-panel .group-thread button {
-  flex-shrink: 0;
-  white-space: nowrap;
-  border: 0;
-  padding: 2px 6px;
-  font-size: 0.8125rem;
-  color: var(--accent);
-}
-.group-create {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.group-create-sheet .sheet-body {
-  padding-top: 4px;
-}
-.group-create fieldset {
-  margin: 0;
-}
-.group-create .actions button {
-  min-height: 44px;
-}
-.group-create fieldset label {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.group-create fieldset label:has(input:disabled) {
-  opacity: 0.55;
-}
-.group-panel .approval-card .actions {
-  margin-bottom: 0;
-}
-.group-create .actions {
-  margin-bottom: 0;
-  justify-content: flex-end;
-}
-@media (max-width: 620px) {
   .group-panel {
-    padding: 16px;
+    padding: 24px clamp(16px, 4vw, 48px);
+    overflow: auto;
+    flex: 1;
+    container-type: size;
+    --group-chrome: 76px;
+    min-height: calc(
+      44px + var(--group-chrome) + 48px + var(--group-notes, 0px)
+    );
   }
-  .group-panel button.group-reply,
-  .group-panel .group-thread button {
-    min-height: 44px;
+  .group-panel:has(.group-composer > .group-thread) {
+    --group-chrome: 150px;
   }
-}
-
-/* Group chat @mentions: suggestions open above the composer. */
-.mention-list {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 6px);
-  z-index: 5;
-  min-width: 220px;
-  max-width: calc(100% - 24px);
-  max-height: 220px;
-  margin: 0;
-  padding: 6px;
-  overflow-y: auto;
-  list-style: none;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: 0 10px 30px #0003;
-}
-.mention-list li {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 0.875rem;
-}
-.mention-list li small {
-  color: var(--muted);
-}
-.mention-list li[aria-selected="true"] {
-  background: var(--accent-soft);
-}
-
-.routine-results-dialog .panel-header {
-  align-items: flex-start;
-}
-.routine-results-dialog .panel-header h2 {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 1.25rem;
-  line-height: 1.4;
-}
-.routine-results-dialog .panel-header > button {
-  flex: none;
-  min-height: 44px;
-}
-.routine-results-dialog > p.muted {
-  margin: 8px 0 18px;
-  font-size: 0.875rem;
-  line-height: 1.6;
-}
-.routine-results-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-}
-.routine-results-toolbar label {
-  flex: 1;
-  min-width: 180px;
-  margin: 0;
-}
-.routine-results-toolbar > button {
-  min-height: 44px;
-}
-.routine-output-actions {
-  margin-bottom: 20px;
-}
-.routine-output-actions > button {
-  min-height: 44px;
-}
-.routine-output > article + article {
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid var(--line);
-}
-
-/* Room purpose, settings and live work. */
-.group-heading-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.group-heading p.group-purpose {
-  margin-top: 6px;
-  color: var(--ink);
-  overflow-wrap: anywhere;
-}
-.group-assignment {
-  margin: 8px 12px;
-  font-size: 0.8125rem;
-  color: var(--message-meta);
-}
-.group-activity {
-  list-style: none;
-  margin: 16px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.group-activity li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.group-activity li > span:last-child {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.group-activity small {
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-.group-settings select,
-.group-settings textarea {
-  width: 100%;
-}
-@media (max-width: 620px) {
+  .composer.group-composer textarea {
+    max-height: min(
+      200px,
+      30vh,
+      max(44px, calc(100cqh - var(--group-chrome) - var(--group-notes, 0px)))
+    );
+  }
+  /* Holds its children's margins, so its height is the room the notes take. GroupChats.tsx reports it as --group-notes. */
+  .group-notes {
+    display: flow-root;
+  }
+  .group-panel button:not(.send-button) {
+    font-size: 0.8125rem;
+    padding: 7px 12px;
+  }
+  .group-panel > section {
+    max-width: 860px;
+  }
   .group-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .group-heading h3 {
+    margin: 0 0 4px;
+  }
+  .group-heading p {
+    margin: 0;
+    font-size: 0.8125rem;
+  }
+  .group-heading button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .group-message {
+    padding: 16px 12px;
+    border-bottom: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .group-message.own {
+    background: var(--user);
+  }
+  .group-message.selected {
+    background: var(--accent-soft);
+    outline: 1px solid var(--accent);
+    box-shadow: inset 3px 0 var(--accent);
+  }
+  .group-message .message-attribution {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.875rem;
+    color: var(--ink);
+  }
+  .group-speaker,
+  .group-requester {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .group-speaker {
+    min-width: 0;
+  }
+  .group-thread-context {
+    border-left: 2px solid var(--accent);
+    padding-left: 10px;
+    font-size: 0.8125rem;
+    color: var(--message-meta);
+  }
+  .group-requester {
+    font-size: 0.875rem;
+  }
+  .group-message .message-attribution time {
+    font-size: 0.75rem;
+    color: var(--muted);
+    font-weight: 400;
+  }
+  .group-panel button.group-reply {
+    border: 0;
+    padding: 2px 0;
+    font-size: 0.8125rem;
+    color: var(--accent);
+  }
+  .group-panel button.group-reply:hover:enabled {
+    background: transparent;
+    color: var(--accent);
+  }
+  .group-panel .group-more {
+    margin-top: 12px;
+  }
+  /* Two classes, so `.composer`'s `position: relative` in styles.css cannot undo the sticking. */
+  .composer.group-composer {
+    margin-top: 20px;
+    position: sticky;
+    bottom: 0;
+  }
+  .composer.group-composer {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "thread" "input" "lead";
+  }
+  .composer.group-composer > .group-thread {
+    grid-area: thread;
+  }
+  .composer.group-composer .composer-tools {
+    margin-left: 0;
+    justify-self: stretch;
+    justify-content: space-between;
+    padding: 0 4px 2px 10px;
+  }
+  .group-status {
+    font-size: 0.8125rem;
+    color: var(--muted);
+  }
+  .group-thread {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.8125rem;
+    color: var(--message-meta);
+    margin: 0 0 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .group-thread span {
+    min-width: 0;
+  }
+  .group-thread strong {
+    display: block;
+    color: var(--ink);
+  }
+  .group-thread small {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin-top: 4px;
+    font-size: inherit;
+  }
+  .group-panel .group-thread button {
+    flex-shrink: 0;
+    white-space: nowrap;
+    border: 0;
+    padding: 2px 6px;
+    font-size: 0.8125rem;
+    color: var(--accent);
+  }
+  .group-create {
+    display: flex;
     flex-direction: column;
+    gap: 14px;
   }
-  .group-heading-actions {
-    justify-content: flex-start;
+  .group-create-sheet .sheet-body {
+    padding-top: 4px;
   }
-  .group-heading-actions button {
+  .group-create fieldset {
+    margin: 0;
+  }
+  .group-create .actions button {
     min-height: 44px;
   }
-}
-/* A routine's post: its name, marked like a routine run elsewhere. */
-.group-routine-tag {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 0 8px;
+  .group-create fieldset label {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .group-create fieldset label:has(input:disabled) {
+    opacity: 0.55;
+  }
+  .group-panel .approval-card .actions {
+    margin-bottom: 0;
+  }
+  .group-create .actions {
+    margin-bottom: 0;
+    justify-content: flex-end;
+  }
+  @media (max-width: 620px) {
+    .group-panel {
+      padding: 16px;
+    }
+    .group-panel button.group-reply,
+    .group-panel .group-thread button {
+      min-height: 44px;
+    }
+  }
+
+  /* Group chat @mentions: suggestions open above the composer. */
+  .mention-list {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 6px);
+    z-index: 5;
+    min-width: 220px;
+    max-width: calc(100% - 24px);
+    max-height: 220px;
+    margin: 0;
+    padding: 6px;
+    overflow-y: auto;
+    list-style: none;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px #0003;
+  }
+  .mention-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.875rem;
+  }
+  .mention-list li small {
+    color: var(--muted);
+  }
+  .mention-list li[aria-selected="true"] {
+    background: var(--accent-soft);
+  }
+
+  .routine-results-dialog .panel-header {
+    align-items: flex-start;
+  }
+  .routine-results-dialog .panel-header h2 {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: 1.25rem;
+    line-height: 1.4;
+  }
+  .routine-results-dialog .panel-header > button {
+    flex: none;
+    min-height: 44px;
+  }
+  .routine-results-dialog > p.muted {
+    margin: 8px 0 18px;
+    font-size: 0.875rem;
+    line-height: 1.6;
+  }
+  .routine-results-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+  }
+  .routine-results-toolbar label {
+    flex: 1;
+    min-width: 180px;
+    margin: 0;
+  }
+  .routine-results-toolbar > button {
+    min-height: 44px;
+  }
+  .routine-output-actions {
+    margin-bottom: 20px;
+  }
+  .routine-output-actions > button {
+    min-height: 44px;
+  }
+  .routine-output > article + article {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* Room purpose, settings and live work. */
+  .group-heading-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .group-heading p.group-purpose {
+    margin-top: 6px;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  .group-assignment {
+    margin: 8px 12px;
+    font-size: 0.8125rem;
+    color: var(--message-meta);
+  }
+  .group-activity {
+    list-style: none;
+    margin: 16px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .group-activity li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .group-activity li > span:last-child {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .group-activity small {
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .group-settings select,
+  .group-settings textarea {
+    width: 100%;
+  }
+  @media (max-width: 620px) {
+    .group-heading {
+      flex-direction: column;
+    }
+    .group-heading-actions {
+      justify-content: flex-start;
+    }
+    .group-heading-actions button {
+      min-height: 44px;
+    }
+  }
+  /* A routine's post: its name, marked like a routine run elsewhere. */
+  .group-routine-tag {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0 8px;
+  }
 }

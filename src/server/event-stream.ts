@@ -1,5 +1,11 @@
 import type { FastifyReply } from "fastify";
+import { httpError } from "./http-error.js";
 import { markStream } from "./request-log.js";
+
+/** Maximum concurrent SSE streams allowed per signed-in user across all stream endpoints. */
+export const MAX_STREAMS_PER_USER = 32;
+// Tracks open streams per user scoped to each app's `streams` set, so independent app instances in tests do not collide.
+const userStreamCounts = new WeakMap<Set<() => void>, Map<string, number>>();
 
 /** How often a stream pings: the iOS app and older web bundles expect `data: ping` this often. */
 export const PING_MS = 25_000;
@@ -61,13 +67,34 @@ export function eventStreamConnection(reply: FastifyReply) {
       options: { allowed: () => boolean; teardown: () => void; reserve?: () => void },
     ): EventStream {
       response.off("close", left);
+      const userId = reply.request.user?.id;
+      let counts: Map<string, number> | undefined;
+      let counted = false;
+      if (userId) {
+        counts = userStreamCounts.get(streams);
+        if (!counts) {
+          counts = new Map<string, number>();
+          userStreamCounts.set(streams, counts);
+        }
+        if ((counts.get(userId) ?? 0) >= MAX_STREAMS_PER_USER)
+          throw httpError(429, "Too many open live update streams.");
+      }
       let torn = false;
       const teardown = () => {
         if (torn) return;
         torn = true;
+        if (counted && userId && counts) {
+          const remaining = (counts.get(userId) ?? 1) - 1;
+          if (remaining > 0) counts.set(userId, remaining);
+          else counts.delete(userId);
+        }
         options.teardown();
       };
       try {
+        if (userId && counts) {
+          counts.set(userId, (counts.get(userId) ?? 0) + 1);
+          counted = true;
+        }
         options.reserve?.();
         return openEventStream(
           reply,

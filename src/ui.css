@@ -1,5 +1,5 @@
 /* Keep the existing application's native defaults. Deliberately omit Preflight. */
-@layer theme, base, components, utilities;
+@layer theme, base, components, motion, utilities;
 /* Prefix utilities so legacy semantic classes such as "inline" stay inert. */
 @import "tailwindcss/theme.css" layer(theme) prefix(tw);
 @import "tailwindcss/utilities.css" layer(utilities) source(".") prefix(tw);

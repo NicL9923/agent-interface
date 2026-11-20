@@ -1,8 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import type { Runtime } from "../shared/types.js";
-import type { SecureRequest, SecureRequestAnswer, VaultRequest } from "../shared/vault.js";
+import type {
+  ProfileVault,
+  SecureRequest,
+  SecureRequestAnswer,
+  VaultRequest,
+} from "../shared/vault.js";
 import { httpError } from "./http-error.js";
 const source = z.enum(["onepassword", "bitwarden"]);
 const method = z.enum(["vault.save_login", "vault.code", "vault.unlock_prompt", "secret"]);
@@ -81,17 +87,24 @@ export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime)
     }
   }
   const botId = (req: { params: unknown }) => z.object({ id }).passthrough().parse(req.params).id;
-  app.get("/api/bots/:id/vault", (req) =>
-    request(signedIn(req).id, { operation: "overview", profile: botId(req) }),
+  apiRoute(
+    app,
+    "GET /bots/:id/vault",
+    {},
+    (req) =>
+      request(signedIn(req).id, {
+        operation: "overview",
+        profile: botId(req),
+      }) as Promise<ProfileVault>,
   );
-  app.post("/api/bots/:id/vault/logins", (req) =>
+  apiRoute(app, "POST /bots/:id/vault/logins", { body: login }, (req, body) =>
     request(signedIn(req).id, {
       operation: "add_login",
       profile: botId(req),
-      login: login.parse(req.body),
+      login: body,
     }),
   );
-  app.delete("/api/bots/:id/vault/logins/:itemId", (req) => {
+  apiRoute(app, "DELETE /bots/:id/vault/logins/:itemId", {}, (req) => {
     const params = z.object({ id, itemId: id }).strict().parse(req.params);
     return request(signedIn(req).id, {
       operation: "remove_login",
@@ -99,38 +112,50 @@ export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime)
       itemId: params.itemId,
     });
   });
-  app.put("/api/bots/:id/vault/sources/:source", (req) => {
-    const params = z.object({ id, source }).strict().parse(req.params);
-    const { enabled } = z.object({ enabled: z.boolean() }).strict().parse(req.body);
-    return request(signedIn(req).id, {
-      operation: "source",
-      profile: params.id,
-      source: params.source,
-      enabled,
-    });
-  });
-  app.post("/api/bots/:id/vault/sources/:source/unlock", (req) => {
-    const params = z.object({ id, source }).strict().parse(req.params);
-    const { password } = z.object({ password: text }).strict().parse(req.body);
-    return request(signedIn(req).id, {
-      operation: "unlock",
-      profile: params.id,
-      source: params.source,
-      password,
-    });
-  });
-  app.post("/api/bots/:id/vault/sources/:source/lock", (req) => {
-    const params = z.object({ id, source }).strict().parse(req.params);
-    z.object({}).strict().parse(req.body);
-    return request(signedIn(req).id, {
-      operation: "lock",
-      profile: params.id,
-      source: params.source,
-    });
-  });
-  app.post("/api/bots/:id/secure-requests/:requestId", (req) => {
+  apiRoute(
+    app,
+    "PUT /bots/:id/vault/sources/:source",
+    { body: z.object({ enabled: z.boolean() }).strict() },
+    (req, { enabled }) => {
+      const params = z.object({ id, source }).strict().parse(req.params);
+      return request(signedIn(req).id, {
+        operation: "source",
+        profile: params.id,
+        source: params.source,
+        enabled,
+      });
+    },
+  );
+  apiRoute(
+    app,
+    "POST /bots/:id/vault/sources/:source/unlock",
+    { body: z.object({ password: text }).strict() },
+    (req, { password }) => {
+      const params = z.object({ id, source }).strict().parse(req.params);
+      return request(signedIn(req).id, {
+        operation: "unlock",
+        profile: params.id,
+        source: params.source,
+        password,
+      });
+    },
+  );
+  apiRoute(
+    app,
+    "POST /bots/:id/vault/sources/:source/lock",
+    { body: z.object({}).strict() },
+    (req) => {
+      const params = z.object({ id, source }).strict().parse(req.params);
+      return request(signedIn(req).id, {
+        operation: "lock",
+        profile: params.id,
+        source: params.source,
+      });
+    },
+  );
+  apiRoute(app, "POST /bots/:id/secure-requests/:requestId", { body: answer }, (req, body) => {
     const params = z.object({ id, requestId: id }).strict().parse(req.params);
-    const payload = answer.parse(req.body) as SecureRequestAnswer;
+    const payload = body as SecureRequestAnswer;
     // Hermes binds a login the assistant asked for by address to the member whose task asked.
     return request(signedIn(req).id, {
       operation: "answer",
@@ -138,7 +163,7 @@ export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime)
       requestId: params.requestId,
       answer: payload,
       actor: signedIn(req).id,
-    });
+    }) as Promise<{ status: "ok" | "expired" }>;
   });
 }
 /** Names the member who owns each login requested by address, for its card. An unknown member stays unnamed. */

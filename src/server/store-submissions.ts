@@ -209,13 +209,14 @@ export class SubmissionRepository {
   /** The recorded sender of each of these group events that has one. */
   groupSenders(roomId: string, eventIds: string[]) {
     const senders = new Map<string, string>();
-    const read = this.db.prepare(
-      "SELECT user_id AS userId FROM group_senders WHERE room_id=? AND event_id=?",
-    );
-    for (const eventId of new Set(eventIds)) {
-      const row = read.get(roomId, eventId) as { userId: string } | undefined;
-      if (row) senders.set(eventId, row.userId);
-    }
+    const unique = [...new Set(eventIds)];
+    if (!unique.length) return senders;
+    const rows = this.db
+      .prepare(
+        "SELECT event_id AS eventId,user_id AS userId FROM group_senders WHERE room_id=? AND event_id IN (SELECT value FROM json_each(?))",
+      )
+      .all(roomId, JSON.stringify(unique)) as { eventId: string; userId: string }[];
+    for (const row of rows) senders.set(row.eventId, row.userId);
     return senders;
   }
   approval(id: string) {

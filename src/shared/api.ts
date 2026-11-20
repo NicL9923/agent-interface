@@ -23,7 +23,32 @@ import type {
   RoutineRunReceipt,
   TodayOverview,
 } from "./experience.js";
-import type { RoutineOutput, RoutineResult } from "./collaboration.js";
+import type {
+  GroupCatalog,
+  GroupEvent,
+  GroupPage,
+  GroupRoom,
+  GroupState,
+  RoutineOutput,
+  RoutineResult,
+} from "./collaboration.js";
+import type {
+  ComputerHandoffResult,
+  ComputerStatus,
+  ComputerStreamTicket,
+  TerminalRequestDecision,
+  TerminalRequestResult,
+} from "./computer.js";
+import type {
+  ConnectionRequestDecision,
+  ConnectionRequestResult,
+  CustomMcpInput,
+  IntegrationCatalog,
+  IntegrationConnection,
+  IntegrationFlow,
+} from "./integrations.js";
+import type { UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "./upgrades.js";
+import type { AddVaultLogin, ProfileVault, SecureRequestAnswer, VaultResponse } from "./vault.js";
 import type { RoutineRunPage } from "./routine-runs.js";
 import type { LinkedMacs } from "./mac.js";
 import type { ReplyCardState } from "./reply-cards.js";
@@ -32,7 +57,7 @@ import type { ApprovalScope, ApprovalSettings } from "./types.js";
 import type { routinePresets } from "./routine-presets.js";
 import type { EarlierFiles } from "./history.js";
 import type { LiveState } from "./live-activity.js";
-import type { TalkAnswer, TalkSession, TalkVoice } from "./voice.js";
+import type { TalkAnswer, TalkSession, TalkVoice, VoicePlayback } from "./voice.js";
 import type {
   Avatar,
   Bootstrap,
@@ -446,6 +471,119 @@ export interface ApiRoutes {
   };
   "DELETE /native/live-activity/start": { body: { deviceId: string }; response: Ok };
   "POST /native/push/test": { body: { botId: string }; response: PushTest };
+
+  // --- Voice speech ---
+  "POST /bots/:id/voice/speak": { body: { messageId: string }; response: VoicePlayback };
+
+  // --- Hermes upgrades ---
+  "GET /hermes/upgrade": { response: UpgradeStatus };
+  "POST /hermes/upgrade/check": { body: Record<string, never>; response: UpgradeStatus };
+  "POST /hermes/upgrade/install": { body: UpgradeInstallRequest; response: UpgradeStatus };
+  "POST /hermes/upgrade/control": { body: UpgradeControlRequest; response: UpgradeStatus };
+
+  // --- Computer & terminal requests ---
+  "GET /computer": { response: ComputerStatus };
+  "POST /computer/desktop": { body: { viewerId?: string }; response: ComputerStreamTicket };
+  "POST /computer/control": {
+    body: { action: "take" | "release"; viewerId: string };
+    response: ComputerStatus;
+  };
+  "POST /computer/terminal": { body: Record<string, never>; response: ComputerStreamTicket };
+  "POST /computer/terminal/end": { body: { sessionId: string }; response: Ok };
+  "POST /bots/:id/computer-handoffs/:requestId": {
+    body: { decision: "decline"; epoch: string; sessionId: string };
+    response: ComputerHandoffResult;
+  };
+  "POST /bots/:id/terminal-requests/:requestId": {
+    body: { decision: TerminalRequestDecision; epoch: string; sessionId: string };
+    response: TerminalRequestResult;
+  };
+
+  // --- Integrations ---
+  "GET /integrations": { query: { profile: string }; response: IntegrationCatalog };
+  "POST /integrations/:id/check": {
+    body: { profile: string; fields?: Record<string, string> };
+    response: IntegrationConnection | IntegrationFlow | IntegrationCatalog | Ok;
+  };
+  "POST /integrations/:id/connect": {
+    body: { profile: string; fields?: Record<string, string> };
+    response: IntegrationFlow | IntegrationConnection;
+  };
+  "POST /integrations/:id/disconnect": {
+    body: { profile: string; fields?: Record<string, string> };
+    response: IntegrationConnection | IntegrationFlow | Ok;
+  };
+  "POST /integrations/mcp": {
+    body: { profile: string } & CustomMcpInput;
+    response: IntegrationConnection | IntegrationFlow | IntegrationCatalog | Ok;
+  };
+  "GET /integrations/flows/:flowId": { query: { profile: string }; response: IntegrationFlow };
+  "DELETE /integrations/flows/:flowId": { query: { profile: string }; response: IntegrationFlow };
+  "POST /integrations/flows/:flowId/callback": {
+    body: { profile: string; callbackUrl: string };
+    response: IntegrationFlow;
+  };
+  "POST /bots/:id/connection-requests/:requestId": {
+    body: {
+      decision: ConnectionRequestDecision;
+      epoch: string;
+      sessionId: string;
+      connection: string;
+    };
+    response: ConnectionRequestResult;
+  };
+
+  // --- Group chats ---
+  "GET /groups": { response: GroupCatalog };
+  "POST /groups": {
+    body: { requestId: string; name: string; botIds: string[] };
+    response: { room: GroupRoom };
+  };
+  "GET /groups/:roomId": { response: GroupState };
+  "GET /groups/:roomId/log": {
+    query: { since?: number; state?: "1" };
+    response: GroupPage & { state?: GroupState };
+  };
+  "POST /groups/:roomId/messages": {
+    body: { requestId: string; text: string; threadId: string };
+    response: { accepted?: boolean; event?: GroupEvent };
+  };
+  "POST /groups/:roomId/stop": {
+    body: { requestId: string };
+    response: Record<string, unknown>;
+  };
+  "POST /groups/:roomId/context": {
+    body: { requestId: string; purpose: string; notes: string; leadMemberId: string | null };
+    response: Record<string, unknown>;
+  };
+  "POST /groups/:roomId/approve": {
+    body: {
+      taskId: string;
+      memberId: string;
+      generation: number;
+      choice: "once" | "deny";
+      requestId: string;
+    };
+    response: Record<string, unknown>;
+  };
+
+  // --- Vault & secure requests ---
+  "GET /bots/:id/vault": { response: ProfileVault };
+  "POST /bots/:id/vault/logins": { body: AddVaultLogin; response: VaultResponse };
+  "DELETE /bots/:id/vault/logins/:itemId": { response: VaultResponse };
+  "PUT /bots/:id/vault/sources/:source": { body: { enabled: boolean }; response: VaultResponse };
+  "POST /bots/:id/vault/sources/:source/unlock": {
+    body: { password: string };
+    response: VaultResponse;
+  };
+  "POST /bots/:id/vault/sources/:source/lock": {
+    body: Record<string, never>;
+    response: VaultResponse;
+  };
+  "POST /bots/:id/secure-requests/:requestId": {
+    body: SecureRequestAnswer;
+    response: { status: "ok" | "expired" };
+  };
 }
 export type ApiRoute = keyof ApiRoutes;
 export type ApiResponse<K extends ApiRoute> = ApiRoutes[K]["response"];

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
-import { write } from "../client-api";
+import { request } from "../client-api";
 import { useAction } from "../app/use-action";
 import { groupCreateKey } from "../app/storage";
 import { pendingGroup, type PendingGroup } from "../app/home-rooms";
@@ -72,7 +72,7 @@ export function GroupCreate({
       async () => {
         localStorage.setItem(createKey, JSON.stringify(input));
         setSaved(input);
-        const value = await write<{ room: GroupRoom }>("/groups", input);
+        const value = await request("POST /groups", { body: input });
         localStorage.removeItem(createKey);
         setSaved(null);
         onCreated(value.room);

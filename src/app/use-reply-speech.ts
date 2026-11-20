@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../client-api";
+import { request as apiRequest } from "../client-api";
 import { MAX_SPOKEN_TEXT, MAX_VOICE_BYTES, STOP_SPEECH } from "../shared/voice";
-import type { VoicePlayback } from "../shared/voice";
 import { talkLive } from "./talk-live";
 
 /** Preparing is the request and download, ready is audio the browser would not start by itself, speaking is playing. */
@@ -91,9 +90,9 @@ export function useReplySpeech(botId: string, disabled: boolean): ReplySpeech {
     setError(null);
     show({ id: message.id, phase: "preparing" });
     try {
-      const result = await api<VoicePlayback>(`/bots/${encodeURIComponent(botId)}/voice/speak`, {
-        method: "POST",
-        body: JSON.stringify({ messageId: message.id }),
+      const result = await apiRequest("POST /bots/:id/voice/speak", {
+        params: { id: botId },
+        body: { messageId: message.id },
         signal: controller.signal,
       });
       if (generation.current !== run) return;

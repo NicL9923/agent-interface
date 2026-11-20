@@ -107,6 +107,7 @@ export const at = ({ path, line }: Declaration) => `${path}:${line}`;
 export const conditionsOf = ({ blocks }: Declaration): string =>
   blocks
     .slice(0, -1)
+    .filter((block) => !/^@layer\b/.test(block))
     .map((block) =>
       block
         .replace(/\(\s*prefers-reduced-motion\s*:\s*[\w-]+\s*\)/g, "")

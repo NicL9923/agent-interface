@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api, write } from "../client-api";
-import type { ComputerHandoff, ComputerHandoffResult, ComputerStatus } from "../shared/computer";
+import { ApiError, request } from "../client-api";
+import type { ComputerHandoff, ComputerStatus } from "../shared/computer";
 import { rememberSettled } from "../app/waiting-input";
 import { attentionAnchor } from "../app/transcript-logic";
 import { Icon } from "./Icon";
@@ -51,7 +51,7 @@ export function ComputerHandoffCard({
     const controller = new AbortController();
     const refresh = async () => {
       try {
-        const next = await api<ComputerStatus>("/computer", { signal: controller.signal });
+        const next = await request("GET /computer", { signal: controller.signal });
         if (!controller.signal.aborted) setStatus(next);
       } catch {
         /* The card keeps its last known status; Take over still opens the computer view. */
@@ -75,10 +75,10 @@ export function ComputerHandoffCard({
     setDeclining(true);
     setError("");
     try {
-      const result = await write<ComputerHandoffResult>(
-        `/bots/${encodeURIComponent(botId)}/computer-handoffs/${encodeURIComponent(requestId)}`,
-        { decision: "decline", epoch: handoff.epoch, sessionId: handoff.sessionId },
-      );
+      const result = await request("POST /bots/:id/computer-handoffs/:requestId", {
+        params: { id: botId, requestId },
+        body: { decision: "decline", epoch: handoff.epoch, sessionId: handoff.sessionId },
+      });
       if (!live.current) return;
       if (result.status === "expired")
         setError("This request had already closed. Refresh the conversation to see what happened.");

@@ -68,6 +68,7 @@
   "src/server/group-watch.ts",
   "src/server/health.ts",
   "src/server/hermes-files.ts",
+  "src/server/hermes-helpers.ts",
   "src/server/hermes-mapping.ts",
   "src/server/hermes-operation-contracts.ts",
   "src/server/hermes-qualification.ts",

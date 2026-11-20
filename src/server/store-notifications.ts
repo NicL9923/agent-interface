@@ -1,8 +1,9 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { digestCopy, notificationCopy } from "../shared/event-copy.js";
 import { markdownPlain } from "../shared/plain-text.js";
 import type { RuntimeEvent } from "../shared/types.js";
 import { httpError } from "./http-error.js";
+import { timingSafeEqualText } from "./timing-safe.js";
 import type { AccountRepository } from "./store-accounts.js";
 import type { PersonalRepository } from "./store-personal.js";
 import type { PresentationRepository } from "./store-presentation.js";
@@ -21,15 +22,10 @@ function sameKeys(stored: string, keys: { p256dh: string; auth: string }) {
   } catch {
     return false;
   }
-  // Lengths are compared in bytes: timingSafeEqual throws on buffers of unequal byte length, and a
-  // string of the same character count can differ in bytes when it holds a multibyte character.
-  const same = (a: unknown, b: string) => {
-    if (typeof a !== "string") return false;
-    const left = Buffer.from(a),
-      right = Buffer.from(b);
-    return left.length === right.length && timingSafeEqual(left, right);
-  };
-  return same(held.keys?.p256dh, keys.p256dh) && same(held.keys?.auth, keys.auth);
+  return (
+    timingSafeEqualText(held.keys?.p256dh, keys.p256dh) &&
+    timingSafeEqualText(held.keys?.auth, keys.auth)
+  );
 }
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 // Exponential backoff spends about an hour on these; later news is stale.
@@ -301,20 +297,65 @@ export class NotificationRepository {
    * listed too: it showed nothing, but its badge counted the news.
    */
   readOnDevices(now = Date.now()) {
-    // A week covers what a lock screen plausibly still shows.
-    return (
-      this.db
-        .prepare(`SELECT d.outbox_id,d.endpoint,o.user_id,json_extract(o.payload,'$.tag') AS tag,r.client_id AS reader FROM delivered d
-      JOIN outbox o ON o.id=d.outbox_id JOIN chat_reads r ON r.user_id=o.user_id AND r.bot_id=json_extract(o.payload,'$.botId')
-      WHERE (d.endpoint LIKE 'apns:%' OR d.endpoint LIKE 'skipped:apns:%') AND o.created_at>? AND NOT EXISTS(SELECT 1 FROM delivered c WHERE c.outbox_id=d.outbox_id AND c.endpoint='cleared:'||d.endpoint) ORDER BY o.created_at`)
-        .all(now - 7 * 86400000) as {
-        outbox_id: string;
-        endpoint: string;
-        user_id: string;
-        tag: string;
-        reader: string;
-      }[]
-    ).filter((row) => this.seenInChat(row.outbox_id, now));
+    // A week covers what a lock screen plausibly still shows. Join events and presence in one query
+    // instead of running N+1 seenInChat() lookups per delivered row.
+    const rows = this.db
+      .prepare(`SELECT d.outbox_id,d.endpoint,o.user_id,o.payload,o.created_at,
+        e.value AS event_value,e.created_at AS discovered,
+        r.read_at,r.client_id AS reader,
+        EXISTS(SELECT 1 FROM chat_presence p WHERE p.user_id=o.user_id AND p.bot_id=r.bot_id AND p.updated_at>?) AS present
+      FROM delivered d
+      JOIN outbox o ON o.id=d.outbox_id
+      JOIN chat_reads r ON r.user_id=o.user_id AND r.bot_id=json_extract(o.payload,'$.botId')
+      LEFT JOIN notification_events e ON e.id=o.event_id
+      WHERE (d.endpoint LIKE 'apns:%' OR d.endpoint LIKE 'skipped:apns:%') AND o.created_at>?
+        AND NOT EXISTS(SELECT 1 FROM delivered c WHERE c.outbox_id=d.outbox_id AND c.endpoint='cleared:'||d.endpoint)
+      ORDER BY o.created_at`)
+      .all(now - presenceTtl, now - 7 * 86400000) as {
+      outbox_id: string;
+      endpoint: string;
+      user_id: string;
+      payload: string;
+      created_at: number;
+      event_value: string | null;
+      discovered: number | null;
+      read_at: number;
+      reader: string;
+      present: number;
+    }[];
+    const matched: {
+      outbox_id: string;
+      endpoint: string;
+      user_id: string;
+      tag: string;
+      reader: string;
+    }[] = [];
+    for (const row of rows) {
+      const payload = JSON.parse(row.payload) as {
+        botId?: string;
+        kind?: string;
+        url?: string;
+        tag?: string;
+      };
+      if (
+        !payload.botId ||
+        payload.kind === "security" ||
+        new URL(payload.url ?? "/", "http://app").searchParams.has("routine")
+      )
+        continue;
+      if (!row.present) {
+        const event = row.event_value ? (JSON.parse(row.event_value) as RuntimeEvent) : undefined;
+        if (row.read_at < eventTime(event?.occurredAt, row.discovered ?? row.created_at)) continue;
+      }
+      matched.push({
+        outbox_id: row.outbox_id,
+        endpoint: row.endpoint,
+        user_id: row.user_id,
+        tag: payload.tag ?? "",
+        reader: row.reader,
+      });
+    }
+    return matched;
   }
   markCleared(id: string, endpoint: string) {
     this.markDelivered(id, clearedEndpoint(endpoint));

@@ -13,6 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { open, readdir, readFile, rename } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Runtime, User } from "../shared/types.js";
@@ -190,6 +191,32 @@ const writePrivate = (file: string, value: unknown) => {
   }
 };
 
+const writePrivateAsync = async (file: string, value: unknown) => {
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  const handle = await open(temporary, "wx", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(value) + "\n");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await rename(temporary, file);
+  const directory = await open(dirname(file), "r");
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
+};
+const readJsonAsync = async <T = any>(file: string): Promise<T | undefined> => {
+  try {
+    return JSON.parse(await readFile(file, "utf8")) as T;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+};
+
 /** Installer-owned local worker. Browser requests can name only an already qualified SHA. */
 export class HermesUpgrades {
   private readonly stateFile?: string;
@@ -278,6 +305,10 @@ export class HermesUpgrades {
     if (this.stateFile)
       writePrivate(this.stateFile, { ...state, updatedAt: new Date().toISOString() });
   }
+  private async saveAsync(state: WorkerState) {
+    if (this.stateFile)
+      await writePrivateAsync(this.stateFile, { ...state, updatedAt: new Date().toISOString() });
+  }
   private read(): WorkerState {
     if (!this.stateFile)
       return {
@@ -287,6 +318,25 @@ export class HermesUpgrades {
       };
     try {
       return stateSchema.parse(JSON.parse(readFileSync(this.stateFile, "utf8")));
+    } catch {
+      return {
+        phase: "blocked",
+        checks: [],
+        maintenance: true,
+        message: "The upgrade record needs installer review before Hermes can accept changes.",
+        error: "invalid_upgrade_record",
+      };
+    }
+  }
+  private async readAsync(): Promise<WorkerState> {
+    if (!this.stateFile)
+      return {
+        phase: "blocked",
+        checks: [],
+        message: "Hermes upgrades have not been enabled by this installation's administrator.",
+      };
+    try {
+      return stateSchema.parse(JSON.parse(await readFile(this.stateFile, "utf8")));
     } catch {
       return {
         phase: "blocked",
@@ -314,14 +364,15 @@ export class HermesUpgrades {
       probe.on("exit", (code) => resolveHeld(code !== 0));
     });
   }
-  private recoveryEligibility(state: WorkerState): {
+  private async recoveryEligibility(state: WorkerState): Promise<{
     restore: boolean;
     restart: boolean;
     reason?: string;
-  } {
+  }> {
     const none = { restore: false, restart: false };
     try {
-      const settings = JSON.parse(readFileSync(this.config.hermesUpgrade!.workerConfig, "utf8"));
+      const settings = await readJsonAsync(this.config.hermesUpgrade!.workerConfig);
+      if (!settings) return none;
       const finish = settings.hooks?.finish;
       const hooks = Boolean(
         (settings.hooks?.recover && settings.hooks?.restart_service) ||
@@ -348,9 +399,10 @@ export class HermesUpgrades {
       const stage = qualification.stage;
       const journalPath = join(stage, "recovery.json"),
         platformPath = join(stage, "platform.json");
-      const journal = existsSync(journalPath)
-        ? JSON.parse(readFileSync(journalPath, "utf8"))
-        : undefined;
+      const [journal, platform] = await Promise.all([
+        readJsonAsync(journalPath),
+        readJsonAsync(platformPath),
+      ]);
       if (journal && journal.operationId !== state.operationId) return none;
       if (journal?.releaseStarted)
         return {
@@ -362,20 +414,19 @@ export class HermesUpgrades {
       // An admitted worker which has not started a hook can be cancelled safely.
       if (
         !journal &&
-        !existsSync(platformPath) &&
+        !platform &&
         (state.phase === "installing" ||
           (state.phase === "failed" && state.error === "worker_start_failed")) &&
         !state.checks.some((check) => ["quiescence", "backup", "install"].includes(check.id))
       )
         return { restore: true, restart: false };
-      if (!existsSync(platformPath)) return none;
-      const platform = JSON.parse(readFileSync(platformPath, "utf8"));
+      if (!platform) return none;
       if (Array.isArray(finish) && finish.includes("--config")) {
-        const platformConfig = JSON.parse(
-          readFileSync(finish[finish.indexOf("--config") + 1], "utf8"),
-        );
-        const gate = JSON.parse(readFileSync(platformConfig.maintenanceFile, "utf8"));
-        if (gate.operationId !== state.operationId)
+        const platformConfig = await readJsonAsync(finish[finish.indexOf("--config") + 1]);
+        const gate = platformConfig?.maintenanceFile
+          ? await readJsonAsync(platformConfig.maintenanceFile)
+          : undefined;
+        if (!gate || gate.operationId !== state.operationId)
           return {
             ...none,
             reason:
@@ -393,8 +444,8 @@ export class HermesUpgrades {
       const previous = journal?.previousReceipt
         ? JSON.parse(Buffer.from(journal.previousReceipt, "base64").toString("utf8"))
         : undefined;
-      const deployed = existsSync(settings.qualificationReceipt)
-        ? JSON.parse(readFileSync(settings.qualificationReceipt, "utf8"))
+      const deployed = settings.qualificationReceipt
+        ? await readJsonAsync(settings.qualificationReceipt)
         : undefined;
       const attested = (receipt: typeof deployed) =>
         receipt?.schemaVersion === 1 &&
@@ -423,17 +474,46 @@ export class HermesUpgrades {
       return none;
     }
   }
-  private controlIntent(
+  private async controlIntentAsync(
     operationId?: string,
-  ):
+  ): Promise<
     | { action: UpgradeControlAction; requestId: string; status: string; startedAt?: string }
-    | undefined {
+    | undefined
+  > {
     if (!this.controlsDirectory || !operationId) return;
     try {
-      const file = join(this.controlsDirectory, `${operationId}.json`);
-      return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : undefined;
+      return await readJsonAsync(join(this.controlsDirectory, `${operationId}.json`));
     } catch {
       return { action: "cancel", requestId: "invalid", status: "pending" };
+    }
+  }
+  private async pendingInstallAsync(state: WorkerState): Promise<boolean> {
+    if (!this.requestsDirectory) return false;
+    try {
+      const files = (await readdir(this.requestsDirectory)).filter((file) =>
+        file.endsWith(".json"),
+      );
+      for (const file of files) {
+        const receipt = JSON.parse(await readFile(join(this.requestsDirectory, file), "utf8"));
+        if (receipt.status === "complete") continue;
+        if (
+          receipt.operationId === state.operationId &&
+          file === `${state.requestId}.json` &&
+          state.maintenance === false &&
+          ["succeeded", "rolled_back", "blocked", "cancelled"].includes(state.phase)
+        ) {
+          await writePrivateAsync(join(this.requestsDirectory, file), {
+            ...receipt,
+            status: "complete",
+            result: state,
+          });
+          continue;
+        }
+        return true;
+      }
+      return false;
+    } catch {
+      return true;
     }
   }
   private pendingInstall() {
@@ -488,20 +568,24 @@ export class HermesUpgrades {
     }
   }
   async status(user: User): Promise<UpgradeStatus> {
-    const state = this.read();
+    const state = await this.readAsync();
     const available = Boolean(this.config.hermesUpgrade),
       administrator = this.administrator(user);
-    const busyBots = available && !this.maintenance() ? await this.busyBots(user) : [];
+    const maintenance = Boolean(
+      this.config.hermesUpgrade && (state.maintenance || (await this.pendingInstallAsync(state))),
+    );
+    const [busyBots, held, intent, recovery] = await Promise.all([
+      available && !maintenance ? this.busyBots(user) : Promise.resolve([]),
+      available ? this.workerHeld() : Promise.resolve(false),
+      this.controlIntentAsync(state.operationId),
+      this.recoveryEligibility(state),
+    ]);
     const starting = Boolean(state.updatedAt && Date.now() - Date.parse(state.updatedAt) < 15000);
-    const held = available && (await this.workerHeld());
     const abandoned = active.has(state.phase) && !held && !starting;
-    const intent = this.controlIntent(state.operationId);
     const controlling =
       intent?.status === "pending" &&
       (held || Boolean(intent.startedAt && Date.now() - Date.parse(intent.startedAt) < 15000));
-    const recovery = this.recoveryEligibility(state);
     const controllable = available && administrator && !!state.operationId && !controlling;
-    const maintenance = this.maintenance();
     return {
       available,
       phase: abandoned ? "blocked" : state.phase,
@@ -591,11 +675,12 @@ export class HermesUpgrades {
         .strict()
         .parse(input);
       const receiptFile = join(this.controlsDirectory!, `request-${input.requestId}.json`);
-      if (existsSync(receiptFile)) {
-        const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
+      const existingReceipt = await readJsonAsync(receiptFile);
+      if (existingReceipt) {
+        const receipt = existingReceipt;
         if (receipt.action !== input.action || receipt.operationId !== input.operationId)
           throw httpError(409, "This recovery request ID already belongs to another action");
-        const intent = this.controlIntent(input.operationId);
+        const intent = await this.controlIntentAsync(input.operationId);
         const lostLaunch =
           !intent ||
           (intent.requestId === input.requestId &&
@@ -604,10 +689,10 @@ export class HermesUpgrades {
         if (
           receipt.status === "pending" &&
           lostLaunch &&
-          this.read().operationId === input.operationId &&
+          (await this.readAsync()).operationId === input.operationId &&
           !(await this.workerHeld())
         ) {
-          writePrivate(join(this.controlsDirectory!, `${input.operationId}.json`), {
+          await writePrivateAsync(join(this.controlsDirectory!, `${input.operationId}.json`), {
             ...receipt,
             startedAt: new Date().toISOString(),
           });
@@ -630,8 +715,8 @@ export class HermesUpgrades {
           "This recovery action is unavailable while another operation runs or the update requires installer review",
         );
       const intent = { ...input, status: "pending", startedAt: new Date().toISOString() };
-      writePrivate(receiptFile, intent);
-      writePrivate(join(this.controlsDirectory!, `${input.operationId}.json`), intent);
+      await writePrivateAsync(receiptFile, intent);
+      await writePrivateAsync(join(this.controlsDirectory!, `${input.operationId}.json`), intent);
       // A running worker consumes cancellation at its next safe command boundary.
       if (!(await this.workerHeld()))
         this.launch({ action: input.action, operationId: input.operationId });
@@ -644,7 +729,7 @@ export class HermesUpgrades {
       if (!(await this.status(user)).canCheck)
         throw httpError(409, "An upgrade is already running or requires installer review");
       const operationId = randomUUID();
-      this.save({
+      await this.saveAsync({
         phase: "checking",
         checks: [],
         operationId,
@@ -665,8 +750,9 @@ export class HermesUpgrades {
         .parse(input);
       this.authorized(user);
       const requestFile = join(this.requestsDirectory!, `${input.requestId}.json`);
-      if (existsSync(requestFile)) {
-        const receipt = JSON.parse(readFileSync(requestFile, "utf8")) as InstallReceipt;
+      const existingInstall = await readJsonAsync<InstallReceipt>(requestFile);
+      if (existingInstall) {
+        const receipt = existingInstall;
         if (receipt.candidateRevision !== input.candidateRevision)
           throw httpError(409, "This upgrade request ID was already used for a different revision");
         const current = await this.status(user);
@@ -700,7 +786,7 @@ export class HermesUpgrades {
         );
       const operationId = randomUUID();
       // The pending receipt is also the durable maintenance gate. Persist it before launching.
-      const predecessor = this.read();
+      const predecessor = await this.readAsync();
       const admittedState = {
         ...predecessor,
         phase: "installing" as const,
@@ -710,14 +796,14 @@ export class HermesUpgrades {
         workerPid: undefined,
         message: "Installing the qualified Hermes update. Your conversations are saved.",
       };
-      writePrivate(requestFile, {
+      await writePrivateAsync(requestFile, {
         candidateRevision: input.candidateRevision,
         operationId,
         predecessorOperationId: predecessor.operationId,
         admittedState,
         status: "pending",
       });
-      this.save(admittedState);
+      await this.saveAsync(admittedState);
       this.launch({ action: "install", operationId });
       return this.status(user);
     });

@@ -11,7 +11,7 @@ import { mockOf } from "./helpers/mock-of";
 
 const requestApi = vi.hoisted(() => vi.fn());
 vi.mock("../src/client-api", async () =>
-  (await import("./helpers/request-mock")).withRequest({ api: requestApi }),
+  (await import("./helpers/request-mock")).withRequest({ api: requestApi, write: requestApi }),
 );
 const audioUrl = (id: number) => `/api/voice/audio/01234567-0123-4123-8123-01234567890${id}`;
 const players: FakeAudio[] = [];
@@ -106,10 +106,7 @@ it("speaks the chosen reply, reports speaking only during playback and stops it"
   answer();
   await render({ messages: [reply("a")] });
   await press("a", "Listen to reply");
-  expect(requestApi).toHaveBeenCalledWith(
-    "/bots/ranch/voice/speak",
-    expect.objectContaining({ method: "POST", body: JSON.stringify({ messageId: "a" }) }),
-  );
+  expect(requestApi).toHaveBeenCalledWith("/bots/ranch/voice/speak", { messageId: "a" });
   expect(fetch).toHaveBeenCalledWith(
     audioUrl(1),
     expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
@@ -127,10 +124,7 @@ it("plays one reply at a time across the transcript, in any reply", async () => 
   answer(2);
   await press("b", "Listen to reply");
   expect(players[0]!.pause).toHaveBeenCalled();
-  expect(requestApi).toHaveBeenLastCalledWith(
-    "/bots/ranch/voice/speak",
-    expect.objectContaining({ body: JSON.stringify({ messageId: "b" }) }),
-  );
+  expect(requestApi).toHaveBeenLastCalledWith("/bots/ranch/voice/speak", { messageId: "b" });
   expect(button("b", "Stop speaking")).toBeTruthy();
   expect(button("a", "Listen to reply")).toBeTruthy();
 });

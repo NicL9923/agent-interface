@@ -462,7 +462,7 @@ export async function installCollaborationRoutes(
       }),
     };
   }
-  app.get("/api/groups", async (req) => {
+  apiRoute(app, "GET /groups", {}, async (req) => {
     if (!runtime.groupRequest)
       return {
         supported: false,
@@ -511,32 +511,42 @@ export async function installCollaborationRoutes(
         };
       }
     : undefined;
-  app.post("/api/groups", async (req) => {
-    const body = z
-      .object({
-        requestId: uuid,
-        name: z.string().trim().min(1).max(100),
-        botIds: z
-          .array(id)
-          .min(2)
-          .max(6)
-          .refine((ids) => new Set(ids).size === ids.length),
-      })
-      .strict()
-      .parse(req.body);
-    const allowed = await bots(signedIn(req).id);
-    const members = body.botIds.map((botId) => {
-      const bot = allowed.find((bot) => bot.id === botId);
-      if (!bot || ["all", "everyone"].includes(bot.id.toLowerCase()))
-        throw httpError(400, "Choose local assistants with unique, non-reserved handles.");
-      return { member_id: bot.id, profile: bot.id, handle: bot.id, display_name: bot.name };
-    });
-    return request({ operation: "create", roomId: body.requestId, name: body.name, members });
-  });
-  app.get("/api/groups/:roomId", async (req) =>
+  apiRoute(
+    app,
+    "POST /groups",
+    {
+      body: z
+        .object({
+          requestId: uuid,
+          name: z.string().trim().min(1).max(100),
+          botIds: z
+            .array(id)
+            .min(2)
+            .max(6)
+            .refine((ids) => new Set(ids).size === ids.length),
+        })
+        .strict(),
+    },
+    async (req, body) => {
+      const allowed = await bots(signedIn(req).id);
+      const members = body.botIds.map((botId) => {
+        const bot = allowed.find((bot) => bot.id === botId);
+        if (!bot || ["all", "everyone"].includes(bot.id.toLowerCase()))
+          throw httpError(400, "Choose local assistants with unique, non-reserved handles.");
+        return { member_id: bot.id, profile: bot.id, handle: bot.id, display_name: bot.name };
+      });
+      return request({
+        operation: "create",
+        roomId: body.requestId,
+        name: body.name,
+        members,
+      }) as Promise<{ room: GroupRoom }>;
+    },
+  );
+  apiRoute(app, "GET /groups/:roomId", {}, async (req) =>
     room(signedIn(req).id, z.object({ roomId: id }).parse(req.params).roomId),
   );
-  app.get("/api/groups/:roomId/log", async (req) => {
+  apiRoute(app, "GET /groups/:roomId/log", {}, async (req) => {
     const { roomId } = z.object({ roomId: id }).parse(req.params);
     const { since, state } = z
       .object({
@@ -553,94 +563,114 @@ export async function installCollaborationRoutes(
     );
     return state ? { ...log, state: current } : log;
   });
-  app.post("/api/groups/:roomId/messages", async (req) => {
-    const { roomId } = z.object({ roomId: id }).parse(req.params);
-    const body = z
-      .object({
-        requestId: uuid,
-        text: z.string().trim().min(1).max(16000),
-        threadId: z
-          .string()
-          .min(1)
-          .max(128)
-          .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
-      })
-      .strict()
-      .parse(req.body);
-    const userId = signedIn(req).id;
-    await room(userId, roomId);
-    // Separate household send keys without inventing a native actor or changing model text.
-    const requestId = createHash("sha256")
-      .update(JSON.stringify([userId, body.requestId]))
-      .digest("hex");
-    const sent = (await request({ operation: "send", roomId, ...body, requestId })) as {
-      event?: GroupEvent;
-    };
-    // Hermes names the event it appended; a lost or older response leaves the message unattributed.
-    if (typeof sent.event?.event_id === "string" && sent.event.kind === "message.user")
-      store.attributeGroupMessage(roomId, sent.event.event_id, userId);
-    return sent;
-  });
-  app.post("/api/groups/:roomId/stop", async (req) => {
-    const { roomId } = z.object({ roomId: id }).parse(req.params);
-    const { requestId } = z.object({ requestId: uuid }).strict().parse(req.body);
-    await room(signedIn(req).id, roomId);
-    return request({ operation: "stop", roomId, requestId });
-  });
+  apiRoute(
+    app,
+    "POST /groups/:roomId/messages",
+    {
+      body: z
+        .object({
+          requestId: uuid,
+          text: z.string().trim().min(1).max(16000),
+          threadId: z
+            .string()
+            .min(1)
+            .max(128)
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+        })
+        .strict(),
+    },
+    async (req, body) => {
+      const { roomId } = z.object({ roomId: id }).parse(req.params);
+      const userId = signedIn(req).id;
+      await room(userId, roomId);
+      // Separate household send keys without inventing a native actor or changing model text.
+      const requestId = createHash("sha256")
+        .update(JSON.stringify([userId, body.requestId]))
+        .digest("hex");
+      const sent = (await request({ operation: "send", roomId, ...body, requestId })) as {
+        accepted?: boolean;
+        event?: GroupEvent;
+      };
+      // Hermes names the event it appended; a lost or older response leaves the message unattributed.
+      if (typeof sent.event?.event_id === "string" && sent.event.kind === "message.user")
+        store.attributeGroupMessage(roomId, sent.event.event_id, userId);
+      return sent;
+    },
+  );
+  apiRoute(
+    app,
+    "POST /groups/:roomId/stop",
+    { body: z.object({ requestId: uuid }).strict() },
+    async (req, { requestId }) => {
+      const { roomId } = z.object({ roomId: id }).parse(req.params);
+      await room(signedIn(req).id, roomId);
+      return request({ operation: "stop", roomId, requestId }) as Promise<Record<string, unknown>>;
+    },
+  );
   // Anyone who can open the room may set its purpose, shared notes and lead, as anyone may message it.
-  app.post("/api/groups/:roomId/context", async (req) => {
-    const { roomId } = z.object({ roomId: id }).parse(req.params);
-    const body = z
-      .object({
-        requestId: uuid,
-        purpose: z.string().max(GROUP_PURPOSE_MAX),
-        // Hermes counts the trimmed notes in UTF-8 bytes.
-        notes: z
-          .string()
-          .max(GROUP_NOTES_MAX_BYTES * 4)
-          .refine(
-            (notes) => Buffer.byteLength(notes.trim(), "utf8") <= GROUP_NOTES_MAX_BYTES,
-            "Shared notes are too long. Shorten them and try again.",
-          ),
-        leadMemberId: id.nullable(),
-      })
-      .strict()
-      .parse(req.body);
-    const userId = signedIn(req).id;
-    const state = await room(userId, roomId);
-    if (
-      body.leadMemberId !== null &&
-      !state.room.members.some((member) => member.member_id === body.leadMemberId)
-    )
-      throw httpError(400, "Choose a lead from this group's assistants.");
-    // Like a message, one person's retry is the same save, and two people's saves never share a key.
-    const requestId = `context:${createHash("sha256")
-      .update(JSON.stringify([userId, body.requestId]))
-      .digest("hex")}`;
-    return request({
-      operation: "context",
-      roomId,
-      requestId,
-      purpose: body.purpose,
-      notes: body.notes,
-      routing: body.leadMemberId === null ? "everyone" : "lead",
-      leadMemberId: body.leadMemberId ?? "",
-    });
-  });
-  app.post("/api/groups/:roomId/approve", async (req) => {
-    const { roomId } = z.object({ roomId: id }).parse(req.params);
-    const body = z
-      .object({
-        taskId: id,
-        memberId: id,
-        generation: z.number().int().min(1),
-        choice: z.enum(["once", "deny"]),
-        requestId: id,
-      })
-      .strict()
-      .parse(req.body);
-    await room(signedIn(req).id, roomId);
-    return request({ operation: "approve", roomId, ...body });
-  });
+  apiRoute(
+    app,
+    "POST /groups/:roomId/context",
+    {
+      body: z
+        .object({
+          requestId: uuid,
+          purpose: z.string().max(GROUP_PURPOSE_MAX),
+          // Hermes counts the trimmed notes in UTF-8 bytes.
+          notes: z
+            .string()
+            .max(GROUP_NOTES_MAX_BYTES * 4)
+            .refine(
+              (notes) => Buffer.byteLength(notes.trim(), "utf8") <= GROUP_NOTES_MAX_BYTES,
+              "Shared notes are too long. Shorten them and try again.",
+            ),
+          leadMemberId: id.nullable(),
+        })
+        .strict(),
+    },
+    async (req, body) => {
+      const { roomId } = z.object({ roomId: id }).parse(req.params);
+      const userId = signedIn(req).id;
+      const state = await room(userId, roomId);
+      if (
+        body.leadMemberId !== null &&
+        !state.room.members.some((member) => member.member_id === body.leadMemberId)
+      )
+        throw httpError(400, "Choose a lead from this group's assistants.");
+      // Like a message, one person's retry is the same save, and two people's saves never share a key.
+      const requestId = `context:${createHash("sha256")
+        .update(JSON.stringify([userId, body.requestId]))
+        .digest("hex")}`;
+      return request({
+        operation: "context",
+        roomId,
+        requestId,
+        purpose: body.purpose,
+        notes: body.notes,
+        routing: body.leadMemberId === null ? "everyone" : "lead",
+        leadMemberId: body.leadMemberId ?? "",
+      }) as Promise<Record<string, unknown>>;
+    },
+  );
+  apiRoute(
+    app,
+    "POST /groups/:roomId/approve",
+    {
+      body: z
+        .object({
+          taskId: id,
+          memberId: id,
+          generation: z.number().int().min(1),
+          choice: z.enum(["once", "deny"]),
+          requestId: id,
+        })
+        .strict(),
+    },
+    async (req, body) => {
+      const { roomId } = z.object({ roomId: id }).parse(req.params);
+      await room(signedIn(req).id, roomId);
+      return request({ operation: "approve", roomId, ...body }) as Promise<Record<string, unknown>>;
+    },
+  );
   return { room, catalogRead };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, request as apiRequest, write } from "../client-api";
+import { ApiError, request as apiRequest } from "../client-api";
 import type { ExplicitLoginRequest, SecureRequest, SecureRequestAnswer } from "../shared/vault";
 import "./vault.css";
 import { FormMessage } from "./ui/form-message";
@@ -116,10 +116,10 @@ export function SecureRequestCard({
     setError("");
     setNotice("");
     try {
-      const result = await write<{ status: "ok" | "expired" }>(
-        `/bots/${encodeURIComponent(botId)}/secure-requests/${encodeURIComponent(requestId)}`,
-        payload,
-      );
+      const result = await apiRequest("POST /bots/:id/secure-requests/:requestId", {
+        params: { id: botId, requestId },
+        body: payload,
+      });
       uncertainRequests.delete(started);
       if (!active(started)) return;
       if (result.status === "expired") {

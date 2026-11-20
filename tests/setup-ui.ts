@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { recordActWarning, takeActWarnings } from "./act-guard";
 import { browserLocks } from "./helpers/web-locks";
 
@@ -68,12 +68,46 @@ if (typeof document !== "undefined") {
     // Modern secure browsers expose Web Locks. Unsupported-browser cases explicitly remove this I/O boundary.
     Object.defineProperty(navigator, "locks", { configurable: true, value: browserLocks() });
   });
+  // Snapshot descriptors that individual tests overwrite via Object.defineProperty (often without
+  // writable: true or without teardown) so later files in a shared worker see a clean jsdom surface.
+  const snapshotKey = Symbol.for("agent-interface.test.domSnapshots");
+  type DescriptorTarget = [object, PropertyKey];
+  type Snapshot = [object, PropertyKey, PropertyDescriptor | undefined];
+  const targets: DescriptorTarget[] = [
+    [HTMLDialogElement.prototype, "showModal"],
+    [HTMLDialogElement.prototype, "close"],
+    [HTMLElement.prototype, "scrollIntoView"],
+    [Element.prototype, "scrollIntoView"],
+    [URL, "createObjectURL"],
+    [URL, "revokeObjectURL"],
+    [window, "innerWidth"],
+    [window, "innerHeight"],
+    [document.documentElement, "clientWidth"],
+    [document.documentElement, "clientHeight"],
+    [navigator, "serviceWorker"],
+    [navigator, "setAppBadge"],
+    [navigator, "clearAppBadge"],
+    [navigator, "onLine"],
+    [document, "visibilityState"],
+  ];
+  const snapshots: Snapshot[] =
+    (Reflect.get(globalThis, snapshotKey) as Snapshot[] | undefined) ??
+    targets.map(([target, key]) => [target, key, Object.getOwnPropertyDescriptor(target, key)]);
+  Reflect.set(globalThis, snapshotKey, snapshots);
+
   const { unmountAll } = await import("./ui-harness");
   afterEach(async () => {
     await unmountAll();
     document.body.replaceChildren();
+    document.head.replaceChildren();
     localStorage.clear();
     sessionStorage.clear();
+    // Removing a focused node while fake timers are active starts jsdom's 16ms
+    // rendering-update interval on the fake clock. Flushing one frame before
+    // restoring real timers lets jsdom clear its internal interval handle; without
+    // this, vi.useRealTimers() discards the fake timer while jsdom keeps the dead
+    // handle, permanently stalling requestAnimationFrame for later files in the worker.
+    if (vi.isFakeTimers()) vi.advanceTimersByTime(20);
     vi.useRealTimers();
     // A bare console.error mock that is still in place swallowed what it was given; read it before restoring.
     const errorLog = console.error;
@@ -87,5 +121,13 @@ if (typeof document !== "undefined") {
       throw new Error(
         `React reported ${found.length} act() problem(s). Await every act(), wrap async work in it, and never nest acts:\n${found.join("\n")}`,
       );
+  });
+  // File-scoped prototype and navigator patches installed in beforeAll must survive every test in
+  // the file, then reset cleanly before the next file runs in the same worker.
+  afterAll(() => {
+    for (const [target, key, descriptor] of snapshots) {
+      if (descriptor) Object.defineProperty(target, key, descriptor);
+      else Reflect.deleteProperty(target, key);
+    }
   });
 }

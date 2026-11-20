@@ -234,7 +234,7 @@ describe("rollback to the previous release", () => {
     expect(version(open(legacyDatabase()).db)).toBeLessThanOrEqual(previousRelease.schemaVersion);
   });
 
-  it("keeps every object of the previous schema and only adds new tables beside them", () => {
+  it("keeps every object of the previous schema and only adds new tables or plain non-unique indexes", () => {
     const current = objects(open(legacyDatabase()).db);
     for (const object of previousRelease.objects) expect(current).toContainEqual(object);
     const known = new Set(previousRelease.objects.map((object) => object.name));
@@ -244,6 +244,11 @@ describe("rollback to the previous release", () => {
         .map((object) => object.name),
     );
     for (const added of current.filter((object) => !known.has(object.name))) {
+      if (added.type === "index") {
+        // Non-unique plain column indexes are maintained transparently by SQLite after a rollback.
+        expect(added.sql, added.name).toMatch(/^CREATE INDEX [a-z_]+ ON [a-z_]+\([a-z_, ]+\)$/);
+        continue;
+      }
       expect(added.type, added.name).toBe("table");
       expect(added.sql, added.name).toMatch(/^CREATE TABLE/);
       expect(oldTables.has(added.tableName), added.name).toBe(false);

@@ -1,11 +1,10 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { ApiError, write } from "../client-api";
+import { ApiError, request as apiRequest } from "../client-api";
 import type { Bot } from "../shared/types";
 import {
   connectionReady,
   type ConnectionRequest,
   type ConnectionRequestDecision,
-  type ConnectionRequestResult,
   type IntegrationCatalog,
   type IntegrationConnection,
 } from "../shared/integrations";
@@ -71,15 +70,15 @@ export function ConnectionRequestCard({
     setSending(decision);
     setError("");
     try {
-      const result = await write<ConnectionRequestResult>(
-        `/bots/${encodeURIComponent(botId)}/connection-requests/${encodeURIComponent(requestId)}`,
-        {
+      const result = await apiRequest("POST /bots/:id/connection-requests/:requestId", {
+        params: { id: botId, requestId },
+        body: {
           decision,
           epoch: request.epoch,
           sessionId: request.sessionId,
           connection: request.connectionId,
         },
-      );
+      });
       if (!live.current) return;
       if (result.status === "expired")
         setError("This request had already closed. Refresh the conversation to see what happened.");

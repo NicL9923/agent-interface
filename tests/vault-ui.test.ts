@@ -504,3 +504,56 @@ it("shows the reload recovery beside a failed unlock and clears the secret witho
   await submit();
   expect(write).toHaveBeenCalledOnce();
 });
+
+it("reports definite 4xx vault rejections and clears secrets without locking the panel", async () => {
+  const source = {
+    name: "onepassword" as const,
+    displayName: "1Password",
+    enabled: true,
+    needsUnlock: true,
+    unlocked: false,
+    installed: true,
+    canToggle: true,
+    canUnlock: true,
+    canLock: false,
+  };
+  vi.mocked(api).mockResolvedValue({ ...vault, sources: [source] });
+  vi.mocked(write)
+    .mockRejectedValueOnce(new ApiError("Incorrect master password.", 400))
+    .mockResolvedValueOnce({ unlocked: true });
+  await render(createElement(VaultPanel, { botId: "ranch" }));
+  await click("Unlock");
+  await type("Master password", "wrong-secret");
+  await submit();
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+    "Incorrect master password. Secret fields have been cleared.",
+  );
+  expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
+  // Panel is not locked: a corrected submission proceeds without forcing a reload.
+  await type("Master password", "right-secret");
+  await submit();
+  expect(write).toHaveBeenCalledTimes(2);
+});
+
+it("still locks the vault panel on ambiguous 409 conflicts until reloaded", async () => {
+  const source = {
+    name: "onepassword" as const,
+    displayName: "1Password",
+    enabled: true,
+    needsUnlock: true,
+    unlocked: false,
+    installed: true,
+    canToggle: true,
+    canUnlock: true,
+    canLock: false,
+  };
+  vi.mocked(api).mockResolvedValue({ ...vault, sources: [source] });
+  vi.mocked(write).mockRejectedValue(new ApiError("Vault state changed concurrently.", 409));
+  await render(createElement(VaultPanel, { botId: "ranch" }));
+  await click("Unlock");
+  await type("Master password", "secret");
+  await submit();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Reload and review");
+  await submit();
+  expect(write).toHaveBeenCalledOnce();
+});

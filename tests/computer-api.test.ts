@@ -24,13 +24,15 @@ const shellId = (userId: string) =>
 // A host double: attachments are a real child process that echoes nothing, never a shell.
 function terminalDouble(live: string[] = []) {
   const ended: string[] = [];
-  return {
+  const double = {
     ended,
     available: true,
     target: "hermes@vps · /workspace",
-    reason: undefined,
+    reason: undefined as string | undefined,
+    isAvailable: async () => double.available,
+    getReason: async () => double.reason,
     sessionId: shellId,
-    sessions: () => [...live],
+    sessions: async () => [...live],
     attach: () => spawn(process.execPath, ["-e", "process.stdin.resume()"]),
     end: async (userId: string) => {
       ended.push(shellId(userId));
@@ -40,6 +42,7 @@ function terminalDouble(live: string[] = []) {
     },
     close: () => {},
   };
+  return double;
 }
 async function setup(
   options: { admins?: string; terminals?: ReturnType<typeof terminalDouble> } = {},
