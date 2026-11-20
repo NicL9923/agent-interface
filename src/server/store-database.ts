@@ -120,6 +120,22 @@ const additions = `
   -- Macs linked with WildBots for Mac. The credential is stored as its SHA-256 only. A revoked Mac
   -- keeps its row with revoked_at set, so its ID and credential can never be used again.
   CREATE TABLE IF NOT EXISTS mac_devices(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,model TEXT,os_version TEXT,app_version TEXT,credential_hash TEXT NOT NULL,created_at INTEGER NOT NULL,last_seen_at INTEGER,revoked_at INTEGER);
+  -- Plain B-tree indexes for hot polling, pruning, and lookup paths. Rollback-safe: SQLite maintains
+  -- non-unique indexes automatically across releases without raising user_version.
+  CREATE INDEX IF NOT EXISTS chat_presence_user_bot ON chat_presence(user_id,bot_id,updated_at);
+  CREATE INDEX IF NOT EXISTS chat_presence_updated ON chat_presence(updated_at);
+  CREATE INDEX IF NOT EXISTS device_activity_user ON device_activity(user_id,beat_at,used_at);
+  CREATE INDEX IF NOT EXISTS device_activity_session ON device_activity(session_hash);
+  CREATE INDEX IF NOT EXISTS mac_devices_user ON mac_devices(user_id,revoked_at);
+  CREATE INDEX IF NOT EXISTS push_action_tokens_expires ON push_action_tokens(expires);
+  CREATE INDEX IF NOT EXISTS sessions_expires ON sessions(expires);
+  CREATE INDEX IF NOT EXISTS native_sessions_expires ON native_sessions(expires);
+  CREATE INDEX IF NOT EXISTS native_flows_expires ON native_flows(expires);
+  CREATE INDEX IF NOT EXISTS native_codes_expires ON native_codes(expires);
+  CREATE INDEX IF NOT EXISTS group_senders_created ON group_senders(created_at);
+  CREATE INDEX IF NOT EXISTS approval_attribution_created ON approval_attribution(created_at);
+  CREATE INDEX IF NOT EXISTS retry_claims_created ON retry_claims(created_at);
+  CREATE INDEX IF NOT EXISTS submissions_created ON submissions(created_at);
 `;
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {
@@ -206,7 +222,9 @@ export class StoreDatabase {
     // node:sqlite blocks the event loop, so a commit that waits on fsync stalls every request and
     // stream. In WAL mode NORMAL syncs at checkpoints instead: the database cannot corrupt, but a
     // power loss or OS crash, not an app crash, can roll back the last few commits.
-    this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
+    this.db.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
+    );
     migrate(this.db);
     this.db.exec(additions);
     this.db.exec(

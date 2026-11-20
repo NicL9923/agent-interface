@@ -5,6 +5,7 @@ import { isConversationReply } from "../shared/message-origin.js";
 import type { Message, Runtime } from "../shared/types.js";
 import type { VoiceAudio, VoiceTranscript } from "../shared/voice.js";
 import { MAX_SPOKEN_TEXT, MAX_VOICE_BYTES, VOICE_MIMES } from "../shared/voice.js";
+import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { readMessage } from "./conversation-view.js";
 import { httpError } from "./http-error.js";
@@ -110,47 +111,50 @@ export async function registerVoiceRoutes(
       });
     });
   });
-  app.post("/api/bots/:id/voice/speak", async (req, reply) => {
-    const botId = botParams.parse(req.params).id;
-    const { messageId } = z
-      .object({ messageId: z.string().min(1).max(300) })
-      .strict()
-      .parse(req.body);
-    await checkBot(req, botId);
-    if (!runtime.synthesizeVoice)
-      throw httpError(409, "Spoken replies are unavailable on this Hermes connection.");
-    return operation(req, async () => {
-      const message = await readableReply(req, botId, messageId);
-      if (message.id.endsWith("-inflight"))
-        throw httpError(409, "Wait for this assistant reply to finish before listening.");
-      if (message.text.length > MAX_SPOKEN_TEXT)
-        throw httpError(400, "This reply is too long to read aloud. Ask for a shorter summary.");
-      const result = await runtime.synthesizeVoice!(botId, message.text);
-      const mime = result.mime.split(";", 1)[0]!.trim().toLowerCase();
-      if (
-        !VOICE_MIMES.has(mime) ||
-        !Buffer.isBuffer(result.data) ||
-        !result.data.length ||
-        result.data.length > MAX_VOICE_BYTES
-      )
-        throw httpError(502, "Hermes did not return a supported audio reply under 8 MB.");
-      prune();
-      const userId = signedIn(req).id;
-      for (const [key, entry] of audio) if (entry.userId === userId) audio.delete(key);
-      let total = [...audio.values()].reduce((sum, entry) => sum + entry.data.length, 0);
-      for (const [key, entry] of audio) {
-        if (total + result.data.length <= MAX_CACHED_AUDIO) break;
-        total -= entry.data.length;
-        audio.delete(key);
-      }
-      const key = randomUUID(),
-        expires = now() + AUDIO_TTL;
-      audio.set(key, { userId, botId, messageId, data: result.data, mime, expires });
-      return reply
-        .header("Cache-Control", "private, no-store")
-        .send({ url: `/api/voice/audio/${key}`, mime, expiresAt: new Date(expires).toISOString() });
-    });
-  });
+  apiRoute(
+    app,
+    "POST /bots/:id/voice/speak",
+    { body: z.object({ messageId: z.string().min(1).max(300) }).strict() },
+    async (req, { messageId }, reply) => {
+      const botId = botParams.parse(req.params).id;
+      await checkBot(req, botId);
+      if (!runtime.synthesizeVoice)
+        throw httpError(409, "Spoken replies are unavailable on this Hermes connection.");
+      return operation(req, async () => {
+        const message = await readableReply(req, botId, messageId);
+        if (message.id.endsWith("-inflight"))
+          throw httpError(409, "Wait for this assistant reply to finish before listening.");
+        if (message.text.length > MAX_SPOKEN_TEXT)
+          throw httpError(400, "This reply is too long to read aloud. Ask for a shorter summary.");
+        const result = await runtime.synthesizeVoice!(botId, message.text);
+        const mime = result.mime.split(";", 1)[0]!.trim().toLowerCase();
+        if (
+          !VOICE_MIMES.has(mime) ||
+          !Buffer.isBuffer(result.data) ||
+          !result.data.length ||
+          result.data.length > MAX_VOICE_BYTES
+        )
+          throw httpError(502, "Hermes did not return a supported audio reply under 8 MB.");
+        prune();
+        const userId = signedIn(req).id;
+        for (const [key, entry] of audio) if (entry.userId === userId) audio.delete(key);
+        let total = [...audio.values()].reduce((sum, entry) => sum + entry.data.length, 0);
+        for (const [key, entry] of audio) {
+          if (total + result.data.length <= MAX_CACHED_AUDIO) break;
+          total -= entry.data.length;
+          audio.delete(key);
+        }
+        const key = randomUUID(),
+          expires = now() + AUDIO_TTL;
+        audio.set(key, { userId, botId, messageId, data: result.data, mime, expires });
+        return reply.header("Cache-Control", "private, no-store").send({
+          url: `/api/voice/audio/${key}`,
+          mime,
+          expiresAt: new Date(expires).toISOString(),
+        });
+      });
+    },
+  );
   app.get("/api/voice/audio/:audioId", async (req, reply) => {
     const userId = signedIn(req).id;
     const { audioId } = z.object({ audioId: z.string().uuid() }).parse(req.params);

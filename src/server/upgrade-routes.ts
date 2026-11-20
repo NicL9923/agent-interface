@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { hermesMaintenanceSendMessage } from "../shared/errors.js";
 import { routePattern } from "./route-path.js";
@@ -35,30 +36,35 @@ export function installMaintenanceGate(
 
 /** Checking, installing and recovering Hermes updates. */
 export function installUpgradeRoutes(app: FastifyInstance, upgrades: HermesUpgrades) {
-  app.get("/api/hermes/upgrade", async (req) => upgrades.status(signedIn(req)));
-  app.post("/api/hermes/upgrade/check", async (req) => {
-    z.object({}).strict().parse(req.body);
-    return upgrades.check(signedIn(req));
-  });
-  app.post("/api/hermes/upgrade/install", async (req) => {
-    const input = z
-      .object({
-        candidateRevision: z.string().regex(/^[a-f0-9]{40}$/),
-        requestId: z.string().uuid(),
-      })
-      .strict()
-      .parse(req.body);
-    return upgrades.install(signedIn(req), input);
-  });
-  app.post("/api/hermes/upgrade/control", async (req) => {
-    const input = z
-      .object({
-        action: z.enum(["retry", "cancel", "restart_service"]),
-        operationId: z.string().uuid(),
-        requestId: z.string().uuid(),
-      })
-      .strict()
-      .parse(req.body);
-    return upgrades.control(signedIn(req), input);
-  });
+  apiRoute(app, "GET /hermes/upgrade", {}, async (req) => upgrades.status(signedIn(req)));
+  apiRoute(app, "POST /hermes/upgrade/check", { body: z.object({}).strict() }, async (req) =>
+    upgrades.check(signedIn(req)),
+  );
+  apiRoute(
+    app,
+    "POST /hermes/upgrade/install",
+    {
+      body: z
+        .object({
+          candidateRevision: z.string().regex(/^[a-f0-9]{40}$/),
+          requestId: z.string().uuid(),
+        })
+        .strict(),
+    },
+    async (req, input) => upgrades.install(signedIn(req), input),
+  );
+  apiRoute(
+    app,
+    "POST /hermes/upgrade/control",
+    {
+      body: z
+        .object({
+          action: z.enum(["retry", "cancel", "restart_service"]),
+          operationId: z.string().uuid(),
+          requestId: z.string().uuid(),
+        })
+        .strict(),
+    },
+    async (req, input) => upgrades.control(signedIn(req), input),
+  );
 }

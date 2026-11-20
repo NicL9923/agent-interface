@@ -1,7 +1,7 @@
-import { timingSafeEqual } from "node:crypto";
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import WebSocket, { type RawData } from "ws";
 import { z } from "zod";
+import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { httpError } from "./http-error.js";
@@ -10,6 +10,7 @@ import type { MacDevice } from "./store-macs.js";
 import type { LinkedMacs } from "../shared/mac.js";
 import { MAX_MACS } from "./store-macs.js";
 import { rawDataText } from "./raw-data-text.js";
+import { timingSafeEqualText } from "./timing-safe.js";
 
 /**
  * WildBots for Mac: linked Macs that personal assistants can ask to act, unattended when the
@@ -163,11 +164,7 @@ export const directLoopback = (req: FastifyRequest) =>
     (name) => name === "forwarded" || name.startsWith("x-forwarded-") || name === "x-real-ip",
   );
 
-const sameKey = (supplied: string, expected: string) => {
-  const a = Buffer.from(supplied),
-    b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-};
+const sameKey = (supplied: string, expected: string) => timingSafeEqualText(supplied, expected);
 
 /** The live links and the invocations waiting on them. One instance per app. */
 export class MacBroker {
@@ -559,7 +556,7 @@ export function installMacLink(app: FastifyInstance, config: Config, store: Stor
     });
   });
 
-  app.get("/api/mac/devices", async (req): Promise<LinkedMacs> => {
+  apiRoute(app, "GET /mac/devices", {}, async (req): Promise<LinkedMacs> => {
     const user = signedIn(req);
     if (!available()) return { available: false, reason: unavailable, devices: [] };
     return {
@@ -581,7 +578,7 @@ export function installMacLink(app: FastifyInstance, config: Config, store: Stor
     };
   });
 
-  app.delete<{ Params: { id: string } }>("/api/mac/devices/:id", async (req) => {
+  apiRoute(app, "DELETE /mac/devices/:id", {}, async (req) => {
     const user = signedIn(req);
     if (!store.macs.revoke(req.params.id, user.id))
       throw httpError(404, "Mac not found", { code: "mac_not_found" });

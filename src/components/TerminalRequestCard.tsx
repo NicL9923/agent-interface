@@ -1,11 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api, write } from "../client-api";
-import type {
-  ComputerStatus,
-  TerminalRequest,
-  TerminalRequestDecision,
-  TerminalRequestResult,
-} from "../shared/computer";
+import { ApiError, request as apiRequest } from "../client-api";
+import type { ComputerStatus, TerminalRequest, TerminalRequestDecision } from "../shared/computer";
 import { rememberSettled } from "../app/waiting-input";
 import { attentionAnchor } from "../app/transcript-logic";
 import { Icon } from "./Icon";
@@ -59,7 +54,7 @@ export function TerminalRequestCard({
     const controller = new AbortController();
     const refresh = async () => {
       try {
-        const next = await api<ComputerStatus>("/computer", { signal: controller.signal });
+        const next = await apiRequest("GET /computer", { signal: controller.signal });
         if (!controller.signal.aborted) setStatus(next);
       } catch {
         /* The card keeps its last known status; the server still checks every button. */
@@ -85,10 +80,10 @@ export function TerminalRequestCard({
     setSending(decision);
     setError("");
     try {
-      const result = await write<TerminalRequestResult>(
-        `/bots/${encodeURIComponent(botId)}/terminal-requests/${encodeURIComponent(requestId)}`,
-        { decision, epoch: request.epoch, sessionId: request.sessionId },
-      );
+      const result = await apiRequest("POST /bots/:id/terminal-requests/:requestId", {
+        params: { id: botId, requestId },
+        body: { decision, epoch: request.epoch, sessionId: request.sessionId },
+      });
       if (!live.current) return;
       if (result.status === "expired")
         setError("This request had already closed. Refresh the conversation to see what happened.");

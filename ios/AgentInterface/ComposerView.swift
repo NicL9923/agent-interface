@@ -37,7 +37,7 @@ struct ComposerView: View {
       TalkPanel(talk: talk, name: bot.name)
       card.fixedSize(horizontal: false, vertical: true)
     }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
-      .frame(maxWidth: 752).frame(maxWidth: .infinity).background { ComposerBackdrop() }
+      .frame(maxWidth: 752).frame(maxWidth: .infinity)
       .accessibilityElement(children: .contain).accessibilityIdentifier("composerArea")
       .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
         drop(providers)
@@ -113,9 +113,7 @@ struct ComposerView: View {
       }
       VoicePanel(voice: voice, disabled: voiceDisabled, bot: bot)
       footnotes
-    }.padding(4).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Palette.line, lineWidth: 1))
-      .accessibilityElement(children: .contain).accessibilityIdentifier("composerCard")
+    }.padding(4).glassSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
   }
   private var input: some View {
     // While a message is on its way the transcript shows it, so the box reads empty and is
@@ -517,13 +515,15 @@ private struct ComposerRowLayout: Layout {
   }
 }
 
-/// Behind the message box as the transcript scrolls under it: a blur that fades in over its top
-/// edge, reaching down past the home indicator. Reduce Transparency makes it solid.
-private struct ComposerBackdrop: View {
-  var body: some View {
-    Rectangle().fill(.regularMaterial)
-      .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.12)], startPoint: .top, endPoint: .bottom))
-      .ignoresSafeArea(edges: .bottom)
-      .accessibilityHidden(true)
+extension View {
+  /// A control floating over the transcript, with nothing behind it but the messages scrolling under:
+  /// Liquid Glass on iOS 26, and a material with a hairline edge before it. Both turn solid with
+  /// Reduce Transparency.
+  @ViewBuilder func glassSurface<S: Shape>(_ shape: S, interactive: Bool = false) -> some View {
+    if #available(iOS 26, *) {
+      glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+    } else {
+      background(.regularMaterial, in: shape).overlay(shape.stroke(Palette.line, lineWidth: 1))
+    }
   }
 }

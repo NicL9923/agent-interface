@@ -715,21 +715,18 @@ describe("conversation change stream", () => {
           cleared: unknown[] = [];
         const set = globalThis.setTimeout,
           clear = globalThis.clearTimeout;
-        const setSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-          handler: () => void,
-          ms?: number,
-          ...rest: unknown[]
-        ) => {
+        // Wrap the active fake timers directly instead of vi.spyOn: Vitest's restoreAllMocks()
+        // would otherwise re-apply the captured fake function after vi.useRealTimers() restores
+        // Node's real timers, stalling later files in a shared worker.
+        globalThis.setTimeout = ((handler: () => void, ms?: number, ...rest: unknown[]) => {
           const timer = set(handler, ms, ...rest);
           if (ms === TURN_HOLD_MS) holds.push(timer);
           return timer;
-        }) as typeof setTimeout);
-        const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(((
-          timer?: Parameters<typeof clearTimeout>[0],
-        ) => {
+        }) as typeof setTimeout;
+        globalThis.clearTimeout = ((timer?: Parameters<typeof clearTimeout>[0]) => {
           cleared.push(timer);
           return clear(timer);
-        }) as typeof clearTimeout);
+        }) as typeof clearTimeout;
         try {
           const held = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
           await held.until(() => held.text.includes("retry"));
@@ -739,8 +736,8 @@ describe("conversation change stream", () => {
           await pass(100);
           expect(cleared).toContain(holds[0]);
         } finally {
-          setSpy.mockRestore();
-          clearSpy.mockRestore();
+          globalThis.setTimeout = set;
+          globalThis.clearTimeout = clear;
         }
       });
     });

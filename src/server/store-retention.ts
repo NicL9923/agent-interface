@@ -98,8 +98,10 @@ export class RetentionRepository {
     const stale =
       "SELECT id FROM outbox WHERE state<>'pending' AND created_at<? AND NOT EXISTS(SELECT 1 FROM notification_events e WHERE e.id=outbox.event_id)";
     const cutoff = now - 30 * 86400000;
+    const historyCutoff = now - 90 * 86400000;
     return this.database.transaction(() => {
       const sessions = this.db.prepare("DELETE FROM sessions WHERE expires<=?").run(now).changes;
+      this.accounts.pruneNativeAuth(now);
       this.db.prepare("DELETE FROM chat_presence WHERE updated_at<?").run(now - presenceTtl);
       // A row holds its device while its session lives; one whose session ended holds nothing.
       this.db
@@ -116,6 +118,21 @@ export class RetentionRepository {
       this.db
         .prepare("DELETE FROM approval_resolutions WHERE resolved_at<?")
         .run(now - 2 * 86400000);
+      // Settled historical records age out after 90 days so long-lived installations stay bounded.
+      this.db
+        .prepare(
+          "DELETE FROM submissions WHERE created_at<? AND json_extract(receipt,'$.status')<>'uncertain'",
+        )
+        .run(historyCutoff);
+      this.db.prepare("DELETE FROM approval_attribution WHERE created_at<?").run(historyCutoff);
+      this.db.prepare("DELETE FROM retry_claims WHERE created_at<?").run(historyCutoff);
+      this.db.prepare("DELETE FROM group_senders WHERE created_at<?").run(historyCutoff);
+      this.db
+        .prepare(
+          `DELETE FROM participants WHERE NOT EXISTS(SELECT 1 FROM submissions s WHERE json_extract(s.receipt,'$.runId')=participants.run_id)
+           AND NOT EXISTS(SELECT 1 FROM notification_events e WHERE json_extract(e.value,'$.runId')=participants.run_id)`,
+        )
+        .run();
       this.db.prepare(`DELETE FROM delivered WHERE outbox_id IN (${stale})`).run(cutoff);
       this.db
         .prepare(`DELETE FROM notification_batch_items WHERE outbox_id IN (${stale})`)

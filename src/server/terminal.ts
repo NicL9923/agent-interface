@@ -1,35 +1,69 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  execFile,
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import type { Config } from "./config.js";
 import { httpError } from "./http-error.js";
 
+const execFileAsync = promisify(execFile);
 const host = fileURLToPath(new URL("./terminal-host.py", import.meta.url));
+// Cache tmux liveness briefly so rapid status polls do not spawn a subprocess on every request.
+const AVAILABILITY_TTL_MS = 2_000;
+
 export class SystemTerminal {
   private readonly children = new Set<ChildProcessWithoutNullStreams>();
   readonly target: string;
   private readonly dependencies: boolean;
-  get available() {
-    return Boolean(
-      this.dependencies &&
-      this.config &&
-      spawnSync(
+  private cachedAvailability?: { value: boolean; expiresAt: number };
+  private availabilityCheck?: Promise<boolean>;
+
+  private async probeAvailable(): Promise<boolean> {
+    if (!this.dependencies || !this.config) return false;
+    try {
+      await execFileAsync(
         "tmux",
         ["-N", "-S", join(this.config.stateDirectory, "tmux.sock"), "show-options", "-s"],
         { timeout: 2000 },
-      ).status === 0,
-    );
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
-  get reason() {
-    return this.available
+
+  /** Checks whether the tmux server is reachable without blocking the event loop. */
+  async isAvailable(): Promise<boolean> {
+    if (!this.dependencies || !this.config) return false;
+    const now = Date.now();
+    if (this.cachedAvailability && this.cachedAvailability.expiresAt > now)
+      return this.cachedAvailability.value;
+    this.availabilityCheck ??= this.probeAvailable()
+      .then((value) => {
+        this.cachedAvailability = { value, expiresAt: Date.now() + AVAILABILITY_TTL_MS };
+        return value;
+      })
+      .finally(() => {
+        this.availabilityCheck = undefined;
+      });
+    return this.availabilityCheck;
+  }
+
+  async getReason(): Promise<string | undefined> {
+    return (await this.isAvailable())
       ? undefined
       : this.dependencies
         ? "The system terminal service is not running on this host."
         : "The installer has not enabled the system terminal on this host.";
   }
+
   constructor(private readonly config: Config["computerTerminal"]) {
     this.target = `${userInfo().username}@${hostname()}${config ? ` · ${config.cwd}` : ""}`;
     this.dependencies = Boolean(
@@ -54,25 +88,29 @@ export class SystemTerminal {
     return "member-" + createHash("sha256").update(userId).digest("hex").slice(0, 32);
   }
   /** Member shell names on the running tmux server. */
-  sessions() {
-    if (!this.available || !this.config) return [];
-    const result = spawnSync(
-      "tmux",
-      [
-        "-N",
-        "-S",
-        join(this.config.stateDirectory, "tmux.sock"),
-        "list-sessions",
-        "-F",
-        "#{session_name}",
-      ],
-      { timeout: 2000, encoding: "utf8" },
-    );
-    if (result.status !== 0) return [];
-    return result.stdout.split("\n").filter((name) => /^member-[a-f0-9]{32}$/.test(name));
+  async sessions(): Promise<string[]> {
+    if (!(await this.isAvailable()) || !this.config) return [];
+    try {
+      const { stdout } = await execFileAsync(
+        "tmux",
+        [
+          "-N",
+          "-S",
+          join(this.config.stateDirectory, "tmux.sock"),
+          "list-sessions",
+          "-F",
+          "#{session_name}",
+        ],
+        { timeout: 2000, encoding: "utf8" },
+      );
+      return stdout.split("\n").filter((name) => /^member-[a-f0-9]{32}$/.test(name));
+    } catch {
+      return [];
+    }
   }
   private arguments(sessionId: string) {
-    if (!this.available || !this.config) throw httpError(409, this.reason ?? "");
+    if (!this.dependencies || !this.config)
+      throw httpError(409, "The installer has not enabled the system terminal on this host.");
     return [
       host,
       "--socket",
@@ -97,6 +135,11 @@ export class SystemTerminal {
     return this.endSession(this.sessionId(userId));
   }
   async endSession(sessionId: string) {
+    if (!(await this.isAvailable()))
+      throw httpError(
+        409,
+        (await this.getReason()) ?? "The system terminal service is not running on this host.",
+      );
     const args = this.arguments(sessionId);
     const child = spawn(this.config!.python, [...args, "--end"], {
       stdio: "ignore",

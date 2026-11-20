@@ -8,7 +8,7 @@ import type {
   SubmissionReceipt,
 } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
-import { api } from "./client-api";
+import { request } from "./client-api";
 import type { GroupCatalog, GroupRoom } from "./shared/collaboration";
 import { AvatarTrio, SignIn } from "./components/SignIn";
 import { useDeviceNotifications } from "./components/use-device-notifications";
@@ -262,7 +262,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           : GROUP_UNNOTIFIED_POLL_MS,
       wake: true,
       load: async (path, signal) => {
-        const catalog = await api<GroupCatalog>(path, { signal });
+        const catalog = await request("GET /groups", { signal });
         const json = JSON.stringify([userId, catalog]);
         if (groupsHeld.current?.json === json) return groupsHeld.current.value;
         groupsHeld.current = { json, value: { userId: userId!, catalog } };

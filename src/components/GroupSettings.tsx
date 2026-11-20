@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { write } from "../client-api";
+import { request } from "../client-api";
 import { useAction } from "../app/use-action";
 import { Dialog } from "./ui/dialog";
 import { FormMessage } from "./ui/form-message";
@@ -54,11 +54,14 @@ export function GroupSettings({
   const over = notesBytes(notes) - GROUP_NOTES_MAX_BYTES;
   const save = () =>
     action.run(async () => {
-      await write(`/groups/${encodeURIComponent(roomId)}/context`, {
-        requestId: crypto.randomUUID(),
-        purpose,
-        notes,
-        leadMemberId: lead || null,
+      await request("POST /groups/:roomId/context", {
+        params: { roomId },
+        body: {
+          requestId: crypto.randomUUID(),
+          purpose,
+          notes,
+          leadMemberId: lead || null,
+        },
       });
       onSaved();
     });

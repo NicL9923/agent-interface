@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Runtime } from "../shared/types.js";
 import type { TerminalRequestResult } from "../shared/computer.js";
+import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import type { Config } from "./config.js";
 import type { Store } from "./store.js";
@@ -25,11 +26,12 @@ export async function installTerminalRequestRoutes(
   store: Store,
   runtime: Runtime,
 ) {
-  app.post(
-    "/api/bots/:id/terminal-requests/:requestId",
-    async (req): Promise<TerminalRequestResult> => {
+  apiRoute(
+    app,
+    "POST /bots/:id/terminal-requests/:requestId",
+    { body },
+    async (req, input): Promise<TerminalRequestResult> => {
       const path = params.parse(req.params),
-        input = body.parse(req.body),
         user = signedIn(req);
       if (!visibleTo(store, path.id, user.id)) throw httpError(404, "Assistant not found");
       if (!runtime.computerRequest)

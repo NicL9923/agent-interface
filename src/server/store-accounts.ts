@@ -152,9 +152,9 @@ export class AccountRepository {
   deleteNativeSession(hash: string) {
     this.db.prepare("DELETE FROM native_sessions WHERE hash=?").run(hash);
   }
-  pruneNativeAuth() {
+  pruneNativeAuth(now = Date.now()) {
     for (const table of ["native_flows", "native_codes", "native_sessions"])
-      this.db.prepare(`DELETE FROM ${table} WHERE expires<=?`).run(Date.now());
+      this.db.prepare(`DELETE FROM ${table} WHERE expires<=?`).run(now);
   }
   nativeFlow(hash: string, state: string, challenge: string, nonce: string, expires: number) {
     this.pruneNativeAuth();

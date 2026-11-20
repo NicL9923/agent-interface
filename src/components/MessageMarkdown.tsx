@@ -31,7 +31,18 @@ type Highlighter = typeof import("./code-highlight");
 let highlighter: Highlighter | undefined;
 let highlighterLoad: Promise<Highlighter> | undefined;
 const loadHighlighter = () =>
-  (highlighterLoad ??= import("./code-highlight").then((module) => (highlighter = module)));
+  (highlighterLoad ??= import("./code-highlight")
+    .then((module) => (highlighter = module))
+    .catch((error) => {
+      // Allow subsequent code blocks to retry after a transient network or deploy error.
+      highlighterLoad = undefined;
+      throw error;
+    }));
+/** Resets the cached highlighter module between test files in shared workers. */
+export function resetHighlighterForTest() {
+  highlighter = undefined;
+  highlighterLoad = undefined;
+}
 
 interface ReplyContextValue {
   text: string;

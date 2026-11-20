@@ -42,7 +42,7 @@ vi.mock("@xterm/addon-fit", () => ({
 let container: HTMLDivElement;
 let root: Root;
 const requests = (path: string) =>
-  vi.mocked(api).mock.calls.filter(([called]) => called === path).length;
+  vi.mocked(write).mock.calls.filter(([called]) => called === path).length;
 const computer = (available: boolean) => ({
   available,
   running: available,
@@ -80,15 +80,12 @@ const open = () =>
 
 describe("retired terminal and desktop chunks", () => {
   it("end the desktop in the reload notice instead of reconnecting forever", async () => {
-    vi.mocked(api).mockImplementation(async (path) =>
-      path === "/computer"
-        ? (computer(true) as never)
-        : ({
-            path: "/api/computer/desktop/ws?ticket=d",
-            viewerId: "viewer",
-            expiresAt: "future",
-          } as never),
-    );
+    vi.mocked(api).mockResolvedValue(computer(true) as never);
+    vi.mocked(write).mockResolvedValue({
+      path: "/api/computer/desktop/ws?ticket=d",
+      viewerId: "viewer",
+      expiresAt: "future",
+    } as never);
     await open();
     await advance(100);
     expect(container.querySelector("[role=alert]")?.textContent).toContain("could not load");
@@ -99,16 +96,13 @@ describe("retired terminal and desktop chunks", () => {
   });
 
   it("end the terminal in the reload notice instead of reconnecting forever", async () => {
-    vi.mocked(api).mockImplementation(async (path) =>
-      path === "/computer"
-        ? (computer(false) as never)
-        : ({
-            path: "/api/computer/terminal/ws?ticket=t",
-            sessionId: "shell",
-            target: "nicolas@hermes",
-            expiresAt: "future",
-          } as never),
-    );
+    vi.mocked(api).mockResolvedValue(computer(false) as never);
+    vi.mocked(write).mockResolvedValue({
+      path: "/api/computer/terminal/ws?ticket=t",
+      sessionId: "shell",
+      target: "nicolas@hermes",
+      expiresAt: "future",
+    } as never);
     await open();
     await advance(100);
     await act(async () =>

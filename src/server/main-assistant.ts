@@ -1,7 +1,7 @@
-import { timingSafeEqual } from "node:crypto";
 import { visiblePreferences } from "./bootstrap-routes.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { timingSafeEqualText } from "./timing-safe.js";
 import {
   CHECK_IN_ROUTINE_NAME,
   checkInSchedule,
@@ -57,9 +57,7 @@ export function signedCheckInMember(
   const match = markerPattern.exec(job.prompt ?? "");
   // The signature covers this job's own assistant, so a marker copied from another assistant's job fails it.
   if (!match) return undefined;
-  const expected = Buffer.from(store.accounts.checkInSignature(job.botId, match[1])),
-    given = Buffer.from(match[3]);
-  return expected.length === given.length && timingSafeEqual(expected, given)
+  return timingSafeEqualText(match[3], store.accounts.checkInSignature(job.botId, match[1]))
     ? match[1]
     : undefined;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { api, ApiError, changeStream, write } from "../client-api";
+import { ApiError, changeStream, request } from "../client-api";
 import { insertMention, matchMembers, mentionAt } from "../app/mentions";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
@@ -78,12 +78,16 @@ export function GroupRoomView({
     roomId && !gone ? `/groups/${encodeURIComponent(roomId)}` : null,
     {
       pollMs: GROUP_FALLBACK_POLL_MS,
-      load: async (path, signal) => {
-        const state = await api<GroupState>(path, { signal });
+      load: async (_path, signal) => {
+        const state = await request("GET /groups/:roomId", { params: { roomId }, signal });
         // Read after the first request, once a room change has reset the cursor and the events.
         return {
           state,
-          page: await api<GroupPage>(`${path}/log?since=${cursor.current}`, { signal }),
+          page: await request("GET /groups/:roomId/log", {
+            params: { roomId },
+            query: { since: cursor.current },
+            signal,
+          }),
         };
       },
       onData: ({ page }) => {
@@ -251,10 +255,10 @@ export function GroupRoomView({
       async () => {
         localStorage.setItem(attemptKey, JSON.stringify(input));
         setPending(input);
-        const response = await write<{ accepted: boolean }>(
-          `/groups/${encodeURIComponent(roomId)}/messages`,
-          input,
-        );
+        const response = await request("POST /groups/:roomId/messages", {
+          params: { roomId },
+          body: input,
+        });
         if (response.accepted !== true) throw new Error("Hermes did not confirm this message.");
         localStorage.removeItem(attemptKey);
         localStorage.removeItem(`${attemptKey}:draft`);
@@ -276,11 +280,11 @@ export function GroupRoomView({
     );
   };
   // The room may change or leave the list while this runs. Its reload is then inert, and its error is not shown on another room.
-  const act = (path: string, body: unknown) => {
+  const act = (send: () => Promise<unknown>) => {
     const attemptKey = key;
     return action.run(
       async () => {
-        await write(`/groups/${encodeURIComponent(roomId)}/${path}`, body);
+        await send();
         await room.reload();
       },
       { onError: (cause) => (scope.current === attemptKey ? (cause as Error).message : null) },
@@ -424,7 +428,14 @@ export function GroupRoomView({
                   {state.driver_status?.working && (
                     <button
                       disabled={busy || !writable}
-                      onClick={() => void act("stop", { requestId: crypto.randomUUID() })}
+                      onClick={() =>
+                        void act(() =>
+                          request("POST /groups/:roomId/stop", {
+                            params: { roomId },
+                            body: { requestId: crypto.randomUUID() },
+                          }),
+                        )
+                      }
                     >
                       <Icon name="stop" size={14} /> Stop discussion
                     </button>
@@ -512,13 +523,19 @@ export function GroupRoomView({
                           key={choice}
                           disabled={busy || !writable}
                           onClick={() =>
-                            void act("approve", {
-                              taskId: actionItem.task_id,
-                              memberId: actionItem.member_id,
-                              generation: actionItem.execution_generation,
-                              requestId: actionItem.request_id || actionItem.approval?.request_id,
-                              choice,
-                            })
+                            void act(() =>
+                              request("POST /groups/:roomId/approve", {
+                                params: { roomId },
+                                body: {
+                                  taskId: actionItem.task_id,
+                                  memberId: actionItem.member_id ?? "",
+                                  generation: actionItem.execution_generation ?? 1,
+                                  requestId:
+                                    actionItem.request_id || actionItem.approval?.request_id || "",
+                                  choice,
+                                },
+                              }),
+                            )
                           }
                         >
                           {choice === "once" ? "Allow once" : "Deny"}

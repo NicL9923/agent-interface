@@ -109,13 +109,14 @@ export class DeviceRepository {
       .prepare("DELETE FROM native_devices WHERE user_id=? AND device_id=?")
       .run(userId, deviceId);
   }
-  nativeDevices(userId: string, environment: "sandbox" | "production") {
-    this.accounts.pruneNativeAuth();
+  nativeDevices(userId: string, environment: "sandbox" | "production", now = Date.now()) {
     return this.db
       .prepare(
-        "SELECT device_id AS deviceId,token,environment FROM native_devices WHERE user_id=? AND environment=?",
+        `SELECT d.device_id AS deviceId,d.token,d.environment FROM native_devices d
+         JOIN native_sessions s ON s.hash=d.session_hash AND s.expires>?
+         WHERE d.user_id=? AND d.environment=?`,
       )
-      .all(userId, environment) as {
+      .all(now, userId, environment) as {
       deviceId: string;
       token: string;
       environment: "sandbox" | "production";
@@ -181,13 +182,14 @@ export class DeviceRepository {
   }
   // END device activity
   /** Every registered device in this environment, with the person it belongs to. */
-  allNativeDevices(environment: "sandbox" | "production") {
-    this.accounts.pruneNativeAuth();
+  allNativeDevices(environment: "sandbox" | "production", now = Date.now()) {
     return this.db
       .prepare(
-        "SELECT user_id AS userId,device_id AS deviceId,token,environment FROM native_devices WHERE environment=?",
+        `SELECT d.user_id AS userId,d.device_id AS deviceId,d.token,d.environment FROM native_devices d
+         JOIN native_sessions s ON s.hash=d.session_hash AND s.expires>?
+         WHERE d.environment=?`,
       )
-      .all(environment) as {
+      .all(now, environment) as {
       userId: string;
       deviceId: string;
       token: string;

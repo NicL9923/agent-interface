@@ -1,3 +1,4 @@
+@layer motion {
 /* Motion and ambience: spring timing, the scroll-lifted chat header, per-assistant tints, dark-mode
    depth, the phone navigation morph, live work, reactions and seasonal chrome. Loads after styles.css,
    but the built app links component stylesheets such as home.css and shell.css after it, so a property this
@@ -368,3 +369,4 @@
 @keyframes nav-recede { to { transform: translateX(-28%); opacity: 0.6; } }
 @keyframes nav-leave { to { transform: translateX(100%); } }
 @keyframes nav-return { from { transform: translateX(-28%); opacity: 0.6; } }
+}
