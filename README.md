@@ -796,14 +796,6 @@ contrast; a chat without an avatar color, such as one with a photo, keeps the ti
 Both are saved with your preferences, like Appearance, so they follow you to your other
 devices. Group chats keep their own layout.
 
-On the web, to answer the reply that ends the chat with one tap, use **React** in its
-actions and pick 👍, ❤️, 😂, 🎉 or 👎. The emoji is sent as your message, the same as
-typing it, and shows as an ordinary message. React appears only while you could send, on a
-reply that is still the last message, including one that only holds files. If someone
-else wrote in the meantime, the reaction is not sent: the chat refreshes and says "The chat
-moved on, so your reaction was not sent." A reaction can't be taken back, and your draft
-stays as it is whatever happens to the reaction. Group chats don't offer reactions.
-
 When a reply fails, **Retry** under it sends your message again without touching
 your draft. A failed turn can be retried once, by anyone, from any device: a second
 tap, tab or phone gets the first retry's result instead of starting another turn.
@@ -832,7 +824,7 @@ loaded messages, with the turn in view marked. Hovering or focusing a tick previ
 message and the start of its reply; choosing one brings that message to the top of the
 view. When more ticks exist than fit, the rail shows the ones around the turn you are
 reading, with a chevron above or below where more are hidden. The rail is one tab stop;
-Up, Down, Home and End reach every loaded message you sent, and a reaction gets no tick.
+Up, Down, Home and End reach every loaded message you sent.
 It does not appear on phones. A status area above the message box gathers send problems, the
 interrupted-task review, waiting decisions with **Review**, and connection trouble,
 most urgent first.

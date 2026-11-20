@@ -967,68 +967,6 @@ edge. `"solid"` fills it with the assistant's avatar color at OKLCH lightness ca
 0.52, chroma and hue kept, under white text; a chat without an avatar color uses the
 tint.
 
-### Reaction answers
-
-A person can answer the reply that ends the chat with one emoji. A reaction is an
-ordinary message in every respect: it draws an ordinary row for whoever sent it, find
-in chat and search find it, history pages, scroll anchoring and read positions treat it
-as any message, and it counts toward unread. Nothing about it depends on the messages
-around it. `src/shared/reactions.ts` holds the rules below; the web uses them as written.
-
-The set, in picker order: 👍 (Thumbs up), ❤️ (Heart), 😂 (Laugh), 🎉 (Celebrate),
-👎 (Thumbs down). A message's text is a reaction when, trimmed and with every U+FE0F
-variation selector removed, it is exactly one emoji of the set, so U+2764 alone is the
-heart. Two reasons to read that from a message, and only these: the message rail gives
-a person's message that is a reaction and has no files no tick, and prompt recall skips
-it.
-
-Offer **React** in the action row of the conversation's last message when it is a
-settled assistant reply: `role` `assistant`, not `interim`, not activity (read origins
-as `withMessageOrigins` does, so a reply to an agent's prompt is activity), with text or
-files, and not still streaming. Offer it on a reply that has only files too, even
-though Copy, Listen, Save and Quote need words. Offer it only while the composer could
-send: nothing pending or sending, no turn running or starting, the assistant reachable,
-an interrupted task reviewed, and the `reactionAnswers` capability supported. A server
-without the guard below omits that capability; hide React there. Group chats do not
-offer reactions.
-
-Send the choice with `POST /api/bots/:id/messages` like any other message, with the
-emoji as the whole `text`, `attachments: []`, and `answering` set to the ID of the
-reply it answers. Leave out `draftBaseRevision` and `retryOf`. Like a retry, an
-answering send never reads, merges, clears or restores the sender's draft: not when it
-is accepted, refused, retried, discarded or reconciled later. A resend of an uncertain
-answer with `reviewedUncertain: true` carries the same `answering`. The server answers
-400 `Invalid request` with `details[].path` `["answering"]` when `answering` comes with
-text that is not exactly one emoji of the set, with files, with `draftBaseRevision` or
-with `retryOf`, and 400 on `POST /api/bots/:id/steer`.
-
-The server reads the conversation's last turn fresh, never from a read shared with
-other callers, and admits the answer only when no turn is running and the last message
-is the reply `answering` names, by the same rule that offers React: a settled assistant
-reply, not a progress line, not activity, with text or files. An answer that names a
-person's message, a progress line or an activity reply is refused even when that message
-ends the chat. Otherwise the server answers 409 with `code: "answer_stale"`, records
-nothing and sends nothing to Hermes, so one member who still sees "Open the north gate?"
-cannot approve "Open the south gate?" with one tap.
-
-Another member can start a turn after that read and before Hermes admits the answer. The
-server sends an answer to Hermes with `require_idle`, as it sends a retry, and never as a
-steer. The add-on checks for a running turn under its admission lock and refuses with RPC
-code 4091 instead of steering the emoji into the newer turn. The server turns that
-refusal into the same 409 `answer_stale`, and records nothing for it either.
-
-One window stays open by design. If a whole other turn starts and finishes between the
-server's read and Hermes's admission lock, Hermes finds the chat idle and admits the
-answer after that turn's reply. Retries accept the same window. A turn that is running
-at the read is refused by the server, and one still running at admission is refused by
-Hermes. So the open case needs a turn that starts after the read and settles, model reply
-included, in the time one send takes to reach Hermes. The server adds no second check for it.
-
-The same request ID can be sent again once the reply ends the chat again. On
-`answer_stale`, leave the draft alone, read the conversation again, and tell the person
-"The chat moved on, so your reaction was not sent." as an alert that assistive tech
-announces.
-
 <!-- Main assistant: begin -->
 
 ### Main assistant and check-ins

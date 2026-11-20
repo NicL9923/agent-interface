@@ -517,10 +517,6 @@ const changeStreams = new Map();
 const changed = (botId) => {
   for (const stream of changeStreams.get(botId) ?? []) stream.write("data: change\n\n");
 };
-// PREVIEW_REACTIONS=1: Kitchen companion ends on a reply, so it offers React. PREVIEW_REACTIONS=stale also has
-// another member write before the send arrives, so the server's `answer_stale` refusal and its notice show.
-const reactionFixture = ["1", "stale"].includes(process.env.PREVIEW_REACTIONS ?? "");
-const staleReactions = process.env.PREVIEW_REACTIONS === "stale";
 if (process.env.PREVIEW_ARRIVALS === "1") {
   let arrival = 0;
   setInterval(() => {
@@ -1633,58 +1629,6 @@ const handle = async (request, response) => {
       secureFlowSettled(conversation, "declined");
       return setTimeout(() => json(response, { status: "ok" }), 700);
     }
-    // The server's guard on a reaction answer (src/server/conversation-routes.ts): it is sent only while
-    // the reply it names still ends the chat. PREVIEW_REACTIONS=stale has Jordan write first, so it never does.
-    const answerMatch =
-      request.method === "POST" && body.answering !== undefined
-        ? /^\/bots\/([^/]+)\/messages$/.exec(path)
-        : null;
-    if (answerMatch) {
-      const botId = decodeURIComponent(answerMatch[1]),
-        chat = conversations[botId];
-      if (staleReactions && chat) {
-        chat.messages.push({
-          id: `stale-${Date.now()}`,
-          role: "user",
-          sender: { id: "jordan", name: "Jordan" },
-          text: "Actually, make it the south gate.",
-          createdAt: new Date().toISOString(),
-        });
-        changed(botId);
-      }
-      if (chat?.messages.at(-1)?.id !== body.answering)
-        return json(
-          response,
-          { error: "The chat moved on, so your reaction was not sent.", code: "answer_stale" },
-          409,
-        );
-    }
-    // PREVIEW_REACTIONS=1: a message to Kitchen companion, such as a reaction answer, is held for
-    // PREVIEW_SEND_DELAY ms (default 2500) so its sending state shows, then saved and accepted. No turn runs.
-    if (
-      reactionFixture &&
-      request.method === "POST" &&
-      path === "/bots/kitchen/messages" &&
-      !body.retryOf
-    )
-      return setTimeout(
-        () => {
-          conversations.kitchen.messages.push({
-            id: body.requestId,
-            role: "user",
-            sender: { id: "preview", name: "Nicolas" },
-            text: body.text,
-            createdAt: new Date().toISOString(),
-          });
-          json(response, {
-            requestId: body.requestId,
-            status: "accepted",
-            messageId: body.requestId,
-          });
-          changed("kitchen");
-        },
-        Number(process.env.PREVIEW_SEND_DELAY || 2500),
-      );
     // Retry of a failed turn: the fixture runs again briefly, then answers. Nothing is fetched.
     const retryMatch =
       request.method === "POST" && body.retryOf ? /^\/bots\/([^/]+)\/messages$/.exec(path) : null;
@@ -1879,7 +1823,6 @@ const handle = async (request, response) => {
             "imageGeneration",
             "portraitGeneration",
             "liveVoice",
-            "reactionAnswers",
           ].map((key) => [key, { supported: true }]),
         ),
       });
