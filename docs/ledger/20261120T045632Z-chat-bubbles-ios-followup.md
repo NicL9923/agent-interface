@@ -16,10 +16,10 @@ Merge commit `abec8653` merged origin/main with no conflicts. #456 drops the com
 
 ## Red runs
 
-| Break | Guarding test | Result |
-| --- | --- | --- |
+| Break                                           | Guarding test                                           | Result                                                                                                                                                                  |
+| ----------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The unfixed code: every list and quote is prose | `testAListOrQuoteHoldingAFullWidthBlockLeavesTheBubble` | Red: `["bubble 3"]` against `["bubble 1", "list", "bubble 1"]` (`red-nested-list.log`). The first test version then crashed on an index; it now checks the count first. |
-| A quote is always prose (`case .quote: true`) | the same test | Red: `["bubble 2"]` against `["bubble 1", "quote"]`, and `["bubble 1"]` against `["quote"]` (`red-quote.log`) |
+| A quote is always prose (`case .quote: true`)   | the same test                                           | Red: `["bubble 2"]` against `["bubble 1", "quote"]`, and `["bubble 1"]` against `["quote"]` (`red-quote.log`)                                                           |
 
 The quote break was applied by hand to `8aaa18c4`, run with `IOS_VALIDATION_FRESH=1`, and restored with `git checkout`; `git status` was clean after. The fix then passed: `ChatBubblesTests` ran 15 tests with no failures (`green-and-shots.log`).
 
@@ -31,10 +31,10 @@ The quote break was applied by hand to `8aaa18c4`, run with `IOS_VALIDATION_FRES
 
 `TranscriptFlowTests.testApprovalScopesTheDeclineHandoffARecommendedAnswerAndSteering` ran 20 times on each side, alone, in the same simulator:
 
-| Code | Runs | Passed | Failed |
-| --- | --- | --- | --- |
-| This branch, `8aaa18c4` | 5 + 15 | 18 | 2 |
-| origin/main, `2eb5a123` | 5 + 15 | 19 | 1 |
+| Code                    | Runs   | Passed | Failed |
+| ----------------------- | ------ | ------ | ------ |
+| This branch, `8aaa18c4` | 5 + 15 | 18     | 2      |
+| origin/main, `2eb5a123` | 5 + 15 | 19     | 1      |
 
 Every failure, on both sides, is the same assertion at line 99: no alert after the coordinate tap on the Always allow menu row. The failed branch run's recording shows the menu open and its row at a stable frame; the tap leaves the menu open. Because main fails the same way, this is a baseline flake and the test is unchanged. Results: `.private/ios-test-20261120T043934Z-90395.xcresult` and `.private/ios-test-20261120T044510Z-97586.xcresult` on the branch; on main, the result bundles went with the detached worktree they ran in, and the console output remains in `flake-main.log` and `flake-main-15.log`.
 
