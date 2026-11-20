@@ -330,10 +330,17 @@
     nonisolated(unsafe) static var retryClaim: [String: Any]?
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
     nonisolated(unsafe) static var readPosition: [String: Any] = [:]
-    nonisolated(unsafe) static var preferences: [String: Any] = [
-      "startPage": "assistant", "presentation": "simple", "theme": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_THEME"] ?? "system", "favorites": [], "sections": [],
-      "followBots": [],
-    ]
+    nonisolated(unsafe) static var preferences: [String: Any] = {
+      let environment = ProcessInfo.processInfo.environment
+      var preferences: [String: Any] = [
+        "startPage": "assistant", "presentation": "simple", "theme": environment["AGENT_INTERFACE_UI_THEME"] ?? "system", "favorites": [], "sections": [],
+        "followBots": [],
+      ]
+      // Absent unless set, as from a server before chat styles.
+      preferences["chatStyle"] = environment["AGENT_INTERFACE_UI_CHAT_STYLE"]
+      preferences["ownBubble"] = environment["AGENT_INTERFACE_UI_OWN_BUBBLE"]
+      return preferences
+    }()
     nonisolated(unsafe) static var items: [[String: Any]] = [
       [
         "id": "web", "name": "Web search",
