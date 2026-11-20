@@ -87,6 +87,9 @@ extension AppStore {
     let read = conversationReads
     conversationReadsInFlight += 1
     defer { conversationReadsInFlight -= 1 }
+    // This read is the retry a failed one was waiting for: its own outcome sets the next, if any.
+    readRetry?.cancel()
+    readRetry = nil
     // A draft still to load or to save again needs the conversation's copy applied every time.
     // One still loading is assumed to load; if it does not, the copy is read again below.
     let needsCopy = { !self.draftReady || self.draft.dirty == true && self.settled(id) }
@@ -104,6 +107,7 @@ extension AppStore {
       appliedConversationRead = read
       conversationRefreshedAt = now()
       pollSucceeded(.chat)
+      conversationReadsRecovered()
       // Echoes settle against each current read, changed or not.
       defer { if !echoes.isEmpty { updateEcho() } }
       // The conversation applied last time, unchanged: nothing to decode, merge or render.
@@ -121,8 +125,9 @@ extension AppStore {
       if Self.missing(error) {
         await leave(id)
       } else {
-        appUnavailable = true
-        failures += 1
+        // One chat's failed read is that chat's, as on the web: the bootstrap it asks for says
+        // whether the app or Hermes is gone too.
+        conversationReadFailed(id)
         reportPoll(error, .chat)
       }
     }

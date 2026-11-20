@@ -28,6 +28,9 @@ enum ActivityState: String, Codable, CaseIterable {
     }
   }
   var active: Bool { [.thinking, .working, .waiting, .blocked].contains(self) }
+  /// Whether home captions an assistant with this state. A lost connection is said once, in the
+  /// header; the assistants only dim, as on the web.
+  var captioned: Bool { ![.idle, .done, .disconnected].contains(self) }
 }
 struct AvatarConfig: Codable, Equatable {
   var mode = AvatarMode.geometric

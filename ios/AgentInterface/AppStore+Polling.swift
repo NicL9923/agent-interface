@@ -8,10 +8,15 @@ extension AppStore {
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
         guard let self, await self.pollOnce() else { return }
-        let seconds = self.failures == 0 ? 1.5 : min(30, pow(2, Double(min(self.failures, 5))))
-        try? await Task.sleep(for: .seconds(seconds))
+        try? await Task.sleep(for: Self.pollDelay(failures: self.failures))
       }
     }
+  }
+  /// The wait before the next pass: short while all is well, and after failed bootstraps the same
+  /// waits as a failed conversation read, so a loss that is already over clears inside the grace
+  /// period. The first retry is a second after the failure.
+  nonisolated static func pollDelay(failures: Int) -> Duration {
+    failures == 0 ? .milliseconds(1_500) : ReadRetry.delay(after: failures)
   }
   /// One pass of the poll loop. Returns false once the sign-in is expiring, which ends polling.
   func pollOnce() async -> Bool {
@@ -230,10 +235,15 @@ extension AppStore {
       pollSucceeded(.roster)
       // The body applied last time, unchanged: nothing to decode, merge or publish to views.
       guard var value = response.value ?? bootstrap else { return }
+      defer { updateActivity() }
       var applied = false
       if response.value != nil {
         if let previous = bootstrap, previous.user.id == value.user.id, !value.connection.connected {
           value.bots = previous.bots
+        } else if let previous = bootstrap, previous.user.id == value.user.id {
+          value.bots = carryActivity(value.bots, from: previous.bots)
+        } else {
+          staleRosterSince = nil
         }
         if let previous = bootstrap, previous.user.id == value.user.id, value.connection.connected,
           Set(previous.bots.map(\.id)) != Set(value.bots.map(\.id)) {
@@ -254,8 +264,12 @@ extension AppStore {
           persistDraft()
           resetAccountContent()
         }
+        // After any account change above, which starts the outages over.
+        bootstrapAnswered = true
+        if value.connection.connected { everConnected = true }
         if bootstrap != value { bootstrap = value; applied = true }
-        appliedBootstrapTag = response.etag
+        // A stale roster is read whole each time, so the end of its carry is judged on it.
+        appliedBootstrapTag = staleRosterSince == nil ? response.etag : nil
       }
       // Publishing follows a changed roster; an unchanged one still renews the widgets' freshness.
       if !applied { publishWidgetSnapshot() }
@@ -280,8 +294,32 @@ extension AppStore {
     } catch is CancellationError {} catch {
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
       failures += 1
+      bootstrapAnswered = true
       appUnavailable = true
+      updateActivity()
       reportPoll(error, .roster)
+    }
+  }
+  /// How long after the first stale roster in a row each row keeps what its assistant was doing,
+  /// as the web's `ROSTER_CARRY_MS`. With Hermes connected, the server marks rows `disconnected`
+  /// when it could list only its last roster, as after a roster read that failed. Longer than a
+  /// bootstrap's retries take, so one stale roster never dims anyone; short enough that an
+  /// assistant is not shown working long after nobody can tell.
+  static let rosterCarry: Duration = .seconds(30)
+  /// The roster a connected bootstrap brings. Who is on it is the server's word. What each assistant
+  /// is doing is the server's word only when it knows: a stale row keeps the activity it had here
+  /// while `rosterCarry` holds, and whether the app shows a loss is the outages' business.
+  func carryActivity(_ next: [Bot], from previous: [Bot]) -> [Bot] {
+    guard next.contains(where: { $0.activity == .disconnected }) else { staleRosterSince = nil; return next }
+    let since = staleRosterSince ?? now()
+    staleRosterSince = since
+    guard now() - since < Self.rosterCarry else { return next }
+    let before = Dictionary(previous.map { ($0.id, $0.activity) }, uniquingKeysWith: { first, _ in first })
+    return next.map { bot in
+      guard bot.activity == .disconnected, let activity = before[bot.id] else { return bot }
+      var kept = bot
+      kept.activity = activity
+      return kept
     }
   }
   func reconnect() async {

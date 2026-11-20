@@ -175,6 +175,8 @@ struct ComposerView: View {
         .contentShape(Circle())
     }.buttonStyle(.plain).disabled(!enabled)
       .accessibilityLabel(stopVisible ? "Stop response" : store.active ? "Send guidance" : "Send message")
+      // The web's tooltip: why Send or Stop waits for the connection, said where VoiceOver is.
+      .accessibilityHint(store.connectionReason ?? "")
       .accessibilityIdentifier("sendMessage")
   }
   @ViewBuilder private var footnotes: some View {

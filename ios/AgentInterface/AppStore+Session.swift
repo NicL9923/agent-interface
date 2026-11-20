@@ -223,6 +223,7 @@ extension AppStore {
   }
   /// Every account boundary clears the same account-owned content and async request identities.
   func resetAccountContent() {
+    resetOutages()
     cachedChats.removeAll()
     interruptionReviewed = false
     NotificationController.shared.clearPendingNavigation()

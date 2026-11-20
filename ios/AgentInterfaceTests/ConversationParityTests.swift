@@ -39,8 +39,8 @@ import XCTest
     XCTAssertNil(view.prepending(try conversation(["p0"]), before: "p9"), "The view no longer holds that message")
   }
 
-  private func sentence(_ state: ActivityState, _ detail: String? = nil, lost: Bool = false) -> String {
-    ActivitySentence.text(name: "Ranch hand", state: state, detail: detail, connectionLost: lost)
+  private func sentence(_ state: ActivityState, _ detail: String? = nil) -> String {
+    ActivitySentence.text(name: "Ranch hand", state: state, detail: detail)
   }
 
   func testWorkingLineNamesTheCurrentStepInOneSentence() {
@@ -57,8 +57,6 @@ import XCTest
     XCTAssertEqual(sentence(.blocked), "Ranch hand is waiting for your input...")
     XCTAssertEqual(sentence(.failed), "Ranch hand is having trouble...")
     XCTAssertEqual(sentence(.interrupted), "Ranch hand is stopped...")
-    XCTAssertEqual(sentence(.disconnected), "Ranch hand is reconnecting...")
-    XCTAssertEqual(sentence(.working, "Creating a reminder", lost: true), "Ranch hand is reconnecting...")
     XCTAssertEqual(sentence(.unknown), "Ranch hand's status is unknown")
   }
 
@@ -164,13 +162,6 @@ import XCTest
     XCTAssertNil(ToolActivityView.waiting(ToolCall(id: "d", name: "search", status: "completed"), result: nil, connected: true))
   }
 
-  func testConnectionCardCopyFollowsTheConnectionCode() {
-    XCTAssertEqual(ConnectionCopy.compact(code: "reconnecting", appUnavailable: false).title, "Reconnecting to Hermes")
-    XCTAssertEqual(ConnectionCopy.compact(code: nil, appUnavailable: false).title, "Hermes is temporarily unavailable")
-    XCTAssertEqual(ConnectionCopy.compact(code: "something_new", appUnavailable: false).title, "Hermes is temporarily unavailable")
-    XCTAssertTrue(ConnectionCopy.compact(code: "unauthorized", appUnavailable: false).setup)
-    XCTAssertEqual(ConnectionCopy.compact(code: "reconnecting", appUnavailable: true).title, "Reconnecting to the app")
-  }
 }
 
 /// The sent-message echo, ported from the web's src/app/sent-echo.ts and its tests.

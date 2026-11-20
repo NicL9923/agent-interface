@@ -512,6 +512,18 @@
       Self.lock.lock()
       defer { Self.lock.unlock() }
       let path = request.url!.path
+      // A connection lost on cue; see `UIConnectionLoss`.
+      switch UIConnectionLoss.now {
+      case .app?, .offline?:
+        client?.urlProtocol(self, didFailWithError: URLError(UIConnectionLoss.now == .offline ? .notConnectedToInternet : .cannotConnectToHost)); return
+      case .chat?, .hermes?:
+        guard path.hasSuffix("/conversation") else { break }
+        // What the server answers when one Hermes call times out, or Hermes is gone.
+        let data = try! JSONSerialization.data(withJSONObject: ["error": "Hermes timed out. Try again.", "code": "unreachable"])
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 502, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self); return
+      default: break
+      }
       if let data = Self.uploadedPortraits[path] {
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self); return
@@ -717,6 +729,10 @@
         // A distributed build newer than any local build, so the update banner shows.
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APP_UPDATE"] == "1" {
           object = (object as! [String: Any]).merging(["nativeApp": ["latestBuild": 999, "updateUrl": "https://testflight.apple.com/join/FIXTURE"]]) { $1 }
+        }
+        if UIConnectionLoss.now == .hermes, var bootstrap = object as? [String: Any] {
+          bootstrap["connection"] = ["connected": false, "code": "unreachable", "address": "ws://hermes.fixture.invalid:8642", "detail": "Fixture: Hermes stopped answering."]
+          object = bootstrap
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_OUTAGE"] == "1" {
           status = 503; object = ["error": "Fixture: the app server is unreachable"]
@@ -1549,6 +1565,27 @@
         guard let text = message["text"] as? String, text.localizedStandardContains(q), let id = message["id"] as? String else { return nil }
         return ["botId": botId, "botName": "Ranch hand", "sessionId": longSession, "title": "Fixture history", "snippet": text, "messageId": id, "offset": index]
       }
+    }
+  }
+  /// A connection the fixture loses on cue, for the connection-state UI tests and screenshots.
+  /// `AGENT_INTERFACE_UI_LOSE_CONNECTION` names it: `app` (requests never reach the server),
+  /// `offline` (the device has no network, as `NetworkReachability` then says too), `hermes`
+  /// (bootstrap finds Hermes down and conversation reads answer 502) or `chat` (only conversation
+  /// reads fail, as one timed-out Hermes call answers). It is lost from `AGENT_INTERFACE_UI_LOSE_AT`,
+  /// seconds since 1970 on the shared simulator clock, and comes back after
+  /// `AGENT_INTERFACE_UI_LOSE_FOR` seconds when that is set.
+  enum UIConnectionLoss: String, Sendable {
+    case app, offline, hermes, chat
+    nonisolated static var now: UIConnectionLoss? {
+      let environment = ProcessInfo.processInfo.environment
+      guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1",
+        let loss = environment["AGENT_INTERFACE_UI_LOSE_CONNECTION"].flatMap(UIConnectionLoss.init(rawValue:)),
+        let at = environment["AGENT_INTERFACE_UI_LOSE_AT"].flatMap(Double.init)
+      else { return nil }
+      let elapsed = Date().timeIntervalSince1970 - at
+      guard elapsed >= 0 else { return nil }
+      if let lasts = environment["AGENT_INTERFACE_UI_LOSE_FOR"].flatMap(Double.init), elapsed >= lasts { return nil }
+      return loss
     }
   }
 #endif

@@ -25,7 +25,6 @@ extension PrimitiveButtonStyle where Self == AccentProminentButtonStyle {
 struct RootView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
-  private let reachability = NetworkReachability.shared
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
   @State private var creatingGroup = false
@@ -115,7 +114,8 @@ struct RootView: View {
       if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
       // Only while the roster itself is the saved copy; a saved chat says so in the chat.
       if let date = store.offlineSavedAt, !store.householdConnected {
-        Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). \(reachability.offline ? "Offline." : "Reconnecting…")")
+        // When the copy was saved, and nothing more: the header says the connection's state once.
+        Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)).")
           .font(.caption).foregroundStyle(.secondary).padding(8)
       }
       if UIDevice.current.userInterfaceIdiom == .phone { compactNavigation } else { splitNavigation }
@@ -454,7 +454,6 @@ struct BotListView: View {
   /// True while the new-group sheet is up, so a request it leaves saved shows here once it closes.
   var creatingGroup = false
   var openDiscovery: () -> Void
-  private let reachability = NetworkReachability.shared
   @State private var checkingConnection = false
   /// The assistant a new home section is being named for.
   @State private var sectionFor: Bot?
@@ -467,7 +466,10 @@ struct BotListView: View {
   @State private var signOutConfirm = false
   @State private var choosingMain = false
   private var pinnedMinimum: CGFloat { sizeClass == .compact ? pinColumn : pinColumn * 0.76 }
-  private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
+  /// The household's loss as home shows it, once it has waited out its grace period. Home never
+  /// shows one chat's failed reads.
+  private var lost: Bool { store.appOutage.shown }
+  private var offlineShown: Bool { store.deviceOffline && lost }
   private var selectionVisible: Bool { sizeClass != .compact }
   private var homeBackground: Color { sizeClass == .compact ? Palette.surface(scheme) : Palette.rail(scheme) }
   var body: some View {
@@ -612,7 +614,7 @@ struct BotListView: View {
     } label: {
       AccountAvatar(member: store.bootstrap?.user, size: 40)
         .overlay(alignment: .bottomTrailing) {
-          Circle().fill(HomeConnectionStatus.of(lost: lost, offline: reachability.offline).color)
+          Circle().fill(HomeConnectionStatus.of(lost: lost, offline: offlineShown).color)
             .frame(width: 10, height: 10).overlay(Circle().stroke(homeBackground, lineWidth: 2))
         }.contentShape(Circle())
     }.buttonStyle(.plain).accessibilityLabel("Account menu").accessibilityIdentifier("openSettings")
@@ -620,7 +622,7 @@ struct BotListView: View {
   /// Home while there are no assistants: the setup panel if Hermes is out of reach, else the web's empty list.
   @ViewBuilder private var emptyHome: some View {
     if lost {
-      HermesConnectionPanel(connection: store.bootstrap?.connection, offline: reachability.offline,
+      HermesConnectionPanel(connection: store.bootstrap?.connection, offline: store.deviceOffline,
         appUnavailable: store.appUnavailable, busy: checkingConnection) {
           checkingConnection = true
           Task { await store.reconnect(); checkingConnection = false }
@@ -644,8 +646,8 @@ struct BotListView: View {
   private var syncPill: some View {
     Button { Task { await store.reconnect() } } label: {
       HStack(spacing: 7) {
-        SyncSpinner(spinning: !reachability.offline)
-        Text(reachability.offline ? "Offline" : "Reconnecting").font(.subheadline).foregroundStyle(Palette.muted)
+        SyncSpinner(spinning: !offlineShown)
+        Text(offlineShown ? "Offline" : "Reconnecting").font(.subheadline).foregroundStyle(Palette.muted)
       }.fixedSize()
     }.buttonStyle(.plain).accessibilityIdentifier("homeSync")
       .accessibilityHint("Loaded conversations and drafts are kept. Tap to reconnect now.")
@@ -667,7 +669,8 @@ struct BotListView: View {
   }
   private func state(_ bot: Bot) -> ActivityState {
     // The open conversation is read only while on screen; otherwise the roster's state is the current one.
-    lost ? .disconnected : bot.id == store.followedBotId ? store.activity : bot.activity
+    // The open chat's own loss stays in that chat, so its row shows what Hermes last said.
+    lost ? .disconnected : bot.id == store.followedBotId ? store.listedActivity : bot.activity
   }
   private func open(_ bot: Bot) { openBot(); Task { await store.select(bot.id) } }
   private func pinnedTile(_ bot: Bot) -> some View {
@@ -684,7 +687,7 @@ struct BotListView: View {
             .multilineTextAlignment(.center)
           if typeSize.isAccessibilitySize { label } else { label.lineLimit(2, reservesSpace: true) }
         }
-        if activity != .idle && activity != .done { ActivityLabel(state: activity) }
+        if activity.captioned { ActivityLabel(state: activity) }
       }.frame(maxWidth: .infinity).padding(.vertical, 10).padding(.horizontal, 4)
         .contentShape(RoundedRectangle(cornerRadius: 16))
     }.buttonStyle(.plain).accessibilityValue(unread ? "Unread" : "")
@@ -709,7 +712,7 @@ struct BotListView: View {
               .padding(.horizontal, 7).padding(.vertical, 2).background(Palette.accent, in: Capsule())
             Spacer(minLength: 0)
           }
-          if activity != .idle && activity != .done { ActivityLabel(state: activity) }
+          if activity.captioned { ActivityLabel(state: activity) }
           else {
             Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : "Your main assistant")
               .font(.subheadline).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
@@ -747,7 +750,7 @@ struct BotListView: View {
               if let at = bot.lastMessage?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
             }
           }
-          if activity != .idle && activity != .done { ActivityLabel(state: activity) }
+          if activity.captioned { ActivityLabel(state: activity) }
           else {
             Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : bot.shared ? "Shared assistant" : "Personal assistant")
               .font(unread ? .subheadline.weight(.medium) : .subheadline)
@@ -813,6 +816,19 @@ private struct SyncSpinner: View {
   private(set) var offline = false
   @ObservationIgnored private let monitor = NWPathMonitor()
   init() {
+    #if DEBUG
+      // The fixture's lost network: the path follows the cue instead of the simulator's own.
+      if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LOSE_CONNECTION"] == UIConnectionLoss.offline.rawValue {
+        Task { [weak self] in
+          while !Task.isCancelled {
+            let lost = UIConnectionLoss.now == .offline
+            if self?.offline != lost { self?.offline = lost }
+            try? await Task.sleep(for: .milliseconds(250))
+          }
+        }
+        return
+      }
+    #endif
     monitor.pathUpdateHandler = { [weak self] path in Task { @MainActor in self?.offline = path.status != .satisfied } }
     monitor.start(queue: DispatchQueue(label: "dev.agentinterface.reachability"))
   }

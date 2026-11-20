@@ -46,6 +46,8 @@ import UserNotifications
             if phase == .background { BackgroundRefresh.schedule() }
           }
         }
+        // The store times a lost connection from this, so every screen shows it the same way.
+        .onChange(of: NetworkReachability.shared.offline, initial: true) { _, offline in store.deviceOffline = offline }
         .onChange(of: store.connected) { _, connected in
           if connected {
             Task { await NotificationController.shared.synchronize() }

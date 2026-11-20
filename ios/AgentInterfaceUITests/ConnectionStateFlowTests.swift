@@ -1,0 +1,99 @@
+import XCTest
+
+/// How a lost connection reaches the screen, as the web does since November 19: nothing for a 3-second
+/// grace period, then one line until the loss lasts 10 seconds, then what is down with Reconnect now.
+/// The Debug fixture loses the connection at a moment the test picks (`UIConnectionLoss`); these
+/// establish native behavior on the simulator, not a real server, Hermes or network.
+@MainActor final class ConnectionStateFlowTests: XCTestCase {
+  override func setUp() { continueAfterFailure = false }
+  /// Launches on the open chat, losing `loss` `after` seconds from now on the clock the simulator shares.
+  private func launch(_ loss: String, after seconds: TimeInterval = 10) -> (XCUIApplication, Date) {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    let lostAt = Date().addingTimeInterval(seconds)
+    app.launchEnvironment["AGENT_INTERFACE_UI_LOSE_CONNECTION"] = loss
+    app.launchEnvironment["AGENT_INTERFACE_UI_LOSE_AT"] = String(lostAt.timeIntervalSince1970)
+    app.launch()
+    return (app, lostAt)
+  }
+  private func capture(_ name: String) throws {
+    let screenshot = XCUIScreen.main.screenshot()
+    let attachment = XCTAttachment(screenshot: screenshot); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+    if let directory = ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] {
+      try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+      try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
+    }
+  }
+  private func openChat(_ app: XCUIApplication, before lostAt: Date) -> XCUIElement {
+    let composer = app.textViews["messageComposer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertLessThan(Date(), lostAt, "The chat must be open before the fixture loses the connection")
+    return composer
+  }
+  /// Seconds since the fixture lost the connection.
+  private func since(_ lostAt: Date) -> TimeInterval { Date().timeIntervalSince(lostAt) }
+  private func sleep(until date: Date) {
+    let wait = date.timeIntervalSinceNow
+    // Timer: the moment inside the grace period is the behavior under test, so it is a fixed point in time.
+    if wait > 0 { Thread.sleep(forTimeInterval: wait) }
+  }
+  private var card: (XCUIApplication) -> XCUIElement { { $0.descendants(matching: .any)["connectionCard"] } }
+
+  func testAHermesLossWaitsThenSaysOneLineThenNamesWhatIsDown() throws {
+    let (app, lostAt) = launch("hermes")
+    _ = openChat(app, before: lostAt)
+    // The chat reads every 1.5 seconds, so the loss is found within that and shows 3 seconds later.
+    sleep(until: lostAt.addingTimeInterval(1.5))
+    XCTAssertFalse(card(app).exists, "Nothing shows inside the grace period")
+    try capture("ios-1-in-grace")
+    let line = app.staticTexts["Reconnecting…"]
+    XCTAssertTrue(line.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertGreaterThanOrEqual(since(lostAt), 3, "Not before the grace period ends")
+    XCTAssertFalse(app.buttons["reconnectNow"].exists, "One line: the app is already retrying")
+    XCTAssertFalse(app.staticTexts["connectionDetail"].exists)
+    try capture("ios-2-one-line")
+    let lasting = app.staticTexts["Hermes isn't answering"]
+    XCTAssertTrue(lasting.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertGreaterThanOrEqual(since(lostAt), 10, "Named once it lasts")
+    XCTAssertEqual(app.staticTexts["connectionDetail"].label, "Messages can't be sent until it's back. We'll keep trying.",
+      "No draft, so no word about one")
+    XCTAssertTrue(app.buttons["reconnectNow"].exists)
+    XCTAssertTrue(app.buttons["Connection details"].exists)
+    try capture("ios-3-lasting")
+  }
+
+  func testALastingLossWithADraftSaysTheDraftIsKept() throws {
+    let (app, lostAt) = launch("app")
+    let composer = openChat(app, before: lostAt)
+    composer.typeWhenFocused("Move the heifers to the north pasture")
+    XCTAssertTrue(app.staticTexts["Can't reach the app"].waitForExistence(timeout: 30), app.debugDescription)
+    XCTAssertEqual(app.staticTexts["connectionDetail"].label, "Your draft is kept. We'll keep trying.")
+    try capture("ios-4-lasting-draft")
+  }
+
+  func testOneChatsFailedReadsStayInThatChat() throws {
+    let (app, lostAt) = launch("chat")
+    _ = openChat(app, before: lostAt)
+    XCTAssertTrue(app.staticTexts["Can't refresh this chat"].waitForExistence(timeout: 30), app.debugDescription)
+    XCTAssertEqual(app.staticTexts["connectionDetail"].label, "New messages may not show yet. We'll keep trying.")
+    XCTAssertTrue(app.buttons["reconnectNow"].exists)
+    XCTAssertFalse(app.buttons["Connection details"].exists, "Hermes's details say nothing about one chat")
+    try capture("ios-5-chat-only")
+    // Home lists every assistant as it was: the chat's loss is the chat's.
+    app.navigationBars.buttons.firstMatch.tapWhenReady()
+    XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertFalse(app.descendants(matching: .any)["homeSync"].exists, "Home says nothing is lost")
+  }
+
+  func testOfflineWaitsItsGracePeriodThenSaysSoWithoutARetry() throws {
+    let (app, lostAt) = launch("offline")
+    _ = openChat(app, before: lostAt)
+    XCTAssertTrue(app.staticTexts["You're offline"].waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertGreaterThanOrEqual(since(lostAt), 3, "Not before the grace period ends")
+    XCTAssertEqual(app.staticTexts["connectionDetail"].label, "We'll reconnect when you're back online.")
+    XCTAssertFalse(app.buttons["reconnectNow"].exists, "Nothing to retry until the network is back")
+    try capture("ios-6-offline")
+  }
+}
