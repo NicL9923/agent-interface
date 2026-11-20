@@ -457,6 +457,10 @@ the UI checks; it was not run again. The other 7 classes it had not reached ran 
 That run was on the final code. The unit run was on code that differed only by a blank line and an
 unused property in `RootView.swift`, which the second run compiled.
 
+The web battery ran on `9301c603` with this change, before `811804ec` (the fifth review round's web
+fix) was merged in. That commit changes only web files and the native app has no live-updates notice,
+so nothing here was run again for it.
+
 The 8 web failures are this Mac's, and all 8 fail the same way at `9301c603` in a separate worktree:
 `tests/direct-routes.test.ts` (2) and `tests/native-contract.test.ts` (1) need a second loopback address
 the Mac does not have, `tests/upgrades.test.ts` (2) runs `scripts/hermes-upgrade-worker.py` with a
