@@ -247,7 +247,6 @@ const capabilities = {
   portraitGeneration: supported,
   avatarMetadata: supported,
   liveVoice: { supported: false, reason: "The WildBots voice plugin is not linked into Hermes." },
-  reactionAnswers: supported,
   imageGeneration: {
     supported: false,
     reason: "The connected Hermes profile has no image provider.",

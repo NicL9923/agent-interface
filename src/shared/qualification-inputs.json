@@ -140,7 +140,6 @@
   "src/shared/plain-text.ts",
   "src/shared/progress-line-instructions.json",
   "src/shared/qualification-inputs.json",
-  "src/shared/reactions.ts",
   "src/shared/recommended.ts",
   "src/shared/reply-cards.ts",
   "src/shared/retry-id.ts",

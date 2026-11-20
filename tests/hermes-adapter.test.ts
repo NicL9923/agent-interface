@@ -9,7 +9,6 @@ import type { ExperienceRequest } from "../src/shared/experience.js";
 import type { AutomationRequest } from "../src/shared/automation.js";
 import { Store } from "../src/server/store.js";
 import {
-  answerStaleMessage,
   hermesMaintenanceSendMessage,
   IncompleteCreationError,
   nothingToStopMessage,
@@ -700,28 +699,6 @@ describe("Hermes adapter trust and recovery boundary", () => {
     });
     // Any other send keeps its uncertain receipt, since admission may have happened.
     expect((await runtime.submit({ ...input(), text: "Plain" })).status).toBe("uncertain");
-  });
-  // Another member's turn can start between the route's fresh read and Hermes's admission lock. The add-on refuses
-  // require_idle under that lock (src/hermes/extension.py), so a reaction never steers into the newer turn.
-  it("fences an answer to an idle assistant and reports the refusal as answer_stale", async () => {
-    canonicalSubmission = true;
-    await runtime.status();
-    calls = [];
-    const answer = { ...input(), text: "👍", answering: "a1" };
-    expect((await runtime.submit(answer)).status).toBe("accepted");
-    expect(calls[0].params).toMatchObject({ text: "👍", require_idle: true, steer: false });
-    rpcErrors.set("agent-interface.submit", { code: 4091, message: "Started another turn" });
-    await expect(runtime.submit({ ...answer, requestId: "late" })).rejects.toMatchObject({
-      statusCode: 409,
-      code: "answer_stale",
-      message: answerStaleMessage,
-    });
-    calls = [];
-    // An answer joins no running turn, so a steer of one never reaches Hermes.
-    await expect(runtime.steer({ ...answer, requestId: "steered" })).rejects.toMatchObject({
-      statusCode: 400,
-    });
-    expect(calls).toEqual([]);
   });
   it("reports the errors the add-on answers before admitting a send as a message that was not sent", async () => {
     canonicalSubmission = true;
@@ -4235,24 +4212,6 @@ describe("Hermes conversation and roster read costs", () => {
     const older: ReadTiming = {};
     await runtime.conversation("shared", { window: { turns: 20 }, timing: older });
     expect(older).toEqual({ shared: false, hermes: expect.any(Number) });
-  });
-  it("answers a fresh read from Hermes itself, never joining a read another caller started", async () => {
-    await runtime.status();
-    snapshot.messages = [{ row_id: 1, role: "user", text: "Hi" }];
-    const opens = () => calls.filter((call) => call.method === "agent-interface.open").length;
-    const before = opens();
-    const shared: ReadTiming = {},
-      fresh: ReadTiming = {};
-    // The guard on a reaction answer reads this way, so a read seconds old never admits a stale answer.
-    await Promise.all([
-      runtime.conversation("shared", { window: { turns: 1 }, timing: shared }),
-      runtime.conversation("shared", { window: { turns: 1 }, fresh: true, timing: fresh }),
-    ]);
-    expect(opens() - before).toBe(2);
-    expect(fresh).toEqual({ shared: false, hermes: expect.any(Number) });
-  });
-  it("advertises reaction answers, so the app offers React only to a server that checks them", async () => {
-    expect((await runtime.capabilities()).reactionAnswers).toEqual({ supported: true });
   });
   it("reads write-check state without history and asks Hermes to cut a window", async () => {
     await runtime.submit(input());

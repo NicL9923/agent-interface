@@ -1,13 +1,13 @@
 import type { ActivityState, AttentionRequest, Message } from "../shared/types";
 import type { SearchHit } from "../shared/discovery";
-import {
-  activityLabels,
-  isActivityMessage,
-  isHumanMessage,
-  messageOrigin,
-} from "../shared/message-origin";
+import { activityLabels, isActivityMessage, messageOrigin } from "../shared/message-origin";
 
-export { isHumanMessage };
+/** A message a person wrote, as opposed to scheduled prompts, agent envelopes and other activity. */
+export function isHumanMessage(message: Message) {
+  if (message.role !== "user" || isActivityMessage(message)) return false;
+  const kind = messageOrigin(message)?.kind;
+  return !kind || kind === "human";
+}
 
 /**
  * The person's message a failed turn can resend: the latest human message, when the assistant

@@ -48,13 +48,6 @@ export class SubmissionRepository {
     return this.database.transaction(() => this.record(input));
   }
   /**
-   * Forgets an intent Hermes refused before admitting it, so the same request can be sent again. Hermes
-   * answers a request it already admitted with that receipt before any refusal, so nothing settled is lost.
-   */
-  withdraw(requestId: string) {
-    this.db.prepare("DELETE FROM submissions WHERE request_id=?").run(requestId);
-  }
-  /**
    * Records a retry's intent as the one retry of its failed turn: an assistant, the message it
    * retries and the run that failed, '' without one. When another request claimed that turn
    * first, nothing is recorded and that request's receipt comes back instead, so every device
@@ -166,16 +159,14 @@ export class SubmissionRepository {
         .prepare("UPDATE submissions SET receipt=? WHERE request_id=?")
         .run(JSON.stringify(stored), receipt.requestId);
       const row = this.submission(receipt.requestId);
-      // A retry resends an earlier message and a reaction answers a reply, never the draft, which stays the person's
-      // own. A typed stop phrase that ended Hermes's voice chat (`turn: "none"`) sent nothing to the assistant, so its
-      // words and files stay too.
+      // A retry resends an earlier message, never the draft, which stays the person's own. A typed stop phrase that
+      // ended Hermes's voice chat (`turn: "none"`) sent nothing to the assistant, so its words and files stay too.
       if (
         row &&
         receipt.status === "accepted" &&
         receipt.turn !== "none" &&
         previous?.receipt.status !== "accepted" &&
-        row.input.retryOf === undefined &&
-        row.input.answering === undefined
+        row.input.retryOf === undefined
       )
         this.drafts.clearSubmittedDraft(
           row.input.senderId,

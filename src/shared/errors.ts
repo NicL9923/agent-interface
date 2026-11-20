@@ -35,9 +35,6 @@ export type ErrorCode =
   | "sharing_changed"
   // A request ID came back with different content: another tab or device already sent under it.
   | "submission_conflict"
-  // A reaction answer named a reply that no longer ends the chat, or a turn is running or started before
-  // Hermes admitted it. Nothing was sent.
-  | "answer_stale"
   // Approval scopes (Workstream B): a choice Hermes did not offer, settings an older add-on lacks, and policy guards.
   | "approval_choice_unavailable"
   | "approval_settings_unsupported"
@@ -86,11 +83,6 @@ export function withoutDraftClause(message: string): string {
     .filter((sentence) => !/\bdraft\b/i.test(sentence))
     .join(" ");
 }
-/**
- * Sent with `answer_stale`: the reply a reaction answered no longer ends the chat, or another turn started
- * before Hermes admitted it, so it was not sent.
- */
-export const answerStaleMessage = "The chat moved on, so your reaction was not sent.";
 /** Sent when a conversation's interrupted task needs review before another message starts. */
 export const interruptionPendingMessage =
   "Review the interrupted task before starting another message.";

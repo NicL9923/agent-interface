@@ -37,7 +37,6 @@ import type { ExperienceRequest, ExperienceResult } from "../shared/experience.j
 import type { AutomationRequest, AutomationResult } from "../shared/automation.js";
 import { formatBytes } from "../shared/uploads.js";
 import {
-  answerStaleMessage,
   approvalNotPendingMessage,
   assistantNameMessage,
   assistantNotFoundMessage,
@@ -111,8 +110,6 @@ const keys = [
   "portraitGeneration",
   "avatarMetadata",
   "liveVoice",
-  // The server's own guard on a send's `answering` reply (conversation-routes.ts), so an app can offer React.
-  "reactionAnswers",
 ] as const;
 // The voice plugin's state changes outside this socket, as when someone enables it, so it is read again this often.
 const LIVE_VOICE_MS = 30_000;
@@ -574,9 +571,6 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
     descriptionEdits.set(name, (descriptionEdits.get(name) ?? 0) + 1);
   }
   async function submit(input: Submission, steer = false): Promise<SubmissionReceipt> {
-    // An answer replies to the message that ends an idle chat; joining a running turn would answer another question.
-    if (steer && input.answering !== undefined)
-      throw httpError(400, "Answer a reply by sending, not by steering");
     let attachments: RegisteredFile[];
     try {
       attachments = input.attachments.map((file) => fileValue(file.id));
@@ -618,12 +612,9 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
         reviewed_interruption: input.reviewedInterruption === true,
         // An older add-on ignores it, so a spoken request still runs, at the profile's own effort.
         ...(input.voice ? { voice_turn: true } : {}),
-        // A retry answers its failed turn, and a reaction the reply that ended the chat. Hermes refuses
-        // either under its submission lock if another turn started since the app checked, instead of
-        // steering it into that turn.
-        ...(input.retryOf !== undefined || input.answering !== undefined
-          ? { require_idle: true }
-          : {}),
+        // A retry answers its failed turn. Hermes refuses it under its submission lock if another
+        // turn started since the app checked, instead of steering the old question into that turn.
+        ...(input.retryOf !== undefined ? { require_idle: true } : {}),
       });
       // Taken as the answer lands: a read asked at a newer version was asked after Hermes finished admitting.
       const admitted = versionOf(structuralGenerationOf(input.botId));
@@ -638,14 +629,7 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
     } catch (error) {
       if (error instanceof TransportError && error.rpcCode === 4094)
         throw httpError(409, interruptionPendingMessage, { code: "interruption_pending" });
-      // Refused before admission: nothing reached the assistant. The route records nothing for an answer,
-      // as for its own stale check, so the same request can be sent once the chat is idle again.
-      if (
-        input.answering !== undefined &&
-        error instanceof TransportError &&
-        error.rpcCode === 4091
-      )
-        throw httpError(409, answerStaleMessage, { code: "answer_stale" });
+      // Refused before admission: nothing reached the assistant.
       if (input.retryOf !== undefined && error instanceof TransportError && error.rpcCode === 4091)
         return {
           requestId: input.requestId,
@@ -1555,9 +1539,9 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
       }
     },
     conversation(botId, options = {}) {
-      // Write checks and activity summaries need current state, not history. Never shared, nor is a fresh read.
+      // Write checks and activity summaries need current state, not history. Never shared.
       if (options.timing) options.timing.shared = false;
-      if (options.history === false || options.fresh) return readConversation(botId, options);
+      if (options.history === false) return readConversation(botId, options);
       const now = Date.now(),
         generation = generationOf(botId);
       for (const [key, entry] of sharedReads)
