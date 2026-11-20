@@ -3356,6 +3356,40 @@ class SubmissionRecoveryGateTests(unittest.TestCase):
             finally:
                 journal.db.close()
 
+    def test_a_reaction_answer_arriving_while_another_turn_runs_is_refused_not_steered(
+        self,
+    ):
+        # A member's 👍 to "Open the north gate?" reaches Hermes after another member started the south-gate turn.
+        # The server's read saw an idle chat; this lock is the last place that can see the newer turn.
+        with FakeGateway(
+            [{"row_id": 1, "role": "user", "text": "Check the gates"}]
+        ) as hermes:
+            hermes.open()
+            submit = hermes.methods["agent-interface.submit"]
+            hermes.server._sessions["sid"]["running"] = True
+            hermes.server.handle_request = Mock(
+                return_value=hermes.server._ok("native", {"status": "queued"})
+            )
+            # What src/server/hermes.ts sends for a send that names the reply it answers.
+            answer = {
+                "profile": "default",
+                "request_id": "thumbs-up",
+                "sender_id": "member",
+                "text": "👍",
+                "attachments": [],
+                "steer": False,
+                "reviewed_interruption": False,
+                "require_idle": True,
+            }
+            refused = submit("send", answer)
+            self.assertEqual(refused["error"]["code"], 4091)
+            hermes.server.handle_request.assert_not_called()
+            self.assertIsNone(hermes.journal.receipt("thumbs-up"))
+            # Without the fence the same input joins the running turn, which is what the answer must never do.
+            unfenced = dict(answer, request_id="unfenced")
+            del unfenced["require_idle"]
+            self.assertIs(submit("send", unfenced)["result"]["steering"], True)
+
     def test_unsettled_receipt_and_resume_require_idle_use_the_same_submit_gate(self):
         with FakeHermes([]) as hermes:
             hermes.open()

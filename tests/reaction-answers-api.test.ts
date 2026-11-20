@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
+import { answerStaleMessage } from "../src/shared/errors.js";
+import { httpError } from "../src/server/http-error.js";
 import type { ActivityState, Message, Runtime, Submission } from "../src/shared/types.js";
 import {
   botFixture,
@@ -173,6 +175,69 @@ describe("reaction answers at admission", () => {
     const again = await send({ requestId, text: "👍", answering: "a1" });
     expect(again.json().status).toBe("accepted");
     expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  // The rule the clients offer React by (src/shared/reactions.ts): only a settled assistant reply is answered.
+  it.each<[string, Message]>([
+    ["a person's message", { id: "z", role: "user", text: "Actually, the south one" }],
+    [
+      "a progress line",
+      { id: "z", role: "assistant", text: "Checking the gate log.", interim: true },
+    ],
+    ["an empty assistant row", { id: "z", role: "assistant", text: "" }],
+  ])(
+    "refuses with answer_stale when the chat ends in %s, even when the answer names it",
+    async (_case, last) => {
+      const { submit, send } = await installation({ messages: [...north, last] });
+      const sent = await send({ text: "👍", answering: "z" });
+      expect(sent.statusCode).toBe(409);
+      expect(sent.json().code).toBe("answer_stale");
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses with answer_stale when the last reply answers another assistant, which the chat shows as activity", async () => {
+    const { submit, send } = await installation({
+      messages: [
+        ...north,
+        {
+          id: "s1",
+          role: "user",
+          text: "How many head came in?",
+          origin: { kind: "agent", visibility: "activity", name: "Trail Boss" },
+        },
+        // Its own row carries no origin; it inherits the prompt's, as the clients read it.
+        { id: "z", role: "assistant", text: "Forty head came in." },
+      ],
+    });
+    const sent = await send({ text: "👍", answering: "z" });
+    expect(sent.json().code).toBe("answer_stale");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  // Another member's turn can start between the server's read and Hermes's admission. The adapter fences an answer to
+  // an idle chat (require_idle), and Hermes's refusal before admission reaches the route as answer_stale.
+  it("passes Hermes's refusal through as answer_stale and records nothing, so the same request can admit later", async () => {
+    const refusal = () => httpError(409, answerStaleMessage, { code: "answer_stale" });
+    let refuse = true;
+    const submit = vi.fn(async (input: Submission) => {
+      if (refuse) throw refusal();
+      return { requestId: input.requestId, status: "accepted" as const, runId: "run" };
+    });
+    const { put, draft, send } = await installation({}, { submit });
+    await put("👍");
+    const before = await draft();
+    const requestId = randomUUID();
+    const sent = await send({ requestId, text: "👍", answering: "a1" });
+    expect(sent.statusCode).toBe(409);
+    expect(sent.json()).toMatchObject({ code: "answer_stale", error: answerStaleMessage });
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ requestId, answering: "a1" }));
+    expect(await draft()).toEqual(before);
+    // A recorded request would answer its saved receipt here without asking Hermes again.
+    refuse = false;
+    const again = await send({ requestId, text: "👍", answering: "a1" });
+    expect(again.json().status).toBe("accepted");
+    expect(submit).toHaveBeenCalledTimes(2);
   });
 
   // Each refusal names the field it is about, so a client that builds the request wrong learns why.

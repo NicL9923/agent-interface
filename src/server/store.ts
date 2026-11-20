@@ -343,6 +343,9 @@ export class Store {
   intent(...args: Parameters<SubmissionRepository["intent"]>) {
     return this.submissions.intent(...args);
   }
+  withdraw(...args: Parameters<SubmissionRepository["withdraw"]>) {
+    this.submissions.withdraw(...args);
+  }
   claimRetry(...args: Parameters<SubmissionRepository["claimRetry"]>) {
     return this.submissions.claimRetry(...args);
   }

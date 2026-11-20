@@ -15,7 +15,7 @@ import {
   windowFiles,
 } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
-import { REACTIONS, reactionOf } from "../shared/reactions.js";
+import { answerableReply, REACTIONS, reactionOf } from "../shared/reactions.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
 import type {
   ActivityState,
@@ -776,11 +776,13 @@ export function installConversationRoutes(
             : await runtime.conversation(input.botId, { history: false });
     if (conversation?.activity.state === "interrupted" && !reviewedInterruption)
       throw httpError(409, interruptionPendingMessage);
-    // Nothing is recorded, so the same request can be sent once the reply ends the chat again.
+    // The rule the clients offer React by: the chat ends in a settled assistant reply, and it is the one
+    // answered. Hermes checks again that no turn runs as it admits (require_idle, see hermes.ts). Nothing
+    // is recorded, so the same request can be sent once the reply ends the chat again.
     if (
       input.answering !== undefined &&
       (activeStates.includes(conversation!.activity.state) ||
-        conversation!.messages.at(-1)?.id !== input.answering)
+        answerableReply(conversation!.messages) !== input.answering)
     )
       throw httpError(409, answerStaleMessage, { code: "answer_stale" });
     if (input.retryOf !== undefined) {
@@ -861,6 +863,11 @@ export function installConversationRoutes(
           store.participate(receipt.runId, userId);
       return receipt;
     } catch (error) {
+      // Hermes found another turn running as it admitted the answer, and admitted nothing.
+      if ((error as { code?: string }).code === "answer_stale" && input.answering !== undefined) {
+        store.withdraw(input.requestId);
+        throw error;
+      }
       if ((error as { code?: string }).code === "interruption_pending") {
         store.receipt(
           { requestId: input.requestId, status: "rejected", message: interruptionPendingMessage },
