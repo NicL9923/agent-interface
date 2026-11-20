@@ -299,8 +299,7 @@ run had included:
 
 ## Not run, and not done
 
-- iOS still has the earlier states, and `ios/Parity.md` lists the four differences under "Not yet
-  matched". Its conversation read sets `appUnavailable` on any failure, with no grace period.
+- iOS matched these states afterwards; see "iOS" below.
 - Safari, Firefox, a screen reader and a real phone: not run. The live region and tooltips were checked
   in jsdom and by reading the DOM in Chromium.
 - The fourth review round's fixes were not reviewed again.
@@ -313,3 +312,151 @@ run had included:
   treats it as proof, so nothing depends on it, but the code says more than the server knows.
 - The live-updates notice still clears about 10 seconds after a stream reconnects, because a stream
   counts as live only on data well after its opening ping. Unchanged here.
+
+## iOS
+
+The native app's half of the same change, on the same branch after `9301c603`. Checks ran on the Mac
+mini (macOS 27.0.1, Xcode 27.2), iOS 27.0 simulator "conn-states-iphone17" (iPhone 17), made for
+this task. `ios/Parity.md`, "Connection states", lists what matches and what still differs, and why.
+
+### Change
+
+- `ConnectionOutage.swift`, new. `Outage` is `useOutage` as a value with no clock of its own: `update`
+  takes each change of what is lost, `advance` takes each deadline, and both are given the time. It has
+  the web's grace, lasting and minimum times, scope, `lingering` and `recoveries`. It has no "due" step:
+  native changes run on the main actor one at a time, so the call that finds a loss past its grace
+  period and still down shows it. `ReadRetry.delay` is `READ_RETRY_MS`.
+- `AppStore+Outage.swift`, new. The store times two outages: the household's (offline, the app or
+  Hermes) and the open chat's own failed reads, scoped to that chat while it is on screen. The timer
+  sleeps until the next deadline instant, not for a duration, so a task that starts late still wakes
+  on time; the fake clock in the tests found that. A household loss is certain, and shows at once, when
+  it needs setup or when a household read has answered in this session and never found Hermes
+  connected. A cold launch's saved roster counts as nothing answered yet, so it waits like any loss.
+  VoiceOver hears the loss once per change and "Connected again." when a shown loss ends, but not while
+  another loss is being said. The news is held without the draft sentence.
+- `connected` still gates every write, now including the open chat's failed read, from the first
+  moment. `activity`, which the chat shows, stays what Hermes last said until the loss shows.
+  `listedActivity` is what home lists for the open assistant, which only the household's loss changes.
+- A failed conversation read no longer sets `appUnavailable` or slows the poll. It sets
+  `readFailedFor`, asks bootstrap once what is down, and is read again after 1, 2, 4, 8, 16, then every
+  30 seconds, not while the app is in the background, the device is offline, the sign-in is gone or the
+  chat is off screen. Coming back online reads at once. Every read drops the pending retry as it sets
+  out. After failed bootstraps the poll waits the same steps; it waited 2, 4, 8, 16, 30 before.
+- A connected bootstrap whose rows are marked `disconnected` keeps each row's activity for 30 seconds
+  from the first stale roster, as `rosterFrom` does, and reads the next bootstrap whole so the end of
+  the carry is judged.
+- `ConnectionCopy.of` is the web's copy table, `needsSetup` included. The dock's notice is one line
+  with a spinner until the loss lasts, then the title, the detail, Reconnect now and, for the app and
+  Hermes, the details. Offline has no button and no details. The full panel always says everything and
+  shows only once the household's loss does. The client's message for a read that never reached the
+  app no longer mentions a draft.
+- A disconnected avatar has no badge and dims to saturation 0.45 and opacity 0.9, easing over 400 ms.
+  Home captions no assistant with "Connection lost", and the saved-roster line no longer adds
+  "Offline." or "Reconnecting…": the header's pill says it once, after the grace period. The chat's
+  activity row is hidden while the loss shows, the "reconnecting" verb is gone, and a chat that never
+  loaded says "This conversation hasn't loaded yet".
+- Native idioms where the web has none: Send's reason is its VoiceOver hint, because a disabled button
+  has no tooltip on a touch screen. The Stop confirmation is a system dialog with no room for a reason,
+  so it closes when stopping becomes unavailable.
+- `DebugFixtures.swift` gains `UIConnectionLoss`, which loses the app, the network, Hermes or one chat's
+  reads at a moment a UI test picks. Release builds compile it out.
+
+No web source changed. `tests/avatar-art-parity.test.ts` checks only that native path data is in the
+web's list, and native drew its badge with an SF Symbol, so the web's unused question-mark path in
+`Avatar.tsx` can now go; it was left for a web change.
+
+### Tests
+
+- `ios/AgentInterfaceTests/ConnectionStateTests.swift`, new, 39 tests: `OutageTests` (15, the edges of
+  `tests/outage.test.ts` at exact instants), `ReadRetryTests` (2), `ConnectionCopyTests` (9, from
+  `tests/connection-copy.test.ts`), `ConnectionStateStoreTests` (10, the store on a fake clock and a
+  fake timer: the grace period, the one line, lasting, a loss before Hermes was reached, setup, offline,
+  a chat-only loss, the saved copy, recoveries and announcements, the draft sentence) and
+  `ConnectionQuietingTests` (3: badge and dim, captions, the read message).
+- `NativeContractTests`, 7 new against the mock server: the backoff and the one bootstrap, the retry
+  guards, a read dropping the pending retry, a retry waking while a read is on its way, another chat's
+  failures, a Hermes loss before and after Hermes was reached, and the roster carry.
+- Changed because the behavior did: `testConversationOutagePreservesDraftAndTranscriptWhileDisablingSendUntilRecovery`
+  expected `.disconnected` at once and now expects Send refused with the chat unchanged during the
+  grace period. `testPollingKeepsRefreshingBootstrapWhileTheServerIsDisconnectedOrFailing` expected a
+  chat's failed read to need a bootstrap to clear; it now expects the one bootstrap the failure asks
+  for and a clear through the chat's own read. `ConversationParityTests` and `HomeParityTests` lost the
+  old copy and "reconnecting" cases, which `ConnectionCopyTests` replaces. `ObservedChanges` lists the
+  five new observed properties.
+- `ios/AgentInterfaceUITests/ConnectionStateFlowTests.swift`, new, 4 tests on the fixture: a Hermes loss
+  shows nothing at 1.5 seconds, one line no sooner than 3 seconds with no button, then "Hermes isn't
+  answering" no sooner than 10 with Reconnect now and details; a lasting loss with a draft; one chat's
+  reads, with home showing nothing lost; and offline. No existing UI test expected the card at once:
+  the only one that shows it, the setup panel, is certain and still shows at once.
+
+### Screenshots
+
+From `ConnectionStateFlowTests`, iPhone 17 simulator, light theme. The collage is
+[`ios-collage.png`](../evidence/2026-11-19-connection-states/ios-collage.png), made by
+[`ios-collage.swift`](../evidence/2026-11-19-connection-states/ios-collage.swift): in grace, one line,
+lasting, lasting with a draft, one chat only, and offline. The one-line shot was taken as the notice
+appeared, so the header avatar is still easing into its dim.
+
+### Mutants
+
+Each line was broken with `~/.agents/tools/mutate.py` and the tests in
+[`ios-tests.sh`](../evidence/2026-11-19-connection-states/mutants/ios-tests.sh) run, all under
+`mac-heavy-lock.sh`. The lists and the tool's output are the `ios-*` files in
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 63 mutants, 63 caught.
+
+| File                                | Mutants | Result    |
+| ----------------------------------- | ------- | --------- |
+| `ConnectionOutage.swift`            | 19      | 19 caught |
+| `AppStore+Outage.swift`             | 17      | 17 caught |
+| `AppStore.swift`                    | 4       | 4 caught  |
+| `AppStore+Polling.swift`            | 7       | 7 caught  |
+| `AppStore+Conversation.swift`       | 3       | 3 caught  |
+| `ConnectionCopy`                    | 9       | 9 caught  |
+| `AvatarView`, `Models`, `APIClient` | 4       | 4 caught  |
+
+Survivors on the way, and what was done:
+
+- The pending retry dropped as a read sets out. No test had a retry wake while a read was on its way;
+  one now does, and catches the second read.
+- `select` clearing the last chat's failures. Equivalent: the next read's outcome, or the new chat's
+  id, already decides, so it was removed.
+- A new chat's failures starting the waits over (`first ? 1`). Once `select` no longer cleared them,
+  this is what does; the chat-switch test now checks the new chat's first wait is a second.
+
+### Checks
+
+| Check                          | Command                                                                                                   | Result                                                                                          |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Connection tests while writing | `validate-ios.sh … test -only-testing:` the five new classes, `NativeContractTests`, `FixedWaitRuleTests` | passed, 205 tests                                                                               |
+| Mutants                        | `ios-run.sh`, then the two changed lists again                                                            | 63 of 63 caught                                                                                 |
+| Connection UI tests            | `validate-ios.sh … test -only-testing:AgentInterfaceUITests/ConnectionStateFlowTests`                     | passed, 4 tests                                                                                 |
+| Native unit suite              | `validate-ios.sh SIMULATOR test`                                                                          | passed: 858 tests, 2 skipped                                                                    |
+| Native UI suite                | the same run, then the seven classes it had not reached                                                   | passed: 94, then 66 with 2 skipped                                                              |
+| Web battery                    | `.agents/tools/check-all --keep-going`, Node 24.22.2                                                      | typecheck, lint, ruff, build, py passed; test 5 failed of 4,204; e2e 3 failed of 178, 3 skipped |
+| Web format                     | `npm run format:check`                                                                                    | passed                                                                                          |
+
+The full run stopped at its 2-hour limit while it was in `ScreenshotTourTests`, after 94 UI tests had
+passed and none had failed. `ScreenshotTourTests` produces evidence only, and the README leaves it out of
+the UI checks; it was not run again. The other 7 classes it had not reached ran next with
+`ConnectionStateFlowTests` and `ConnectionStateStoreTests` again: 66 passed and 2 skipped:
+`TabletPresentationTests`, which needs an iPad, and `testApprovalScopeScreens`, which skips by design.
+That run was on the final code. The unit run was on code that differed only by a blank line and an
+unused property in `RootView.swift`, which the second run compiled.
+
+The 8 web failures are this Mac's, and all 8 fail the same way at `9301c603` in a separate worktree:
+`tests/direct-routes.test.ts` (2) and `tests/native-contract.test.ts` (1) need a second loopback address
+the Mac does not have, `tests/upgrades.test.ts` (2) runs `scripts/hermes-upgrade-worker.py` with a
+Python that rejects its syntax, and the 3 WebKit cases in `e2e/smoke.spec.ts` (lines 40, 811 and 856)
+fail on this host's WebKit. No web source changed here.
+
+### Not done
+
+- No independent review of the iOS change has run.
+- A real phone, real VoiceOver and a real network: not run. Announcements were checked through the
+  store's injected `announce`, and the network loss through the fixture.
+- iPad was not captured or run through the new UI tests. Its sidebar reads the same `listedActivity`
+  and household outage as the phone's home.
+- The remaining differences in `ios/Parity.md`: no live-updates notice, the whole roster kept while
+  Hermes is down, and the poll reading bootstrap every 1.5 seconds while Hermes is down.
+- A group chat open while the selected assistant's last read failed keeps its writes refused until that
+  assistant's chat is read again, as `appUnavailable` refused them before.
