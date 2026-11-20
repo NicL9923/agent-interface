@@ -32,8 +32,10 @@ Each break was made by hand in Chromium, and the named test failed:
   - Changing the composer area's `pointer-events: none` to `auto` gave
     `gapReachesTranscript: false`.
 - In `a sent message held near the top stays there while the next draft grows and clears`,
-  reverting `reserveEnd` to count the end padding as content moved the sent message from 24px to
-  493px.
+  counting the end padding as content moved the sent message from 24px to 493px. The test now
+  runs at 390x582 with a 12-line draft. There, measuring content as `scrollHeight` less the
+  fractional end padding still moved it from 24px to 231px in 3 of 3 runs. The final
+  `space.offsetTop` measure passed 3 of 3.
 
 ## Visual checks
 

@@ -856,6 +856,8 @@ test.describe("on a phone held upright", () => {
   test("a sent message held near the top stays there while the next draft grows and clears", async ({
     page,
   }) => {
+    // A shorter phone, where the box's height, and so the transcript's end padding, lands on fractions of a pixel.
+    await page.setViewportSize({ width: 390, height: 582 });
     await signIn(page);
     await assistants(page)
       .getByRole("button", { name: /Ranch Hand/ })
@@ -880,9 +882,9 @@ test.describe("on a phone held upright", () => {
     const held = await sentTop();
     await field.tap();
     await openKeyboard(page, 355);
-    await field.fill("One\nTwo\nThree\nFour\nFive");
+    await field.fill(Array.from({ length: 12 }, (_, line) => `Line ${line + 1}`).join("\n"));
     await field.fill("");
-    await openKeyboard(page, 844);
+    await openKeyboard(page, 582);
     await expect.poll(sentTop).toBe(held);
   });
 });

@@ -1086,6 +1086,9 @@ a {
 }
 .composer textarea::placeholder {
   white-space: nowrap;
+  /* The browser's default gray falls below 4.5:1 on the phone's glass. */
+  color: var(--muted);
+  opacity: 1;
 }
 .composer textarea:focus-visible {
   outline: none;
