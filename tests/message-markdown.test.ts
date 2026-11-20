@@ -8,6 +8,8 @@ import {
   ReplyMarkdown,
   StreamingMarkdown,
   blocksAgree,
+  bubbleRuns,
+  parseBlock,
   sameBlock,
   streamingBlocks,
 } from "../src/components/MessageMarkdown";
@@ -816,6 +818,100 @@ describe("a streamed reply once saved", () => {
     expect(
       blocksAgree("```\ncode\n\nmore\n```\n\nAfter", ["```\ncode\n\nmore\n```", "After"]),
     ).toBe(true);
+  });
+});
+
+describe("reply bubbles", () => {
+  /** Each run of a reply as its blocks group: "bubble:" and the prose tags it holds, or the lone block's tag. */
+  const layout = (blocks: string[]) =>
+    bubbleRuns(blocks.flatMap((text) => parseBlock({ text })))
+      .filter((run) => run.pieces.some((piece) => piece.kind !== "space"))
+      .map((run) =>
+        run.bubble
+          ? `bubble:${run.pieces.flatMap((piece) => piece.tag ?? []).join(",")}`
+          : run.pieces[0].tag,
+      );
+
+  it("puts a reply of only prose in one bubble", () => {
+    expect(layout(["Hi.\n\n- Oats\n- Hay\n\n> Feed at dusk.\n\n## Then\n\n1. Water"])).toEqual([
+      "bubble:p,ul,blockquote,h2,ol",
+    ]);
+  });
+  it("keeps a table in the middle at full width, between two bubbles", () => {
+    expect(
+      layout(["Here:\n\n| Gate | Battery |\n| --- | --- |\n| North | 14% |\n\nDone."]),
+    ).toEqual(["bubble:p", "table", "bubble:p"]);
+  });
+  it("starts with a code block when the reply does, and opens a bubble after it", () => {
+    expect(layout(["```js\nlet x = 1;\n```\n\nThat sets it."])).toEqual(["pre", "bubble:p"]);
+  });
+  it("keeps media and a thematic break out of bubbles", () => {
+    expect(
+      layout(["Look:\n\n![Barn](https://example.test/barn.png)\n\n---\n\nThat is the barn."]),
+    ).toEqual(["bubble:p", "p", "hr", "bubble:p"]);
+  });
+  it("splits a block where a fence interrupts its paragraph", () => {
+    expect(layout(["Run:\n```sh\nls\n```\nThen look."])).toEqual(["bubble:p", "pre", "bubble:p"]);
+  });
+  it("joins prose from separate streaming blocks in one bubble while a fence is still open", () => {
+    const blocks = streamingBlocks("One.\n\nTwo.\n\n```py\nprint(")!;
+    expect(blocks).toHaveLength(3);
+    expect(layout(blocks)).toEqual(["bubble:p,p", "pre"]);
+  });
+  it("has no runs for an empty reply", () => {
+    expect(layout([""])).toEqual([]);
+    expect(bubbleRuns([])).toEqual([]);
+  });
+
+  const mixed =
+    "Intro with `code`.\n\nMore.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n```txt\nx\n```\n\nDone.";
+  const live = (text: string) =>
+    act(async () => root.render(createElement(ReplyMarkdown, { text, live: true, bubbles: true })));
+  it("keeps a bubble's node while the reply grows into it and once it is saved", async () => {
+    await live("Intro with `code`.");
+    const first = container.querySelector(".reply-bubble");
+    await live("Intro with `code`.\n\nMore.");
+    expect(container.querySelector(".reply-bubble")).toBe(first);
+    expect(first!.querySelectorAll("p")).toHaveLength(2);
+    await live(mixed);
+    await act(async () =>
+      root.render(createElement(ReplyMarkdown, { text: mixed, live: false, bubbles: true })),
+    );
+    expect(container.querySelector(".reply-bubble")).toBe(first);
+    expect(
+      [...container.querySelector(".message-markdown")!.children].map((child) =>
+        child.classList.contains("reply-bubble") ? "bubble" : child.className,
+      ),
+    ).toEqual(["bubble", "markdown-table", "markdown-code-block", "bubble"]);
+  });
+  it("shows reported inputs streamed and saved as they show opened fresh", async () => {
+    const shown = async (element: ReturnType<typeof createElement>) => {
+      await act(async () => root.render(createElement("div")));
+      await act(async () => root.render(element));
+      // Newlines between blocks are insignificant in the transcript's normal white-space.
+      return container.innerHTML.replace(/>\n</g, "><");
+    };
+    for (const text of [
+      mixed,
+      "Steps:\n\n1. Soak\n\n1. Rinse\n\nEnjoy.",
+      "See [docs][a].\n\nMore.\r\r[a]: https://example.test",
+      "Example:\n\n    ```\n    code\n\nDone",
+    ]) {
+      await shown(createElement(ReplyMarkdown, { text, live: true, bubbles: true }));
+      await act(async () =>
+        root.render(createElement(ReplyMarkdown, { text, live: false, bubbles: true })),
+      );
+      const saved = container.innerHTML.replace(/>\n</g, "><");
+      expect(saved).toBe(await shown(createElement(MessageMarkdown, { text, bubbles: true })));
+    }
+  });
+  it("keeps text order and every word whether or not prose sits in bubbles", async () => {
+    await act(async () => root.render(createElement(MessageMarkdown, { text: mixed })));
+    const flat = container.textContent;
+    await act(async () =>
+      root.render(createElement(MessageMarkdown, { text: mixed, bubbles: true })),
+    );
+    expect(container.textContent).toBe(flat);
   });
 });
 

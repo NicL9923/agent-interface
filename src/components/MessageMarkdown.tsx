@@ -1,5 +1,6 @@
 import {
   Children,
+  Fragment,
   createContext,
   isValidElement,
   memo,
@@ -10,7 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps, ReactElement, ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -250,13 +251,19 @@ type MessageMarkdownProps = {
   unavailable?: boolean;
   inlineUi?: boolean;
 };
+/** Whether a reply's prose sits in bubbles; see bubbleRuns. Classic replies render flat. */
+type ReplyStyle = { bubbles?: boolean };
 
 // Memoized because the composer re-renders the app on every keystroke, and
 // re-parsing every reply in a long transcript made typing lag.
-export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkdownProps) {
+export const MessageMarkdown = memo(function MessageMarkdown({
+  bubbles = false,
+  ...props
+}: MessageMarkdownProps & ReplyStyle) {
+  const parsed = useParsedBlocks([props.text], props);
   return (
-    <div className="message-markdown">
-      <MarkdownBlocks {...props} />
+    <div className={bubbles ? "message-markdown reply-bubbles" : "message-markdown"}>
+      <ReplyPieces parsed={parsed} keyed={false} bubbles={bubbles} />
     </div>
   );
 });
@@ -273,35 +280,162 @@ export const sameBlock = (a: MessageMarkdownProps, b: MessageMarkdownProps) =>
   a.userId === b.userId &&
   a.unavailable === b.unavailable &&
   (a.messageId === b.messageId || !/agent-ui/.test(b.text));
-/** One parsed piece of a reply, without its container, so several can share one. */
-const MarkdownBlocks = memo(function MarkdownBlocks({
+
+/** What a top-level piece of a reply is: prose that reads in a bubble, any other block, or the space between. */
+export type PieceKind = "prose" | "block" | "space";
+/** One top-level piece of a parsed block, such as a paragraph, table or fence, in its block's context. */
+export interface ReplyPiece {
+  /** Unique within its block and stable while the block grows, as React Markdown keys it. */
+  key: string;
+  /** The element's tag, such as "p" or "table"; none for the space between elements. */
+  tag?: string;
+  kind: PieceKind;
+  node: ReactNode;
+}
+const proseTags = new Set(["p", "ul", "ol", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"]);
+const remarkPlugins = [remarkGfm];
+/** The hast element React Markdown passes to a component it renders, such as a table or an image. */
+const tagOf = (element: ReactElement) =>
+  typeof element.type === "string"
+    ? element.type
+    : (element.props as { node?: { tagName?: string } }).node?.tagName;
+/** A paragraph that holds only images is media, not prose. */
+const onlyImages = (element: ReactElement) => {
+  const parts = Children.toArray((element.props as { children?: ReactNode }).children).filter(
+    (part) => typeof part !== "string" || /\S/.test(part),
+  );
+  return parts.length > 0 && parts.every((part) => isValidElement(part) && tagOf(part) === "img");
+};
+function pieceKind(node: ReactNode, tag: string | undefined): PieceKind {
+  if (typeof node === "string") return /\S/.test(node) ? "prose" : "space";
+  if (!isValidElement(node) || !tag || !proseTags.has(tag)) return "block";
+  return tag === "p" && onlyImages(node) ? "block" : "prose";
+}
+/**
+ * One block of a reply parsed into its top-level pieces, each carrying the block's context, so a
+ * piece can share a bubble with pieces of other blocks. React Markdown's `Markdown` is a plain
+ * function of its options with no hooks, so calling it here yields the elements it would render.
+ */
+export function parseBlock({
   text,
   botId,
   messageId,
   userId,
   unavailable,
   inlineUi = false,
-}: MessageMarkdownProps) {
-  const context = useMemo(
-    () => ({
-      text,
-      inlineUi,
-      actionableIds: new Set(replyCardsFromText(text).map((card) => card.id)),
-      botId,
-      messageId,
-      userId,
-      unavailable,
-    }),
-    [text, inlineUi, botId, messageId, userId, unavailable],
+}: MessageMarkdownProps): ReplyPiece[] {
+  const context: ReplyContextValue = {
+    text,
+    inlineUi,
+    actionableIds: new Set(replyCardsFromText(text).map((card) => card.id)),
+    botId,
+    messageId,
+    userId,
+    unavailable,
+  };
+  const root = Markdown({ children: text, skipHtml: true, remarkPlugins, components });
+  const children = (root.props as { children?: ReactNode }).children;
+  return ([] as ReactNode[])
+    .concat(children)
+    .filter((node) => node !== null && node !== undefined && typeof node !== "boolean")
+    .map((node, index) => {
+      const element = isValidElement(node) ? node : undefined;
+      const tag = element && tagOf(element);
+      return {
+        key: element?.key ?? `text-${index}`,
+        tag,
+        kind: pieceKind(node, tag),
+        node: element ? (
+          <ReplyContext.Provider value={context}>{element}</ReplyContext.Provider>
+        ) : (
+          node
+        ),
+      };
+    });
+}
+
+/**
+ * Groups a reply's top-level pieces, across all its blocks, into runs: each run of consecutive prose
+ * shares one bubble, and every other piece stands alone at the column's width. The space between two
+ * pieces goes in a bubble only when prose follows it there, so the reply's text stays in order.
+ */
+export function bubbleRuns<T extends { kind: PieceKind }>(
+  pieces: T[],
+): { bubble: boolean; pieces: T[] }[] {
+  const runs: { bubble: boolean; pieces: T[] }[] = [];
+  let open: T[] | undefined,
+    spaces: T[] = [];
+  for (const piece of pieces) {
+    if (piece.kind === "space") {
+      spaces.push(piece);
+      continue;
+    }
+    if (piece.kind === "prose" && open) open.push(...spaces, piece);
+    else {
+      for (const space of spaces) runs.push({ bubble: false, pieces: [space] });
+      open = piece.kind === "prose" ? [piece] : undefined;
+      runs.push({ bubble: !!open, pieces: open ?? [piece] });
+    }
+    spaces = [];
+  }
+  for (const space of spaces) runs.push({ bubble: false, pieces: [space] });
+  return runs;
+}
+
+type Parsed = { props: MessageMarkdownProps; pieces: ReplyPiece[] };
+/**
+ * Each block's pieces, parsed again only when the block changed (`sameBlock`). A finished block
+ * keeps its very elements while the last one grows, so React skips it, and keeps its nodes and any
+ * selection in them, as it did when each block was its own memoized component.
+ */
+function useParsedBlocks(texts: string[], props: MessageMarkdownProps): Parsed[] {
+  const kept = useRef<Parsed[]>([]);
+  const { botId, messageId, userId, unavailable, inlineUi } = props;
+  const parsed = texts.map((text, index) => {
+    const block = { text, botId, messageId, userId, unavailable, inlineUi };
+    const old = kept.current[index];
+    return old && sameBlock(old.props, block) ? old : { props: block, pieces: parseBlock(block) };
+  });
+  useLayoutEffect(() => {
+    kept.current = parsed;
+  });
+  return parsed;
+}
+
+/**
+ * A reply's pieces in order, flat or with its prose in bubbles. Each piece is keyed by its block and
+ * its own key, and a bubble by its first piece, so neither changes while the reply grows below it.
+ */
+function ReplyPieces({
+  parsed,
+  keyed,
+  bubbles,
+}: {
+  parsed: Parsed[];
+  /** Keys pieces by their block's place; false for a reply parsed whole. */
+  keyed: boolean;
+  bubbles: boolean;
+}) {
+  const pieces = parsed.flatMap(({ pieces }, block) =>
+    pieces.map((piece) => ({
+      ...piece,
+      key: `${keyed ? block : "whole"}/${piece.key}`,
+    })),
   );
-  return (
-    <ReplyContext.Provider value={context}>
-      <Markdown skipHtml remarkPlugins={[remarkGfm]} components={components}>
-        {text}
-      </Markdown>
-    </ReplyContext.Provider>
+  const shown = (piece: (typeof pieces)[number]) => (
+    <Fragment key={piece.key}>{piece.node}</Fragment>
   );
-}, sameBlock);
+  if (!bubbles) return pieces.map(shown);
+  return bubbleRuns(pieces).map((run) =>
+    run.bubble ? (
+      <div className="reply-bubble" key={`bubble:${run.pieces[0].key}`}>
+        {run.pieces.map(shown)}
+      </div>
+    ) : (
+      shown(run.pieces[0])
+    ),
+  );
+}
 
 // A backtick fence's info string cannot hold a backtick, so a line such as ```code``` is inline code.
 const fence = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
@@ -440,8 +574,9 @@ export function blocksAgree(text: string, blocks: string[]): boolean {
 export const StreamingMarkdown = memo(function StreamingMarkdown({
   holdBack = true,
   whole: parseWhole = false,
+  bubbles = false,
   ...props
-}: MessageMarkdownProps & { holdBack?: boolean; whole?: boolean }) {
+}: MessageMarkdownProps & ReplyStyle & { holdBack?: boolean; whole?: boolean }) {
   const blocks = useMemo(() => {
     const split = parseWhole ? null : streamingBlocks(props.text);
     return split && holdBack ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : split;
@@ -450,14 +585,11 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
     () => (blocks ? "" : holdBack ? streamingHoldBack(props.text) : props.text),
     [blocks, holdBack, props.text],
   );
+  const parsed = useParsedBlocks(blocks ?? [whole], props);
   // One container however the reply splits, so the reply's node never changes while it streams.
   return (
-    <div className="message-markdown">
-      {blocks ? (
-        blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)
-      ) : (
-        <MarkdownBlocks key="whole" {...props} text={whole} />
-      )}
+    <div className={bubbles ? "message-markdown reply-bubbles" : "message-markdown"}>
+      <ReplyPieces parsed={parsed} keyed={!!blocks} bubbles={bubbles} />
     </div>
   );
 });
@@ -478,7 +610,7 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
 export const ReplyMarkdown = memo(function ReplyMarkdown({
   live,
   ...props
-}: MessageMarkdownProps & { live: boolean }) {
+}: MessageMarkdownProps & ReplyStyle & { live: boolean }) {
   const [streamed, setStreamed] = useState(live);
   if (live && !streamed) setStreamed(true);
   const text = useRevealed(props.text, live);
