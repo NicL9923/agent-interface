@@ -952,7 +952,10 @@ optional `Preferences` fields; servers before them omit both. Read an absent
 and sync to every device like `theme`. `PATCH /api/preferences` answers 400 for any
 other value, with the field's name in `details[].path`. An omitted value keeps the
 saved one, so a client that predates them cannot clear them; send the default
-explicitly to go back to it.
+explicitly to go back to it. A client sends `chatStyle` or `ownBubble` only when the
+person changed it, and only a value it knows, so one device cannot write its stale copy
+over a choice made on another. A save answered without a value the client sent means
+the server predates the field; say so to the person and show what the server holds.
 
 In `"bubbles"`, each run of a reply's consecutive prose blocks (paragraphs, lists,
 block quotes and headings) shares one bubble, and every other block (a table, code
@@ -965,7 +968,13 @@ with its list or quote intact, and the prose before and after it still forms bub
 Inline code, links and nested lists keep a list prose. `"classic"` shows replies flat. In both, the person's own bubble fits its text at the trailing
 edge. `"solid"` fills it with the assistant's avatar color at OKLCH lightness capped at
 0.52, chroma and hue kept, under white text; a chat without an avatar color uses the
-tint.
+tint. A solid bubble stays opaque while its message sends, because fading the fill
+under white text takes it below 4.5:1; the tinted bubble fades as before.
+
+The iOS app draws an image as an inline "Open image" link, not as media, so an image
+there stays prose and can sit inside a bubble. A scheduled delivery is never in a
+person's bubble on either client: it is flat, full-width Markdown under its
+"Scheduled" label.
 
 <!-- Main assistant: begin -->
 
