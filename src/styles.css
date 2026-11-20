@@ -1157,9 +1157,6 @@
     gap: 4px;
     justify-self: start;
   }
-  .composer > .voice-controls {
-    display: contents;
-  }
   .composer .voice-actions {
     grid-area: voice;
   }
@@ -1392,9 +1389,6 @@
   }
   .settings-index .settings-group {
     border: 1px solid var(--line);
-  }
-  .settings-index .settings-row {
-    min-height: 60px;
   }
   .settings-section + .settings-section {
     margin-top: 28px;
@@ -1707,9 +1701,6 @@
     .jump-latest {
       bottom: calc(14px + var(--composer-overlap, 0px));
     }
-    .transcript-frame .computer-peek {
-      bottom: calc(12px + var(--composer-overlap, 0px));
-    }
     /* Find in chat and the Quote button float above it at 5, in transcript.css. */
     .composer-area {
       position: relative;
@@ -1724,18 +1715,15 @@
       padding: 4px;
       border-radius: 26px;
     }
+    /* Its shadows are in motion.css, beside the depth layer's own for the box, which outranks this layer. */
     .composer-area > .composer {
       background: var(--glass-fill);
       border-color: var(--glass-edge);
-      box-shadow: var(--glass-shadow);
       -webkit-backdrop-filter: var(--glass-backdrop);
       backdrop-filter: var(--glass-backdrop);
     }
     .composer-area > .composer:focus-within {
       border-color: var(--accent);
-      box-shadow:
-        0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent),
-        var(--glass-shadow);
     }
     .composer textarea {
       font-size: max(16px, 1rem);

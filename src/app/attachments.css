@@ -138,6 +138,11 @@
     background: var(--raised);
     padding: 3px 8px;
   }
+  /* The app's button hover, restated here: the base layer's rule loses to this layer. */
+  .attachment-image .attachment-retry:hover:enabled,
+  button.attachment-thumb:hover:enabled {
+    background: var(--accent-soft);
+  }
   .attachment-remove {
     position: absolute;
     top: -7px;
@@ -153,7 +158,8 @@
     color: var(--surface);
     box-shadow: 0 1px 4px #0002;
   }
-  .attachment-remove:hover {
+  /* Specific enough to beat the base button hover in either cascade: that one left a light icon on a light fill. */
+  .attachment-remove:hover:enabled {
     background: var(--danger);
   }
   /* A finger needs a bigger target than the drawn circle. */
@@ -211,6 +217,10 @@
     border: 0;
     padding: 4px;
     color: inherit;
+  }
+  /* The app's icon button hover, restated here: the base layer's rule loses to the one above. */
+  .attachment-notice .icon-button:hover:enabled {
+    color: var(--ink);
   }
   .attachment-preview {
     max-width: min(92vw, 1100px);

@@ -148,9 +148,6 @@
       border-radius: 24px 24px 0 0;
       padding-bottom: env(safe-area-inset-bottom);
     }
-    .command-palette[open] {
-      animation: palette-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
-    }
     .palette-escape,
     .palette-footer,
     .palette-option kbd {
@@ -160,6 +157,7 @@
       min-height: 52px;
     }
   }
+  /* motion.css plays it on a phone, where the palette rises from the bottom edge. */
   @keyframes palette-up {
     from {
       transform: translateY(30%);

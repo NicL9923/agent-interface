@@ -38,6 +38,10 @@
   .routine-run-summary:hover {
     background: color-mix(in srgb, var(--rail) 55%, transparent);
   }
+  /* The app's button hover, restated here: the base layer's rule loses to this layer. */
+  .routine-run-summary:hover:enabled {
+    background: var(--accent-soft);
+  }
   .routine-run-summary:focus-visible {
     outline: 3px solid var(--accent);
     outline-offset: 2px;
