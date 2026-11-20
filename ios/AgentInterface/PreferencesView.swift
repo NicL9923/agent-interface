@@ -81,6 +81,16 @@ struct PreferencesView: View {
           Picker("Appearance", selection: $preferences.theme) {
             Text("Follow device").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
           }
+          Picker("Chat style", selection: $preferences.chatStyleChoice) {
+            Text("Bubbles").tag(ChatStyle.bubbles); Text("Classic").tag(ChatStyle.classic)
+          }.accessibilityIdentifier("chatStyle")
+          VStack(alignment: .leading, spacing: 4) {
+            Picker("Your messages", selection: $preferences.ownBubbleChoice) {
+              Text("Tinted").tag(OwnBubble.tint); Text("Solid color").tag(OwnBubble.solid)
+            }.accessibilityIdentifier("ownBubble")
+            Text("Solid color uses each assistant's color. Assistants with a photo keep the tint.").font(.caption).foregroundStyle(Palette.muted)
+              .fixedSize(horizontal: false, vertical: true)
+          }
           HStack {
             VStack(alignment: .leading, spacing: 4) {
               Text("Advanced details")

@@ -37,6 +37,11 @@ enum Palette {
   static func user(_ scheme: ColorScheme) -> Color {
     Color(hex: scheme == .dark ? "#2A3A2E" : "#E7EEE4")
   }
+  /// A reply bubble: the ink color at 7% over the surface, mixed in sRGB (ink #282C27 over #FAF8F2,
+  /// and #F1EFDF over #1B211E in dark).
+  static let replyBubble = Color.adaptive(light: "#EBEAE4", dark: "#2A2F2C")
+  /// A bubble's edge with Increase Contrast on: at least 3:1 against the surface in both appearances.
+  static let bubbleBorder = muted
 }
 
 /// A small tool the avatar holds while Hermes runs a recognizable kind of tool. It mirrors
