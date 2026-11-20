@@ -42,6 +42,11 @@
   .message-rail:focus-within .message-rail-tick {
     opacity: 1;
   }
+  /* Only the mark answers a hover. Specific enough to hold against the base button hover's fill by specificity too,
+     which e2e/cascade-layers.spec.ts checks. */
+  .message-rail-tick:hover:enabled {
+    background: transparent;
+  }
   .message-rail-tick:hover::after,
   .message-rail-tick:focus-visible::after {
     width: 16px;

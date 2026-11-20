@@ -6,6 +6,10 @@
     align-items: center;
     gap: 2px 8px;
   }
+  /* In the composer its buttons take the composer grid's voice and panel areas themselves. */
+  .composer > .voice-controls {
+    display: contents;
+  }
   .voice-actions {
     display: flex;
     gap: 4px;

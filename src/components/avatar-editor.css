@@ -44,6 +44,10 @@
     border-radius: 999px;
     background: var(--raised);
   }
+  /* The app's button hover, restated here: the base layer's rule loses to this layer. */
+  .avatar-stage-states button:hover:enabled {
+    background: var(--accent-soft);
+  }
   @media (max-width: 620px) {
     .avatar-stage-states button {
       min-height: 44px;

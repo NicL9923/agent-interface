@@ -315,6 +315,10 @@
     text-align: left;
     cursor: pointer;
   }
+  /* The app's button hover, restated here: the base layer's rule loses to this layer. */
+  .automation-task-group-toggle:hover:enabled {
+    background: var(--accent-soft);
+  }
   .automation-task-group-toggle:focus-visible,
   .automation-task summary:focus-visible {
     outline: 2px solid var(--accent);
