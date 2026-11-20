@@ -953,8 +953,7 @@ and sync to every device like `theme`. `PATCH /api/preferences` answers 400 for 
 other value, with the field's name in `details[].path`. An omitted value keeps the
 saved one, so a client that predates them cannot clear them; send the default
 explicitly to go back to it. A client sends `chatStyle` or `ownBubble` only when the
-person changed it, and only a value it knows, so one device cannot write its stale copy over a choice made on another. The web client's preference queue follows the same rule (`src/app/preference-queue.ts`). A save answered without a value the client sent means
-the server predates the field; say so to the person and show what the server holds.
+person changed it, and only a value it knows, so one device cannot write its stale copy over a choice made on another. The web client's preference queue follows the same rule (`src/app/preference-queue.ts`). On both clients the control the person used names the choice it set, because the values cannot always show it: the screen may hold another device's choice while a save still waiting holds the one the person now picks. A save answered without a value the app sent means the server predates the field; the iOS app says so to the person and shows what the server holds. The web client is served by the server it talks to, so it never meets that case.
 
 In `"bubbles"`, each run of a reply's consecutive prose blocks (paragraphs, lists,
 block quotes and headings) shares one bubble, and every other block (a table, code

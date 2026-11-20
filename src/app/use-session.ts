@@ -7,7 +7,7 @@ import {
   request as apiRequest,
   setCsrf,
 } from "../client-api";
-import { preferenceQueue } from "./preference-queue";
+import { preferenceQueue, type OwnChoice } from "./preference-queue";
 import { prefetchLinkedChat, settleLinkedChat } from "./linked-chat";
 import {
   accountEpoch,
@@ -270,8 +270,10 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   const applyPreferences = (value: Preferences) =>
     setBoot((previous) => (previous ? { ...previous, preferences: value } : previous));
   /** Applies an edit to the newest preferences, including a save still on its way. */
-  const editPreferences = (edit: (value: Preferences) => Preferences) =>
-    preferences.current!.edit(edit, bootRef.current?.preferences);
+  const editPreferences = (
+    edit: (value: Preferences) => Preferences,
+    chosen?: readonly OwnChoice[],
+  ) => preferences.current!.edit(edit, bootRef.current?.preferences, chosen);
   return {
     boot,
     auth,

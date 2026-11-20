@@ -3859,4 +3859,74 @@ describe("chat style", () => {
       vi.mocked(write).mockReset().mockResolvedValue({});
     }
   });
+
+  // Another device saved Classic while this tab held Bubbles. An answer brings Classic on screen while a save built
+  // on Bubbles still waits. Picking Bubbles then equals what that save holds, so only the picker can say it changed.
+  it("sends a chat style picked in Settings though a save still waiting holds the old one", async () => {
+    for (const [method, open] of [
+      ["showModal", true],
+      ["close", false],
+    ] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, method, {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.open = open;
+        },
+      });
+    const before = bootstrap.preferences;
+    bootstrap.preferences = { ...before, chatStyle: "bubbles" };
+    const bodies: Record<string, unknown>[] = [];
+    const answers: (() => void)[] = [];
+    // As the server does, this keeps a choice a save leaves out. Each save answers when the test lets it.
+    let held: Record<string, unknown> = { ...bootstrap.preferences };
+    vi.mocked(write).mockImplementation(<T>(path: string, value?: unknown) => {
+      if (path !== "/preferences") return Promise.resolve({} as T);
+      bodies.push(value as Record<string, unknown>);
+      return new Promise<T>((resolve) =>
+        answers.push(() => {
+          held = { ...held, ...(value as Record<string, unknown>) };
+          resolve(held as T);
+        }),
+      );
+    });
+    const openSettings = async () => {
+      await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
+      await act(async () =>
+        [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+          .find((item) => item.textContent === "Settings")!
+          .click(),
+      );
+      await loaded();
+    };
+    const picker = (label: string) =>
+      [...container.querySelectorAll(".settings-row")]
+        .find((row) => row.querySelector(".row-label")?.textContent === label)!
+        .querySelector("select")!;
+    const choose = async (label: string, value: string) => {
+      const select = picker(label);
+      select.value = value;
+      await act(async () => select.dispatchEvent(new Event("change", { bubbles: true })));
+    };
+    try {
+      await render();
+      await openSettings();
+      await choose("Appearance", "dark");
+      await choose("Start page", "today");
+      held = { ...held, chatStyle: "classic" };
+      await act(async () => answers[0]());
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>('[aria-label="Close settings"]')!.click(),
+      );
+      await openSettings();
+      expect(picker("Chat style").value).toBe("classic");
+      await choose("Chat style", "bubbles");
+      await act(async () => answers[1]());
+      expect(bodies[2]).toMatchObject({ chatStyle: "bubbles" });
+      await act(async () => answers[2]());
+      expect(picker("Chat style").value).toBe("bubbles");
+    } finally {
+      bootstrap.preferences = before;
+      vi.mocked(write).mockReset().mockResolvedValue({});
+    }
+  });
 });

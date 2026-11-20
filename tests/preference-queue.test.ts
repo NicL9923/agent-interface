@@ -177,3 +177,36 @@ it("keeps a choice a later edit builds on, though that edit does not send it", a
   expect(sent[1]).not.toHaveProperty("ownBubble");
   expect(applied.at(-1)).toMatchObject({ theme: "dark", ownBubble: "solid" });
 });
+
+// A change measured against the queue's newest value misses one case. An answer can bring another tab's Classic on
+// screen while a save built on Bubbles still waits. The person then picks Bubbles, which equals what the waiting
+// save holds, so only the pick itself says the choice changed.
+it("sends a choice the person picks though a save still waiting holds that value", async () => {
+  const replies = [deferred(), deferred(), deferred()];
+  const sent: Preferences[] = [];
+  const held = { ...base, theme: "light", chatStyle: "bubbles" } as Preferences;
+  let screen = held;
+  const queue = preferenceQueue({
+    send: (value) => {
+      sent.push(value);
+      return replies[sent.length - 1].promise;
+    },
+    apply: (value) => {
+      screen = value;
+    },
+    failed: vi.fn(),
+    account: () => 1,
+  });
+  const first = queue.edit((value) => ({ ...value, theme: "dark" }), screen);
+  const second = queue.edit((value) => ({ ...value, startPage: "today" }), screen);
+  replies[0].resolve({ ...held, theme: "dark", chatStyle: "classic" });
+  await first;
+  expect(screen.chatStyle).toBe("classic");
+  const third = queue.edit((value) => ({ ...value, chatStyle: "bubbles" }), screen, ["chatStyle"]);
+  replies[1].resolve({ ...screen, startPage: "today" });
+  await second;
+  expect(sent[2]).toMatchObject({ chatStyle: "bubbles" });
+  replies[2].resolve({ ...screen, chatStyle: "bubbles" });
+  await third;
+  expect(screen.chatStyle).toBe("bubbles");
+});

@@ -40,6 +40,33 @@ Each line was broken by hand and the file restored from a saved copy.
 | Send every choice the value holds                       | all 3 new         | `.private/web-chat-style-save/red-send-everything.log`        |
 | An edit never carries a choice                          | all 3 new         | `.private/web-chat-style-save/red-never-send.log`             |
 
+## A pick the values could not show
+
+A final independent review found a case the first version dropped. Tab A last saw Bubbles. Another
+tab saves Classic. Tab A queues two unrelated edits; the first answer brings Classic on screen while
+the second save, built on Bubbles, still waits. The person reopens Settings and picks Bubbles. The
+queue compared that pick with its waiting value, found no change, and left `chatStyle` out, so the
+picker went back to Classic.
+
+A change of values cannot show that pick, so the picker now says it. `PreferencesDialog` names the
+chat style choices an update sets, and that travels through `usePreferenceEdits` and the session to
+the queue's `edit`, which sends a named choice whatever the queue holds. The value comparison stays
+as a net for an edit that changes a choice without naming it. The iOS app works the same way.
+
+| Check                                                  | Result                                                    | Evidence                                                      |
+| ------------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------- |
+| Typecheck, lint, format check                          | Compiled and passed                                       |                                                               |
+| Full Vitest                                            | Unit-passed: 4,192 tests in 229 files, 2 more new         |                                                               |
+| The 2 new tests, queue and Settings, before the change | Failed as intended: the third save carried no `chatStyle` | `.private/web-chat-style-save/red-explicit-choice-before.log` |
+| The Settings pickers name no choice                    | The Settings test failed                                  | `.private/web-chat-style-save/red-picker-names-nothing.log`   |
+| The queue ignores the named choice                     | Both new tests failed                                     | `.private/web-chat-style-save/red-queue-ignores-chosen.log`   |
+| The edits hook drops the named choice                  | The Settings test failed                                  | `.private/web-chat-style-save/red-hook-drops-chosen.log`      |
+| The session drops the named choice                     | The Settings test failed                                  | `.private/web-chat-style-save/red-session-drops-chosen.log`   |
+
+The Settings test opens Settings, queues two saves, lets the first answer with another device's
+Classic, closes and reopens Settings, picks Bubbles while the second save waits, and reads the third
+save's body.
+
 ## Not done
 
 - The rest of the preferences object is still sent whole, as before. A stale tab can still write an

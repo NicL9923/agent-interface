@@ -13,8 +13,8 @@ import type { Preferences } from "../shared/types";
  * it changed it. The server keeps a choice a save leaves out, and this tab's copy may be older than
  * a choice made since on another device, which a whole object would write back over it.
  */
-const OWN_CHOICES = ["chatStyle", "ownBubble"] as const;
-type OwnChoice = (typeof OWN_CHOICES)[number];
+export const OWN_CHOICES = ["chatStyle", "ownBubble"] as const;
+export type OwnChoice = (typeof OWN_CHOICES)[number];
 
 export function preferenceQueue(options: {
   send(value: Preferences): Promise<Preferences>;
@@ -59,16 +59,25 @@ export function preferenceQueue(options: {
     tail = run;
     return run;
   };
-  /** `saved` is the screen's current preferences, used when nothing is queued for this account. */
-  const edit = (change: (value: Preferences) => Preferences, saved: Preferences | undefined) => {
+  /**
+   * `saved` is the screen's current preferences, used when nothing is queued for this account. `chosen` names the
+   * chat style choices the person set with this edit, which a picker knows and the values cannot always show: the
+   * screen may hold another device's choice while a save still waiting holds the one the person now picks.
+   */
+  const edit = (
+    change: (value: Preferences) => Preferences,
+    saved: Preferences | undefined,
+    chosen: readonly OwnChoice[] = [],
+  ) => {
     const latest = newest?.account === options.account() ? newest.value : saved;
     if (!latest) return Promise.resolve();
     const next = change(latest);
-    // Measured against the value the edit was made on, a queued one included, never against what the server last
-    // confirmed: a choice changed and changed back while the first save is on its way equals the confirmed one.
+    // An edit that changes a choice without naming it still carries it. That change is measured against the value
+    // the edit was made on, a queued one included, never against what the server last confirmed: a choice changed
+    // and changed back while the first save is on its way equals the confirmed one.
     return save(
       next,
-      OWN_CHOICES.filter((choice) => next[choice] !== latest[choice]),
+      OWN_CHOICES.filter((choice) => chosen.includes(choice) || next[choice] !== latest[choice]),
     );
   };
   /** Taken when a read starts; `fresh` is true only if no save was running or ran since. */
