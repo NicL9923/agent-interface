@@ -79,8 +79,10 @@ import XCTest
     // Return adds too.
     name.typeWhenFocused("Kids\n")
     XCTAssertTrue(section(app, "Kids").waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["reorderSections"].exists)
+    // The chat style rows make Settings taller, so the reorder row can start below the fold.
+    reveal(app, app.buttons["reorderSections"])
 
+    reveal(app, section(app, "Around the house"), up: false)
     section(app, "Around the house").tap()
     XCTAssertTrue(app.textFields["sectionName"].waitForExistence(timeout: 5))
     app.buttons["assistantCheck.ranch"].tap()
