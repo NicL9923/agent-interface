@@ -319,6 +319,23 @@ import XCTest
     XCTAssertTrue(style.label.contains("Classic") || (style.value as? String) == "Classic", "The saved choice comes back: \(style.label)")
   }
 
+  /// A scheduled delivery reads as flat Markdown at the full column width, labeled at the leading edge, as on
+  /// the web. Only words a person sent sit in the person's bubble at the trailing edge.
+  func testAScheduledDeliveryStaysOutOfThePersonsBubble() throws {
+    let app = launch(["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1"])
+    let tables = app.scrollViews.matching(NSPredicate(format: "label == %@", "Table"))
+    XCTAssertTrue(waitFor { tables.count == 2 }, app.debugDescription)
+    let ordered = tables.allElementsBoundByIndex.sorted { $0.frame.minY < $1.frame.minY }
+    let delivery = ordered[0].frame, reply = ordered[1].frame
+    XCTAssertEqual(delivery.minX, reply.minX, accuracy: 2, "The delivery starts at the column edge, as a reply's table does")
+    XCTAssertGreaterThanOrEqual(delivery.width, reply.width - 2, "The delivery's table gets the full column: \(delivery.width) vs \(reply.width)")
+    let label = app.staticTexts["Scheduled"]
+    XCTAssertTrue(label.exists)
+    XCTAssertLessThan(label.frame.minX, app.frame.midX, "Its label sits at the leading edge: \(label.frame)")
+    let ask = app.staticTexts["Which one first?"]
+    XCTAssertGreaterThan(ask.frame.minX, app.frame.midX, "A person's words keep their bubble at the trailing edge: \(ask.frame)")
+  }
+
   /// A server from before chat styles saves the rest of Settings and answers without the choice. Settings says
   /// why the choice did not stick and shows what the server holds.
   func testAServerWithoutChatStylesExplainsWhyTheChoiceDidNotSave() throws {
@@ -369,6 +386,24 @@ import XCTest
         try shoot("nested-code-\(style)-\(theme)", ["AGENT_INTERFACE_UI_NESTED_CODE": "1", "AGENT_INTERFACE_UI_THEME": theme,
           "AGENT_INTERFACE_UI_CHAT_STYLE": style], ready: "Copy code")
       }
+    }
+    // Review fixes: a quote in a bubble with a table after it, a scheduled delivery holding a table, and solid
+    // bubbles with Increase Contrast on and while a message is on its way.
+    for theme in ["light", "dark"] {
+      try shoot("review-solid-\(theme)", ["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1", "AGENT_INTERFACE_UI_THEME": theme,
+        "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid"], ready: "Which one first?")
+      try shoot("review-contrast-\(theme)", ["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1", "AGENT_INTERFACE_UI_THEME": theme,
+        "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid", "AGENT_INTERFACE_UI_INCREASE_CONTRAST": "1"], ready: "Which one first?")
+      let app = launch(["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1", "AGENT_INTERFACE_UI_THEME": theme, "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid",
+        "AGENT_INTERFACE_UI_SEND_HOLD": "1"])
+      let composer = app.textViews["messageComposer"]
+      XCTAssertTrue(composer.waitForExistence(timeout: 15))
+      composer.tapWhenReady()
+      composer.typeText("Thanks, heading out now.")
+      app.buttons["sendMessage"].tapWhenReady()
+      XCTAssertTrue(app.staticTexts["Thanks, heading out now."].waitForExistence(timeout: 5))
+      try capture(app, "iphone-review-sending-\(theme)")
+      app.terminate()
     }
     try shoot("progress-bubbles-accessibility-xl", ["AGENT_INTERFACE_UI_PROGRESS": "1"],
       arguments: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])

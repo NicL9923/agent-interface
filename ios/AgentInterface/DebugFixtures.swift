@@ -1,6 +1,7 @@
 #if DEBUG
   import Foundation
   import CryptoKit
+  import UIKit
   import UserNotifications
 
   /// UI test transport only. Shipping Release builds contain no fixture transport.
@@ -80,6 +81,10 @@
         store.host = ""
       }
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return false }
+      // Increase Contrast for screenshots, which a UI test cannot switch on in Settings.
+      if environment["AGENT_INTERFACE_UI_INCREASE_CONTRAST"] == "1" {
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes { scene.traitOverrides.accessibilityContrast = .high }
+      }
       precondition(!(environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" && FixtureProtocol.designFixture?["screen"] as? String == "work"),
         "The Work design fixture cannot be combined with the automation flow fixture.")
       VoiceController.fixtureRecording = true
@@ -222,6 +227,8 @@
         }
         // A reply whose list holds a code block, then the person's follow-up and a short answer last.
         if environment["AGENT_INTERFACE_UI_NESTED_CODE"] == "1" { FixtureProtocol.messages = TranscriptFixtures.nestedCode }
+        // A scheduled delivery holding a table, then a reply whose quoted prose a table follows.
+        if environment["AGENT_INTERFACE_UI_BUBBLE_REVIEW"] == "1" { FixtureProtocol.messages = TranscriptFixtures.bubbleReview }
         if environment["AGENT_INTERFACE_UI_RETRY"] != nil { FixtureProtocol.messages = TranscriptFixtures.failed }
         if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
           FixtureProtocol.preferences["presentation"] = presentation
@@ -521,6 +528,8 @@
       Self.lock.lock()
       defer { Self.lock.unlock() }
       let path = request.url!.path
+      // A send that Hermes never answers, so the message stays on its way.
+      if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_SEND_HOLD"] == "1", request.httpMethod == "POST", path.hasSuffix("/messages") { return }
       if let data = Self.uploadedPortraits[path] {
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self); return
@@ -1558,6 +1567,16 @@
        "sender": ["id": "native-test", "name": "Local test member"]],
       ["id": "nested-answer", "role": "assistant", "createdAt": "2026-10-01T15:04:08.000Z",
        "text": "Yes. It closes at 9 PM on its usual schedule, and the evening check confirms it."],
+    ] }
+    static var bubbleReview: [[String: Any]] { [
+      ["id": "review-ask", "role": "user", "text": "Send me the gate batteries every morning.", "createdAt": "2026-10-01T06:50:00.000Z",
+       "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "review-delivery", "role": "user", "createdAt": "2026-10-01T07:00:00.000Z",
+       "text": "[Cron delivery: Gate batteries]\nThis morning's levels:\n\n| Gate | Battery | Last checked |\n| --- | ---: | --- |\n| North | 18% | 6:40 AM |\n| South | 92% | 6:41 AM |\n| Barn | 64% | 6:43 AM |"],
+      ["id": "review-follow-up", "role": "user", "text": "Which one first?", "createdAt": "2026-10-01T07:05:00.000Z",
+       "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "review-answer", "role": "assistant", "createdAt": "2026-10-01T07:05:10.000Z",
+       "text": "Start with the north gate.\n\n> Check the gate before you leave.\n\n| Gate | Battery | Replace |\n| --- | ---: | --- |\n| North | 18% | Today |\n| Barn | 64% | Next month |"],
     ] }
     static var failed: [[String: Any]] { [
       ["id": "retry-prompt", "role": "user", "text": "Is the north gate closed?", "sender": ["id": "native-test", "name": "Local test member"]],

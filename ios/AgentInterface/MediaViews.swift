@@ -252,7 +252,7 @@ struct MarkdownBlockView: View {
     case .code(let language, let text):
       MarkdownCodeBlock(code: text, language: language)
     case .quote(let blocks):
-      AnyView(MarkdownBlocksView(blocks: blocks, listDepth: listDepth)).foregroundStyle(Palette.muted)
+      AnyView(MarkdownBlocksView(blocks: blocks, listDepth: listDepth)).foregroundStyle(Palette.quote)
         .padding(.leading, 14)
         .overlay(alignment: .leading) { Rectangle().fill(Palette.line).frame(width: 3) }
     case .list(let list):

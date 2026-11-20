@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import AgentInterface
 
@@ -45,6 +46,23 @@ final class ChatBubblesTests: XCTestCase {
     XCTAssertEqual(shape("Note:\n\n> Run\n>\n> ```\n> ls\n> ```"), ["bubble 1", "quote"])
     XCTAssertEqual(shape("> Morning.\n>\n> ---\n>\n> Evening."), ["quote"])
     XCTAssertEqual(shape("Plain:\n\n- North\n- South\n\n> Check the gate first."), ["bubble 3"])
+  }
+  /// Only the bubble that ends a reply points at the assistant. One that a table or code block follows joins
+  /// it with the tighter corner instead, as on the web, and a reply part that another part follows has no tail.
+  func testOnlyTheReplysFinalBubbleCarriesTheTail() {
+    func corners(_ text: String, endsReply: Bool = true) -> [String] {
+      let segments = ReplyBubbles.segments(ReplyCards.parse(text), streaming: false)
+      return segments.filter(\.isBubble).map { segment in
+        let corners = ReplyBubbles.corners(at: segment.id, count: segments.count, endsReply: endsReply)
+        return "\(Int(corners.top))/\(Int(corners.bottom))"
+      }
+    }
+    let table = "| Gate | Battery |\n| --- | ---: |\n| North | 18% |"
+    XCTAssertEqual(corners("Start with the north gate.\n\n\(table)"), ["18/8"], "A table follows, so the bubble joins it")
+    XCTAssertEqual(corners("Before.\n\n```sh\nls\n```"), ["18/8"])
+    XCTAssertEqual(corners("Before.\n\n\(table)\n\nAfter."), ["18/8", "8/4"])
+    XCTAssertEqual(corners("Only prose."), ["18/4"])
+    XCTAssertEqual(corners("Only prose.", endsReply: false), ["18/18"])
   }
   func testCardsSplitTheReplyAndKeepTheirOwnBlock() {
     let card = #"{"version":1,"cards":[{"id":"feed","type":"checklist","title":"Feed","items":[{"id":"hay","text":"Hay"}]}]}"#
@@ -95,8 +113,9 @@ final class ChatBubblesTests: XCTestCase {
     XCTAssertEqual(saved.chatStyleChoice, .classic)
     XCTAssertEqual(saved.ownBubbleChoice, .solid)
   }
-  /// A value from a newer client reads as the default, and a save of another setting passes it on unchanged.
-  func testAnUnknownChoiceReadsAsTheDefaultAndSurvivesASave() throws {
+  /// A value from a newer client reads as the default and stays in the copy this app keeps offline. A settings
+  /// save never sends it back; NativeContractTests covers that.
+  func testAnUnknownChoiceReadsAsTheDefaultAndStaysInTheCachedCopy() throws {
     var newer = try decode(#","chatStyle":"compact","ownBubble":"gradient""#)
     XCTAssertEqual(newer.chatStyleChoice, .bubbles)
     XCTAssertEqual(newer.ownBubbleChoice, .tint)
@@ -144,12 +163,111 @@ final class ChatBubblesTests: XCTestCase {
       XCTAssertEqual(Self.lightness(fill), 0.52, accuracy: 0.003, "\(color) became \(fill)")
     }
   }
+  /// Fills from an independent implementation of the same rule: sRGB to OKLab by way of CIE XYZ, lightness
+  /// capped at 0.52, and chroma bisected to the sRGB edge, the most sRGB shows at that lightness and hue.
+  /// One unit a channel allows for rounding. A wrong coefficient in this app's conversion moves a fill well past
+  /// that, which hue and lightness checks made with the same conversion cannot see. A reference that steps
+  /// chroma down 2% at a time lands up to 8 units inside the edge in a channel near zero, where sRGB is
+  /// steepest (#FF263C gives #C40826), so it cannot hold the tolerance this needs.
+  func testSolidFillMatchesAnIndependentReference() throws {
+    let reference = [
+      "#1084FE": "#0066CA", "#FF6700": "#AC4300", "#00BCA6": "#007A6B", "#FF263C": "#C50025", "#FF309B": "#BD006E",
+      "#9159FE": "#7738DD", "#FF9800": "#975800", "#97683D": "#8B5D32", "#292929": "#292929",
+    ]
+    for (color, expected) in reference {
+      let fill = try XCTUnwrap(SolidBubble.fill(color))
+      let (r, g, b) = try XCTUnwrap(AvatarMotion.rgb(fill)), (er, eg, eb) = try XCTUnwrap(AvatarMotion.rgb(expected))
+      XCTAssertLessThanOrEqual(max(abs(r - er), abs(g - eg), abs(b - eb)), 1, "\(color) became \(fill), expected \(expected)")
+    }
+  }
   func testOnlyADrawnAvatarTintsTheBubble() {
     XCTAssertEqual(SolidBubble.tint(AvatarConfig(color: "#FF6700")), "#FF6700")
     XCTAssertNil(SolidBubble.tint(AvatarConfig(mode: .portrait, color: "#FF6700", src: "/api/files/me")), "A portrait keeps the tint")
     XCTAssertNil(SolidBubble.tint(nil))
     XCTAssertNil(SolidBubble.tint(AvatarConfig(color: nil)))
     XCTAssertNil(SolidBubble.tint(AvatarConfig(color: "orange")), "A color that is not hex is ignored, as on the web")
+  }
+
+  // MARK: Contrast
+
+  private static let avatarColors = AvatarConfig.colors + ["#1084FE", "#FF6700", "#00BCA6", "#FF263C", "#FF309B", "#9159FE", "#FF9800", "#97683D", "#292929"]
+  /// A color as one appearance draws it, with its alpha.
+  private static func resolved(_ color: Color, dark: Bool) -> (r: Double, g: Double, b: Double, a: Double) {
+    let ui = UIColor(color).resolvedColor(with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light))
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+    return (Double(r), Double(g), Double(b), Double(a))
+  }
+  /// `top` at `opacity` (times its own alpha) over an opaque `bottom`, as 0...1 channels.
+  private static func over(_ top: (r: Double, g: Double, b: Double, a: Double), _ bottom: (r: Double, g: Double, b: Double, a: Double),
+    opacity: Double = 1) -> (r: Double, g: Double, b: Double, a: Double) {
+    let a = top.a * opacity
+    return (top.r * a + bottom.r * (1 - a), top.g * a + bottom.g * (1 - a), top.b * a + bottom.b * (1 - a), 1)
+  }
+  private static func luminance(_ c: (r: Double, g: Double, b: Double, a: Double)) -> Double {
+    func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+    return 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
+  }
+  private static func ratio(_ x: (r: Double, g: Double, b: Double, a: Double), _ y: (r: Double, g: Double, b: Double, a: Double)) -> Double {
+    let (l1, l2) = (luminance(x), luminance(y))
+    return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+  }
+
+  /// Every text color that can sit in a reply bubble or the person's tinted bubble reads at 4.5:1 on its fill
+  /// in both appearances; a task's empty box, a graphic, at 3:1. A palette change that lowers one fails here.
+  func testTextInsideABubbleKeepsItsContrastInBothAppearances() {
+    let light = Self.resolved(Palette.replyBubble, dark: false), dark = Self.resolved(Palette.replyBubble, dark: true)
+    XCTAssertGreaterThan(abs(light.r - dark.r), 0.5, "The reply fill resolves per appearance")
+    for isDark in [false, true] {
+      let scheme: ColorScheme = isDark ? .dark : .light
+      let reply = Self.resolved(Palette.replyBubble, dark: isDark), person = Self.resolved(Palette.user(scheme), dark: isDark)
+      let pairs: [(String, Color, (r: Double, g: Double, b: Double, a: Double), Double)] = [
+        ("reply text, headings, inline code and list numbers", Color(uiColor: .label), reply, 4.5),
+        ("a link in a reply", Palette.accent, reply, 4.5),
+        ("a block quote", Palette.quote, reply, 4.5),
+        ("a task's empty box", Palette.bubbleSecondary, reply, 3),
+        ("the person's text and a file's name", Color(uiColor: .label), person, 4.5),
+        ("a file's size under the person's message", Palette.bubbleSecondary, person, 4.5),
+      ]
+      for (name, text, fill, minimum) in pairs {
+        let value = Self.ratio(Self.over(Self.resolved(text, dark: isDark), fill), fill)
+        XCTAssertGreaterThanOrEqual(value, minimum, "\(name) in \(isDark ? "dark" : "light"): \(String(format: "%.2f", value)):1")
+      }
+    }
+  }
+  /// With Increase Contrast on, every person's bubble has an edge at 3:1 against the transcript, solid ones too.
+  func testIncreasedContrastGivesEveryPersonsBubbleAVisibleEdge() throws {
+    for isDark in [false, true] {
+      let scheme: ColorScheme = isDark ? .dark : .light
+      let surface = Self.resolved(Palette.surface(scheme), dark: isDark)
+      let tinted = PersonBubbles.border(solid: false, increasedContrast: true) ?? Palette.user(scheme)
+      XCTAssertGreaterThanOrEqual(Self.ratio(Self.resolved(tinted, dark: isDark), surface), 3, "Tinted in \(scheme)")
+      for color in Self.avatarColors {
+        let fill = try XCTUnwrap(SolidBubble.fill(color))
+        let edge = PersonBubbles.border(solid: true, increasedContrast: true) ?? Color(hex: fill)
+        let value = Self.ratio(Self.resolved(edge, dark: isDark), surface)
+        XCTAssertGreaterThanOrEqual(value, 3, "\(color) as \(fill) in \(scheme): \(String(format: "%.2f", value)):1")
+      }
+    }
+  }
+  /// While it is on its way, a solid bubble's white text still reads at 4.5:1 over the transcript.
+  func testASolidBubbleOnItsWayKeepsItsTextReadable() throws {
+    let opacity = PersonBubbles.sendingOpacity(solid: true)
+    for isDark in [false, true] {
+      let surface = Self.resolved(Palette.surface(isDark ? .dark : .light), dark: isDark)
+      for color in Self.avatarColors {
+        let fill = try XCTUnwrap(SolidBubble.fill(color))
+        let background = Self.over(Self.resolved(Color(hex: fill), dark: isDark), surface, opacity: opacity)
+        let text = Self.over(Self.over(Self.resolved(.white, dark: isDark), Self.resolved(Color(hex: fill), dark: isDark)), surface, opacity: opacity)
+        let value = Self.ratio(text, background)
+        XCTAssertGreaterThanOrEqual(value, 4.5, "\(color) as \(fill) in \(isDark ? "dark" : "light"): \(String(format: "%.2f", value)):1")
+      }
+    }
+  }
+  /// The person's bubble takes up to 86% of the column and stops at 560 points, as the web's min(86%, 560px).
+  func testThePersonsBubbleStopsAt560Points() {
+    XCTAssertEqual(PersonBubbles.layout.width(for: 390), 335.4, accuracy: 0.01, "A phone column")
+    XCTAssertEqual(PersonBubbles.layout.width(for: 900), 560, "An iPad column")
   }
 
   private static func hex(hue: Double) -> String {

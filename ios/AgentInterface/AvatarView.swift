@@ -42,6 +42,12 @@ enum Palette {
   static let replyBubble = Color.adaptive(light: "#EAE8E2", dark: "#272D29")
   /// A bubble's edge with Increase Contrast on: at least 3:1 against the surface in both appearances.
   static let bubbleBorder = muted
+  /// A block quote's text: at least 4.5:1 on the reply bubble's fill as well as on the surface, which
+  /// `muted` misses in light (4.07:1 on #EAE8E2). ChatBubblesTests checks every color a bubble holds.
+  static let quote = messageMetadata
+  /// Secondary text inside a bubble, such as a file's size or a task's empty box. The system's secondary
+  /// label reads at 3.2:1 on the bubble fills in light.
+  static let bubbleSecondary = messageMetadata
 }
 
 /// A small tool the avatar holds while Hermes runs a recognizable kind of tool. It mirrors

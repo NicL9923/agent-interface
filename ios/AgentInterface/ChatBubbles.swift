@@ -168,12 +168,13 @@ enum ReplyBubbles {
     }
     return result
   }
-  /// A bubble's leading corners. Where it meets another piece of the reply the corner tightens, and
-  /// the last bubble of a finished reply points at the assistant, mirroring the person's bubble.
-  static func corners(at index: Int, in segments: [ReplySegment], endsReply: Bool) -> (top: CGFloat, bottom: CGFloat) {
-    let last = segments.lastIndex { $0.isBubble }
+  /// The leading corners of the bubble at `index` among a reply's `count` segments. Where it meets
+  /// another piece of the reply the corner tightens. Only a bubble that is the final segment of a finished
+  /// reply points at the assistant, mirroring the person's bubble; one a table or code block follows
+  /// joins it instead, as on the web.
+  static func corners(at index: Int, count: Int, endsReply: Bool) -> (top: CGFloat, bottom: CGFloat) {
     let top: CGFloat = index > 0 ? 8 : 18
-    let bottom: CGFloat = index == last && endsReply ? 4 : index < segments.count - 1 ? 8 : 18
+    let bottom: CGFloat = index < count - 1 ? 8 : endsReply ? 4 : 18
     return (top, bottom)
   }
 }
@@ -199,7 +200,9 @@ struct BubbleWidth: Layout {
   var fraction: CGFloat = 1
   var cap: CGFloat = .infinity
   var trailing = false
-  private func limit(_ width: CGFloat?) -> CGFloat? { width.map { min($0 * fraction, cap) } }
+  /// The widest the bubble may be in a column this wide.
+  func width(for column: CGFloat) -> CGFloat { min(column * fraction, cap) }
+  private func limit(_ width: CGFloat?) -> CGFloat? { width.map(self.width(for:)) }
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     guard let child = subviews.first else { return .zero }
     let size = child.sizeThatFits(ProposedViewSize(width: limit(proposal.width), height: proposal.height))
@@ -226,7 +229,7 @@ struct BubbledReplyView: View {
       ForEach(segments) { segment in
         switch segment.kind {
         case .bubble(let blocks, let settled):
-          let corners = ReplyBubbles.corners(at: segment.id, in: segments, endsReply: endsReply)
+          let corners = ReplyBubbles.corners(at: segment.id, count: segments.count, endsReply: endsReply)
           ReplyBubble(blocks: blocks, settled: settled, top: corners.top, bottom: corners.bottom)
         case .block(let block, let settled):
           MarkdownBlockView(block: block, listDepth: 0).environment(\.markdownSettled, settled)
@@ -251,6 +254,7 @@ private struct ReplyBubble: View {
       topLeadingRadius: top, bottomLeadingRadius: bottom, bottomTrailingRadius: 18, topTrailingRadius: 18, style: .continuous)
     BubbleWidth(cap: sizeClass == .regular ? 600 : .infinity) {
       MarkdownBlocksView(blocks: blocks, settled: settled).markdownLinks()
+        .foregroundStyle(Color.primary, Palette.bubbleSecondary)
         .padding(.vertical, 10).padding(.horizontal, 14)
         .background(Palette.replyBubble, in: shape)
         .overlay { if contrast == .increased { shape.strokeBorder(Palette.bubbleBorder) } }
@@ -258,8 +262,23 @@ private struct ReplyBubble: View {
   }
 }
 
-/// The person's message bubble, in both chat styles: it hugs its text up to 86% of the column at the
-/// trailing edge, with its tail at the bottom trailing corner. `solid` fills it with the assistant's
+/// The rules the person's bubble follows, apart from its content.
+enum PersonBubbles {
+  /// 86% of the column, and no wider than 560 points, as the web's min(86%, 560px).
+  static let layout = BubbleWidth(fraction: 0.86, cap: 560, trailing: true)
+  /// The edge drawn around the bubble: with Increase Contrast on, tinted or solid, since a dark solid fill
+  /// can sit as close as 1.13:1 to the dark transcript.
+  static func border(solid: Bool, increasedContrast: Bool) -> Color? {
+    increasedContrast ? Palette.bubbleBorder : nil
+  }
+  /// How opaque the person's message is while it is on its way. A tinted one fades. A solid one stays
+  /// opaque, since fading its fill and white text together drops them below 3:1 over the light transcript;
+  /// the delivery line under it says it is on its way.
+  static func sendingOpacity(solid: Bool) -> Double { solid ? 1 : 0.66 }
+}
+
+/// The person's message bubble, in both chat styles: it hugs its text up to 86% of the column, at most
+/// 560 points, at the trailing edge, with its tail at the bottom trailing corner. `solid` fills it with the assistant's
 /// color and white text.
 struct PersonBubble<Content: View>: View {
   var solid: Color?
@@ -271,13 +290,17 @@ struct PersonBubble<Content: View>: View {
     UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18, bottomTrailingRadius: 4, topTrailingRadius: 18, style: .continuous)
   }
   var body: some View {
-    BubbleWidth(fraction: 0.86, trailing: true) {
+    PersonBubbles.layout {
       Group {
         if let solid {
           content().foregroundStyle(.white, .white).tint(.white).background(solid, in: Self.shape)
         } else {
-          content().background(Palette.user(scheme), in: Self.shape)
-            .overlay { if contrast == .increased { Self.shape.strokeBorder(Palette.bubbleBorder) } }
+          content().foregroundStyle(Color.primary, Palette.bubbleSecondary).background(Palette.user(scheme), in: Self.shape)
+        }
+      }
+      .overlay {
+        if let border = PersonBubbles.border(solid: solid != nil, increasedContrast: contrast == .increased) {
+          Self.shape.strokeBorder(border)
         }
       }
       // The find outline hugs the bubble.
