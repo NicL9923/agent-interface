@@ -118,6 +118,35 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
+// A message on its way is drawn faint. Fading a solid bubble mixes its fill toward the page while its text stays
+// white, which takes the text under 4.5:1, so only the tinted bubble fades.
+test("a solid bubble keeps its fill while its message sends", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+  await signIn(page);
+  await assistants(page)
+    .getByRole("button", { name: /Ranch Hand/ })
+    .click();
+  await page.getByText("Morning. The north fence is fixed.").waitFor();
+  const opacity = await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>(".conversation-panel")!;
+    // The seeded assistant has a portrait, so the chat has no tint of its own; a drawn avatar's color stands in.
+    panel.setAttribute("data-tint", "");
+    panel.style.setProperty("--bot-tint", "#1084FE");
+    const sending = document.createElement("article");
+    sending.className = "message message-user message-outgoing message-sending";
+    sending.innerHTML = '<div class="message-bubble">Fix the south fence too</div>';
+    // A sent message eases between the two, and a value read mid-ease is neither.
+    sending.style.transition = "none";
+    document.querySelector(".transcript-content")!.appendChild(sending);
+    const read = (fill: string) => {
+      panel.setAttribute("data-own-bubble", fill);
+      return getComputedStyle(sending).opacity;
+    };
+    return { tint: read("tint"), solid: read("solid") };
+  });
+  expect(opacity).toEqual({ tint: "0.66", solid: "1" });
+});
+
 // Both bubbles carry a transparent border that only increased contrast and forced colors draw, so their edge shows
 // where the fill alone does not. The reply bubble's default lives in the components layer, which ranks above base.
 for (const [mode, media] of [

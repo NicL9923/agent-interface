@@ -96,6 +96,11 @@
   .conversation-panel[data-tint][data-own-bubble="solid"] .message-user > .message-bubble .file-link {
     border-color: color-mix(in srgb, #fff 50%, transparent);
   }
+  /* A faded solid fill takes white text under 4.5:1, so a solid bubble stays whole while it sends. The line under it
+     already says the message is on its way. */
+  .conversation-panel[data-tint][data-own-bubble="solid"] .message-user.message-sending {
+    opacity: 1;
+  }
   .conversation-panel[data-tint] .chat-header-identity {
     background-image: linear-gradient(to bottom, var(--tint-wash), transparent);
   }
