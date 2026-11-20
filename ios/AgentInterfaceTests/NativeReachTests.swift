@@ -71,6 +71,18 @@ import XCTest
     XCTAssertFalse(nobody)
   }
 
+  /// Round 3, finding 3: a roster from the server's cache, whose rows say so, can be stale either way. The
+  /// background read wrote it, dropping an assistant the open app still lists, or bringing one back.
+  func testABackgroundReadOfACachedRosterLeavesTheSnapshotAlone() async {
+    let fake = FakeServer()
+    fake.reply = .init(body: bootstrapJSON(activity: "disconnected"))
+    let api = fake.api()
+    let url = refreshing(with: fake) { api }
+    let refreshed = await BackgroundRefresh.refreshWidgets()
+    XCTAssertFalse(refreshed)
+    XCTAssertNil(WidgetSnapshotStore.read(from: url), "A cached roster never replaces the snapshot")
+  }
+
   func testAReadThatFinishesAfterANewerSnapshotLeavesItAlone() async throws {
     let fake = FakeServer()
     fake.reply = .init(body: bootstrapJSON(activity: "working"))

@@ -65,6 +65,7 @@ extension AppStore {
     bootstrapAnswered = false
     everConnected = false
     staleRosterSince = nil
+    rosterFromCache = false
     readRetry?.cancel()
     readRetry = nil
     readFailures = 0

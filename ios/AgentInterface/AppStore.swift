@@ -149,9 +149,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var readRetry: Task<Void, Never>?
   /// The wait before a failed conversation read is tried again. Tests substitute one they control.
   @ObservationIgnored var readRetryPause: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
-  /// Clears the delivered notifications of chats whose assistants left the roster. Tests watch it.
-  @ObservationIgnored var removeDeliveredChats: (Set<String>) -> Void = { ids in
-    Task { await NotificationController.shared.removeDelivered(bots: ids) }
+  /// Clears this account's delivered notifications of chats whose assistants left its roster. On a shared
+  /// device another member's for the same assistant stay. Tests watch it.
+  @ObservationIgnored var removeDeliveredChats: (_ bots: Set<String>, _ account: String) -> Void = { ids, account in
+    Task { await NotificationController.shared.removeDelivered(bots: ids, account: account) }
   }
   /// The device has no network path, as `NetworkReachability` reports it. The app root keeps it current.
   var deviceOffline = false {
@@ -183,6 +184,13 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var announce: (String) -> Void = { AccessibilityNotification.Announcement($0).post() }
   /// When the roster first came back stale since the last fresh one; see `AppStore.rosterCarry`.
   @ObservationIgnored var staleRosterSince: ContinuousClock.Instant?
+  /// The roster applied last came from the server's cache: Hermes was down, or its roster read failed and
+  /// rows are marked `disconnected`. Such a roster can be stale either way, so nothing is removed for it.
+  @ObservationIgnored var rosterFromCache = false
+  /// Assistants a cached roster left out, with the row each had last. Home lists what the server lists,
+  /// but only a connected roster that also leaves one out says it left; until then its chat stays open
+  /// on this row and nothing of it is cleared.
+  var unconfirmedDepartures: [String: Bot] = [:]
   var interruptionReviewed = false
   var authConfig: AuthConfig?
   var restoring = false
@@ -241,13 +249,18 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// one. A response older than one already applied is dropped, so it cannot undo newer state.
   @ObservationIgnored var conversationReads = 0
   @ObservationIgnored var appliedConversationRead = 0
+  /// Full refreshes started, apart from the history pages that also count in `conversationReads`, so a
+  /// cancelled refresh knows whether a newer refresh, which owns the retry, set out after it.
+  @ObservationIgnored var conversationRefreshes = 0
   /// Replies already accounted for in the open conversation. As in the web's conversation hook,
   /// the first successful read after opening is the baseline, even when it matches the cache.
   @ObservationIgnored var replyWatch: ReplyWatch?
   @ObservationIgnored private var announcements = 0
   /// The latest settled reply for VoiceOver, numbered so a repeat of the same words is read again.
   private(set) var replyAnnouncement: ReplyAnnouncement?
-  @ObservationIgnored var conversationRefreshAgain = false
+  /// The session a stream notice or retry asked for one more refresh in, while one was running. The read
+  /// after it is checked against that session, not the running one's.
+  @ObservationIgnored var conversationRefreshAgain: UUID?
   /// While the stream is live, change notices drive updates and this slow poll covers a stream
   /// that fails unnoticed, as on the web. Server pings arrive every 25 seconds.
   static let streamFallbackInterval: Duration = .seconds(30)
@@ -305,7 +318,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// instead of an error banner. Opening the list again retries, as on the web.
   var earlierFilesFailure: String?
   var loadingEarlier = false
-  var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
+  /// The open assistant. One a cached roster left out keeps its last row, so its chat stays on screen.
+  var bot: Bot? {
+    bootstrap?.bots.first { $0.id == selectedBotId } ?? selectedBotId.flatMap { unconfirmedDepartures[$0] }
+  }
   /// Whether the open chat can act now: what gates Send, Stop and every write in it. A lost network or
   /// a failed read of the chat refuses them from the first moment, though the chat shows the loss only
   /// once an outage does. The household's own controls read `householdReachable`.
@@ -499,12 +515,16 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
 
   // MARK: Writes and errors
 
-  /// Every write in the open chat and in an assistant's settings, each enabled only while `connected`. It
-  /// checks again as it posts, so one confirmed after the chat's read failed or the network dropped, as from
-  /// an alert left open, is refused instead of sent.
-  func perform<V: Encodable>(_ path: String, _ value: V, method: String = "POST") async throws {
+  /// What a write needs to go out. A write in the open chat needs that chat (`connected`); an assistant's
+  /// settings and anything else not aimed at the open chat need only the household (`householdReachable`),
+  /// so one chat's failed read never refuses them.
+  enum WriteGate { case openChat, household }
+  /// Every write in the open chat and in an assistant's settings. It checks its gate again as it posts, so
+  /// one confirmed after the connection it needs went down, as from an alert left open, is refused instead
+  /// of sent.
+  func perform<V: Encodable>(_ path: String, _ value: V, method: String = "POST", gate: WriteGate) async throws {
     guard let api else { throw APIError(message: "Connect to an app server first.", status: 0) }
-    guard connected else { throw connectionRefused() }
+    guard gate == .household ? householdReachable : connected else { throw connectionRefused() }
     let currentGeneration = generation
     do {
       let _: EmptyResponse = try await api.write(path, value, method: method)

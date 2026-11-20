@@ -15,33 +15,23 @@ extension WidgetSnapshot {
   }
 }
 extension AppStore {
-  /// Called whenever bootstrap changes. Signing out removes the snapshot; an outage keeps the
-  /// last good one so widgets show its real age instead of refreshing stale states. Spotlight,
-  /// Siri's assistant names and notification sender pictures follow the snapshot, so they leave with it.
+  /// Called whenever bootstrap changes. Signing out removes the snapshot. A roster from the server's cache,
+  /// while Hermes is down or after its roster read failed, keeps the last good snapshot whole, with its real
+  /// age: that roster can be stale either way, so an assistant it leaves out may not have left. A connected
+  /// roster replaces the snapshot with a newer `generatedAt`, which a background read that started earlier
+  /// cannot overwrite. Spotlight, Siri's assistant names and notification sender pictures follow it.
   func publishWidgetSnapshot(at now: Date = Date()) {
     let next: WidgetSnapshot?
     if let bootstrap {
       guard let scope else { return }
-      if !bootstrap.connection.connected {
-        // An outage preserves only this account's snapshot. Signing in as somebody else
-        // must clear the previous person's names and previews even while Hermes is down.
-        let stored = WidgetSnapshotStore.read(from: widgetSnapshotURL)
-        if stored?.scope != scope {
+      if !bootstrap.connection.connected || rosterFromCache {
+        // Only this account's snapshot is kept. Signing in as somebody else must clear the previous
+        // person's names and previews even while Hermes is down.
+        if WidgetSnapshotStore.read(from: widgetSnapshotURL)?.scope != scope {
           if WidgetSnapshotStore.write(nil, to: widgetSnapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
           syncSystemSearch(nil)
           syncSenderAvatars(nil)
-          return
         }
-        // Who is on the roster is still the server's word, as `refreshBootstrap` takes it: an assistant
-        // that left goes from every surface, and the rows that stay keep what was last seen, with the
-        // snapshot's real age. A roster that lists nobody says nothing about who left.
-        guard var pruned = stored, !bootstrap.bots.isEmpty else { return }
-        let listed = Set(bootstrap.bots.map(\.id))
-        pruned.assistants.removeAll { !listed.contains($0.id) }
-        guard pruned != stored else { return }
-        if WidgetSnapshotStore.write(pruned, to: widgetSnapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
-        syncSystemSearch(pruned)
-        syncSenderAvatars(bootstrap)
         return
       }
       next = WidgetSnapshot(bootstrap: bootstrap, scope: scope, at: now)

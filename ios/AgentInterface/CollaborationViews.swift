@@ -271,6 +271,21 @@ struct GroupCreateView: View {
     pending = nil; onCreated(room); dismiss()
   }
 }
+extension AppStore {
+  /// A group room's Send. The message is saved as pending under `key` before it posts, so Retry sends the
+  /// same request again without a duplicate. It needs the household, checked before anything is saved.
+  func sendGroupMessage(
+    _ input: GroupSend, room path: String, savedAs key: String, busy: Binding<Bool>?, error: Binding<String?>,
+    saved: (GroupSend) -> Void
+  ) async -> GroupAccepted? {
+    await run(busy: busy, error: error, household: true, failure: { $0.localizedDescription + " The message may have arrived. Retry the same saved message to check, without sending a duplicate." }) {
+      UserDefaults.standard.set(try JSONEncoder().encode(input), forKey: key); saved(input)
+      let receipt: GroupAccepted = try await $0.api.write(path + "/messages", input)
+      guard receipt.accepted else { throw NSError(domain: "Group chat", code: 1, userInfo: [NSLocalizedDescriptionKey: "Hermes did not confirm this message."]) }
+      return receipt
+    }
+  }
+}
 struct GroupConversationView: View {
   var room: GroupRoom; var canSend: Bool
   @Environment(AppStore.self) private var store
@@ -578,12 +593,7 @@ struct GroupConversationView: View {
   private func send() async {
     let input = pending ?? GroupSend(requestId: UUID().uuidString.lowercased(), threadId: threadId.isEmpty ? UUID().uuidString.lowercased() : threadId, text: draft.trimmingCharacters(in: .whitespacesAndNewlines))
     error = nil
-    let receipt: GroupAccepted? = await store.run(busy: $busy, error: $error, household: true, failure: { $0.localizedDescription + " The message may have arrived. Retry the same saved message to check, without sending a duplicate." }) {
-      UserDefaults.standard.set(try JSONEncoder().encode(input), forKey: key); pending = input
-      let receipt: GroupAccepted = try await $0.api.write(path + "/messages", input)
-      guard receipt.accepted else { throw NSError(domain: "Group chat", code: 1, userInfo: [NSLocalizedDescriptionKey: "Hermes did not confirm this message."]) }
-      return receipt
-    }
+    let receipt = await store.sendGroupMessage(input, room: path, savedAs: key, busy: $busy, error: $error) { pending = $0 }
     guard receipt != nil else { return }
     UserDefaults.standard.removeObject(forKey: key); UserDefaults.standard.removeObject(forKey: key + ":draft"); pending = nil; draft = ""; threadId = ""; replyToId = ""; await load(); sentScrollRequest = UUID()
   }

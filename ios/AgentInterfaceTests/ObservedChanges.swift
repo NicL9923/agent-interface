@@ -26,7 +26,7 @@ extension AppStore {
       "connectionError": \.connectionError, "activity": \.activity,
       // The connection's state: the open chat's failed read, the device's network, the two outages and home's activity.
       "readFailedFor": \.readFailedFor, "deviceOffline": \.deviceOffline, "appOutage": \.appOutage,
-      "chatOutage": \.chatOutage, "listedActivity": \.listedActivity,
+      "chatOutage": \.chatOutage, "listedActivity": \.listedActivity, "unconfirmedDepartures": \.unconfirmedDepartures,
       "readHere": \.readHere, "openComputer": \.openComputer, "openTerminal": \.openTerminal,
       // Transcript entry points (I1): Retry, opening at a message, and the attention scroll.
       "retryAttempt": \.retryAttempt, "focusedMessage": \.focusedMessage, "attentionScrollRequest": \.attentionScrollRequest,

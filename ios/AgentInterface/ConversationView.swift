@@ -65,6 +65,8 @@ struct ConversationView: View {
   @State private var composerFocused = false
   @State private var peekDismissedTurn: String?
   @State private var visible = false
+  /// The banner message VoiceOver last heard here, so it hears each one once.
+  @State private var announcedBanner: String?
   @State private var findOpen = false
   @State private var findQuery = ""
   @State private var findTarget: String?
@@ -163,20 +165,28 @@ struct ConversationView: View {
     }
     .sheet(isPresented: $profileOpen, onDismiss: profileClosed) { profileSheet }
     // On screen, even under a sheet, the conversation is polled and streamed; elsewhere it is not.
-    .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
-    .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false; speech.reset() }
-    .onChange(of: findQuery) { _, _ in findTarget = nil }
-    .onChange(of: store.chatErrorBanner) { _, shown in
-      // Only an error the banner shows, as it comes into view: a failed poll is the connection's news,
-      // said once by the store.
-      if visible, let shown { AccessibilityNotification.Announcement(shown).post() }
+    .onAppear {
+      if !visible { store.conversationShown(bot.id, true) }
+      visible = true
+      // A banner already showing as the chat opens is heard too; `onChange` sees only later changes.
+      announceBanner(store.chatErrorBanner)
     }
+    .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false; announcedBanner = nil; speech.reset() }
+    .onChange(of: findQuery) { _, _ in findTarget = nil }
+    .onChange(of: store.chatErrorBanner) { _, shown in announceBanner(shown) }
     .task(id: "\(findOpen):\(findQuery)") { await searchHistory() }
     // Handoff to another device, and the assistant on screen for Siri.
     .userActivity(ChatHandoff.activityType, isActive: store.api != nil && !store.sessionExpired) { activity in
       ChatHandoff.describe(activity, bot: bot, server: store.api?.baseURL)
     }
     .findShortcut(botId: bot.id, open: openFind)
+  }
+  /// Only an error the banner shows, as it comes into view, and each once: a failed poll is the connection's
+  /// news, said once by the store.
+  private func announceBanner(_ shown: String?) {
+    guard visible, shown != announcedBanner else { return }
+    announcedBanner = shown
+    if let shown { store.announce(shown) }
   }
   private func configureSpeech() {
     speech.api = store.api
@@ -1213,7 +1223,7 @@ struct AttentionView: View {
       do {
         try await store.perform(
           "/bots/\(APIClient.component(botId))/requests/\(APIClient.component(request.id))",
-          QuestionAnswers.Submission(answers: answers.payload(questions)))
+          QuestionAnswers.Submission(answers: answers.payload(questions)), gate: .openChat)
         guard scope == store.scope else { return }
         settled = true
         AccessibilityNotification.Announcement("Answers sent.").post()

@@ -125,6 +125,24 @@ import XCTest
     XCTAssertTrue(hermes.label.contains("Connected"), "Bootstrap found Hermes well: \(hermes.label)")
   }
 
+  /// Round 3, finding 4: an assistant's settings need the household, not the open chat. With the chat's reads
+  /// failing, Save was disabled and, once it ran, its tools step was refused after the profile saved.
+  func testOneChatsFailedReadsLeaveItsAssistantsSettingsSavable() throws {
+    let (app, lostAt) = launch("chat")
+    _ = openChat(app, before: lostAt)
+    XCTAssertTrue(app.staticTexts["Can't refresh this chat"].waitForExistence(timeout: 30), app.debugDescription)
+    app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Behavior")
+    let web = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Web search")).firstMatch
+    XCTAssertTrue(web.waitForExistence(timeout: 5), app.debugDescription)
+    let save = app.buttons["saveChanges"]
+    XCTAssertFalse(app.staticTexts["Reconnect to save your changes."].exists)
+    web.switches.firstMatch.tapWhenReady()
+    XCTAssertTrue(save.wait(until: "enabled == true"), "One chat's failed read says nothing about its assistant's settings")
+    save.tap()
+    XCTAssertTrue(app.staticTexts["settingsNotice"].wait(until: "label == %@", "Saved"), "The tools reached the server")
+  }
+
   func testOfflineWaitsItsGracePeriodThenSaysSoWithoutARetry() throws {
     let (app, lostAt) = launch("offline")
     _ = openChat(app, before: lostAt)

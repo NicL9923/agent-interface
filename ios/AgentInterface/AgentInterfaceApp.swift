@@ -229,6 +229,16 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   func removeDelivered(bots: Set<String>) async {
     await removeDelivered { Self.chatBotId($0["url"] as? String).map(bots.contains) == true }
   }
+  /// Removes one account's delivered notifications for these chats, as when their assistants leave its
+  /// roster. On a shared iPad another member's for the same assistant stay.
+  func removeDelivered(bots: Set<String>, account: String) async {
+    await removeDelivered { Self.isChat($0, of: bots, account: account) }
+  }
+  /// A delivered notification is one of this account's chats: its link names one of `bots`, and it names
+  /// the account it went to. One that names no account, as an oversized one may not, could be anyone's.
+  nonisolated static func isChat(_ userInfo: [AnyHashable: Any], of bots: Set<String>, account: String) -> Bool {
+    userInfo["account"] as? String == account && chatBotId(userInfo["url"] as? String).map(bots.contains) == true
+  }
   /// Removes the delivered notifications another device read. Newer ones for the same chat stay.
   func removeDelivered(tags: Set<String>) async {
     await removeDelivered { ($0["tag"] as? String).map(tags.contains) == true }

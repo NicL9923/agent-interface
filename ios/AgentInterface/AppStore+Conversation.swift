@@ -76,15 +76,21 @@ extension AppStore {
     "/bots/\(APIClient.component(id))/conversation?\(query)"
   }
   /// `draftLoad` is the draft read opening this chat started alongside it. Whatever this read
-  /// brings waits for the draft to settle before it applies.
-  func refreshConversation(after draftLoad: Task<Void, Never>? = nil) async {
+  /// brings waits for the draft to settle before it applies. An `automatic` read, one nobody asked for,
+  /// from the poll, a stream notice or a retry, names the session it was asked in, and each request it
+  /// sends checks `automaticReadAllowed` as it sets out. Opening a chat, pull to refresh and Reconnect
+  /// now read at once.
+  func refreshConversation(after draftLoad: Task<Void, Never>? = nil, automatic session: UUID? = nil) async {
     guard let id = selectedBotId, let api, bootstrap != nil else { return }
+    if let session, !automaticReadAllowed(in: session) { return }
     let selectedGeneration = selectionGeneration
     let requestedWindow = windowGeneration
     let query = historyStarts[id].map { "start=\(APIClient.component($0))" }
       ?? "turns=\(Self.historyPageTurns)"
     conversationReads += 1
     let read = conversationReads
+    conversationRefreshes += 1
+    let refresh = conversationRefreshes
     conversationReadsInFlight += 1
     defer { conversationReadsInFlight -= 1 }
     // This read is the retry a failed one was waiting for: its own outcome sets the next, if any.
@@ -99,6 +105,8 @@ extension AppStore {
         conversationPath(id, query: query), since: skippable ? appliedConversationTag : nil)
       await draftLoad?.value
       if response.value == nil, selectedGeneration == selectionGeneration, needsCopy() {
+        // The second request is checked too: the app may have left or the network dropped meanwhile.
+        if let session, !automaticReadAllowed(in: session) { return }
         response = try await api.changed(conversationPath(id, query: query), since: nil)
       }
       guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
@@ -118,10 +126,10 @@ extension AppStore {
       appliedConversationTag = response.etag
     } catch is CancellationError {
       // Cancelled on its way, as pull to refresh is when the list lets go: it answered nothing. When it had
-      // dropped the failed chat's retry and no newer read took over, the same wait starts again; the poll
-      // leaves a failed chat to its retry, so nothing else would read it. A retry set for a chat no longer
-      // open finds it off screen and reads nothing.
-      if readFailedFor == id, read == conversationReads {
+      // dropped the failed chat's retry and no newer refresh took over, the same wait starts again; the poll
+      // leaves a failed chat to its retry, so nothing else would read it. A history page sets no retry, so
+      // one read since does not count. A retry set for a chat no longer open finds it off screen.
+      if readFailedFor == id, refresh == conversationRefreshes {
         scheduleReadRetry(id)
       }
     } catch {

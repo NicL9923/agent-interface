@@ -25,6 +25,11 @@ extension AppStore {
   }
   func voiceRecordingURL(botId: String) -> URL? {
     guard !sessionExpired, bootstrap?.bots.contains(where: { $0.id == botId }) == true else { return nil }
+    return voiceClipURL(botId: botId)
+  }
+  /// Where an assistant's recording is kept, listed or not, so one a cached roster left out is still
+  /// deleted when a connected roster says it left.
+  func voiceClipURL(botId: String) -> URL? {
     let name = SHA256.hash(data: Data(botId.utf8)).map { String(format: "%02x", $0) }.joined()
     return offlineURL.map { $0.deletingPathExtension().appendingPathExtension(name + ".m4a") }
   }

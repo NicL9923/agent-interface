@@ -42,9 +42,7 @@ extension AppStore {
     watchConversation()
     await refreshBootstrap(ifDue: true)
     // The bootstrap may have waited long enough for the app to leave or the network to drop.
-    if followedBotId != nil, conversationDue, !chatReadWaits, automaticReadAllowed(in: currentGeneration) {
-      await refreshConversation()
-    }
+    if followedBotId != nil, conversationDue, !chatReadWaits { await refreshConversation(automatic: currentGeneration) }
     await reconcilePending()
     // Files added while the connection was down start once it returns, as on the web.
     if connected, !uploads.uploading, uploads.items.contains(where: { $0.status == .queued }) {
@@ -197,16 +195,19 @@ extension AppStore {
   }
   /// One refresh at a time; a notice during one asks for one more after it. Each read is checked as
   /// it sets out, not when it was asked for, so one queued just before a loss or a suspension stays home.
+  /// One more is checked against the session that asked for it: a refresh still running from the account
+  /// before a switch reads for the new one when the new one asked, and never for the old one.
   func requestConversationRefresh() {
-    if conversationRefreshing { conversationRefreshAgain = true; return }
-    conversationRefreshing = true
     let session = generation
+    if conversationRefreshing { conversationRefreshAgain = session; return }
+    conversationRefreshing = true
     Task {
-      repeat {
-        conversationRefreshAgain = false
-        guard automaticReadAllowed(in: session) else { break }
-        await refreshConversation()
-      } while conversationRefreshAgain
+      var asked: UUID? = session
+      while let next = asked {
+        conversationRefreshAgain = nil
+        await refreshConversation(automatic: next)
+        asked = conversationRefreshAgain
+      }
       conversationRefreshing = false
     }
   }
@@ -249,32 +250,42 @@ extension AppStore {
       guard var value = response.value ?? bootstrap else { return }
       defer { updateActivity() }
       var applied = false
-      // Assistants the server says left this person's roster, whether or not Hermes answered.
-      var removed: Set<String> = []
+      // A roster from the server's cache: Hermes is down, or its roster read failed and the rows say so.
+      // The server's cache can be stale either way, as when a read a change overtook never updated it.
+      // An unchanged body is the roster applied last, whose rows may carry what they were doing.
+      let cached = response.value.map { !$0.connection.connected || $0.bots.contains { $0.activity == .disconnected } } ?? rosterFromCache
       if response.value != nil {
-        // The web's `rosterFrom`. Who is on the roster is the server's word even while Hermes is down:
-        // it filters its last roster for each member, so an assistant made private goes at once. A
-        // bootstrap that missed Hermes and lists no roster at all keeps the rows as they were.
+        // Assistants a connected roster says left this person's roster.
+        var removed: Set<String> = []
+        // The web's `rosterFrom`. Who is listed is the server's word even from its cache: it filters its
+        // last roster for each member. A bootstrap that missed Hermes and lists no roster at all keeps the
+        // rows as they were.
         if let previous = bootstrap, previous.user.id == value.user.id {
           let carried = carryActivity(value.bots, from: previous.bots)
           value.bots = !value.connection.connected && value.bots.isEmpty ? previous.bots : carried
+          let listed = Set(value.bots.map(\.id))
+          if cached {
+            // Left out of a cached roster is not proof of leaving: each keeps its last row, and nothing of it
+            // is cleared, until a connected roster says so.
+            for bot in previous.bots where !listed.contains(bot.id) { unconfirmedDepartures[bot.id] = bot }
+          } else {
+            removed = Set(previous.bots.map(\.id)).union(unconfirmedDepartures.keys).subtracting(listed)
+            unconfirmedDepartures = [:]
+          }
         } else {
           staleRosterSince = nil
+          unconfirmedDepartures = [:]
         }
-        if let previous = bootstrap, previous.user.id == value.user.id,
-          Set(previous.bots.map(\.id)) != Set(value.bots.map(\.id)) {
-          removed = Set(previous.bots.map(\.id)).subtracting(value.bots.map(\.id))
-          if !removed.isEmpty {
-            removeDeliveredChats(removed)
-            clearOfflineLibrary(includingVoice: false)
-            for id in removed {
-              conversationCache[id] = nil; cachedChats.remove(id); conversationCapturedAt[id] = nil
-              if let clip = voiceRecordingURL(botId: id) { try? FileManager.default.removeItem(at: clip) }
-            }
-            recentChats.removeAll { removed.contains($0) }
-            // Recheck redacted references without destroying the open view or its scroll anchor.
-            conversationRefreshedAt = nil
+        if !removed.isEmpty {
+          removeDeliveredChats(removed, NotificationActions.accountMarker(value.user.id))
+          clearOfflineLibrary(includingVoice: false)
+          for id in removed {
+            conversationCache[id] = nil; cachedChats.remove(id); conversationCapturedAt[id] = nil
+            if let clip = voiceClipURL(botId: id) { try? FileManager.default.removeItem(at: clip) }
           }
+          recentChats.removeAll { removed.contains($0) }
+          // Recheck redacted references without destroying the open view or its scroll anchor.
+          conversationRefreshedAt = nil
         }
         if let previous = bootstrap, previous.user.id != value.user.id {
           clearOfflineLibrary()
@@ -288,6 +299,8 @@ extension AppStore {
         // past a grace period whose timer has not run yet would show the loss it ends, then say it is over.
         activityHeld = true
         if appUnavailable { appUnavailable = false }
+        // Before the roster is applied, which publishes it to the widgets.
+        rosterFromCache = cached
         if bootstrap != value { bootstrap = value; applied = true }
         activityHeld = false
         updateActivity()
@@ -304,13 +317,13 @@ extension AppStore {
       failures = 0
       saveOfflineLibrary()
       loadPendings(value.bots)
-      // A chat off a connected roster leaves, and so does one the server says left while Hermes is down:
-      // its view has no assistant to show, and leaving drops any read on its way.
-      if let open = selectedBotId, value.connection.connected || removed.contains(open),
-        !value.bots.contains(where: { $0.id == open }) {
+      // A chat off a connected roster leaves, as its assistant did; leaving drops any read on its way. One a
+      // cached roster leaves out stays open on its last row, as the web keeps it behind its notice.
+      if let open = selectedBotId, !cached, !value.bots.contains(where: { $0.id == open }) {
         await leave(open)
-      } else if !stayHome, selectedBotId == nil {
-        // While Hermes is down no other chat is chosen, as on the web, until Hermes answers.
+      } else if !stayHome, selectedBotId == nil, automaticReadAllowed(in: generation) {
+        // Opening a chat nobody tapped reads it, so not while the app is away or offline; the next
+        // bootstrap that answers then chooses.
         let last: String? = read(key(.selected))
         let next =
           value.bots.first { $0.id == last }?.id ?? value.bots.first {

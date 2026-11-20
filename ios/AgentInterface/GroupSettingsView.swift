@@ -59,10 +59,17 @@ struct GroupSettingsView: View {
   private func save() async {
     error = nil
     let input = GroupContextSave(requestId: UUID().uuidString.lowercased(), purpose: purpose, notes: notes, leadMemberId: lead.isEmpty ? nil : lead)
-    let saved: GroupContextSaved? = await store.run(busy: $busy, error: $error, household: true) {
-      try await $0.api.write("/groups/\(APIClient.component(roomId))/context", input)
-    }
+    let saved = await store.saveGroupContext(input, roomId: roomId, busy: $busy, error: $error)
     guard saved != nil else { return }
     onSaved(); dismiss()
+  }
+}
+
+extension AppStore {
+  /// A room's settings Save. It needs the household, checked before it posts.
+  func saveGroupContext(_ input: GroupContextSave, roomId: String, busy: Binding<Bool>?, error: Binding<String?>) async -> GroupContextSaved? {
+    await run(busy: busy, error: error, household: true) {
+      try await $0.api.write("/groups/\(APIClient.component(roomId))/context", input)
+    }
   }
 }

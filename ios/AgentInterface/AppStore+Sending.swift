@@ -61,7 +61,7 @@ extension AppStore {
   /// the button: a Stop confirmed in a dialog, or tapped as the connection goes, must not post after a loss.
   func stopWork(_ botId: String) async throws -> Bool {
     guard selectedBotId == botId, connected else { return false }
-    try await perform("/bots/\(APIClient.component(botId))/stop", [String: String]())
+    try await perform("/bots/\(APIClient.component(botId))/stop", [String: String](), gate: .openChat)
     return true
   }
   /// Asks the server about every assistant's unconfirmed send, not only the open one, so a
