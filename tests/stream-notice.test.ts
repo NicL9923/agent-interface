@@ -34,12 +34,16 @@ const report = (name: string, up: boolean | undefined) => act(async () => report
 // Live updates are back only when the streams say so. One that is closed says nothing.
 describe("streams live", () => {
   let up: StreamsLive[];
+  let scopes: string[];
   function UpProbe({ names }: { names: string[] }) {
-    up.push(useStreamsLive(names));
+    const { live, scope } = useStreamsLive(names);
+    up.push(live);
+    scopes.push(scope);
     return null;
   }
   beforeEach(() => {
     up = [];
+    scopes = [];
   });
 
   it("is up only while every named stream has heard from the server, and closed while one is not open", async () => {
@@ -56,6 +60,28 @@ describe("streams live", () => {
     // Closed, as when the page hides: not down, and not up either.
     await report("household", undefined);
     expect(up.at(-1)).toBe("closed");
+  });
+
+  // A chat's stream is closed and reopened for a new session within one batch, so no render sees it
+  // closed. The replacement is still another stream, and the scope says so.
+  it("names the streams anew when one closes, even if it reopens before a render", async () => {
+    const { render } = mountRoot();
+    await render(createElement(UpProbe, { names: ["household", "chat:shared"] }));
+    await report("household", true);
+    await report("chat:shared", false);
+    const before = scopes.at(-1);
+    up = [];
+    await act(async () => {
+      reportStream("chat:shared", undefined);
+      reportStream("chat:shared", false);
+    });
+    expect(up).not.toContain("closed");
+    expect(scopes.at(-1)).not.toBe(before);
+    // Failing and retrying is the same stream, and the same scope.
+    const reopened = scopes.at(-1);
+    await report("chat:shared", true);
+    await report("chat:shared", false);
+    expect(scopes.at(-1)).toBe(reopened);
   });
 });
 

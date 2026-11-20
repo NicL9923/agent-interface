@@ -454,7 +454,57 @@ describe("live updates and the connection notice", () => {
     await act(async () => other.click());
     await advance(20);
     expect(panels()).toEqual([]);
-    expect(container.querySelector("[data-connection-announcer]")!.textContent).toBe("");
+    const announced = () => container.querySelector("[data-connection-announcer]")!.textContent;
+    expect(announced()).toBe("");
+    // The other chat's own stream proving itself is not the first one coming back either.
+    const next = chat();
+    expect(next).not.toBe(cut);
+    await act(async () => {
+      next.connect();
+      next.emit("ping", "10");
+    });
+    await advance(5_500);
+    await act(async () => next.emit("ping", "10"));
+    await advance(20);
+    expect(announced()).toBe("");
+  });
+
+  // Live updates came back for the household while the chat's stream was still down. A new canonical
+  // session then replaces that stream in one go, and the replacement proving itself is not the stream
+  // that was down coming back.
+  it("announces no return of live updates when the stream still down is replaced for a new session", async () => {
+    boot = { ...boot, bots: [{ ...boot.bots[0], sessionId: "session-one" }, boot.bots[1]] };
+    await live();
+    const announced = () => container.querySelector("[data-connection-announcer]")!.textContent;
+    await act(async () => household().drop());
+    await pinging(15_000);
+    const down = chat();
+    await act(async () => down.drop());
+    await pinging(6_000);
+    expect(notice()).toEqual(["Live updates are delayed"]);
+    await act(async () => {
+      household().connect();
+      household().emit("ping", "10");
+    });
+    await advance(5_500);
+    await act(async () => household().emit("ping", "10"));
+    await advance(20);
+    expect(panels()).toEqual([]);
+    conversation = { ...conversation, sessionId: "session-two" };
+    boot = { ...boot, bots: [{ ...boot.bots[0], sessionId: "session-two" }, boot.bots[1]] };
+    await act(async () => household().emit("roster", "roster"));
+    await advance(20);
+    const replacement = chat();
+    expect(replacement).not.toBe(down);
+    await pinging(3_000, replacement);
+    await act(async () => {
+      replacement.connect();
+      replacement.emit("ping", "10");
+    });
+    await advance(5_500);
+    await act(async () => replacement.emit("ping", "10"));
+    await advance(20);
+    expect(announced()).toBe("");
   });
 
   describe("a chat whose own reads fail", () => {

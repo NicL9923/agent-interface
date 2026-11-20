@@ -347,7 +347,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // STREAM_NOTICE_MS without a break. The polls stand in meanwhile, so the notice is a quiet one.
   const liveStreams = useMemo(() => ["household", ...(botId ? [chatStream(botId)] : [])], [botId]);
   const liveDown = useStreamsDown(liveStreams, STREAM_NOTICE_MS);
-  const live = useStreamsLive(liveStreams);
+  const { live, scope: liveScope } = useStreamsLive(liveStreams);
   // What is lost, as a fact: anything that needs the connection is refused from the first moment
   // (`connectionLost`). What the app shows of it waits out a loss that may be a blip (see useOutage).
   const appDown = session.disconnected || offline;
@@ -374,11 +374,11 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     liveDown,
     chatOnScreen ? botId : "",
   );
-  // Stopped live updates, counted for the live region when their notice ends. Whether that is the
-  // streams coming back is `live`'s to say: the notice also ends when the person opens another chat,
-  // whose stream has not been heard from yet. The notice itself follows `liveDown`, so it never stays
-  // out a minimum time it was not on screen for.
-  const liveOutage = useOutage(liveDown, true);
+  // Stopped live updates, counted for the live region when their notice ends. They belong to the
+  // streams that stopped: opening another chat, or a stream closed and reopened for a new session,
+  // leaves them behind uncounted, and whether the rest are back is `live`'s to say. The notice itself
+  // follows `liveDown`, so it never stays out a minimum time it was not on screen for.
+  const liveOutage = useOutage(liveDown, true, liveScope);
   const appShown = appOutage.shown;
   const connectionShown = appShown || chatOutage.shown;
   // Offline as the views say it, which is once the loss shows.
@@ -1056,7 +1056,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         recoveries={appOutage.recoveries + chatOutage.recoveries}
         liveRecoveries={liveOutage.recoveries}
         live={live}
-        liveScope={liveStreams.join(" ")}
+        liveScope={liveScope}
         connection={boot.connection}
         offline={offline}
         appUnavailable={appUnavailable}

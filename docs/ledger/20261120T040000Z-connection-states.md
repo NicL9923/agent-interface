@@ -171,8 +171,8 @@ Tests changed because the behavior did:
 
 Each line was broken with `~/.agents/tools/mutate.py`, the named tests run, and the source restored.
 The lists and the tool's output from the final pass, after all the review rounds, are in
-[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 108 mutants, 108 caught. The last
-two rows were rerun after the fifth review round.
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 112 mutants, 112 caught. The last
+three rows were run after the fifth and sixth review rounds.
 
 | File                                                | Mutants | Result    |
 | --------------------------------------------------- | ------- | --------- |
@@ -185,6 +185,7 @@ two rows were rerun after the fifth review round.
 | `src/components/Avatar.tsx`, `StopConfirm`          | 4       | 4 caught  |
 | `src/app/stream-health.ts`                          | 3       | 3 caught  |
 | `ConnectionAnnouncer`, partial live return          | 5       | 5 caught  |
+| Live-updates scope, `App.tsx` and `stream-health`   | 4       | 4 caught  |
 
 Mutants that survived on the way, and what was done:
 
@@ -278,6 +279,16 @@ main's `@layer` blocks keep their selectors and declarations.
 | #   | Finding                                                                                                                                                                                                                                                | Fix                                                                                                                                                                                                                                                                                                                                                                                 |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | P2. With the household stream down 21 seconds and the chat stream 6, the household stream's return cleared the notice and used up the recovery while the chat stream was still down. When the chat stream came back 5 seconds later, nothing was said. | `useStreamsLive` tells a stream still waiting from one that is closed. The live region keeps a partial return and says "Live updates are back." when the rest return, unless a stream closes, the watched streams change, or another warning is said first. The UI test replays the reviewer's timings; `connection-copy.test.ts` covers the three ways the kept return is dropped. |
+
+The sixth round reviewed this fix.
+
+### Sixth round, of the native port and the fifth round's fix: one web P2
+
+The native findings and their fixes are in the iOS section below.
+
+| #   | Finding                                                                                                                                                                                                                                                                                                                                                                              | Fix                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | P2. A replacement stream could still say "Live updates are back.": leaving a chat whose stream was down for another counted a recovery in the new chat's scope, said once that chat's stream proved itself; and a chat stream closed and reopened for a new canonical session in one batch never rendered `closed`, so a partial return was said when the replacement proved itself. | `useStreamsLive` also returns a `scope` that changes with the watched names and whenever one of them closes, even if it reopens before a render. The live-updates outage and the live region both use it, so neither a chat switch nor a replaced stream is counted as a return. UI tests replay both paths; `stream-notice.test.ts` pins that a batched close and reopen changes the scope and a failed retry does not. |
 
 This fix has had no review of its own.
 
