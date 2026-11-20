@@ -660,7 +660,7 @@ struct BotListView: View {
       .foregroundStyle(Palette.muted).padding(.horizontal, 10).padding(.bottom, 8).accessibilityAddTraits(.isHeader)
   }
   private var canMakeGroup: Bool { GroupRows.canCreate(store.groupCatalog, bots: store.bootstrap?.bots ?? [], pending: pendingGroup != nil) }
-  private var groupHint: String? { pendingGroup != nil ? nil : GroupRows.creationHint(store.groupCatalog, connected: store.connected) }
+  private var groupHint: String? { pendingGroup != nil ? nil : GroupRows.creationHint(store.groupCatalog, connected: store.householdReachable) }
   @ViewBuilder private var pendingRow: some View {
     if let pendingGroup { PendingGroupRow(request: pendingGroup, action: newGroup) }
   }

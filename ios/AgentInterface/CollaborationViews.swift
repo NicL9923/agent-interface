@@ -263,9 +263,9 @@ struct GroupCreateView: View {
   private func create() async {
     let input = pending ?? GroupCreate(requestId: UUID().uuidString.lowercased(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), botIds: botIds)
     error = nil
-    pending = input
-    let room = await store.run(busy: $busy, error: $error, failure: GroupCreation.failure) {
-      try await GroupCreation.submit(input, api: $0.api, scope: $0.scope)
+    let room = await store.run(busy: $busy, error: $error, household: true, failure: GroupCreation.failure) {
+      pending = input
+      return try await GroupCreation.submit(input, api: $0.api, scope: $0.scope)
     }
     guard let room else { return }
     pending = nil; onCreated(room); dismiss()
@@ -578,7 +578,7 @@ struct GroupConversationView: View {
   private func send() async {
     let input = pending ?? GroupSend(requestId: UUID().uuidString.lowercased(), threadId: threadId.isEmpty ? UUID().uuidString.lowercased() : threadId, text: draft.trimmingCharacters(in: .whitespacesAndNewlines))
     error = nil
-    let receipt: GroupAccepted? = await store.run(busy: $busy, error: $error, failure: { $0.localizedDescription + " The message may have arrived. Retry the same saved message to check, without sending a duplicate." }) {
+    let receipt: GroupAccepted? = await store.run(busy: $busy, error: $error, household: true, failure: { $0.localizedDescription + " The message may have arrived. Retry the same saved message to check, without sending a duplicate." }) {
       UserDefaults.standard.set(try JSONEncoder().encode(input), forKey: key); pending = input
       let receipt: GroupAccepted = try await $0.api.write(path + "/messages", input)
       guard receipt.accepted else { throw NSError(domain: "Group chat", code: 1, userInfo: [NSLocalizedDescriptionKey: "Hermes did not confirm this message."]) }
@@ -588,13 +588,13 @@ struct GroupConversationView: View {
     UserDefaults.standard.removeObject(forKey: key); UserDefaults.standard.removeObject(forKey: key + ":draft"); pending = nil; draft = ""; threadId = ""; replyToId = ""; await load(); sentScrollRequest = UUID()
   }
   private func stop() async {
-    let stopped: [String: Int]? = await store.run(busy: $busy, error: $error) { try await $0.api.write(path + "/stop", ["requestId": UUID().uuidString.lowercased()]) }
+    let stopped: [String: Int]? = await store.run(busy: $busy, error: $error, household: true) { try await $0.api.write(path + "/stop", ["requestId": UUID().uuidString.lowercased()]) }
     if stopped != nil { await load() }
   }
   private func decide(_ action: GroupAction, _ choice: String) async {
     guard let member = action.member_id, let generation = action.execution_generation, let request = action.request_id ?? action.approval?.request_id else { return }
     let decision = GroupDecision(taskId: action.task_id, memberId: member, generation: generation, choice: choice, requestId: request)
-    switch await store.attempt(busy: $busy, { (context) -> GroupApproved in try await context.api.write(path + "/approve", decision) }) {
+    switch await store.attempt(busy: $busy, household: true, { (context) -> GroupApproved in try await context.api.write(path + "/approve", decision) }) {
     case .success?: store.buzz(.decided); await load()
     case .failure(let failure)?: store.buzz(.failed); error = failure.localizedDescription
     case nil: break

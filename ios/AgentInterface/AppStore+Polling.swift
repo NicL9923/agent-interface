@@ -41,7 +41,10 @@ extension AppStore {
     watchRoster()
     watchConversation()
     await refreshBootstrap(ifDue: true)
-    if followedBotId != nil, conversationDue, !chatReadWaits { await refreshConversation() }
+    // The bootstrap may have waited long enough for the app to leave or the network to drop.
+    if followedBotId != nil, conversationDue, !chatReadWaits, automaticReadAllowed(in: currentGeneration) {
+      await refreshConversation()
+    }
     await reconcilePending()
     // Files added while the connection was down start once it returns, as on the web.
     if connected, !uploads.uploading, uploads.items.contains(where: { $0.status == .queued }) {
@@ -192,17 +195,26 @@ extension AppStore {
       conversationCache[patch.botId] = value
     }
   }
-  /// One refresh at a time; a notice during one asks for one more after it.
+  /// One refresh at a time; a notice during one asks for one more after it. Each read is checked as
+  /// it sets out, not when it was asked for, so one queued just before a loss or a suspension stays home.
   func requestConversationRefresh() {
     if conversationRefreshing { conversationRefreshAgain = true; return }
     conversationRefreshing = true
+    let session = generation
     Task {
       repeat {
         conversationRefreshAgain = false
+        guard automaticReadAllowed(in: session) else { break }
         await refreshConversation()
       } while conversationRefreshAgain
       conversationRefreshing = false
     }
+  }
+  /// A conversation read nobody asked for, from the poll, a stream notice or a retry, goes out only in
+  /// the foreground, with a network, in the session it was asked for. Opening a chat, pull to refresh
+  /// and Reconnect now read anyway.
+  func automaticReadAllowed(in session: UUID) -> Bool {
+    !Task.isCancelled && !suspended && !deviceOffline && generation == session && api?.token != nil && !sessionExpired
   }
   func suspend() {
     suspended = true
@@ -237,6 +249,8 @@ extension AppStore {
       guard var value = response.value ?? bootstrap else { return }
       defer { updateActivity() }
       var applied = false
+      // Assistants the server says left this person's roster, whether or not Hermes answered.
+      var removed: Set<String> = []
       if response.value != nil {
         // The web's `rosterFrom`. Who is on the roster is the server's word even while Hermes is down:
         // it filters its last roster for each member, so an assistant made private goes at once. A
@@ -249,8 +263,9 @@ extension AppStore {
         }
         if let previous = bootstrap, previous.user.id == value.user.id,
           Set(previous.bots.map(\.id)) != Set(value.bots.map(\.id)) {
-          let removed = Set(previous.bots.map(\.id)).subtracting(value.bots.map(\.id))
+          removed = Set(previous.bots.map(\.id)).subtracting(value.bots.map(\.id))
           if !removed.isEmpty {
+            removeDeliveredChats(removed)
             clearOfflineLibrary(includingVoice: false)
             for id in removed {
               conversationCache[id] = nil; cachedChats.remove(id); conversationCapturedAt[id] = nil
@@ -289,11 +304,13 @@ extension AppStore {
       failures = 0
       saveOfflineLibrary()
       loadPendings(value.bots)
-      if let open = selectedBotId, value.connection.connected, !value.bots.contains(where: { $0.id == open }) {
+      // A chat off a connected roster leaves, and so does one the server says left while Hermes is down:
+      // its view has no assistant to show, and leaving drops any read on its way.
+      if let open = selectedBotId, value.connection.connected || removed.contains(open),
+        !value.bots.contains(where: { $0.id == open }) {
         await leave(open)
       } else if !stayHome, selectedBotId == nil {
-        // A chat off a connected roster left above. While Hermes is down the open chat stays, as on
-        // the web, until Hermes answers for it.
+        // While Hermes is down no other chat is chosen, as on the web, until Hermes answers.
         let last: String? = read(key(.selected))
         let next =
           value.bots.first { $0.id == last }?.id ?? value.bots.first {

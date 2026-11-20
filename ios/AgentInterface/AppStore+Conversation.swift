@@ -116,7 +116,15 @@ extension AppStore {
       historyStarts[id] = value.messages.first?.id
       apply(value, botId: id)
       appliedConversationTag = response.etag
-    } catch is CancellationError {} catch {
+    } catch is CancellationError {
+      // Cancelled on its way, as pull to refresh is when the list lets go: it answered nothing. When it had
+      // dropped the failed chat's retry and no newer read took over, the same wait starts again; the poll
+      // leaves a failed chat to its retry, so nothing else would read it. A retry set for a chat no longer
+      // open finds it off screen and reads nothing.
+      if readFailedFor == id, read == conversationReads {
+        scheduleReadRetry(id)
+      }
+    } catch {
       await draftLoad?.value
       // A failure that a newer read or a wider window has already overtaken says nothing current.
       guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,

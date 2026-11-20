@@ -45,21 +45,21 @@ struct GroupSettingsView: View {
           ForEach(members, id: \.member_id) { member in Text(member.display_name ?? member.profile).tag(member.member_id) }
         }.accessibilityIdentifier("groupLead")
       } footer: { Text("A lead picks who answers a message that names no one. Messages with an @mention always reach the assistants named.") }
-      if !store.connected { Section { Text("Reconnect to Hermes to change these settings.").font(.footnote) } }
+      if !store.householdReachable { Section { Text("Reconnect to Hermes to change these settings.").font(.footnote) } }
     }
     .disabled(busy)
     .navigationTitle("Group settings").navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
       ToolbarItem(placement: .confirmationAction) {
-        Button(busy ? "Saving…" : "Save") { Task { await save() } }.disabled(busy || !store.connected || over > 0).accessibilityIdentifier("saveGroupSettings")
+        Button(busy ? "Saving…" : "Save") { Task { await save() } }.disabled(busy || !store.householdReachable || over > 0).accessibilityIdentifier("saveGroupSettings")
       }
     }
   }
   private func save() async {
     error = nil
     let input = GroupContextSave(requestId: UUID().uuidString.lowercased(), purpose: purpose, notes: notes, leadMemberId: lead.isEmpty ? nil : lead)
-    let saved: GroupContextSaved? = await store.run(busy: $busy, error: $error) {
+    let saved: GroupContextSaved? = await store.run(busy: $busy, error: $error, household: true) {
       try await $0.api.write("/groups/\(APIClient.component(roomId))/context", input)
     }
     guard saved != nil else { return }

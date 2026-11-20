@@ -166,9 +166,10 @@ struct ConversationView: View {
     .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
     .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false; speech.reset() }
     .onChange(of: findQuery) { _, _ in findTarget = nil }
-    .onChange(of: store.error) { _, error in
-      // Only an error the banner shows: a failed poll is the connection's news, said once by the store.
-      if visible, store.chatErrorShown, let error { AccessibilityNotification.Announcement(error).post() }
+    .onChange(of: store.chatErrorBanner) { _, shown in
+      // Only an error the banner shows, as it comes into view: a failed poll is the connection's news,
+      // said once by the store.
+      if visible, let shown { AccessibilityNotification.Announcement(shown).post() }
     }
     .task(id: "\(findOpen):\(findQuery)") { await searchHistory() }
     // Handoff to another device, and the assistant on screen for Siri.
@@ -199,7 +200,7 @@ struct ConversationView: View {
         .font(.caption).foregroundStyle(.secondary).padding(8).accessibilityIdentifier("chatSavedCopy")
     }
     // A failed poll waits with the connection notice and gives way to it; see `chatErrorShown`.
-    if let error = store.error, store.chatErrorShown {
+    if let error = store.chatErrorBanner {
       ErrorBanner(message: error, dismiss: { store.dismissError() }).padding(.horizontal).padding(.bottom, 8)
     }
     if store.sessionExpired {

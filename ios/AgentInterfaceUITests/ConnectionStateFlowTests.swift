@@ -7,7 +7,8 @@ import XCTest
 @MainActor final class ConnectionStateFlowTests: XCTestCase {
   override func setUp() { continueAfterFailure = false }
   /// Launches on the open chat, losing `loss` `after` seconds from now on the clock the simulator shares.
-  private func launch(_ loss: String, after seconds: TimeInterval = 10, _ switches: [String] = []) -> (XCUIApplication, Date) {
+  /// The first launch on a freshly booted simulator can take 11 seconds, so the default leaves 20.
+  private func launch(_ loss: String, after seconds: TimeInterval = 20, _ switches: [String] = []) -> (XCUIApplication, Date) {
     let app = XCUIApplication()
     for name in switches { app.launchEnvironment["AGENT_INTERFACE_UI_" + name] = "1" }
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
@@ -69,7 +70,7 @@ import XCTest
     let (app, lostAt) = launch("app")
     let composer = openChat(app, before: lostAt)
     composer.typeWhenFocused("Move the heifers to the north pasture")
-    XCTAssertTrue(app.staticTexts["Can't reach the app"].waitForExistence(timeout: 30), app.debugDescription)
+    XCTAssertTrue(app.staticTexts["Can't reach the app"].waitForExistence(timeout: 40), app.debugDescription)
     XCTAssertEqual(app.staticTexts["connectionDetail"].label, "Your draft is kept. We'll keep trying.")
     try capture("ios-4-lasting-draft")
   }
@@ -95,6 +96,14 @@ import XCTest
     _ = openChat(app, before: lostAt)
     XCTAssertTrue(app.staticTexts["Can't refresh this chat"].waitForExistence(timeout: 30), app.debugDescription)
     app.navigationBars.buttons.firstMatch.tapWhenReady()
+    // Round 2, finding 5: home's New group chat and a room's settings read the household too.
+    app.buttons["newMenu"].tapWhenReady(timeout: 15)
+    let newGroup = app.buttons["newGroup"]
+    XCTAssertTrue(newGroup.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(newGroup.isEnabled, "One assistant's chat says nothing about making a group")
+    XCTAssertFalse(app.staticTexts["Reconnect to Hermes to make a group chat."].exists)
+    newGroup.tap()
+    app.buttons["Close"].tapWhenReady()
     app.buttons["room.fixture-room"].tapWhenReady(timeout: 15)
     let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 10), app.debugDescription)
@@ -102,6 +111,12 @@ import XCTest
     let send = app.buttons["Send to group"]
     XCTAssertTrue(send.waitForExistence(timeout: 5), app.debugDescription)
     XCTAssertTrue(send.isEnabled, "One assistant's chat says nothing about the household's rooms")
+    app.buttons["groupSettings"].tapWhenReady()
+    let save = app.buttons["saveGroupSettings"]
+    XCTAssertTrue(save.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(save.isEnabled, "or about the room's settings")
+    XCTAssertFalse(app.staticTexts["Reconnect to Hermes to change these settings."].exists)
+    app.buttons["Cancel"].tapWhenReady()
     if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tapWhenReady() }
     app.openSettingsFromProfileMenu()
     let hermes = app.buttons["Hermes updates"]
@@ -113,7 +128,7 @@ import XCTest
   func testOfflineWaitsItsGracePeriodThenSaysSoWithoutARetry() throws {
     let (app, lostAt) = launch("offline")
     _ = openChat(app, before: lostAt)
-    XCTAssertTrue(app.staticTexts["You're offline"].waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(app.staticTexts["You're offline"].waitForExistence(timeout: 30), app.debugDescription)
     XCTAssertGreaterThanOrEqual(since(lostAt), 3, "Not before the grace period ends")
     XCTAssertEqual(app.staticTexts["connectionDetail"].label, "We'll reconnect when you're back online.")
     XCTAssertFalse(app.buttons["reconnectNow"].exists, "Nothing to retry until the network is back")

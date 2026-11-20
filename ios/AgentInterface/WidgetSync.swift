@@ -25,11 +25,23 @@ extension AppStore {
       if !bootstrap.connection.connected {
         // An outage preserves only this account's snapshot. Signing in as somebody else
         // must clear the previous person's names and previews even while Hermes is down.
-        if WidgetSnapshotStore.read(from: widgetSnapshotURL)?.scope != scope {
+        let stored = WidgetSnapshotStore.read(from: widgetSnapshotURL)
+        if stored?.scope != scope {
           if WidgetSnapshotStore.write(nil, to: widgetSnapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
           syncSystemSearch(nil)
           syncSenderAvatars(nil)
+          return
         }
+        // Who is on the roster is still the server's word, as `refreshBootstrap` takes it: an assistant
+        // that left goes from every surface, and the rows that stay keep what was last seen, with the
+        // snapshot's real age. A roster that lists nobody says nothing about who left.
+        guard var pruned = stored, !bootstrap.bots.isEmpty else { return }
+        let listed = Set(bootstrap.bots.map(\.id))
+        pruned.assistants.removeAll { !listed.contains($0.id) }
+        guard pruned != stored else { return }
+        if WidgetSnapshotStore.write(pruned, to: widgetSnapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
+        syncSystemSearch(pruned)
+        syncSenderAvatars(bootstrap)
         return
       }
       next = WidgetSnapshot(bootstrap: bootstrap, scope: scope, at: now)

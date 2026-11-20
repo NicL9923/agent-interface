@@ -98,6 +98,9 @@ extension AppStore {
   var chatErrorShown: Bool {
     error != nil && (connectionError == nil || !(connectionCardShown || connectionPending))
   }
+  /// What the banner shows: `error` while `chatErrorShown`. The chat announces each change of this, not
+  /// of `error`, so an error that comes into view as the notice clears is heard though its text is the same.
+  var chatErrorBanner: String? { chatErrorShown ? error : nil }
   /// Why Send and Stop are refused for the connection, for VoiceOver: a disabled button gives no
   /// reason on a touch screen. During the grace period the chat still looks connected, so the
   /// reason says it here; once the notice shows, it says more and this only names the wait.
@@ -105,6 +108,10 @@ extension AppStore {
     guard !connected, !sessionExpired, bootstrap != nil, !cachedChats.contains(selectedBotId ?? "") else { return nil }
     if !connectionShown { return Self.checkingConnection }
     return hasDraft ? Self.waitingWithDraft : Self.waitingForConnection
+  }
+  /// A write refused as it set out, because the connection it needs went down after it was asked for.
+  func connectionRefused() -> ConnectionRefused {
+    ConnectionRefused(errorDescription: connectionReason ?? Self.waitingForConnection)
   }
   static let checkingConnection = "Checking the connection. Try again in a moment."
   static let waitingForConnection = "Waiting for the connection."
@@ -138,6 +145,11 @@ extension AppStore {
     let first = readFailedFor != id
     readFailures = first ? 1 : readFailures + 1
     readFailedFor = id
+    scheduleReadRetry(id)
+    if first { Task { await self.refreshBootstrap() } }
+  }
+  /// Sets the failed chat's next read after the wait its failures so far have earned.
+  func scheduleReadRetry(_ id: String) {
     let wait = ReadRetry.delay(after: readFailures)
     let selection = selectionGeneration
     readRetry?.cancel()
@@ -152,7 +164,6 @@ extension AppStore {
       else { return }
       self.requestConversationRefresh()
     }
-    if first { Task { await self.refreshBootstrap() } }
   }
   /// The open chat's reads are failing, so its retry decides when it is read next, with the waits of
   /// `ReadRetry`; the poll would read it every pass. Opening it, returning to the app, coming back online,
@@ -166,3 +177,7 @@ extension AppStore {
     if readFailedFor != nil { readFailedFor = nil }
   }
 }
+
+/// A write refused as it set out, because the connection it needs is down. Its message is the reason
+/// Send gives, never the write's own failure wording, since nothing was sent.
+struct ConnectionRefused: LocalizedError { var errorDescription: String? }

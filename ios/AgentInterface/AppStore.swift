@@ -149,6 +149,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var readRetry: Task<Void, Never>?
   /// The wait before a failed conversation read is tried again. Tests substitute one they control.
   @ObservationIgnored var readRetryPause: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+  /// Clears the delivered notifications of chats whose assistants left the roster. Tests watch it.
+  @ObservationIgnored var removeDeliveredChats: (Set<String>) -> Void = { ids in
+    Task { await NotificationController.shared.removeDelivered(bots: ids) }
+  }
   /// The device has no network path, as `NetworkReachability` reports it. The app root keeps it current.
   var deviceOffline = false {
     didSet {
@@ -495,8 +499,12 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
 
   // MARK: Writes and errors
 
+  /// Every write in the open chat and in an assistant's settings, each enabled only while `connected`. It
+  /// checks again as it posts, so one confirmed after the chat's read failed or the network dropped, as from
+  /// an alert left open, is refused instead of sent.
   func perform<V: Encodable>(_ path: String, _ value: V, method: String = "POST") async throws {
     guard let api else { throw APIError(message: "Connect to an app server first.", status: 0) }
+    guard connected else { throw connectionRefused() }
     let currentGeneration = generation
     do {
       let _: EmptyResponse = try await api.write(path, value, method: method)

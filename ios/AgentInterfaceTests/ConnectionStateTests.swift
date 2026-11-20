@@ -577,6 +577,23 @@ final class ConnectionCopyTests: XCTestCase {
     XCTAssertTrue(value.chatErrorShown, "A failed poll with no loss being timed is the banner's")
   }
 
+  /// Round 2, finding 7: a failed submission check hidden during a household loss was still the error once
+  /// the loss ended. When the notice cleared the banner showed it, but `error` had not changed, so a view
+  /// that watched `error` never told VoiceOver. The banner's message is what changes, and what is watched.
+  func testTheBannerMessageChangesWhenAHiddenErrorComesIntoViewThoughTheErrorDoesNot() async throws {
+    let value = try store()
+    value.appUnavailable = true
+    try await move(to: 3_000, value)
+    value.reportPoll(APIError(message: "Checking a send failed.", status: 503), .submissions)
+    XCTAssertNil(value.chatErrorBanner, "Hidden behind the notice")
+    value.appUnavailable = false
+    XCTAssertTrue(value.connectionCardShown, "The notice stays out its second")
+    try await move(to: 4_000, value)
+    XCTAssertFalse(value.connectionCardShown)
+    XCTAssertEqual(value.error, "Checking a send failed.", "The error itself never changed")
+    XCTAssertEqual(value.chatErrorBanner, "Checking a send failed.", "The value the chat's onChange compares does")
+  }
+
   /// Review finding 7: with a send on its way the composer is empty, but the notice still said the draft was kept.
   func testTheNoticeClaimsNoDraftWhileTheMessageBoxShowsItEmptyForASend() async throws {
     let value = try store()
