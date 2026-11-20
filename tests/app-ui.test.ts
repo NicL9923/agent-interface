@@ -3807,9 +3807,13 @@ describe("chat style", () => {
         createdAt: "2026-10-01T11:01:00Z",
       },
     ];
-    vi.mocked(write).mockImplementation(
-      async <T>(path: string, value?: unknown) => (path === "/preferences" ? value : {}) as T,
-    );
+    // As the server does, this keeps a choice a save leaves out and answers with all it holds.
+    let held: Record<string, unknown> = {};
+    vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => {
+      if (path !== "/preferences") return {} as T;
+      held = { ...held, ...(value as Record<string, unknown>) };
+      return held as T;
+    });
     try {
       await render();
       const reply = () => container.querySelector(".message-assistant .message-markdown")!;
@@ -3840,9 +3844,13 @@ describe("chat style", () => {
       await choose("Your messages", "solid");
       expect(write).toHaveBeenLastCalledWith(
         "/preferences",
-        expect.objectContaining({ chatStyle: "classic", ownBubble: "solid" }),
+        expect.objectContaining({ ownBubble: "solid" }),
         "PATCH",
       );
+      // A save carries only the choice this edit changed, so this tab's copy of the other one cannot write over a
+      // choice made since on another device. The server keeps what it had, and Classic is still on screen.
+      expect(vi.mocked(write).mock.lastCall![1]).not.toHaveProperty("chatStyle");
+      expect(reply().querySelector(".reply-bubble")).toBeNull();
       // The chat carries the choice to its stylesheet; without it, Solid would change nothing.
       expect(container.querySelector<HTMLElement>(".conversation-panel")!.dataset.ownBubble).toBe(
         "solid",

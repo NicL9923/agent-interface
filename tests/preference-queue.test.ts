@@ -107,3 +107,73 @@ it("never carries one account's queued preferences into another account's edit",
   expect(sent.at(-1)).toEqual({ ...theirs, favorites: ["second account pin"] });
   expect(applied).toEqual([{ ...theirs, favorites: ["second account pin"] }]);
 });
+
+// The server keeps a chat style choice a save leaves out. A tab can hold an older copy of one than the server does,
+// set since on another device, so a save carries a choice only when this edit changed it.
+it("sends a chat style choice only with the edit that changed it", async () => {
+  const sent: Preferences[] = [];
+  const queue = preferenceQueue({
+    send: async (value) => {
+      sent.push(value);
+      return value;
+    },
+    apply: vi.fn(),
+    failed: vi.fn(),
+    account: () => 1,
+  });
+  // This tab still holds Tinted and Bubbles; another device may have saved something else since.
+  const held = { ...base, theme: "light", chatStyle: "bubbles", ownBubble: "tint" } as Preferences;
+  await queue.edit((value) => ({ ...value, theme: "dark" }), held);
+  expect(sent[0]).toMatchObject({ theme: "dark" });
+  expect(sent[0]).not.toHaveProperty("chatStyle");
+  expect(sent[0]).not.toHaveProperty("ownBubble");
+  await queue.edit((value) => ({ ...value, chatStyle: "classic" }), { ...held, theme: "dark" });
+  expect(sent[1]).toMatchObject({ chatStyle: "classic" });
+  expect(sent[1]).not.toHaveProperty("ownBubble");
+});
+
+it("sends a chat style choice changed back while the first change is still saving", async () => {
+  const replies = [deferred(), deferred()];
+  const sent: Preferences[] = [];
+  const queue = preferenceQueue({
+    send: (value) => {
+      sent.push(value);
+      return replies[sent.length - 1].promise;
+    },
+    apply: vi.fn(),
+    failed: vi.fn(),
+    account: () => 1,
+  });
+  const held = { ...base, chatStyle: "bubbles", ownBubble: "tint" } as Preferences;
+  const first = queue.edit((value) => ({ ...value, chatStyle: "classic" }), held);
+  // The screen still holds Bubbles, so the second edit equals what was last confirmed. It must be sent all the same.
+  const second = queue.edit((value) => ({ ...value, chatStyle: "bubbles" }), held);
+  await Promise.resolve();
+  expect(sent[0]).toMatchObject({ chatStyle: "classic" });
+  replies[0].resolve({ ...held, chatStyle: "classic" });
+  await first;
+  expect(sent[1]).toMatchObject({ chatStyle: "bubbles" });
+  expect(sent[1]).not.toHaveProperty("ownBubble");
+  replies[1].resolve(held);
+  await second;
+});
+
+it("keeps a choice a later edit builds on, though that edit does not send it", async () => {
+  const sent: Preferences[] = [],
+    applied: Preferences[] = [];
+  const queue = preferenceQueue({
+    // The server answers with what it holds: the choices it was sent, over the ones it had.
+    send: async (value) => {
+      sent.push(value);
+      return { ...applied.at(-1), ...value } as Preferences;
+    },
+    apply: (value) => applied.push(value),
+    failed: vi.fn(),
+    account: () => 1,
+  });
+  const held = { ...base, theme: "light", chatStyle: "bubbles", ownBubble: "tint" } as Preferences;
+  void queue.edit((value) => ({ ...value, ownBubble: "solid" }), held);
+  await queue.edit((value) => ({ ...value, theme: "dark" }), held);
+  expect(sent[1]).not.toHaveProperty("ownBubble");
+  expect(applied.at(-1)).toMatchObject({ theme: "dark", ownBubble: "solid" });
+});
