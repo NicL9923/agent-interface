@@ -793,6 +793,15 @@ contrast; a chat without an avatar color, such as one with a photo, keeps the ti
 Both are saved with your preferences, like Appearance, so they follow you to your other
 devices. Group chats keep their own layout.
 
+On the web, to answer the latest reply with one tap, use **React** in its actions and
+pick 👍, ❤️, 😂, 🎉 or 👎. The emoji is sent as your message, the same as typing it, and
+shows as a small chip under the reply instead of as a message of its own; another member's
+reaction shows their name beside it. A lone one of those emoji you type after a reply
+shows the same way. React appears only while you could send, on a reply that is still
+the last message, and a reaction can't be taken back. Your draft stays as it is. If a
+reaction can't be confirmed, it shows as an ordinary message with **Retry**. Group
+chats don't offer reactions.
+
 When a reply fails, **Retry** under it sends your message again without touching
 your draft. A failed turn can be retried once, by anyone, from any device: a second
 tap, tab or phone gets the first retry's result instead of starting another turn.

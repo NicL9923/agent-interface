@@ -962,6 +962,48 @@ edge. `"solid"` fills it with the assistant's avatar color at OKLCH lightness ca
 0.52, chroma and hue kept, under white text; a chat without an avatar color uses the
 tint.
 
+### Reaction answers
+
+A person can answer the assistant's latest reply with one emoji. A reaction is an
+ordinary message: send it with `POST /api/bots/:id/messages` like any other, with the
+emoji as the whole `text`, no attachments and no `draftBaseRevision`, so the server
+clears only a draft that is empty or the same emoji. Nothing else is stored, and no
+route or field marks it. `src/shared/reactions.ts` holds the rule below; the web uses
+it as written.
+
+The set, in picker order: 👍 (Thumbs up), ❤️ (Heart), 😂 (Laugh), 🎉 (Celebrate),
+👎 (Thumbs down). Compare texts trimmed and with every U+FE0F variation selector
+removed, so U+2764 alone is the heart.
+
+A message is shown as a reaction when all of these hold:
+
+1. A person sent it, this person or another household member: a `user` message whose
+   origin is human or absent, never a scheduled prompt or other activity.
+2. It has no files.
+3. Its text, compared as above, is one emoji of the set.
+4. The nearest earlier message that is neither a tool row nor itself a reaction is an
+   assistant reply that is not a progress line: `role` `assistant`, not `interim`, not
+   activity, with text or files. A tool row is a `tool` message, or an `assistant`
+   message with no text and no files. Read origins as `withMessageOrigins` does, so a
+   reply to an agent's prompt is activity, not a reply.
+
+Read the loaded messages in order; the first loaded message is never a reaction,
+since what it follows is unknown. Reactions in a row all answer the same reply, so
+several members can react to one reply.
+
+A reaction draws no row. Its emoji shows as a chip under the reply it answers, above
+that reply's meta row, with another member's name as visible text. Its accessible
+name is "You reacted thumbs up" or "Jordan reacted thumbs up". Chips are not
+controls; a sent reaction cannot be removed. While the send is on its way the chip is
+faint and marked busy. A send that ends without a receipt shows as an ordinary
+message row with its usual Retry, not as a chip.
+
+Offer the picker only on the latest reply, only while that reply is the last message
+apart from reactions to it, with no tool row after it, and only while the composer
+could send: nothing pending or sending, no turn running or starting, the assistant
+reachable, and an interrupted task reviewed. A reaction is still a real message for
+unread state and the home preview. Group chats do not offer reactions.
+
 <!-- Main assistant: begin -->
 
 ### Main assistant and check-ins

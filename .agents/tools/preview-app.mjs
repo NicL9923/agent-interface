@@ -517,6 +517,16 @@ const changeStreams = new Map();
 const changed = (botId) => {
   for (const stream of changeStreams.get(botId) ?? []) stream.write("data: change\n\n");
 };
+const reactionFixture = process.env.PREVIEW_REACTIONS === "1";
+// Another member already reacted to the latest reply, so a reaction sent here joins theirs.
+if (reactionFixture)
+  conversations.kitchen.messages.push({
+    id: "k63-jordan-heart",
+    role: "user",
+    sender: { id: "jordan", name: "Jordan" },
+    text: "\u2764",
+    createdAt: new Date(Date.UTC(2026, 8, 22, 18, 5)).toISOString(),
+  });
 if (process.env.PREVIEW_ARRIVALS === "1") {
   let arrival = 0;
   setInterval(() => {
@@ -1629,6 +1639,32 @@ const handle = async (request, response) => {
       secureFlowSettled(conversation, "declined");
       return setTimeout(() => json(response, { status: "ok" }), 700);
     }
+    // PREVIEW_REACTIONS=1: a message to Kitchen companion, such as a reaction answer, is held for
+    // PREVIEW_SEND_DELAY ms (default 2500) so its sending state shows, then saved and accepted. No turn runs.
+    if (
+      reactionFixture &&
+      request.method === "POST" &&
+      path === "/bots/kitchen/messages" &&
+      !body.retryOf
+    )
+      return setTimeout(
+        () => {
+          conversations.kitchen.messages.push({
+            id: body.requestId,
+            role: "user",
+            sender: { id: "preview", name: "Nicolas" },
+            text: body.text,
+            createdAt: new Date().toISOString(),
+          });
+          json(response, {
+            requestId: body.requestId,
+            status: "accepted",
+            messageId: body.requestId,
+          });
+          changed("kitchen");
+        },
+        Number(process.env.PREVIEW_SEND_DELAY || 2500),
+      );
     // Retry of a failed turn: the fixture runs again briefly, then answers. Nothing is fetched.
     const retryMatch =
       request.method === "POST" && body.retryOf ? /^\/bots\/([^/]+)\/messages$/.exec(path) : null;
