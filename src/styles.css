@@ -656,9 +656,9 @@
   .message-user:has(> .message-bubble) > .message-attribution {
     justify-content: flex-end;
   }
+  /* The reply bubble's own rule sits beside its default in the components layer, which ranks above this one. */
   @media (prefers-contrast: more) {
-    .message-bubble,
-    .reply-bubble {
+    .message-bubble {
       border-color: var(--message-meta);
     }
   }

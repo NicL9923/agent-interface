@@ -44,6 +44,12 @@
     background: var(--reply-bubble);
     line-height: 1.6;
   }
+  /* Forced colors draws the transparent border by itself; increased contrast needs a color. */
+  @media (prefers-contrast: more) {
+    .reply-bubble {
+      border-color: var(--message-meta);
+    }
+  }
   .reply-bubble > :first-child {
     margin-top: 0;
   }

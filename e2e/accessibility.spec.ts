@@ -117,3 +117,35 @@ for (const theme of ["light", "dark"]) {
     }
   });
 }
+
+// Both bubbles carry a transparent border that only increased contrast and forced colors draw, so their edge shows
+// where the fill alone does not. The reply bubble's default lives in the components layer, which ranks above base.
+for (const [mode, media] of [
+  ["increased contrast", { contrast: "more" }],
+  ["forced colors", { forcedColors: "active" }],
+] as const) {
+  test(`both chat bubbles draw an edge under ${mode}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce", ...media });
+    await signIn(page);
+    await assistants(page)
+      .getByRole("button", { name: /Ranch Hand/ })
+      .click();
+    await page.getByText("Morning. The north fence is fixed.").waitFor();
+    const edges = await page.evaluate(() => {
+      // The seeded chat holds no message of the person's, so a bare one carries the cascade's answer for its classes.
+      const person = document.createElement("article");
+      person.className = "message message-user";
+      person.innerHTML = '<div class="message-bubble">Fix the south fence too</div>';
+      document.querySelector(".transcript-content")!.appendChild(person);
+      const edge = (selector: string) => {
+        const style = getComputedStyle(document.querySelector(selector)!);
+        return { width: style.borderTopWidth, color: style.borderTopColor };
+      };
+      return { reply: edge(".reply-bubble"), person: edge(".message-user > .message-bubble") };
+    });
+    for (const [bubble, edge] of Object.entries(edges)) {
+      expect(edge.width, bubble).toBe("1px");
+      expect(edge.color, bubble).not.toMatch(/^rgba\(\d+, \d+, \d+, 0\)$|transparent/);
+    }
+  });
+}
