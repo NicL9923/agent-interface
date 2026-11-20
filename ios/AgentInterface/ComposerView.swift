@@ -113,8 +113,10 @@ struct ComposerView: View {
       }
       VoicePanel(voice: voice, disabled: voiceDisabled, bot: bot)
       footnotes
-    }.padding(4).glassSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
+    }.padding(4)
+      // Inside the glass: on iOS 27 an identifier applied after `glassEffect` is not exposed.
       .accessibilityElement(children: .contain).accessibilityIdentifier("composerCard")
+      .glassSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
   }
   private var input: some View {
     // While a message is on its way the transcript shows it, so the box reads empty and is
