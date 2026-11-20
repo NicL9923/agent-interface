@@ -801,7 +801,12 @@ reasoning. Decisions and requests for input stay outside the fold.
 
 **Find in chat** (Cmd/Ctrl+F on web, Find on iOS) matches loaded messages at once and
 adds older matches from the conversation's history; choosing one opens the chat at
-that message. A status area above the message box gathers send problems, the
+that message. On a wide web window with a mouse or trackpad, a long chat also shows a
+**message rail** at its right edge: one tick for each message a person sent among the
+loaded messages, with the turn in view marked. Hovering or focusing a tick previews the
+message and the start of its reply; choosing one brings that message to the top of the
+view. The rail is one tab stop, moved with Up, Down, Home and End. It does not appear
+on phones. A status area above the message box gathers send problems, the
 interrupted-task review, waiting decisions with **Review**, and connection trouble,
 most urgent first.
 
