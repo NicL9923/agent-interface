@@ -22,6 +22,11 @@
   --danger: #a33c32;
   --attention: #9b6733;
   --user: #e7eee4;
+  /* Glass for controls floating over the transcript: see the phone composer. */
+  --glass-fill: color-mix(in srgb, var(--raised) 64%, transparent);
+  --glass-edge: #ffffffb3;
+  --glass-shadow:
+    inset 0 1px 0 #ffffffa6, 0 1px 3px #1b251a14, 0 8px 28px #1b251a1f;
   color-scheme: light;
 }
 /* A page leaving for the back-forward cache shows nothing of its account if it is shown again before
@@ -44,6 +49,9 @@
   --danger: #faafa0;
   --attention: #ebc188;
   --user: #2a3a2e;
+  --glass-edge: #ffffff1a;
+  --glass-shadow:
+    inset 0 1px 0 #ffffff14, 0 1px 3px #0000004d, 0 8px 28px #00000059;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -60,6 +68,9 @@
     --danger: #faafa0;
     --attention: #ebc188;
     --user: #2a3a2e;
+    --glass-edge: #ffffff1a;
+    --glass-shadow:
+      inset 0 1px 0 #ffffff14, 0 1px 3px #0000004d, 0 8px 28px #00000059;
     color-scheme: dark;
   }
 }
@@ -1644,12 +1655,51 @@ a {
   .empty-state h2 {
     font-size: 1.5625rem;
   }
+  /*
+   * The message box floats over the transcript, with no band behind it: the transcript runs under the composer
+   * area and ends with room as tall as the area, measured into --composer-overlap by Composer.tsx. The frame
+   * keeps that much height and gives it back below, so the area still takes its space last when the view is
+   * short (see .composer-area). Gaps around the box let taps and scrolls through to the transcript.
+   */
+  .transcript-frame {
+    min-height: var(--composer-overlap, 0px);
+    margin-bottom: calc(-1 * var(--composer-overlap, 0px));
+  }
+  .transcript {
+    padding-bottom: calc(10px + var(--composer-overlap, 0px));
+    scroll-padding-bottom: var(--composer-overlap, 0px);
+  }
+  .jump-latest {
+    bottom: calc(14px + var(--composer-overlap, 0px));
+  }
+  .transcript-frame .computer-peek {
+    bottom: calc(12px + var(--composer-overlap, 0px));
+  }
   .composer-area {
+    position: relative;
+    z-index: 4;
     padding: 6px 12px max(8px, var(--composer-bottom-inset));
+    pointer-events: none;
+  }
+  .composer-area > * {
+    pointer-events: auto;
   }
   .composer {
     padding: 4px;
     border-radius: 26px;
+  }
+  .composer-area > .composer {
+    background: var(--glass-fill);
+    border-color: var(--glass-edge);
+    box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(20px) saturate(1.8);
+    backdrop-filter: blur(20px) saturate(1.8);
+  }
+  .composer-area > .composer:focus-within {
+    border-color: var(--accent);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent),
+      var(--glass-shadow);
   }
   .composer textarea {
     font-size: max(16px, 1rem);
@@ -2059,5 +2109,23 @@ button.with-progress {
 @media (max-width: 359px) {
   .composer {
     grid-template-areas: "extras extras extras extras" "input input input input" "lead . voice send" "panel panel panel panel";
+  }
+}
+/* Glass needs a backdrop blur to stay readable over the transcript, and some people ask for none. */
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  .composer-area > .composer {
+    background: var(--raised);
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .composer-area > .composer {
+    background: var(--raised);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .composer-area > .composer:not(:focus-within) {
+    border-color: var(--line);
   }
 }
