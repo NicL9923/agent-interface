@@ -1,7 +1,7 @@
 # November 19 phone glass composer
 
-Branch `t3/mobile-liquid-glass-input`. Web checks ran at `b8d0f768`, and the native checks at
-`d6d89798`. The commits after `b8d0f768` change only Swift files.
+Branch `t3/mobile-liquid-glass-input`. Web checks last ran on the code at `6667bbd9`, and the
+native checks at `d6d89798`. No Swift file changed after `d6d89798`.
 
 On phones the message box floats over the transcript with nothing behind it, and the box is glass.
 On the web (max-width 620px), a CSS backdrop blur provides the glass. iOS 26 and later use Liquid
@@ -9,7 +9,7 @@ Glass through `glassEffect`, and iOS 17 to 25 use a material fallback.
 
 ## Application tests
 
-- `.agents/tools/check-all --keep-going` on LaptopServer at `b8d0f768`:
+- `.agents/tools/check-all --keep-going` on LaptopServer at `6667bbd9`:
   - Typecheck, lint, the unit tests (225 files, 4,120 tests) and the build passed.
   - All 89 Chromium e2e tests passed.
   - All 89 WebKit tests failed to launch because the host is missing Playwright's system
