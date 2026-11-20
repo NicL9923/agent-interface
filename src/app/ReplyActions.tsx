@@ -6,6 +6,7 @@ import { Icon } from "../components/Icon";
 import { When } from "../components/When";
 import { useAction } from "./use-action";
 import type { ReplySpeech } from "./use-reply-speech";
+import { ReactionPicker } from "./Reactions";
 
 /** What reply actions need from the conversation around them. Kept in context so the memoized transcript never re-renders for it. */
 export type TranscriptTools = {
@@ -24,6 +25,10 @@ export type TranscriptTools = {
   formKey?: string;
   startFormSend?: (botId: string, senderId: string, text: string) => (requestId: string) => void;
   settleFormSend?: (receipt: SubmissionReceipt, own: boolean) => void;
+  /** The reply a reaction can answer now, which alone shows React. See reactable in Conversation.tsx. */
+  reactTo?: string;
+  /** Sends a reaction to `reactTo` as an ordinary message. */
+  react?: (emoji: string) => void;
 };
 export const TranscriptTools = createContext<TranscriptTools | null>(null);
 
@@ -83,7 +88,7 @@ export function MessageMeta({
   );
 }
 
-/** Copy on any message, and for a reply also listen, share, save and quote. Shown on hover or focus with a mouse, always with touch. */
+/** Copy on any message, and for a reply also listen, share, save and quote, and React on the latest. Shown on hover or focus with a mouse, always with touch. */
 function MessageActions({ message }: { message: Message }) {
   const tools = useContext(TranscriptTools);
   const save = useAction();
@@ -226,6 +231,7 @@ function MessageActions({ message }: { message: Message }) {
           >
             <Icon name="quote" size={16} />
           </button>
+          {tools.react && tools.reactTo === message.id && <ReactionPicker onReact={tools.react} />}
         </>
       )}
     </div>

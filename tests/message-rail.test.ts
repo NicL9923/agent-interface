@@ -66,6 +66,19 @@ describe("railEntries", () => {
     expect(entries[1].reply).toBeUndefined();
   });
 
+  // A reaction answer shows on its reply, so a tick for it would point at nothing of its own.
+  it("gives a reaction answer no tick, while a lone emoji that answers no reply keeps one", () => {
+    const entries = railEntries([
+      user("q", "Add salt to the list?"),
+      reply("a", "Want me to add it to the list?"),
+      user("react", "👍"),
+      user("member", "🎉", { sender: { id: "two", name: "Two" } }),
+      user("after", "And pepper"),
+      user("lone", "👍"),
+    ]);
+    expect(entries.map((entry) => entry.id)).toEqual(["q", "after", "lone"]);
+  });
+
   it("names a message without words by its files, on one line", () => {
     const [files, spaced] = railEntries([
       user("f", "  ", { files: [{ id: "1", name: "gate.jpg", mime: "image/jpeg" }] }),

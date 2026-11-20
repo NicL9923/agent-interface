@@ -687,6 +687,10 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const sendMessage = useStableCallback(() =>
     send((request) => history.anchorSend(request.requestId)),
   );
+  // A reaction shows on the reply it answers, not as a row a send could anchor, so the view follows the end.
+  const sendReaction = useStableCallback((emoji: string) => {
+    void send(() => history.jumpToLatest(), emoji);
+  });
   const refreshSession = useStableCallback(() => void session.refresh());
   const reconnect = useStableCallback(() => void session.reconnect());
   const uploadFiles = useStableCallback(upload);
@@ -990,6 +994,16 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       ? "thinking"
       : reported;
   const active = ["thinking", "working", "waiting", "blocked"].includes(reported);
+  // A reaction is offered when the message box could send: nothing on its way, no turn running or starting,
+  // and the assistant reachable. See reactable in Conversation.tsx for which reply shows it.
+  const canReact =
+    !pending &&
+    !sending &&
+    !connectionLost &&
+    boot.capabilities.chat.supported &&
+    !active &&
+    !["thinking", "working", "waiting", "blocked"].includes(state) &&
+    !(reported === "interrupted" && !reviewed);
   const showActivity = state !== "idle" && state !== "done";
   const avatarState = state === "done" ? "idle" : state;
   const open = openPanel;
@@ -1125,6 +1139,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
               reviewed={reviewed}
               onDraft={addToDraft}
               onCreate={newBot}
+              canReact={canReact}
+              onReact={sendReaction}
             />
             {selected && (
               <Composer

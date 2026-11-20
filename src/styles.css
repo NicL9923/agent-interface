@@ -682,9 +682,11 @@ a {
   font-size: 0.6875rem;
   font-weight: 400;
 }
-/* The line under a message: its time, or its delivery status, and its actions. */
+/* The line under a message: its time, or its delivery status, and its actions. On a narrow touch
+   screen the actions, 44 px each, may not fit beside the time, so they move to a line of their own. */
 .message-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   min-height: 32px;

@@ -3,9 +3,12 @@ import type { KeyboardEvent } from "react";
 
 /**
  * A small home-bar menu: the first item takes focus on open, arrows, Home and End move between
- * items, Escape closes and returns focus to the trigger, Tab or a press outside closes it.
+ * items, Escape closes and returns focus to the trigger, Tab or a press outside closes it. A
+ * horizontal menu, such as the row of reactions, also moves with Left and Right.
  */
-export function useMenu<Wrap extends HTMLElement = HTMLSpanElement>() {
+export function useMenu<Wrap extends HTMLElement = HTMLSpanElement>({
+  horizontal = false,
+}: { horizontal?: boolean } = {}) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<Wrap>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -35,7 +38,10 @@ export function useMenu<Wrap extends HTMLElement = HTMLSpanElement>() {
         setOpen(false);
         return;
       }
-      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || !wrap.current) return;
+      const forward = event.key === "ArrowDown" || (horizontal && event.key === "ArrowRight");
+      const back = event.key === "ArrowUp" || (horizontal && event.key === "ArrowLeft");
+      if ((!forward && !back && event.key !== "Home" && event.key !== "End") || !wrap.current)
+        return;
       event.preventDefault();
       const items = [
         ...wrap.current.querySelectorAll<HTMLElement>("[role='menuitem']:not(:disabled)"),
@@ -46,10 +52,10 @@ export function useMenu<Wrap extends HTMLElement = HTMLSpanElement>() {
           ? 0
           : event.key === "End"
             ? items.length - 1
-            : (at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+            : (at + (forward ? 1 : -1) + items.length) % items.length;
       items[next]?.focus();
     },
-    [close],
+    [close, horizontal],
   );
   /**
    * Closes the menu, then runs what the item does. Focus goes back to the trigger first, so a dialog the

@@ -44,6 +44,8 @@ import { useDeclined } from "./decline-handoff";
 import { FindBar } from "./FindBar";
 import { MessageRail } from "./MessageRail";
 import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
+import { ReactionChips, reactionName, type ReactionChip } from "./Reactions";
+import { readReactions } from "../shared/reactions";
 import { useReplySpeech } from "./use-reply-speech";
 import { useTalkLive } from "./talk-live";
 import {
@@ -88,6 +90,8 @@ const ArtifactsPanel = lazy(() =>
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
 const noMessages: Message[] = [];
 const noChips = new Map<string, Artifact[]>();
+const noIds: string[] = [];
+const noReactions: TurnReaction[] = [];
 /**
  * Memoized, with stable callbacks from App, so a keystroke in the composer, which changes App's draft,
  * does not re-render the transcript, its decisions, or its activity avatar.
@@ -126,6 +130,8 @@ export const Conversation = memo(function Conversation({
   settleFormSend,
   computerOpen = false,
   reviewed = false,
+  canReact = false,
+  onReact,
 }: {
   boot: Bootstrap;
   selected?: Bot;
@@ -171,6 +177,10 @@ export const Conversation = memo(function Conversation({
   computerOpen?: boolean;
   /** The person reviewed an interrupted task in the message box; form cards send under the same review. */
   reviewed?: boolean;
+  /** The message box could send now, so the latest reply offers React. */
+  canReact?: boolean;
+  /** Sends a reaction, through the message box's own submit path. */
+  onReact?: (emoji: string) => void;
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
@@ -206,6 +216,21 @@ export const Conversation = memo(function Conversation({
         : continueChips(windowChips, settled, live, files, earlier),
     [loaded, unknownEarlier, windowChips, settled, live, files, earlier],
   );
+  // Reaction answers show on the reply they answer, not as rows; see src/shared/reactions.ts. A reaction
+  // whose send came back without a receipt shows as its own row instead, with the message box's Retry.
+  const messages = conversation?.messages ?? noMessages;
+  const reading = useMemo(() => readReactions(messages), [messages]);
+  const failedSend = echo?.status === "unconfirmed" ? echo.request.requestId : undefined;
+  const reactions = useMemo(() => {
+    const answers = new Map(reading.answers);
+    if (failedSend) answers.delete(failedSend);
+    const byReply = new Map<string, Message[]>();
+    for (const message of messages) {
+      const reply = answers.get(message.id);
+      if (reply) byReply.set(reply, [...(byReply.get(reply) ?? []), message]);
+    }
+    return { answers, byReply };
+  }, [reading, failedSend, messages]);
   // Email drafts that revise an earlier one here, so their cards can mark what changed. The map keeps
   // its identity while the live rows add no draft, so the cards reading it do not re-render.
   const settledRevisions = useMemo(() => settleRevisions(settled), [settled]);
@@ -293,6 +318,18 @@ export const Conversation = memo(function Conversation({
     );
     requestAnimationFrame(() => document.getElementById("message")?.focus());
   });
+  // After a reaction the React button is gone, so keyboard focus continues from the transcript.
+  const react = useStableCallback((emoji: string) => {
+    if (!onReact) return;
+    onReact(emoji);
+    announce(`${reactionName({ text: emoji })}.`);
+    requestAnimationFrame(() => {
+      const focused = document.activeElement;
+      if (!focused || focused === document.body || !focused.isConnected)
+        scroll.current?.focus({ preventScroll: true });
+    });
+  });
+  const reactTo = canReact && onReact ? reading.latest : undefined;
   // Live Talk owns the speaker, so replies are not read aloud while it runs.
   const talking = useTalkLive();
   // A reply already playing stops only once the chat shows it is disconnected; starting one is refused at once (`tools.unavailable`).
@@ -309,6 +346,8 @@ export const Conversation = memo(function Conversation({
       formKey: boot.formKey,
       startFormSend,
       settleFormSend,
+      reactTo,
+      react,
     }),
     [
       botId,
@@ -321,6 +360,8 @@ export const Conversation = memo(function Conversation({
       boot.formKey,
       startFormSend,
       settleFormSend,
+      reactTo,
+      react,
     ],
   );
   const frame = useRef<HTMLDivElement>(null);
@@ -491,6 +532,7 @@ export const Conversation = memo(function Conversation({
                       runSlots={runSlots}
                       runActions={runActions}
                       replyFiles={replyFiles}
+                      reactions={reactions}
                       onOpenFile={openFile}
                     />
                   </>
@@ -809,8 +851,15 @@ type TurnProps = {
   outgoing?: SentEcho["status"];
   /** The files this turn produced and the reply they show under, when it has both. */
   files?: { replyId: string; artifacts: Artifact[] };
+  /** The reaction answers among this turn's messages, which draw no row of their own. */
+  hidden: string[];
+  /** The reactions this turn's replies show, each with the reply it answers. */
+  reactions: TurnReaction[];
   onOpenFile: (fileId?: string) => void;
 };
+type TurnReaction = { replyId: string; chip: ReactionChip };
+/** Which reactions answer which reply, and every reaction's ID. See the reactions memo in Conversation. */
+type Reactions = { answers: Map<string, string>; byReply: Map<string, Message[]> };
 /**
  * Reply cards are the only part of a reply that reads `unavailable`, and a change to it re-parses the
  * reply's Markdown, so only a reply that may hold one gets it. Matched as loosely as sameBlock does.
@@ -843,11 +892,16 @@ const Turns = memo(function Turns({
   runSlots,
   runActions,
   replyFiles,
+  reactions,
   unavailable,
   disconnected,
   ...shared
-}: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing" | "files"> & {
+}: Omit<
+  TurnProps,
+  "block" | "live" | "outgoingId" | "outgoing" | "files" | "hidden" | "reactions"
+> & {
   replyFiles: Map<string, Artifact[]>;
+  reactions: Reactions;
   blocks: Turn[];
   /** The latest turn is still working. */
   running: boolean;
@@ -864,6 +918,20 @@ const Turns = memo(function Turns({
         const holdsEcho =
           outgoingId !== undefined && block.messages.some((message) => message.id === outgoingId);
         const reply = block.messages.findLast((message) => replyFiles.has(message.id));
+        const hidden = block.messages
+          .filter((message) => reactions.answers.has(message.id))
+          .map((message) => message.id);
+        const shown = block.messages.flatMap((message) =>
+          (reactions.byReply.get(message.id) ?? []).map((reaction): TurnReaction => ({
+            replyId: message.id,
+            chip: {
+              id: reaction.id,
+              text: reaction.text,
+              who: memberName(reaction, shared) || undefined,
+              sending: reaction.id === outgoingId && outgoing === "sending",
+            },
+          })),
+        );
         // A turn gets the connection flags only when it shows them, so a change re-renders no other turn.
         return [
           ...runCards(runSlots[index], shared.botId, runActions),
@@ -880,6 +948,8 @@ const Turns = memo(function Turns({
             outgoingId={holdsEcho ? outgoingId : undefined}
             outgoing={holdsEcho ? outgoing : undefined}
             files={reply && { replyId: reply.id, artifacts: replyFiles.get(reply.id)! }}
+            hidden={hidden.length ? hidden : noIds}
+            reactions={shown.length ? shown : noReactions}
           />,
         ];
       })}
@@ -958,6 +1028,17 @@ function sameTurn(a: Turn, b: Turn) {
     ([id, message], index) => id === right[index][0] && sameMessage(message, right[index][1]),
   );
 }
+const sameReactions = (a: TurnReaction[], b: TurnReaction[]) =>
+  a === b ||
+  (a.length === b.length &&
+    a.every(
+      ({ replyId, chip }, index) =>
+        replyId === b[index].replyId &&
+        chip.id === b[index].chip.id &&
+        chip.text === b[index].chip.text &&
+        chip.who === b[index].chip.who &&
+        chip.sending === b[index].chip.sending,
+    ));
 const sameTurnProps = (a: TurnProps, b: TurnProps) =>
   a.advanced === b.advanced &&
   a.bubbles === b.bubbles &&
@@ -973,6 +1054,8 @@ const sameTurnProps = (a: TurnProps, b: TurnProps) =>
   a.outgoing === b.outgoing &&
   a.onOpenFile === b.onOpenFile &&
   sameFiles(a.files, b.files) &&
+  a.hidden.join("\n") === b.hidden.join("\n") &&
+  sameReactions(a.reactions, b.reactions) &&
   sameTurn(a.block, b.block);
 const sameFiles = (a: TurnProps["files"], b: TurnProps["files"]) =>
   a === b ||
@@ -996,6 +1079,8 @@ const TurnView = memo(function TurnView({
   outgoingId,
   outgoing,
   files: turnFiles,
+  hidden,
+  reactions,
   onOpenFile,
 }: TurnProps) {
   const allWork = [...block.tools.values()];
@@ -1013,6 +1098,7 @@ const TurnView = memo(function TurnView({
   const messages = ordered.filter(
     (message): message is Message =>
       "role" in message &&
+      !hidden.includes(message.id) &&
       (isAgentExchange(message) || (message.role !== "tool" && shownIds.has(message.id))),
   );
   // A turn's intermediate work folds into one row: before the reply that follows the work, before the
@@ -1101,13 +1187,7 @@ const TurnView = memo(function TurnView({
     const label = scheduled
       ? "Scheduled"
       : own
-        ? message.sender
-          ? message.sender.id !== userId
-            ? message.sender.name
-            : ""
-          : sharedChat && !ownRows.has(message.id)
-            ? UNKNOWN_SENDER
-            : ""
+        ? memberName(message, { userId, sharedChat, ownRows })
         : reply
           ? ""
           : message.toolName || message.role;
@@ -1155,6 +1235,7 @@ const TurnView = memo(function TurnView({
         {turnFiles?.replyId === message.id && !streaming && (
           <ReplyFiles artifacts={turnFiles.artifacts} onOpen={onOpenFile} />
         )}
+        <ReactionChips chips={chipsOf(reactions, message.id)} />
         {/* A live reply holds its meta row's place, hidden, so nothing moves when it is saved. */}
         {!progress && (reply || own) && (
           <MessageMeta
@@ -1171,6 +1252,8 @@ const TurnView = memo(function TurnView({
     return message.id === foldAt ? [...afterFold, article] : [article];
   });
   if (foldAt === undefined) rows.push(...afterFold);
+  // A turn of reactions alone draws nothing; an empty turn would still take the spacing of one.
+  if (!rows.length) return null;
   return <div className="conversation-turn">{rows}</div>;
 }, sameTurnProps);
 function ExchangeMessages({
@@ -1243,6 +1326,20 @@ function TurnWork({
 }
 /** The label for a person's message that names no sender, in a chat other members share. Matches the unresolved author in group chats (src/server/group-latest.ts). */
 const UNKNOWN_SENDER = "Household member";
+/** Another member's name for a person's message, or "" for the person's own. See the label in TurnView. */
+const memberName = (
+  message: Message,
+  { userId, sharedChat, ownRows }: Pick<TurnProps, "userId" | "sharedChat" | "ownRows">,
+) =>
+  message.sender
+    ? message.sender.id !== userId
+      ? message.sender.name
+      : ""
+    : sharedChat && !ownRows.has(message.id)
+      ? UNKNOWN_SENDER
+      : "";
+const chipsOf = (reactions: TurnReaction[], replyId: string) =>
+  reactions.flatMap((reaction) => (reaction.replyId === replyId ? [reaction.chip] : []));
 /** Only its owner can see a personal assistant that is not shared, so nobody else writes in that chat. Mirrors `visible` in src/server/bot-access.ts. */
 const isPrivateAssistant = (bot: Bot) => bot.shared === false && !!bot.ownerId;
 const isReplyRow = (message: Message) =>

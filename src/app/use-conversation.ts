@@ -54,9 +54,10 @@ export function firstMessageBelow(
   }
   return items[low];
 }
+/** A message's row, or for a reaction answer, which has none, its chip on the reply it answers. */
 const messageElement = (container: HTMLElement, id: string) =>
-  [...container.querySelectorAll<HTMLElement>("[data-message-id]")].find(
-    (item) => item.dataset.messageId === id,
+  [...container.querySelectorAll<HTMLElement>("[data-message-id], [data-reaction-id]")].find(
+    (item) => item.dataset.messageId === id || item.dataset.reactionId === id,
   );
 // Rows that hold the reader's place without being messages, such as routine run cards, so one
 // opened at the top of the view stays put. Read positions still name only messages.

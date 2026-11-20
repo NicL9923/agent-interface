@@ -1,0 +1,113 @@
+/* Reaction answers: the React menu in the latest reply's action row, and the chips under a reply.
+   Sizes are in rem so 200% text grows the targets with the emoji. */
+
+.reaction-picker {
+  display: inline-flex;
+}
+/* Opens above the reply's meta row from the column's start, so it never leaves the column: at 200%
+   text it is wider than a phone's column, and wraps to a second row instead. */
+.message-meta:has(.reaction-picker) {
+  position: relative;
+}
+.reaction-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 1.5rem;
+  background: var(--raised);
+  box-shadow: 0 8px 26px rgb(0 0 0 / 12%);
+  transform-origin: 0 100%;
+}
+.reaction-menu button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+.reaction-menu button:hover,
+.reaction-menu button:focus-visible {
+  background: var(--accent-soft);
+}
+.reaction-menu button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+@media (pointer: coarse) {
+  .reaction-menu button {
+    min-width: max(44px, 2.75rem);
+    min-height: max(44px, 2.75rem);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .reaction-menu {
+    animation: reaction-menu-open 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+@keyframes reaction-menu-open {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+
+/* The reactions a reply shows, between its files and its meta row. */
+.reaction-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 1.75rem;
+  padding: 2px 10px;
+  /* A real border, so forced colors keep the chip's edge. */
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  transition: opacity 240ms ease;
+}
+.reaction-emoji {
+  font-size: 1rem;
+  line-height: 1;
+}
+.reaction-who {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--message-meta);
+  font-weight: 600;
+}
+/* Faint until Hermes accepts it, as a sent message is. */
+.reaction-chip.reaction-sending {
+  opacity: 0.55;
+}
+.reaction-chip[data-found] {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reaction-chip {
+    transition: none;
+  }
+}

@@ -143,31 +143,44 @@ export function useSubmission({
       clearInterval(timer);
     };
   }, [pending, userId, botId, sending]);
-  /** `onStart` hears the request once it is on its way, such as to anchor the view to it. */
-  const send = async (onStart?: (request: Pending) => void) => {
+  /**
+   * Sends the draft. `onStart` hears the request once it is on its way, such as to anchor the view to it.
+   * With `reaction`, sends that emoji instead, as an ordinary message, and leaves the draft as it is: the
+   * request names no draft revision, so the server clears only a draft that is empty or the same emoji
+   * (see clearSubmittedDraft). Refused, the emoji goes into the draft as any refused message does.
+   */
+  const send = async (onStart?: (request: Pending) => void, reaction?: string) => {
+    const fromDraft = reaction === undefined;
     if (
       !userId ||
       connectionLost ||
       pending ||
       sending ||
-      !draftReady ||
       !botId ||
-      draft.botId !== botId ||
-      draft.userId !== userId
+      (fromDraft && (!draftReady || draft.botId !== botId || draft.userId !== userId))
     )
       return;
     setError("");
     const epoch = identityEpoch.current;
-    const request: Pending = {
-      requestId: crypto.randomUUID(),
-      botId,
-      text: draft.text,
-      attachments: draft.attachments,
-      reviewedInterruption: reviewed,
-      draftBaseRevision: draft.baseRevision ?? 0,
-    };
+    const request: Pending = fromDraft
+      ? {
+          requestId: crypto.randomUUID(),
+          botId,
+          text: draft.text,
+          attachments: draft.attachments,
+          reviewedInterruption: reviewed,
+          draftBaseRevision: draft.baseRevision ?? 0,
+        }
+      : {
+          requestId: crypto.randomUUID(),
+          botId,
+          text: reaction,
+          attachments: [],
+          reviewedInterruption: reviewed,
+        };
     localSave(submissionKey(userId, botId), request);
-    markSent(userId, request, true);
+    // The draft is the sent copy only when it is what was sent.
+    if (fromDraft) markSent(userId, request, true);
     setPending(request);
     start(request);
     onStart?.(request);
@@ -183,8 +196,10 @@ export function useSubmission({
         if (activeBotRef.current === request.botId) setPending(null);
         localRemove(submissionKey(userId, request.botId));
       } else if (result.status === "accepted") {
-        clearSavedDraft(userId, request);
-        clearSent(userId, request);
+        if (fromDraft) {
+          clearSavedDraft(userId, request);
+          clearSent(userId, request);
+        }
         if (activeBotRef.current === request.botId) setPending(null);
         localRemove(submissionKey(userId, request.botId));
       }

@@ -159,6 +159,20 @@ describe("prompt recall", () => {
     expect(ownPrompts(messages, "one")).toEqual(["Plan dinner", "What about Tuesday?"]);
     expect(ownPrompts(undefined, "one")).toEqual([]);
   });
+  // A reaction answer is a tap on a reply; the same emoji typed after a person's message is words.
+  it("leaves out a reaction answer but keeps a lone emoji that answers no reply", () => {
+    const recalled = ownPrompts(
+      [
+        message("q", "Add salt?"),
+        message("a", "Want me to add it?", "one", "assistant"),
+        message("r", "👍"),
+        message("w", "Thanks"),
+        message("e", "🎉"),
+      ],
+      "one",
+    );
+    expect(recalled).toEqual(["🎉", "Thanks", "Add salt?"]);
+  });
   it("walks back and forward, then restores the empty draft", () => {
     const prompts = ownPrompts(messages, "one");
     let recall: Recall = null;

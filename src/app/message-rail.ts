@@ -1,5 +1,6 @@
 import type { Message } from "../shared/types";
 import { isConversationReply, messageOrigin } from "../shared/message-origin";
+import { reactionAnswers } from "../shared/reactions";
 import { ANCHOR_GAP } from "./scroll-follow";
 import { isHumanMessage } from "./transcript-logic";
 import { replySnippet } from "./reply-announcement";
@@ -37,12 +38,17 @@ const startsTurn = (message: Message) =>
   isHumanMessage(message) ||
   (message.role === "user" && messageOrigin(message)?.kind === "scheduled");
 
-/** The rail's entries: every message a person sent, theirs or another member's, never a scheduled prompt, tool row or reply. */
+/**
+ * The rail's entries: every message a person sent, theirs or another member's, never a scheduled prompt,
+ * tool row or reply. A reaction answer is drawn on its reply, not as a message, so it gets no tick either.
+ */
 export function railEntries(messages: Message[]): RailEntry[] {
   const entries: RailEntry[] = [];
+  const reactions = reactionAnswers(messages);
   let open: RailEntry | undefined;
   for (const message of messages) {
     if (startsTurn(message)) open = undefined;
+    if (reactions.has(message.id)) continue;
     if (isHumanMessage(message)) {
       open = {
         id: message.id,
