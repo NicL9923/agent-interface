@@ -1,0 +1,114 @@
+/* The message rail: one tick per message a person sent, beside the reading column. See MessageRail.tsx. */
+.message-rail {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  /* Extra room on the inside, so the ticks wake as the pointer nears them rather than only on contact. */
+  padding: 8px 8px 8px 20px;
+  transform: translateY(-50%);
+}
+.message-rail ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.message-rail-tick {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 28px;
+  /* The rail's pitch, so each tick is a 24 px target. */
+  height: 24px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* The mark is a border, not a background, so forced-colors mode draws it in the system text color. */
+.message-rail-tick::after {
+  content: "";
+  width: 10px;
+  border-top: 2px solid var(--muted);
+  border-radius: 2px;
+  transition:
+    width 160ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.message-rail:hover .message-rail-tick,
+.message-rail:focus-within .message-rail-tick {
+  opacity: 1;
+}
+.message-rail-tick:hover::after,
+.message-rail-tick:focus-visible::after {
+  width: 16px;
+  border-top-color: var(--ink);
+}
+/* The turn in view: longer and thicker as well as the accent, so it never rests on color alone. */
+.message-rail-tick[aria-current]::after {
+  width: 20px;
+  border-top: 4px solid var(--accent);
+}
+.message-rail-tick[aria-current] {
+  opacity: 0.8;
+}
+.message-rail-tick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.message-rail-preview {
+  position: absolute;
+  right: calc(100% - 12px);
+  width: 280px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  pointer-events: auto;
+  animation: message-rail-preview 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes message-rail-preview {
+  from {
+    opacity: 0;
+    transform: translateX(4px);
+  }
+}
+.message-rail-preview p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.message-rail-sent {
+  font-weight: 600;
+}
+.message-rail-preview p + p {
+  margin-top: 4px;
+}
+.message-rail-reply {
+  color: var(--muted);
+}
+.message-rail-time {
+  display: block;
+  margin-top: 6px;
+  color: var(--message-meta);
+  font-size: 0.75rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-rail-tick,
+  .message-rail-tick::after {
+    transition: none;
+  }
+  .message-rail-preview {
+    animation: none;
+  }
+}

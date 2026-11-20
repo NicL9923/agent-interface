@@ -42,6 +42,7 @@ import { AttentionList } from "./AttentionList";
 import { ApprovalCard, DeclinedStep } from "./ApprovalCard";
 import { useDeclined } from "./decline-handoff";
 import { FindBar } from "./FindBar";
+import { MessageRail } from "./MessageRail";
 import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
 import { useReplySpeech } from "./use-reply-speech";
 import { useTalkLive } from "./talk-live";
@@ -412,6 +413,10 @@ export const Conversation = memo(function Conversation({
             <span className="sr-only" role="status">
               {notice && <span key={notice.id}>{notice.text}</span>}
             </span>
+            {/* Before the transcript, so a keyboard reaches its one tab stop without passing every reply. */}
+            {selected && conversation && (
+              <MessageRail messages={conversation.messages} scroll={scroll} jump={history.jumpTo} />
+            )}
             <div
               className="transcript"
               ref={scroll}
