@@ -92,6 +92,9 @@ export function installBootstrapRoutes(
     const previous = store.preferences(signedIn(req).id);
     value.modelFavorites ??= previous.modelFavorites;
     value.startPage ??= previous.startPage;
+    // Older clients don't know the chat style either; their saves keep this person's choice.
+    value.chatStyle ??= previous.chatStyle;
+    value.ownBubble ??= previous.ownBubble;
     value.notifications ??= previous.notifications;
     // Older clients don't know hidden routine runs; their saves keep this person's list.
     value.hiddenRoutineRuns ??= previous.hiddenRoutineRuns;

@@ -80,6 +80,8 @@ export const preferences = z.object({
     .max(30),
   followBots: z.array(id).max(100),
   startPage: z.enum(["today", "assistant"]).optional(),
+  chatStyle: z.enum(["bubbles", "classic"]).optional(),
+  ownBubble: z.enum(["tint", "solid"]).optional(),
   notifications: z
     .object({
       timezone: z.string().max(100).refine(validTimezone),

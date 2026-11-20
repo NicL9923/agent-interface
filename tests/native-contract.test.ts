@@ -895,6 +895,8 @@ const preferences = {
   sections: [{ id: "home", name: "Home", botIds: ["household", "garden"] }],
   followBots: ["household"],
   startPage: "today",
+  chatStyle: "classic",
+  ownBubble: "solid",
   notifications: {
     timezone: "America/Chicago",
     quietStart: "22:00",
