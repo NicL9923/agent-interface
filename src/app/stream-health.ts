@@ -77,14 +77,17 @@ export function useStreamsDown(names: readonly string[], afterMs: number) {
   return since !== undefined && Date.now() - since >= afterMs;
 }
 
+/** Where a set of streams stands: all heard from, all open with one still waiting, or one closed. */
+export type StreamsLive = "up" | "waiting" | "closed";
 /**
- * True while every one of `names` is open and has heard from the server since it last connected or
- * failed. A stream that is closed, as on a hidden page or an offline device, is not up: nothing says
- * live updates are back until the streams themselves do.
+ * `up` while every one of `names` is open and has heard from the server since it last connected or
+ * failed. A stream that is closed, as on a hidden page or an offline device, or not yet opened, makes
+ * them `closed`: nothing says live updates are back until the streams themselves do.
  */
-export function useStreamsUp(names: readonly string[]) {
+export function useStreamsLive(names: readonly string[]): StreamsLive {
   useSyncExternalStore(subscribe, () => version);
-  return names.every(streamUp);
+  if (names.some((name) => !streams.has(name))) return "closed";
+  return names.every(streamUp) ? "up" : "waiting";
 }
 
 /** Forgets every stream, as a test's fresh page would. */

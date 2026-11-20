@@ -374,15 +374,16 @@ describe("live updates and the connection notice", () => {
   });
 
   // Live updates are back when every stream the notice watches has heard from the server again. One
-  // stream returning while the other is still down, and not yet down long enough to show, is not that.
-  it("announces no return of live updates while another stream is still down", async () => {
+  // stream returning while the other is still down, and not yet down long enough to show, is not that;
+  // the other one returning is.
+  it("announces the return of live updates once the stream still down is back too", async () => {
     await live();
     const announced = () => container.querySelector("[data-connection-announcer]")!.textContent;
     const house = household();
     await act(async () => house.drop());
-    await pinging(12_000);
+    await pinging(15_000);
     await act(async () => chat().drop());
-    await pinging(9_000);
+    await pinging(6_000);
     expect(notice()).toEqual(["Live updates are delayed"]);
     // The household stream's replacement connects and, 5 seconds on, proves itself.
     await act(async () => {
@@ -394,6 +395,15 @@ describe("live updates and the connection notice", () => {
     await advance(20);
     expect(panels()).toEqual([]);
     expect(announced()).toBe("");
+    // The chat stream's replacement proves itself too, 17 seconds into its outage: never shown.
+    await act(async () => {
+      chat().connect();
+      chat().emit("ping", "10");
+    });
+    await advance(5_500);
+    await act(async () => chat().emit("ping", "10"));
+    await advance(20);
+    expect(announced()).toBe("Live updates are back.");
   });
 
   // The loss's own notice stood where the live-updates one would have. Both end together, so the

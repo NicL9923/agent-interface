@@ -98,7 +98,8 @@ the loopback preview with [`capture-before.js`](../evidence/2026-11-19-connectio
   in a row; a bootstrap whose roster is stale is retried like one that failed; a stop question that is
   open when the connection goes refuses its answer and says why in the question; every read drops the
   pending retry as it sets out; a session that is unmounted sets no retry; and "Live updates are back."
-  is said only while `useStreamsUp` finds every watched stream up.
+  is said only once `useStreamsLive` finds every watched stream up, including when one returns after
+  the other.
 
 ## What a person sees
 
@@ -170,7 +171,8 @@ Tests changed because the behavior did:
 
 Each line was broken with `~/.agents/tools/mutate.py`, the named tests run, and the source restored.
 The lists and the tool's output from the final pass, after all the review rounds, are in
-[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 102 mutants, 102 caught.
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 108 mutants, 108 caught. The last
+two rows were rerun after the fifth review round.
 
 | File                                                | Mutants | Result    |
 | --------------------------------------------------- | ------- | --------- |
@@ -181,7 +183,8 @@ The lists and the tool's output from the final pass, after all the review rounds
 | `src/App.tsx`                                       | 24      | 24 caught |
 | `Composer`, `Conversation`, `Sidebar`, `client-api` | 5       | 5 caught  |
 | `src/components/Avatar.tsx`, `StopConfirm`          | 4       | 4 caught  |
-| `src/app/stream-health.ts`                          | 2       | 2 caught  |
+| `src/app/stream-health.ts`                          | 3       | 3 caught  |
+| `ConnectionAnnouncer`, partial live return          | 5       | 5 caught  |
 
 Mutants that survived on the way, and what was done:
 
@@ -257,7 +260,7 @@ Eleven tests failed on the reviewed code for the reasons given and pass after.
 
 ### Fourth round, of the third round's fixes: five P2
 
-These fixes have had no review of their own.
+The fifth round reviewed these fixes.
 
 | #   | Finding                                                                                                                                                                      | Fix                                                                                                                                                                                                               |
 | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -266,6 +269,17 @@ These fixes have had no review of their own.
 | 3   | P2. A live-updates notice that a loss's notice had covered appeared for 900 ms after both ended together.                                                                    | The notice follows `liveDown` directly, as on `main`. `useOutage` only counts its ends.                                                                                                                           |
 | 4   | P2. The 30 seconds counted from the last fresh roster, which is minutes old while all is well, so one stale roster dimmed assistants at once.                                | They count from the first stale roster in a row.                                                                                                                                                                  |
 | 5   | P2. The carry is judged only when a bootstrap answers, so with the retries used up an assistant showed as working 74.5 seconds after the roster went stale.                  | Not changed. The bound is stated where the constant is: about 75 seconds at the latest, because bootstraps come at least every 45 seconds while the roster is stale. A timer for the difference was not worth it. |
+
+### Fifth round, of the fourth round's fixes and the rebase onto main: one P2
+
+The reviewer found nothing else in the fourth round's fixes. The three CSS files hand-merged into
+main's `@layer` blocks keep their selectors and declarations.
+
+| #   | Finding                                                                                                                                                                                                                                                | Fix                                                                                                                                                                                                                                                                                                                                                                                 |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | P2. With the household stream down 21 seconds and the chat stream 6, the household stream's return cleared the notice and used up the recovery while the chat stream was still down. When the chat stream came back 5 seconds later, nothing was said. | `useStreamsLive` tells a stream still waiting from one that is closed. The live region keeps a partial return and says "Live updates are back." when the rest return, unless a stream closes, the watched streams change, or another warning is said first. The UI test replays the reviewer's timings; `connection-copy.test.ts` covers the three ways the kept return is dropped. |
+
+This fix has had no review of its own.
 
 ## Checks
 
