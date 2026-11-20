@@ -36,23 +36,17 @@ export const slowAdmission = (ms: number) =>
 
 /**
  * A signed-out page probes /api/bootstrap and Chromium logs the 401 as a console error. Nothing else is
- * excused here; a test that goes offline on purpose adds its own entries through `allowConsoleError`, and one that
- * knowingly provokes an uncaught error through `allowPageError`.
+ * excused here; a test that goes offline on purpose adds its own entries through `allowConsoleError`.
  */
 const signedOutProbe = (message: ConsoleMessage) =>
   message.text().includes("401") &&
   new URL(message.location().url || "http://none").pathname === "/api/bootstrap";
 
-export const test = base.extend<{
-  allowConsoleError: RegExp[];
-  allowPageError: RegExp[];
-  pageHealth: void;
-}>({
+export const test = base.extend<{ allowConsoleError: RegExp[]; pageHealth: void }>({
   allowConsoleError: [[], { option: false }],
-  allowPageError: [[], { option: false }],
   // Every page the test opens must stay free of uncaught errors, console errors and CSP violation reports.
   pageHealth: [
-    async ({ context, allowConsoleError, allowPageError, browserName }, use) => {
+    async ({ context, allowConsoleError, browserName }, use) => {
       if (browserName === "webkit")
         await context.addInitScript(() => {
           // Playwright WebKit has no push service; leave the app and its error handling real.
@@ -64,10 +58,7 @@ export const test = base.extend<{
         });
       const problems: string[] = [];
       const watch = (page: Page) => {
-        page.on("pageerror", (error) => {
-          if (!allowPageError.some((allowed) => allowed.test(error.message)))
-            problems.push(`Uncaught error: ${error.message}`);
-        });
+        page.on("pageerror", (error) => problems.push(`Uncaught error: ${error.message}`));
         page.on("console", (message) => {
           // Linux WebKit ignores this Chromium viewport extension and reports the ignored key as an error.
           if (

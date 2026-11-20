@@ -215,8 +215,11 @@ const prepare = (page: Page) =>
       layered: Array.from(link.sheet!.cssRules, (rule) => rule.cssText).join("\n"),
       unlayered: unwrap(link.sheet!.cssRules),
     }));
-    const styles = links.map((link) => {
+    const styles = links.map((link, index) => {
       const style = document.createElement("style");
+      // Filled before its link goes: a page left without its styles for a frame resizes everything the app observes,
+      // and WebKit reports the observers' pile-up as uncaught errors.
+      style.textContent = sheets[index]!.layered;
       link.after(style);
       link.disabled = true;
       return style;
@@ -338,11 +341,7 @@ for (const view of VIEWS) {
       isMobile: "touch" in view,
     });
     for (const [name, reach, before] of [...SCREENS, ...EXTRA] as GuardScreen[]) {
-      test(`${name} reads the same without cascade layers`, async ({
-        page,
-        browserName,
-        allowPageError,
-      }) => {
+      test(`${name} reads the same without cascade layers`, async ({ page, browserName }) => {
         await page.emulateMedia({
           colorScheme: view.colorScheme,
           reducedMotion: view.reducedMotion,
@@ -351,11 +350,6 @@ for (const view of VIEWS) {
         await before?.(page);
         await signIn(page);
         await reach(page);
-        // Swapping the cascade resizes things the app observes, in the same frame its observers answer, and WebKit
-        // reports that as an uncaught error. It is allowed only from here, so a page that raises it while it opens
-        // still fails, and only until the built cascade is back.
-        if (browserName === "webkit")
-          allowPageError.push(/^ResizeObserver loop completed with undelivered notifications\.$/);
         await prepare(page);
         const cdp =
           browserName === "chromium" ? await page.context().newCDPSession(page) : undefined;
@@ -369,17 +363,6 @@ for (const view of VIEWS) {
             moved.push(...read.moved.map((line) => `${state ?? "at rest"}: ${line}`));
           }
         }
-        // The built cascade again, and a moment for the observers to answer that last swap. From here the page has
-        // to be quiet, so an observer that loops by itself is still caught.
-        await page.evaluate(() =>
-          (window as unknown as { cascade: (c: string, s: boolean) => void }).cascade(
-            "layered",
-            true,
-          ),
-        );
-        await page.waitForTimeout(200);
-        allowPageError.length = 0;
-        await page.waitForTimeout(250);
         expect(moved).toEqual([]);
       });
     }

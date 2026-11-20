@@ -90,3 +90,33 @@ only in WebKit and only between its first cascade swap and the return to the bui
 page has to be free of it while the screen opens and after the swap settles. And the bubble edge
 test asserts that the page reports the contrast setting it asked for, where it used to skip when
 the page did not.
+
+## What GitHub's runner showed next, and the cause underneath
+
+Run 44815477652 on `9a78c451` finished in 12.1 minutes, inside the job's limit: 275 passed, 3
+skipped, 1 flaky and 5 failed. Chromium had no failure. Four of the five were guard tests in WebKit,
+failing the page-health check on a console error: `/api/client-errors` answered 429. The fifth was
+`e2e/smoke.spec.ts:811`.
+
+The allowance above let the ResizeObserver errors through, and the app reported each one to the
+server until its rate limit refused them. Running the guard twice over in the container reproduced
+it: 86 passed and 4 failed on the same 429.
+
+The errors came from the guard's own setup. `prepare` disabled each stylesheet link and put an
+empty style element beside it, to be filled by the first comparison. Until then the page had no
+styles of its own. That frame resized everything the app observes, and WebKit reported the
+observers' pile-up. `prepare` now fills each style element with its sheet's rules before it
+disables the link, so the page never renders without them.
+
+With that, the guard raises no error in WebKit, so the allowance and the `allowPageError` fixture
+are removed. Nothing in the guard is excused in either browser.
+
+| Check                                                               | Result                                                             | Evidence                                                              |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| Guard twice over, WebKit, with the allowance                        | 86 passed, 4 failed on the 429                                     | The first `.private/webkit/guard-no-allowance.log`, since overwritten |
+| Guard twice over, WebKit, styles kept during setup and no allowance | Runtime-exercised: 90 passed                                       | `.private/webkit/guard-no-allowance.log`                              |
+| Whole suite, WebKit, in the container                               | Runtime-exercised: 138 passed, 3 skipped, 1 failed, in 5.2 minutes | `.private/webkit/full-webkit-final.log`                               |
+| `accessibility.spec.ts` and `cascade-layers.spec.ts`, Chromium      | Runtime-exercised: 56 passed                                       | `.private/webkit/chromium-final-3.log`                                |
+
+The one WebKit failure is `e2e/smoke.spec.ts:811`, as on main. The three skips are the ones WebKit
+had before this branch.
