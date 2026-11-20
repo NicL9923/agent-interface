@@ -71,8 +71,7 @@ skips are gone.
 | Nine guard tests then failed the page-health check | Each reported "ResizeObserver loop completed with undelivered notifications." The same three screens opened without swapping the cascade raised none in 24 of 24 runs | A new `allowPageError` fixture, beside `allowConsoleError`; the guard allows that one message                                      |
 | The forced-colors bubble edge                      | WebKit reports `(forced-colors: active)` as matching and does not recolor a transparent border, so the reply bubble's border stayed transparent                       | Both bubbles get an explicit `forced-colors` border in `CanvasText`. The test skips only when the page does not report the setting |
 
-The first table's cause, "the routes never reach the page", was an inference. The worker is the
-cause: blocking it is the only change between the timeouts and the passes.
+The first table's cause, "the routes never reach the page", was an inference. Blocking the worker restored page routing; it is the only change between the timeouts and the passes. The worker's own fetch handler returns early for `/api/`, so how a registered worker defeats routing in Playwright's WebKit is not established.
 
 | Check                                                                            | Result                                                                | Evidence                               |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | -------------------------------------- |
@@ -85,3 +84,9 @@ cause: blocking it is the only change between the timeouts and the passes.
 The three skips that remain in WebKit are the worker badge and back-forward cache tests it skipped
 before this branch. `e2e/smoke.spec.ts:811` still fails there as it does on main; it does not block
 the worker, which is the likely fix and is noted on issue #462.
+
+A last review pass asked for two tightenings, both made. The guard allows the ResizeObserver message
+only in WebKit and only between its first cascade swap and the return to the built cascade; the
+page has to be free of it while the screen opens and after the swap settles. And the bubble edge
+test asserts that the page reports the contrast setting it asked for, where it used to skip when
+the page did not.

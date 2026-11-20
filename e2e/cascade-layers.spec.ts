@@ -15,8 +15,8 @@ import { SCREENS, type Screen } from "./screens.js";
 
 const LAYERED = ["base", "components", "motion"];
 
-// The routes below give screens their content. Worker-owned requests bypass page routing in WebKit, so the worker
-// is blocked, as in bot-exchanges.spec.ts.
+// The routes below give screens their content. With the service worker registered they do not take effect in
+// Playwright's WebKit; blocking it restores page routing, as in bot-exchanges.spec.ts.
 test.use({ serviceWorkers: "block" });
 
 /** The server's answer in full: a read the client already holds would come back as an empty 304. */
@@ -343,9 +343,6 @@ for (const view of VIEWS) {
         browserName,
         allowPageError,
       }) => {
-        // Swapping the cascade resizes things the app observes, in the same frame its observers answer. WebKit
-        // reports that as an uncaught error. The same screens opened without the swap raise none.
-        allowPageError.push(/^ResizeObserver loop completed with undelivered notifications\.$/);
         await page.emulateMedia({
           colorScheme: view.colorScheme,
           reducedMotion: view.reducedMotion,
@@ -354,6 +351,11 @@ for (const view of VIEWS) {
         await before?.(page);
         await signIn(page);
         await reach(page);
+        // Swapping the cascade resizes things the app observes, in the same frame its observers answer, and WebKit
+        // reports that as an uncaught error. It is allowed only from here, so a page that raises it while it opens
+        // still fails, and only until the built cascade is back.
+        if (browserName === "webkit")
+          allowPageError.push(/^ResizeObserver loop completed with undelivered notifications\.$/);
         await prepare(page);
         const cdp =
           browserName === "chromium" ? await page.context().newCDPSession(page) : undefined;
@@ -367,6 +369,17 @@ for (const view of VIEWS) {
             moved.push(...read.moved.map((line) => `${state ?? "at rest"}: ${line}`));
           }
         }
+        // The built cascade again, and a moment for the observers to answer that last swap. From here the page has
+        // to be quiet, so an observer that loops by itself is still caught.
+        await page.evaluate(() =>
+          (window as unknown as { cascade: (c: string, s: boolean) => void }).cascade(
+            "layered",
+            true,
+          ),
+        );
+        await page.waitForTimeout(200);
+        allowPageError.length = 0;
+        await page.waitForTimeout(250);
         expect(moved).toEqual([]);
       });
     }

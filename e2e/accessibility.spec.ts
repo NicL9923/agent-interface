@@ -123,7 +123,8 @@ for (const theme of ["light", "dark"]) {
 // the attention color, met the app's hover fill at 3.83:1. Bare elements with the components' classes carry the
 // cascade's answer; they sit inside the settings dialog because the page behind a modal cannot be hovered.
 test.describe("hover fills under text", () => {
-  // The route below changes an API answer. Worker-owned requests bypass page routing in WebKit.
+  // The route below changes an API answer. With the service worker registered it does not take effect in
+  // Playwright's WebKit; blocking it restores page routing.
   test.use({ serviceWorkers: "block" });
   for (const colorScheme of ["light", "dark"] as const) hoverContrast(colorScheme);
 });
@@ -259,12 +260,13 @@ for (const [mode, media] of [
   test(`both chat bubbles draw an edge under ${mode}`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce", ...media });
     await signIn(page);
-    // Asked of the page itself: a browser that takes the setting and draws as if it were off has nothing to read.
+    // Asked of the page itself. A browser that stopped applying the setting would leave nothing to read, and that
+    // has to fail here, not pass below on the default styles.
     const applied = await page.evaluate(
       (query) => matchMedia(query).matches,
       mode === "forced colors" ? "(forced-colors: active)" : "(prefers-contrast: more)",
     );
-    test.skip(!applied, `This browser does not apply the ${mode} setting`);
+    expect(applied, `the page reports ${mode}`).toBe(true);
     await assistants(page)
       .getByRole("button", { name: /Ranch Hand/ })
       .click();
