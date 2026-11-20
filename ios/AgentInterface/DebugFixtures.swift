@@ -229,6 +229,8 @@
         if environment["AGENT_INTERFACE_UI_NESTED_CODE"] == "1" { FixtureProtocol.messages = TranscriptFixtures.nestedCode }
         // A scheduled delivery holding a table, then a reply whose quoted prose a table follows.
         if environment["AGENT_INTERFACE_UI_BUBBLE_REVIEW"] == "1" { FixtureProtocol.messages = TranscriptFixtures.bubbleReview }
+        // The same chat, then a reply that streams over the chat's event stream and is saved.
+        if environment["AGENT_INTERFACE_UI_STREAM_SETTLE"] == "1" { FixtureProtocol.messages = TranscriptFixtures.bubbleReview + [TranscriptFixtures.streamAsk] }
         if environment["AGENT_INTERFACE_UI_RETRY"] != nil { FixtureProtocol.messages = TranscriptFixtures.failed }
         if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
           FixtureProtocol.preferences["presentation"] = presentation
@@ -604,6 +606,11 @@
         respond(raw: Data("event: groups\ndata: groups\n\n".utf8), type: "text/event-stream")
         return
       }
+      if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_STREAM_SETTLE"] == "1", path.hasPrefix("/api/bots/"), path.hasSuffix("/events") {
+        streamReplyThenSave(started: Self.streamStarted)
+        Self.streamStarted = true
+        return
+      }
       if path.hasPrefix("/voice-previews/") {
         respond(raw: Self.silence(seconds: 5), type: "audio/wav")
         return
@@ -745,7 +752,10 @@
       } else if path.hasSuffix("/conversation") {
         object = [
           "botId": path.components(separatedBy: "/")[3], "messages": Self.messages,
-          "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
+          // The streamed reply's run stays active until its saved copy lands, so the live reply applies.
+          "activity": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_STREAM_SETTLE"] == "1" && !Self.streamSaved
+            ? ["state": "thinking", "runId": "stream-run"] : ["state": "idle"],
+          "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_ROUTINE_RUNS"] == "1" {
@@ -1456,6 +1466,46 @@
       print("DESIGN_MEMORY_WRITE method=\(method) target=\(target) revision=\(revision) entries=\(texts.count)")
       return (200, designMemory!)
     }
+    nonisolated(unsafe) static var streamStarted = false
+    /// The chat's event stream open now, and the run loop that started loading it, which the URL loading
+    /// client must be called on. The app may reopen its stream, so each chunk goes to the newest one.
+    nonisolated(unsafe) static weak var liveStream: FixtureProtocol?
+    nonisolated(unsafe) static var liveRunLoop: CFRunLoop?
+    nonisolated(unsafe) static var streamSaved = false
+    /// The chat's event stream: after a pause, a reply that grows a few characters at a time, then a
+    /// change notice once it is saved, so the app reads the saved copy.
+    private func streamReplyThenSave(started: Bool) {
+      let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"])!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: Data(": ok\n\n".utf8))
+      Self.liveStream = self; Self.liveRunLoop = CFRunLoopGetCurrent()
+      guard !started else { return }
+      let text = TranscriptFixtures.streamReply, botId = request.url!.pathComponents[3]
+      func send(after delay: Double, _ chunk: @escaping () -> Data) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+          Self.lock.lock()
+          let stream = Self.liveStream, runLoop = Self.liveRunLoop
+          let data = chunk()
+          Self.lock.unlock()
+          guard let stream, let runLoop else { return }
+          CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { stream.client?.urlProtocol(stream, didLoad: data) }
+          CFRunLoopWakeUp(runLoop)
+        }
+      }
+      let steps = stride(from: 12, to: text.count, by: 12).map { $0 } + [text.count]
+      for (index, length) in steps.enumerated() {
+        send(after: 2.5 + Double(index) * 0.25) {
+          let patch: [String: Any] = ["botId": botId, "message": ["id": "stream-session-inflight", "role": "assistant", "text": String(text.prefix(length))],
+            "activity": ["state": "thinking", "runId": "stream-run"], "toolCalls": []]
+          return Data("event: inflight\ndata: ".utf8) + (try! JSONSerialization.data(withJSONObject: patch)) + Data("\n\n".utf8)
+        }
+      }
+      send(after: 2.5 + Double(steps.count) * 0.25 + 0.5) {
+        Self.messages.append(["id": "stream-saved", "role": "assistant", "text": text, "createdAt": "2026-10-01T07:21:10.000Z"])
+        Self.streamSaved = true
+        return Data("event: message\ndata: saved\n\n".utf8)
+      }
+    }
     override func stopLoading() {}
     private func respond(raw data: Data, type: String) {
       let response = HTTPURLResponse(
@@ -1578,6 +1628,9 @@
       ["id": "review-answer", "role": "assistant", "createdAt": "2026-10-01T07:05:10.000Z",
        "text": "Start with the north gate.\n\n> Check the gate before you leave.\n\n| Gate | Battery | Replace |\n| --- | ---: | --- |\n| North | 18% | Today |\n| Barn | 64% | Next month |"],
     ] }
+    static var streamAsk: [String: Any] { ["id": "stream-ask", "role": "user", "text": "How did the gates do overnight?", "createdAt": "2026-10-01T07:20:00.000Z",
+      "sender": ["id": "native-test", "name": "Local test member"]] }
+    static let streamReply = "Checking the gates now.\n\nNorth dropped overnight, so it goes first.\n\n| Gate | Battery |\n| --- | ---: |\n| North | 12% |\n| Barn | 61% |\n\nI'll remind you tonight."
     static var failed: [[String: Any]] { [
       ["id": "retry-prompt", "role": "user", "text": "Is the north gate closed?", "sender": ["id": "native-test", "name": "Local test member"]],
       ["id": "retry-tool", "role": "tool", "text": "Weather service timed out.", "toolCall": ["id": "retry-call", "name": "gate_status", "status": "failed", "error": "Timed out"]],

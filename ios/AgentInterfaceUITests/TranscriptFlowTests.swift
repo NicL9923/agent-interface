@@ -352,6 +352,36 @@ import XCTest
     XCTAssertTrue(waitFor { style.label.contains("Bubbles") || (style.value as? String) == "Bubbles" }, "The control shows what the server holds: \(style.debugDescription)")
   }
 
+  /// A reply that streams and is then saved, in Bubbles and in Classic, captured as fast as XCTest allows
+  /// with the reply's position, so a flicker or jump when the saved copy replaces the streamed one shows.
+  /// Runs only when screenshots are written.
+  func testStreamedReplySettlesForReview() throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"]!).appendingPathComponent("stream")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    for style in ["bubbles", "classic"] {
+      let app = launch(["AGENT_INTERFACE_UI_STREAM_SETTLE": "1", "AGENT_INTERFACE_UI_CHAT_STYLE": style, "AGENT_INTERFACE_UI_THEME": "light"])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Checking the gates")).firstMatch
+      let last = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "I'll remind you")).firstMatch
+      let table = app.scrollViews.matching(NSPredicate(format: "label == %@", "Table"))
+      // The saved copy's time, which the streamed one does not show.
+      let saved = app.staticTexts["Oct 1, 02:21"]
+      let start = Date()
+      var log = "ms,saved,firstMinY,tableMinY,lastMinY\n", index = 0
+      while Date().timeIntervalSince(start) < 14 {
+        let shot = XCUIScreen.main.screenshot()
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        let tables = table.allElementsBoundByIndex.map(\.frame.minY).max() ?? 0
+        log += "\(ms),\(saved.exists),\(reply.exists ? reply.frame.minY : -1),\(tables),\(last.exists ? last.frame.minY : -1)\n"
+        try shot.pngRepresentation.write(to: directory.appendingPathComponent(String(format: "%@-%03d-%05d.png", style, index, ms)))
+        index += 1
+      }
+      try log.write(to: directory.appendingPathComponent("\(style).csv"), atomically: true, encoding: .utf8)
+      app.terminate()
+    }
+  }
+
   /// The chat styles for visual review: Bubbles and Classic, tinted and solid own messages, light and
   /// dark, and one at an accessibility text size. Runs only when screenshots are written.
   func testChatBubbleScreens() throws {
