@@ -352,9 +352,45 @@ import XCTest
     XCTAssertTrue(waitFor { style.label.contains("Bubbles") || (style.value as? String) == "Bubbles" }, "The control shows what the server holds: \(style.debugDescription)")
   }
 
+  /// A person who changes a chat style choice and changes it back while the first save is still out ends on
+  /// what they chose last, though the change back matches what the server held before. Each save takes 15
+  /// seconds here, and reopening a menu takes XCTest about 5.
+  func testAChoiceChangedBackWhileItsSaveIsOutStays() throws {
+    let app = launch(["AGENT_INTERFACE_UI_PROGRESS": "1", "AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "tint",
+      "AGENT_INTERFACE_UI_PREFERENCES_DELAY_MS": "15000"])
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "It will be")).firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    let saving = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving…")).firstMatch
+    func control(_ title: String) -> XCUIElement { app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch }
+    func shows(_ element: XCUIElement, _ choice: String) -> Bool { element.label.hasSuffix(choice) || (element.value as? String) == choice }
+    for (title, away, back) in [("Chat style", "Classic", "Bubbles"), ("Your messages", "Solid color", "Tinted")] {
+      let picker = control(title)
+      for _ in 0..<6 where !picker.canTap { app.swipeUp() }
+      picker.tapWhenReady()
+      app.buttons[away].tapWhenReady()
+      let sent = Date()
+      XCTAssertTrue(saving.waitForExistence(timeout: 3), "\(title): the first save is out")
+      picker.tapWhenReady()
+      app.buttons[back].tapWhenReady()
+      XCTAssertLessThan(Date().timeIntervalSince(sent), 12, "\(title): the change back must land while the first save is out")
+      XCTAssertTrue(saving.waitForDisappearance(timeout: 40), "\(title): every save finished")
+      XCTAssertTrue(shows(picker, back), "\(title) shows the last choice once the saves are in: \(picker.debugDescription)")
+    }
+    app.buttons["Close"].tapWhenReady()
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    for (title, back) in [("Chat style", "Bubbles"), ("Your messages", "Tinted")] {
+      let picker = control(title)
+      for _ in 0..<6 where !picker.canTap { app.swipeUp() }
+      XCTAssertTrue(shows(picker, back), "\(title) reopens on what the server saved: \(picker.debugDescription)")
+    }
+  }
+
   /// A reply that streams and is then saved, in Bubbles and in Classic, captured as fast as XCTest allows
   /// with the reply's position, so a flicker or jump when the saved copy replaces the streamed one shows.
-  /// Runs only when screenshots are written.
+  /// Each style must catch the reply at least once while it streams and once saved. Runs only when
+  /// screenshots are written.
   func testStreamedReplySettlesForReview() throws {
     try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
     let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"]!).appendingPathComponent("stream")
@@ -366,18 +402,22 @@ import XCTest
       let last = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "I'll remind you")).firstMatch
       let table = app.scrollViews.matching(NSPredicate(format: "label == %@", "Table"))
       // The saved copy's time, which the streamed one does not show.
-      let saved = app.staticTexts["Oct 1, 02:21"]
+      let saved = app.descendants(matching: .any)["messageTime-stream-saved"]
       let start = Date()
-      var log = "ms,saved,firstMinY,tableMinY,lastMinY\n", index = 0
+      var log = "ms,saved,firstMinY,tableMinY,lastMinY\n", index = 0, streaming = 0, settled = 0
       while Date().timeIntervalSince(start) < 14 {
         let shot = XCUIScreen.main.screenshot()
         let ms = Int(Date().timeIntervalSince(start) * 1000)
         let tables = table.allElementsBoundByIndex.map(\.frame.minY).max() ?? 0
-        log += "\(ms),\(saved.exists),\(reply.exists ? reply.frame.minY : -1),\(tables),\(last.exists ? last.frame.minY : -1)\n"
+        let isSaved = saved.exists, first = reply.exists ? reply.frame.minY : -1
+        if first >= 0 { if isSaved { settled += 1 } else { streaming += 1 } }
+        log += "\(ms),\(isSaved),\(first),\(tables),\(last.exists ? last.frame.minY : -1)\n"
         try shot.pngRepresentation.write(to: directory.appendingPathComponent(String(format: "%@-%03d-%05d.png", style, index, ms)))
         index += 1
       }
       try log.write(to: directory.appendingPathComponent("\(style).csv"), atomically: true, encoding: .utf8)
+      XCTAssertGreaterThan(streaming, 0, "\(style): no sample caught the reply while it streamed; saved samples: \(settled)")
+      XCTAssertGreaterThan(settled, 0, "\(style): no sample caught the saved reply; streaming samples: \(streaming)")
       app.terminate()
     }
   }
