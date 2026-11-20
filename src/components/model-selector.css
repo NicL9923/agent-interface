@@ -129,6 +129,11 @@
   .model-favorite[data-favorite="true"] {
     color: var(--accent);
   }
+  /* The app's button hover, restated here: the base layer's rule loses to this layer. */
+  .model-option .model-choice:hover:enabled,
+  .model-option .model-favorite:hover:enabled {
+    background: var(--accent-soft);
+  }
   .model-favorites h3 {
     font-size: 0.8125rem;
     margin: 0 0 6px;

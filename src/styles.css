@@ -23,6 +23,8 @@
     --danger: #a33c32;
     --attention: #9b6733;
     --user: #e7eee4;
+    /* A reply's prose bubble. It follows the theme, since --ink and --surface do. */
+    --reply-bubble: color-mix(in oklab, var(--ink) 7%, var(--surface));
     /* Glass for controls floating over the transcript: see the phone composer. The fill and the backdrop's
      tone keep its muted placeholder at 4.5:1 or better even over a black image (white in dark themes). */
     --glass-fill: color-mix(in srgb, var(--raised) 80%, transparent);
@@ -636,9 +638,34 @@
     margin-bottom: 14px;
   }
   .message-bubble {
-    padding: 15px 20px;
+    padding: 14px 19px;
     background: var(--user);
+    /* Transparent, so forced colors and increased contrast can draw the bubble's edge. */
+    border: 1px solid transparent;
     border-radius: 18px 18px 4px 18px;
+  }
+  /* A person's bubble hugs its words at the trailing edge, and another member's name sits over it. */
+  .message-user:has(> .message-bubble) {
+    margin-left: 0;
+  }
+  .message-user > .message-bubble {
+    width: fit-content;
+    max-width: min(86%, 560px);
+    margin-inline-start: auto;
+  }
+  .message-user:has(> .message-bubble) > .message-attribution {
+    justify-content: flex-end;
+  }
+  /* The reply bubble's own rule sits beside its default in the components layer, which ranks above this one. */
+  @media (prefers-contrast: more) {
+    .message-bubble {
+      border-color: var(--message-meta);
+    }
+  }
+  @media (forced-colors: active) {
+    .message-bubble {
+      border-color: CanvasText;
+    }
   }
   .message-attribution {
     display: flex;
@@ -678,9 +705,11 @@
     font-size: 0.6875rem;
     font-weight: 400;
   }
-  /* The line under a message: its time, or its delivery status, and its actions. */
+  /* The line under a message: its time, or its delivery status, and its actions. On a narrow touch
+     screen the actions, 44 px each, may not fit beside the time, so they move to a line of their own. */
   .message-meta {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
     min-height: 32px;
@@ -1133,9 +1162,6 @@
     gap: 4px;
     justify-self: start;
   }
-  .composer > .voice-controls {
-    display: contents;
-  }
   .composer .voice-actions {
     grid-area: voice;
   }
@@ -1368,9 +1394,6 @@
   }
   .settings-index .settings-group {
     border: 1px solid var(--line);
-  }
-  .settings-index .settings-row {
-    min-height: 60px;
   }
   .settings-section + .settings-section {
     margin-top: 28px;
@@ -1683,9 +1706,7 @@
     .jump-latest {
       bottom: calc(14px + var(--composer-overlap, 0px));
     }
-    .transcript-frame .computer-peek {
-      bottom: calc(12px + var(--composer-overlap, 0px));
-    }
+    /* Find in chat and the Quote button float above it at 5, in transcript.css. */
     .composer-area {
       position: relative;
       z-index: 4;
@@ -1695,27 +1716,19 @@
     .composer-area > * {
       pointer-events: auto;
     }
-    /* What floats over the transcript must stay above the box, which can cover most of a short view. */
-    .transcript-frame .find-bar,
-    .transcript-frame .quote-selection {
-      z-index: 5;
-    }
     .composer {
       padding: 4px;
       border-radius: 26px;
     }
+    /* Its shadows are in motion.css, beside the depth layer's own for the box, which outranks this layer. */
     .composer-area > .composer {
       background: var(--glass-fill);
       border-color: var(--glass-edge);
-      box-shadow: var(--glass-shadow);
       -webkit-backdrop-filter: var(--glass-backdrop);
       backdrop-filter: var(--glass-backdrop);
     }
     .composer-area > .composer:focus-within {
       border-color: var(--accent);
-      box-shadow:
-        0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent),
-        var(--glass-shadow);
     }
     .composer textarea {
       font-size: max(16px, 1rem);

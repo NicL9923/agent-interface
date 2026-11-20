@@ -1,6 +1,7 @@
 #if DEBUG
   import Foundation
   import CryptoKit
+  import UIKit
   import UserNotifications
 
   /// UI test transport only. Shipping Release builds contain no fixture transport.
@@ -80,6 +81,10 @@
         store.host = ""
       }
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return false }
+      // Increase Contrast for screenshots, which a UI test cannot switch on in Settings.
+      if environment["AGENT_INTERFACE_UI_INCREASE_CONTRAST"] == "1" {
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes { scene.traitOverrides.accessibilityContrast = .high }
+      }
       precondition(!(environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" && FixtureProtocol.designFixture?["screen"] as? String == "work"),
         "The Work design fixture cannot be combined with the automation flow fixture.")
       VoiceController.fixtureRecording = true
@@ -220,6 +225,12 @@
           FixtureProtocol.preferences["presentation"] = environment["AGENT_INTERFACE_UI_WORK_PRESENTATION"] ?? "simple"
           FixtureProtocol.messages = TranscriptFixtures.progress
         }
+        // A reply whose list holds a code block, then the person's follow-up and a short answer last.
+        if environment["AGENT_INTERFACE_UI_NESTED_CODE"] == "1" { FixtureProtocol.messages = TranscriptFixtures.nestedCode }
+        // A scheduled delivery holding a table, then a reply whose quoted prose a table follows.
+        if environment["AGENT_INTERFACE_UI_BUBBLE_REVIEW"] == "1" { FixtureProtocol.messages = TranscriptFixtures.bubbleReview }
+        // The same chat, then a reply that streams over the chat's event stream and is saved.
+        if environment["AGENT_INTERFACE_UI_STREAM_SETTLE"] == "1" { FixtureProtocol.messages = TranscriptFixtures.bubbleReview + [TranscriptFixtures.streamAsk] }
         if environment["AGENT_INTERFACE_UI_RETRY"] != nil { FixtureProtocol.messages = TranscriptFixtures.failed }
         if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
           FixtureProtocol.preferences["presentation"] = presentation
@@ -330,10 +341,17 @@
     nonisolated(unsafe) static var retryClaim: [String: Any]?
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
     nonisolated(unsafe) static var readPosition: [String: Any] = [:]
-    nonisolated(unsafe) static var preferences: [String: Any] = [
-      "startPage": "assistant", "presentation": "simple", "theme": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_THEME"] ?? "system", "favorites": [], "sections": [],
-      "followBots": [],
-    ]
+    nonisolated(unsafe) static var preferences: [String: Any] = {
+      let environment = ProcessInfo.processInfo.environment
+      var preferences: [String: Any] = [
+        "startPage": "assistant", "presentation": "simple", "theme": environment["AGENT_INTERFACE_UI_THEME"] ?? "system", "favorites": [], "sections": [],
+        "followBots": [],
+      ]
+      // Absent unless set, as from a server before chat styles.
+      preferences["chatStyle"] = environment["AGENT_INTERFACE_UI_CHAT_STYLE"]
+      preferences["ownBubble"] = environment["AGENT_INTERFACE_UI_OWN_BUBBLE"]
+      return preferences
+    }()
     nonisolated(unsafe) static var items: [[String: Any]] = [
       [
         "id": "web", "name": "Web search",
@@ -512,6 +530,8 @@
       Self.lock.lock()
       defer { Self.lock.unlock() }
       let path = request.url!.path
+      // A send that Hermes never answers, so the message stays on its way.
+      if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_SEND_HOLD"] == "1", request.httpMethod == "POST", path.hasSuffix("/messages") { return }
       if let data = Self.uploadedPortraits[path] {
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self); return
@@ -584,6 +604,11 @@
             ["member_id": "kitchen", "profile": "kitchen", "handle": "kitchen", "display_name": "Kitchen companion"]]])
         }
         respond(raw: Data("event: groups\ndata: groups\n\n".utf8), type: "text/event-stream")
+        return
+      }
+      if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_STREAM_SETTLE"] == "1", path.hasPrefix("/api/bots/"), path.hasSuffix("/events") {
+        streamReplyThenSave(started: Self.streamStarted)
+        Self.streamStarted = true
         return
       }
       if path.hasPrefix("/voice-previews/") {
@@ -727,7 +752,10 @@
       } else if path.hasSuffix("/conversation") {
         object = [
           "botId": path.components(separatedBy: "/")[3], "messages": Self.messages,
-          "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
+          // The streamed reply's run stays active until its saved copy lands, so the live reply applies.
+          "activity": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_STREAM_SETTLE"] == "1" && !Self.streamSaved
+            ? ["state": "thinking", "runId": "stream-run"] : ["state": "idle"],
+          "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_ROUTINE_RUNS"] == "1" {
@@ -1220,13 +1248,23 @@
           object = Self.inference
         }
       } else if path == "/api/preferences" {
+        // A slow settings save, so a test can change a choice again while one is out.
+        if method == "PATCH", let delay = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PREFERENCES_DELAY_MS"].flatMap(Double.init) {
+          Self.lock.unlock(); Thread.sleep(forTimeInterval: delay / 1000); Self.lock.lock()
+        }
         if method == "PATCH" && Self.preferencesFailures > 0 {
           Self.preferencesFailures -= 1; status = 503; object = ["error": "Fixture settings save failed"]
         } else {
           if method == "PATCH" {
             // As the server: model stars, the main assistant and its check-ins keep their own routes.
             let kept = ["modelFavorites", "mainBotId", "checkIns"].reduce(into: [String: Any]()) { $0[$1] = Self.preferences[$1] }
+            // An omitted chat style choice keeps the saved one; a server from before them drops both.
+            let choices = ["chatStyle", "ownBubble"].reduce(into: [String: Any]()) { $0[$1] = body[$1] ?? Self.preferences[$1] }
             Self.preferences = body; Self.preferences.merge(kept) { _, old in old }
+            Self.preferences.merge(choices) { _, saved in saved }
+            if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_OLD_PREFERENCES"] == "1" {
+              Self.preferences["chatStyle"] = nil; Self.preferences["ownBubble"] = nil
+            }
           }
           object = Self.preferences
         }
@@ -1432,6 +1470,46 @@
       print("DESIGN_MEMORY_WRITE method=\(method) target=\(target) revision=\(revision) entries=\(texts.count)")
       return (200, designMemory!)
     }
+    nonisolated(unsafe) static var streamStarted = false
+    /// The chat's event stream open now, and the run loop that started loading it, which the URL loading
+    /// client must be called on. The app may reopen its stream, so each chunk goes to the newest one.
+    nonisolated(unsafe) static weak var liveStream: FixtureProtocol?
+    nonisolated(unsafe) static var liveRunLoop: CFRunLoop?
+    nonisolated(unsafe) static var streamSaved = false
+    /// The chat's event stream: after a pause, a reply that grows a few characters at a time, then a
+    /// change notice once it is saved, so the app reads the saved copy.
+    private func streamReplyThenSave(started: Bool) {
+      let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"])!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: Data(": ok\n\n".utf8))
+      Self.liveStream = self; Self.liveRunLoop = CFRunLoopGetCurrent()
+      guard !started else { return }
+      let text = TranscriptFixtures.streamReply, botId = request.url!.pathComponents[3]
+      func send(after delay: Double, _ chunk: @escaping () -> Data) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+          Self.lock.lock()
+          let stream = Self.liveStream, runLoop = Self.liveRunLoop
+          let data = chunk()
+          Self.lock.unlock()
+          guard let stream, let runLoop else { return }
+          CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { stream.client?.urlProtocol(stream, didLoad: data) }
+          CFRunLoopWakeUp(runLoop)
+        }
+      }
+      let steps = stride(from: 12, to: text.count, by: 12).map { $0 } + [text.count]
+      for (index, length) in steps.enumerated() {
+        send(after: 2.5 + Double(index) * 0.25) {
+          let patch: [String: Any] = ["botId": botId, "message": ["id": "stream-session-inflight", "role": "assistant", "text": String(text.prefix(length))],
+            "activity": ["state": "thinking", "runId": "stream-run"], "toolCalls": []]
+          return Data("event: inflight\ndata: ".utf8) + (try! JSONSerialization.data(withJSONObject: patch)) + Data("\n\n".utf8)
+        }
+      }
+      send(after: 2.5 + Double(steps.count) * 0.25 + 0.5) {
+        Self.messages.append(["id": "stream-saved", "role": "assistant", "text": text, "createdAt": "2026-10-01T07:21:10.000Z"])
+        Self.streamSaved = true
+        return Data("event: message\ndata: saved\n\n".utf8)
+      }
+    }
     override func stopLoading() {}
     private func respond(raw data: Data, type: String) {
       let response = HTTPURLResponse(
@@ -1534,6 +1612,29 @@
          "text": "### Saturday looks good\n\nIt will be **68 degrees** at the 7 PM start, dropping to 47 overnight, with a **10% chance of rain**. I would keep the dance in the barn and leave the doors open.\n\n| Link | Purpose |\n| --- | --- |\n| Sign-up form | Names and dishes |\n| Carpool sheet | Rides from town |\n\nBoth links are live. Explicit fixture, nothing was created."],
       ]
     }
+    static var nestedCode: [[String: Any]] { [
+      ["id": "nested-ask", "role": "user", "text": "How do I reset the north gate?", "createdAt": "2026-10-01T15:00:00.000Z",
+       "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "nested-steps", "role": "assistant", "createdAt": "2026-10-01T15:00:20.000Z",
+       "text": "Here is the reset.\n\n1. Stop the gate at the panel.\n2. Run this from the barn laptop:\n\n   ```sh\n   gate reset --north\n   ```\n\n3. Wait for the green light.\n\nIt reopens on its own after that."],
+      ["id": "nested-follow-up", "role": "user", "text": "Done, the light is green. Will it close again tonight?", "createdAt": "2026-10-01T15:04:00.000Z",
+       "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "nested-answer", "role": "assistant", "createdAt": "2026-10-01T15:04:08.000Z",
+       "text": "Yes. It closes at 9 PM on its usual schedule, and the evening check confirms it."],
+    ] }
+    static var bubbleReview: [[String: Any]] { [
+      ["id": "review-ask", "role": "user", "text": "Send me the gate batteries every morning.", "createdAt": "2026-10-01T06:50:00.000Z",
+       "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "review-delivery", "role": "user", "createdAt": "2026-10-01T07:00:00.000Z",
+       "text": "[Cron delivery: Gate batteries]\nThis morning's levels:\n\n| Gate | Battery | Last checked |\n| --- | ---: | --- |\n| North | 18% | 6:40 AM |\n| South | 92% | 6:41 AM |\n| Barn | 64% | 6:43 AM |"],
+      ["id": "review-follow-up", "role": "user", "text": "Which one first?", "createdAt": "2026-10-01T07:05:00.000Z",
+       "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "review-answer", "role": "assistant", "createdAt": "2026-10-01T07:05:10.000Z",
+       "text": "Start with the north gate.\n\n> Check the gate before you leave.\n\n| Gate | Battery | Replace |\n| --- | ---: | --- |\n| North | 18% | Today |\n| Barn | 64% | Next month |"],
+    ] }
+    static var streamAsk: [String: Any] { ["id": "stream-ask", "role": "user", "text": "How did the gates do overnight?", "createdAt": "2026-10-01T07:20:00.000Z",
+      "sender": ["id": "native-test", "name": "Local test member"]] }
+    static let streamReply = "Checking the gates now.\n\nNorth dropped overnight, so it goes first.\n\n| Gate | Battery |\n| --- | ---: |\n| North | 12% |\n| Barn | 61% |\n\nI'll remind you tonight."
     static var failed: [[String: Any]] { [
       ["id": "retry-prompt", "role": "user", "text": "Is the north gate closed?", "sender": ["id": "native-test", "name": "Local test member"]],
       ["id": "retry-tool", "role": "tool", "text": "Weather service timed out.", "toolCall": ["id": "retry-call", "name": "gate_status", "status": "failed", "error": "Timed out"]],

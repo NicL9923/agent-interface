@@ -3780,3 +3780,153 @@ describe("reply announcements", () => {
     expect(announcement()).toBe("");
   });
 });
+
+describe("chat style", () => {
+  it("saves the chat style and own-message fill from Settings, and a classic reply drops its bubbles", async () => {
+    for (const [method, open] of [
+      ["showModal", true],
+      ["close", false],
+    ] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, method, {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.open = open;
+        },
+      });
+    conversation.messages = [
+      {
+        id: "u",
+        role: "user",
+        text: "Which gates need batteries?",
+        createdAt: "2026-10-01T11:00:00Z",
+      },
+      {
+        id: "a",
+        role: "assistant",
+        text: "Here:\n\n| Gate | Battery |\n| --- | --- |\n| North | 14% |\n\nSwap the north one first.",
+        createdAt: "2026-10-01T11:01:00Z",
+      },
+    ];
+    // As the server does, this keeps a choice a save leaves out and answers with all it holds.
+    let held: Record<string, unknown> = {};
+    vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => {
+      if (path !== "/preferences") return {} as T;
+      held = { ...held, ...(value as Record<string, unknown>) };
+      return held as T;
+    });
+    try {
+      await render();
+      const reply = () => container.querySelector(".message-assistant .message-markdown")!;
+      expect(reply().querySelectorAll(":scope > .reply-bubble")).toHaveLength(2);
+      await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
+      await act(async () =>
+        [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+          .find((item) => item.textContent === "Settings")!
+          .click(),
+      );
+      await loaded();
+      const choose = async (label: string, value: string) => {
+        const select = [...container.querySelectorAll(".settings-row")]
+          .find((row) => row.querySelector(".row-label")?.textContent === label)!
+          .querySelector("select")!;
+        select.value = value;
+        await act(async () => select.dispatchEvent(new Event("change", { bubbles: true })));
+      };
+      await choose("Chat style", "classic");
+      expect(write).toHaveBeenLastCalledWith(
+        "/preferences",
+        expect.objectContaining({ chatStyle: "classic" }),
+        "PATCH",
+      );
+      // Classic shows the reply flat: its paragraphs sit directly in the reply.
+      expect(reply().querySelector(".reply-bubble")).toBeNull();
+      expect(reply().querySelectorAll(":scope > p")).toHaveLength(2);
+      await choose("Your messages", "solid");
+      expect(write).toHaveBeenLastCalledWith(
+        "/preferences",
+        expect.objectContaining({ ownBubble: "solid" }),
+        "PATCH",
+      );
+      // A save carries only the choice this edit changed, so this tab's copy of the other one cannot write over a
+      // choice made since on another device. The server keeps what it had, and Classic is still on screen.
+      expect(vi.mocked(write).mock.lastCall![1]).not.toHaveProperty("chatStyle");
+      expect(reply().querySelector(".reply-bubble")).toBeNull();
+      // The chat carries the choice to its stylesheet; without it, Solid would change nothing.
+      expect(container.querySelector<HTMLElement>(".conversation-panel")!.dataset.ownBubble).toBe(
+        "solid",
+      );
+    } finally {
+      vi.mocked(write).mockReset().mockResolvedValue({});
+    }
+  });
+
+  // Another device saved Classic while this tab held Bubbles. An answer brings Classic on screen while a save built
+  // on Bubbles still waits. Picking Bubbles then equals what that save holds, so only the picker can say it changed.
+  it("sends a chat style picked in Settings though a save still waiting holds the old one", async () => {
+    for (const [method, open] of [
+      ["showModal", true],
+      ["close", false],
+    ] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, method, {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.open = open;
+        },
+      });
+    const before = bootstrap.preferences;
+    bootstrap.preferences = { ...before, chatStyle: "bubbles" };
+    const bodies: Record<string, unknown>[] = [];
+    const answers: (() => void)[] = [];
+    // As the server does, this keeps a choice a save leaves out. Each save answers when the test lets it.
+    let held: Record<string, unknown> = { ...bootstrap.preferences };
+    vi.mocked(write).mockImplementation(<T>(path: string, value?: unknown) => {
+      if (path !== "/preferences") return Promise.resolve({} as T);
+      bodies.push(value as Record<string, unknown>);
+      return new Promise<T>((resolve) =>
+        answers.push(() => {
+          held = { ...held, ...(value as Record<string, unknown>) };
+          resolve(held as T);
+        }),
+      );
+    });
+    const openSettings = async () => {
+      await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
+      await act(async () =>
+        [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+          .find((item) => item.textContent === "Settings")!
+          .click(),
+      );
+      await loaded();
+    };
+    const picker = (label: string) =>
+      [...container.querySelectorAll(".settings-row")]
+        .find((row) => row.querySelector(".row-label")?.textContent === label)!
+        .querySelector("select")!;
+    const choose = async (label: string, value: string) => {
+      const select = picker(label);
+      select.value = value;
+      await act(async () => select.dispatchEvent(new Event("change", { bubbles: true })));
+    };
+    try {
+      await render();
+      await openSettings();
+      await choose("Appearance", "dark");
+      await choose("Start page", "today");
+      held = { ...held, chatStyle: "classic" };
+      await act(async () => answers[0]());
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>('[aria-label="Close settings"]')!.click(),
+      );
+      await openSettings();
+      expect(picker("Chat style").value).toBe("classic");
+      await choose("Chat style", "bubbles");
+      await act(async () => answers[1]());
+      expect(bodies[2]).toMatchObject({ chatStyle: "bubbles" });
+      await act(async () => answers[2]());
+      expect(picker("Chat style").value).toBe("bubbles");
+    } finally {
+      bootstrap.preferences = before;
+      vi.mocked(write).mockReset().mockResolvedValue({});
+    }
+  });
+});

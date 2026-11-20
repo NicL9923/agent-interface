@@ -37,6 +37,7 @@ import { AttentionList } from "./AttentionList";
 import { ApprovalCard, DeclinedStep } from "./ApprovalCard";
 import { useDeclined } from "./decline-handoff";
 import { FindBar } from "./FindBar";
+import { MessageRail } from "./MessageRail";
 import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
 import { useReplySpeech } from "./use-reply-speech";
 import { useTalkLive } from "./talk-live";
@@ -403,6 +404,10 @@ export const Conversation = memo(function Conversation({
             <span className="sr-only" role="status">
               {notice && <span key={notice.id}>{notice.text}</span>}
             </span>
+            {/* Before the transcript, so a keyboard reaches its one tab stop without passing every reply. */}
+            {selected && conversation && (
+              <MessageRail messages={conversation.messages} scroll={scroll} jump={history.jumpTo} />
+            )}
             <div
               className="transcript"
               ref={scroll}
@@ -463,6 +468,7 @@ export const Conversation = memo(function Conversation({
                     <Turns
                       blocks={blocks}
                       advanced={advanced}
+                      bubbles={prefs.chatStyle !== "classic"}
                       unavailable={connectionLost}
                       disconnected={connectionShown}
                       name={selected.name}
@@ -688,6 +694,8 @@ export const Conversation = memo(function Conversation({
 type TurnProps = {
   block: Turn;
   advanced: boolean;
+  /** Reply prose sits in bubbles; see the person's chat style. */
+  bubbles: boolean;
   name: string;
   botId: string;
   userId: string;
@@ -788,6 +796,7 @@ const Turns = memo(function Turns({
 // time. A turn is compared by what it shows, so finished turns, and a reload with the same content, bail out.
 const sameTurnProps = (a: TurnProps, b: TurnProps) =>
   a.advanced === b.advanced &&
+  a.bubbles === b.bubbles &&
   a.unavailable === b.unavailable &&
   a.disconnected === b.disconnected &&
   a.name === b.name &&
@@ -804,6 +813,7 @@ const sameTurnProps = (a: TurnProps, b: TurnProps) =>
 const TurnView = memo(function TurnView({
   block,
   advanced,
+  bubbles,
   unavailable,
   disconnected,
   name,
@@ -950,6 +960,7 @@ const TurnView = memo(function TurnView({
         {reply ? (
           <ReplyMarkdown
             live={streaming}
+            bubbles={bubbles && !progress && message.role === "assistant"}
             text={message.text}
             botId={botId}
             messageId={message.id}

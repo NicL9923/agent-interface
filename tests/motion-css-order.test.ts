@@ -50,6 +50,35 @@ const overlap = (motion: Declaration, other: Declaration) =>
   motionsOf(motion).some((setting) => motionsOf(other).includes(setting)) &&
   conditionsMeet(conditionsOf(motion), conditionsOf(other));
 
+// A cascade layer's rank is set where its name first appears. Component stylesheets open `@layer components`, and the
+// build links several of them ahead of the stylesheet that holds src/ui.css, so no import order can put ui.css's
+// statement first. index.html ranks the layers itself, ahead of everything that loads a stylesheet.
+// e2e/stylesheet-order.spec.ts reads the same thing from the built page.
+describe("the cascade layer order", () => {
+  const statement = /@layer\s+([\w\s,]+);/;
+  const page = readFileSync("index.html", "utf8");
+  const head = page.slice(0, page.indexOf("</head>"));
+
+  it("is declared in the page before anything that loads a stylesheet", () => {
+    const declared = head.search(/<style>\s*@layer\s/);
+    expect(declared).toBeGreaterThan(-1);
+    const loaders = [head.indexOf("<script"), head.search(/<link[^>]+stylesheet/)].filter(
+      (at) => at > -1,
+    );
+    expect(loaders.every((at) => declared < at)).toBe(true);
+  });
+
+  it("is the order ui.css names", () => {
+    const names = (text: string) =>
+      statement
+        .exec(text)?.[1]
+        .split(",")
+        .map((name) => name.trim());
+    expect(names(head)).toEqual(["theme", "base", "components", "motion", "utilities"]);
+    expect(names(readFileSync("src/ui.css", "utf8"))).toEqual(names(head));
+  });
+});
+
 describe("the motion layer's stylesheet order", () => {
   it("is guaranteed only for the sheets main.tsx imports before it", () => {
     // If this list grew to a sheet the build could split out, the check below would stop looking at it.

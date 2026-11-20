@@ -944,6 +944,34 @@ nothing else; the add-on fixes the session, so the app sends only microphone aud
 (24 kHz mono PCM), the tool loop's events, and `conversation.item.truncate` when
 the person speaks over the voice.
 
+### Chat style
+
+`chatStyle` (`"bubbles"` or `"classic"`) and `ownBubble` (`"tint"` or `"solid"`) are
+optional `Preferences` fields; servers before them omit both. Read an absent
+`chatStyle` as `"bubbles"` and an absent `ownBubble` as `"tint"`. They are per person
+and sync to every device like `theme`. `PATCH /api/preferences` answers 400 for any
+other value, with the field's name in `details[].path`. An omitted value keeps the
+saved one, so a client that predates them cannot clear them; send the default
+explicitly to go back to it. A client sends `chatStyle` or `ownBubble` only when the
+person changed it, and only a value it knows, so one device cannot write its stale copy over a choice made on another. The web client's preference queue follows the same rule (`src/app/preference-queue.ts`). On both clients the control the person used names the choice it set, because the values cannot always show it: the screen may hold another device's choice while a save still waiting holds the one the person now picks. A save answered without a value the app sent means the server predates the field; the iOS app says so to the person and shows what the server holds. The web client shows no notice: a tab left open across a server rollback gets the same answer, and its picker goes back to what the server holds.
+
+In `"bubbles"`, each run of a reply's consecutive prose blocks (paragraphs, lists,
+block quotes and headings) shares one bubble, and every other block (a table, code
+block, image, card or thematic break) stands alone at the column's width. Read the
+reply's top-level blocks only. A paragraph holding only images is an image. A list or
+block quote is prose only while nothing inside it, at any depth, is a fenced or
+indented code block, a card, a table, an image, other media or a thematic break; one
+that holds any of them is a single full-width block, drawn as `"classic"` draws it
+with its list or quote intact, and the prose before and after it still forms bubbles.
+Inline code, links and nested lists keep a list prose. `"classic"` shows replies flat. In both, the person's own bubble fits its text at the trailing
+edge. `"solid"` fills it with the assistant's avatar color at OKLCH lightness capped at
+0.52, chroma and hue kept, under white text; a chat without an avatar color uses the
+tint. A solid bubble stays opaque while its message sends, because fading the fill
+under white text takes it below 4.5:1; the tinted bubble fades as before.
+
+The iOS app draws an image as an inline "Open image" link, not as media, so an image
+there stays prose and can sit inside a bubble. A scheduled delivery that arrives as a person's row, which is how Hermes sends one, is never in a person's bubble on either client: it is flat, full-width Markdown under its "Scheduled" label.
+
 <!-- Main assistant: begin -->
 
 ### Main assistant and check-ins

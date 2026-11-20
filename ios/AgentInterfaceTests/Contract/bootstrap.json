@@ -41,6 +41,8 @@
       ],
       "followBots": ["household"],
       "startPage": "today",
+      "chatStyle": "classic",
+      "ownBubble": "solid",
       "notifications": {
         "timezone": "America/Chicago",
         "quietStart": "22:00",

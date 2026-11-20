@@ -88,6 +88,10 @@
     background: var(--accent-soft);
     border-color: var(--accent);
   }
+  /* The app's button hover, restated here: the base layer's rule loses to this layer. */
+  .home-round:hover:enabled {
+    background: var(--accent-soft);
+  }
   /* Positioned, so visually hidden text inside it is clipped here instead of growing the page. */
   .home-scroll {
     position: relative;
@@ -519,6 +523,10 @@
     border-radius: 50%;
     background: var(--raised);
   }
+  /* The app's button hover, restated here: the base layer's rule loses to this layer. */
+  .sheet-close:hover:enabled {
+    background: var(--accent-soft);
+  }
   .sheet-body {
     overflow: auto;
     overscroll-behavior: contain;
@@ -558,6 +566,10 @@
     font-size: 0.9375rem;
     text-align: left;
     color: var(--ink);
+  }
+  /* An assistant's settings index has taller rows, at every width. */
+  .settings-index .settings-row {
+    min-height: 60px;
   }
   .settings-row + .settings-row,
   .settings-row + .settings-row-group {
@@ -1008,6 +1020,10 @@
     .home .pinned-bot.selected {
       background: transparent;
     }
+    /* The base layer's selected hover won over the rule above by specificity; the pinned row has its own hover. */
+    .home .bot-row.selected:hover:enabled {
+      background: var(--accent-soft);
+    }
     .settings-sheet {
       width: auto;
       max-width: none;
@@ -1018,9 +1034,6 @@
       border-radius: 30px 30px 0 0;
       border-bottom: 0;
     }
-    .settings-sheet[open] {
-      animation: settings-up 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
-    }
     .sheet-body {
       padding-inline: 14px;
     }
@@ -1029,6 +1042,7 @@
       font-size: 1rem;
     }
   }
+  /* motion.css plays it on a phone, where the sheet rises from the bottom edge. */
   @keyframes settings-up {
     from {
       transform: translateY(40%);

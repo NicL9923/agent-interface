@@ -184,14 +184,21 @@ struct MarkdownView: View {
   let text: String
   /// A reply still arriving: parsed from its last settled block and kept out of the shared caches.
   var streaming = false
-  @Environment(AppStore.self) private var store: AppStore?
   var body: some View {
     let parsed = streaming
       ? MarkdownCache.shared.streamingBlocks(text) : (blocks: MarkdownCache.shared.blocks(text), settled: Int.max)
     MarkdownBlocksView(blocks: parsed.blocks, settled: parsed.settled)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .environment(\.openURL, OpenURLAction(handler: open))
+      .markdownLinks()
   }
+}
+extension View {
+  /// Opens a reply's links: a managed file in the app's preview, web and mail links in the system.
+  func markdownLinks() -> some View { modifier(MarkdownLinks()) }
+}
+private struct MarkdownLinks: ViewModifier {
+  @Environment(AppStore.self) private var store: AppStore?
+  func body(content: Content) -> some View { content.environment(\.openURL, OpenURLAction(handler: open)) }
   private func open(_ url: URL) -> OpenURLAction.Result {
     if url.path.hasPrefix("/api/files/"), let store, let origin = store.api?.baseURL,
       url.host == nil || url.host == origin.host && url.scheme == origin.scheme && url.port == origin.port
@@ -245,7 +252,7 @@ struct MarkdownBlockView: View {
     case .code(let language, let text):
       MarkdownCodeBlock(code: text, language: language)
     case .quote(let blocks):
-      AnyView(MarkdownBlocksView(blocks: blocks, listDepth: listDepth)).foregroundStyle(Palette.muted)
+      AnyView(MarkdownBlocksView(blocks: blocks, listDepth: listDepth)).foregroundStyle(Palette.quote)
         .padding(.leading, 14)
         .overlay(alignment: .leading) { Rectangle().fill(Palette.line).frame(width: 3) }
     case .list(let list):
@@ -273,8 +280,8 @@ struct MarkdownListView: View {
       ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           marker(index, item)
+          // No full-width frame, so a list in a reply bubble lets the bubble hug its text.
           AnyView(MarkdownBlocksView(blocks: item.blocks, listDepth: depth + 1, spacing: 6))
-            .frame(maxWidth: .infinity, alignment: .leading)
         }.accessibilityElement(children: .combine)
           .accessibilityValue(item.task.map { $0 ? "Completed" : "Incomplete" } ?? "")
       }

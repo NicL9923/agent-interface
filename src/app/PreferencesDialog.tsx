@@ -26,6 +26,7 @@ import {
   setSectionBots,
 } from "./preferences-editing";
 import type { Section } from "./preferences-editing";
+import { OWN_CHOICES, type OwnChoice } from "./preference-queue";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
 import { SettingsConfirmation } from "../components/SettingsConfirmation";
@@ -59,7 +60,7 @@ export function PreferencesDialog({
   destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" };
   connectionLost: boolean;
   offline: boolean;
-  editPreferences: (edit: PreferenceEdit) => Promise<void>;
+  editPreferences: (edit: PreferenceEdit, chosen?: readonly OwnChoice[]) => Promise<void>;
   notifications: ReturnType<typeof useDeviceNotifications>;
   installEvent: InstallEvent | null;
   notice: string;
@@ -76,7 +77,12 @@ export function PreferencesDialog({
   const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
   const finePointer = useFinePointer();
   const bots = boot.bots;
-  const save = (update: Partial<Preferences>) => commit((value) => ({ ...value, ...update }));
+  // A picker's update names the chat style choice it set, so its save carries that choice whatever the queue holds.
+  const save = (update: Partial<Preferences>) =>
+    commit(
+      (value) => ({ ...value, ...update }),
+      OWN_CHOICES.filter((choice) => choice in update),
+    );
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const notify = (update: Partial<NonNullable<Preferences["notifications"]>>) =>
     commit((value) => ({
@@ -266,6 +272,28 @@ export function PreferencesDialog({
                   <option value="system">Follow device</option>
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
+                </NativeSelect>
+              </label>
+              <label className="settings-row">
+                <span className="row-label">Chat style</span>
+                <NativeSelect
+                  value={prefs.chatStyle ?? "bubbles"}
+                  onChange={(event) =>
+                    save({ chatStyle: event.target.value as "bubbles" | "classic" })
+                  }
+                >
+                  <option value="bubbles">Bubbles</option>
+                  <option value="classic">Classic</option>
+                </NativeSelect>
+              </label>
+              <label className="settings-row">
+                <span className="row-label">Your messages</span>
+                <NativeSelect
+                  value={prefs.ownBubble ?? "tint"}
+                  onChange={(event) => save({ ownBubble: event.target.value as "tint" | "solid" })}
+                >
+                  <option value="tint">Tinted</option>
+                  <option value="solid">Solid color</option>
                 </NativeSelect>
               </label>
               <Switch

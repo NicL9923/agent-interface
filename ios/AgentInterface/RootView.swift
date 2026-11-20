@@ -400,6 +400,19 @@ struct ConnectionView: View {
     Task { await store.connect() }
   }
 }
+/// A short message with a dismiss button, as home and Settings show one.
+struct NoticeBanner: View {
+  var message: String
+  var dismiss: () -> Void
+  @Environment(\.colorScheme) private var scheme
+  var body: some View {
+    HStack(alignment: .top) {
+      Text(message).font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
+      Button(action: dismiss) { Image(systemName: "xmark") }
+        .accessibilityLabel("Dismiss")
+    }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
+  }
+}
 struct ErrorBanner: View {
   var message: String
   var dismiss: (() -> Void)? = nil
@@ -474,12 +487,7 @@ struct BotListView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 20) {
         if let notice = store.notice {
-          HStack(alignment: .top) {
-            Text(notice).font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
-            Button { store.notice = nil } label: { Image(systemName: "xmark") }
-              .accessibilityLabel("Dismiss")
-          }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
-            .accessibilityIdentifier("homeNotice")
+          NoticeBanner(message: notice) { store.notice = nil }.accessibilityIdentifier("homeNotice")
         }
         NotificationOnboardingCard()
         if store.sessionExpired {

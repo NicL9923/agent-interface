@@ -1,96 +1,15 @@
 import type { Page } from "@playwright/test";
 import { assistants, expect, signIn, test } from "./fixtures.js";
+import { SCREENS } from "./screens.js";
 
 // The build links home.css and shell.css after index.css, which holds the base styles and the motion layer; the dev
 // server loads every component sheet before it. A rule that wins by position alone therefore shows in one and not the
-// other. Each screen below is read as built, then with index.css last and the component sheets in the reverse of the
+// other. Each screen in e2e/screens.ts is read as built, then with index.css last and the component sheets in the reverse of the
 // build's order, and its computed styles must not move. A difference names two rules of equal specificity that set the same property on the same element,
 // which a check on selectors cannot find when the two selectors differ, as with Settings' notification row.
 //
-// `.agents/tools/diff-computed-styles.mjs` compares the build with the real dev server on the same screens.
-const SCREENS: [string, (page: Page) => Promise<void>][] = [
-  ["home", async () => {}],
-  [
-    "the assistant menu",
-    async (page) => {
-      await assistants(page)
-        .getByRole("button", { name: /Trail Cook/ })
-        .click({ button: "right" });
-      await page.locator(".bot-menu").waitFor();
-    },
-  ],
-  [
-    "the account menu",
-    async (page) => {
-      await page.getByRole("button", { name: "Account" }).click();
-      await page.getByRole("menu", { name: "Account" }).waitFor();
-    },
-  ],
-  [
-    "Settings",
-    async (page) => {
-      await page.getByRole("button", { name: "Account" }).click();
-      await page
-        .getByRole("menu", { name: "Account" })
-        .getByRole("menuitem", { name: /Settings/ })
-        .click();
-      await page.locator(".settings-sheet[open]").waitFor();
-    },
-  ],
-  // The e2e server has no push key, so the card never reaches its blocked state here; its class is what the card's
-  // warning color hangs on, and Settings' own rules for the same toggle have to leave that color alone.
-  [
-    "Settings with notifications blocked",
-    async (page) => {
-      await page.getByRole("button", { name: "Account" }).click();
-      await page
-        .getByRole("menu", { name: "Account" })
-        .getByRole("menuitem", { name: /Settings/ })
-        .click();
-      await page.locator(".settings-sheet[open]").waitFor();
-      await page.evaluate(() =>
-        document
-          .querySelector(".settings-notifications .notification-settings")
-          ?.classList.add("is-blocked"),
-      );
-      await expect(
-        page.locator(
-          ".settings-notifications .notification-settings.is-blocked .notification-toggle",
-        ),
-      ).toBeVisible();
-    },
-  ],
-  [
-    "the command palette",
-    async (page) => {
-      const apple = await page.evaluate(() =>
-        /Mac|iPhone|iPad|iPod/i.test(
-          (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
-            ?.platform ||
-            navigator.platform ||
-            navigator.userAgent,
-        ),
-      );
-      await page.keyboard.press(apple ? "Meta+k" : "Control+k");
-      await page.locator(".command-palette[open]").waitFor();
-    },
-  ],
-  [
-    "a chat",
-    async (page) => {
-      await assistants(page)
-        .getByRole("button", { name: /Ranch Hand/ })
-        .click();
-      await page.getByText("Morning. The north fence is fixed.").waitFor();
-      // The jump button shows only after scrolling up; a bare one carries the cascade's answer for its class.
-      await page.evaluate(() => {
-        const button = document.createElement("button");
-        button.className = "jump-latest";
-        document.querySelector(".conversation-panel")?.appendChild(button);
-      });
-    },
-  ],
-];
+// `.agents/tools/diff-computed-styles.mjs` compares the build with the real dev server on the same screens, and
+// e2e/cascade-layers.spec.ts reads them with and without the cascade layers.
 
 type Order = "built" | "reversed";
 
@@ -175,6 +94,39 @@ for (const colorScheme of ["light", "dark"] as const) {
     });
   }
 }
+
+// A layer's rank is set where its name first appears, so the statement that ranks them has to be the first layer rule
+// the page meets. A component sheet ahead of it ranks components under base, and the base `button` rule then beats
+// every component's own buttons. Both orders the screens above compare would be wrong together, so they cannot see it.
+test("the built app ranks its cascade layers before any layered rule", async ({ page }) => {
+  await signIn(page);
+  await assistants(page)
+    .getByRole("button", { name: /Ranch Hand/ })
+    .click();
+  await page.getByText("Morning. The north fence is fixed.").waitFor();
+  const read = await page.evaluate(() => {
+    let first: { kind: string; names: string[] } | undefined;
+    for (const sheet of document.styleSheets) {
+      for (const rule of sheet.cssRules) {
+        if (rule instanceof CSSLayerStatementRule)
+          first ??= { kind: "statement", names: [...rule.nameList] };
+        else if (rule instanceof CSSLayerBlockRule) first ??= { kind: "block", names: [rule.name] };
+      }
+      if (first) break;
+    }
+    // A bare button with a component's class carries the cascade's answer for that class.
+    const button = document.createElement("button");
+    button.className = "reply-action";
+    document.querySelector(".message")?.appendChild(button);
+    return { first, border: getComputedStyle(button).borderTopWidth };
+  });
+  expect(read.first).toEqual({
+    kind: "statement",
+    names: ["theme", "base", "components", "motion", "utilities"],
+  });
+  // The base layer gives every button a 1 px border; a reply's action button removes it.
+  expect(read.border).toBe("0px");
+});
 
 // The lit edge is drawn with the button's own drop shadow, not in place of it.
 test("the jump button keeps its drop shadow under the dark lit edge", async ({ page }) => {

@@ -132,6 +132,10 @@ export interface Preferences {
   sections: { id: string; name: string; botIds: string[] }[];
   followBots: string[];
   startPage?: "today" | "assistant";
+  /** How assistant replies read: prose in bubbles, or flat text. Absent means "bubbles". */
+  chatStyle?: "bubbles" | "classic";
+  /** This person's own messages: the chat's light tint, or the assistant's color. Absent means "tint". */
+  ownBubble?: "tint" | "solid";
   notifications?: {
     timezone: string;
     quietStart?: string;

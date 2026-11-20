@@ -408,6 +408,8 @@ struct ConversationView: View {
         .environment(\.transcriptUserId, store.bootstrap?.user.id)
         .environment(\.transcriptSharedChat, bot.othersCanWrite)
         .environment(\.transcriptOwnRows, store.ownRows)
+        .environment(\.chatBubbles, chatPreferences.chatStyleChoice == .bubbles)
+        .environment(\.ownBubbleFill, ownBubbleFill)
         .environment(\.sentAnchor, anchoredMessage)
         .environment(\.scrollTranscript, { id in
           openingCard = nil
@@ -765,6 +767,12 @@ struct ConversationView: View {
     ComposerView(bot: bot, focused: $composerFocused) { latestTrigger += 1 }
   }
   private var advanced: Bool { store.bootstrap?.preferences.presentation == "advanced" }
+  private var chatPreferences: Preferences { store.bootstrap?.preferences ?? Preferences() }
+  /// The person's messages take the assistant's drawn color when they chose Solid; a portrait keeps the tint.
+  private var ownBubbleFill: Color? {
+    guard chatPreferences.ownBubbleChoice == .solid, let tint = SolidBubble.tint(bot.avatar), let fill = SolidBubble.fill(tint) else { return nil }
+    return Color(hex: fill)
+  }
   private func loadEarlier(_ proxy: ScrollViewProxy) {
     let first = store.conversation?.messages.first?.id
     // The scroll position holds the turn in view while history is added above it. Before the
@@ -805,32 +813,43 @@ struct MessageView: View {
   @Environment(\.transcriptUserId) private var userId
   @Environment(\.transcriptSharedChat) private var sharedChat
   @Environment(\.transcriptOwnRows) private var ownRows
-  @Environment(\.colorScheme) private var scheme
   @Environment(\.foundMessage) private var foundMessage
   @Environment(\.sentAnchor) private var sentAnchor
-  private var bubble: Bool { message.role == "user" && !message.isAgentExchange }
+  @Environment(\.chatBubbles) private var chatBubbles
+  @Environment(\.ownBubbleFill) private var ownBubbleFill
+  /// Only words a person sent sit in the person's bubble. A scheduled delivery reads flat at the full
+  /// width, labeled at the leading edge, as on the web.
+  private var bubble: Bool { message.role == "user" && !message.isAgentExchange && !scheduled }
+  /// The solid fill, which applies only to the signed-in person's own words, never another member's.
+  private var solidFill: Color? { bubble && own && label.isEmpty ? ownBubbleFill : nil }
   private var scheduled: Bool { message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity }
   /// The person's own words, which sit on the right with their time beneath.
   private var own: Bool { message.role == "user" && !scheduled && !message.isInternalActivity }
+  /// An assistant answer in the bubbles style. Progress lines, activity and agent exchanges stay flat.
+  private var replyBubbles: Bool {
+    chatBubbles && message.role == "assistant" && !message.isProgressLine && !message.isAgentExchange
+      && !message.isInternalActivity && !message.isToolActivity
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      VStack(alignment: .leading, spacing: 10) {
-        if !continued && !message.isAgentExchange && !label.isEmpty {
+      if bubble {
+        // A person's bubble sits at the trailing edge, with any name above it on that side.
+        if !continued && !label.isEmpty {
           Text(label).font(.caption.weight(.semibold)).foregroundStyle(Palette.messageMetadata)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        if message.isAgentExchange {
-          AgentExchangeView(message: message, recipient: recipient)
-        } else if !message.isToolActivity {
-          ReplyContentView(message: message).modifier(ProgressLineStyle(on: message.isProgressLine))
+        PersonBubble(solid: solidFill, found: foundMessage == message.id) {
+          VStack(alignment: .leading, spacing: 10) { content }.padding(.vertical, 10).padding(.horizontal, 14)
         }
-        ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
-        if let replyFiles, !message.id.hasSuffix("-inflight") { ReplyFilesView(artifacts: replyFiles) }
-      }.padding(bubble ? 14 : 0).background(
-        bubble ? Palette.user(scheme) : Color.clear,
-        in: RoundedRectangle(cornerRadius: 14)
-      )
-        // The outline hugs the message itself, inside a person's indent.
-        .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 14).stroke(Palette.accent, lineWidth: 2) } }
+      } else {
+        VStack(alignment: .leading, spacing: 10) {
+          if !continued && !message.isAgentExchange && !label.isEmpty {
+            Text(label).font(.caption.weight(.semibold)).foregroundStyle(Palette.messageMetadata)
+          }
+          content
+        }
+          .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 14).stroke(Palette.accent, lineWidth: 2) } }
+      }
       if own && message.steered == true {
         Text("Added to the current task").font(.caption).foregroundStyle(Palette.messageMetadata)
           .frame(maxWidth: .infinity, alignment: .trailing).accessibilityIdentifier("steeredLabel")
@@ -841,8 +860,7 @@ struct MessageView: View {
             && !message.text.isEmpty)
       }
     }
-      .padding(.leading, message.role == "user" && !message.isInternalActivity ? 32 : 0)
-      .modifier(SendingMessage(delivery: delivery))
+      .modifier(SendingMessage(delivery: delivery, solid: solidFill != nil))
       .background {
         if sentAnchor == message.id {
           GeometryReader { Color.clear.preference(key: SentAnchorTop.self, value: $0.frame(in: .named(SentAnchorTop.space)).minY) }
@@ -850,6 +868,15 @@ struct MessageView: View {
       }
       .modifier(ReplyActions(message: message))
       .accessibilityElement(children: .contain)
+  }
+  @ViewBuilder private var content: some View {
+    if message.isAgentExchange {
+      AgentExchangeView(message: message, recipient: recipient)
+    } else if !message.isToolActivity {
+      ReplyContentView(message: message, bubbles: replyBubbles ? endsRun : nil).modifier(ProgressLineStyle(on: message.isProgressLine))
+    }
+    ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
+    if let replyFiles, !message.id.hasSuffix("-inflight") { ReplyFilesView(artifacts: replyFiles) }
   }
   /// Replies and a person's own messages carry a time line. Streaming replies do not until they settle.
   private var showsMeta: Bool {
@@ -886,17 +913,18 @@ private struct ProgressLineStyle: ViewModifier {
 /// A sent message rises into the transcript at once, faint until Hermes accepts it, as on the web.
 private struct SendingMessage: ViewModifier {
   var delivery: SentEcho.Status?
+  var solid: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   /// False only for the first frame of a message that appears on its way.
   @State private var risen: Bool
-  init(delivery: SentEcho.Status?) {
-    self.delivery = delivery
+  init(delivery: SentEcho.Status?, solid: Bool) {
+    self.delivery = delivery; self.solid = solid
     _risen = State(initialValue: delivery == nil)
   }
   func body(content: Content) -> some View {
     let rising = delivery != nil && !risen && !reduceMotion
     content
-      .opacity(rising ? 0 : delivery == .sending ? 0.66 : 1)
+      .opacity(rising ? 0 : delivery == .sending ? PersonBubbles.sendingOpacity(solid: solid) : 1)
       .scaleEffect(rising ? 0.96 : 1, anchor: .bottomTrailing)
       .offset(y: rising ? 14 : 0)
       .animation(.easeInOut(duration: 0.24), value: delivery)
