@@ -7,6 +7,8 @@ import { ShortcutsDialog } from "../src/app/ShortcutsDialog";
 import { api, uploadFile, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import { submissionKey } from "../src/app/storage";
+import { OUTAGE_GRACE_MS } from "../src/app/outage";
+import { CHECKING_CONNECTION } from "../src/app/use-conversation";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import {
@@ -269,6 +271,36 @@ describe("keyboard shortcuts", () => {
         .click(),
     );
     expect(write).toHaveBeenCalledWith("/bots/shared/stop", { runId: "run" });
+  });
+
+  // The question can be open when the connection goes. Stop is refused from the first failed read
+  // everywhere else, so the answer to the question is refused too, and says why.
+  it("refuses a stop confirmed after a read failed while the question was open", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "run" } };
+    await render();
+    await key({ key: ".", ctrlKey: true });
+    const serve = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+      if (/^\/bots\/\w+\/conversation\?/.test(path)) throw new Error("Hermes is restarting.");
+      return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+    });
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(0);
+    const stopWork = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button'),
+    ].find((button) => button.textContent === "Stop work")!;
+    expect(stopWork.disabled).toBe(true);
+    // A disabled button is out of the tab order, so the reason is in the question itself: on screen,
+    // and part of what a screen reader reads as the dialog's description.
+    const dialog = document.body.querySelector('[role="alertdialog"]')!;
+    const description = dialog
+      .getAttribute("aria-describedby")!
+      .split(" ")
+      .map((id) => document.getElementById(id)!.textContent)
+      .join(" ");
+    expect(description).toContain(CHECKING_CONNECTION);
+    await act(async () => stopWork.click());
+    expect(write).not.toHaveBeenCalledWith("/bots/shared/stop", expect.anything());
   });
 
   it("stops the run Ctrl+. asked about, not one that began while the question was open", async () => {
@@ -551,9 +583,11 @@ describe("status dock", () => {
     );
   });
 
-  it("shows the connection notice above the composer while reconnecting", async () => {
+  it("shows the connection notice above the composer once a loss has lasted past its grace period", async () => {
     await render();
     await act(async () => window.dispatchEvent(new Event("offline")));
+    expect(mount.container.querySelector(".connection-panel")).toBeNull();
+    await advance(OUTAGE_GRACE_MS);
     const dock = mount.container.querySelector(".status-dock")!;
     expect(dock.querySelector(".connection-panel.compact")?.textContent).toContain(
       "You're offline",

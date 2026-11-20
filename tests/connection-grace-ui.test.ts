@@ -5,10 +5,14 @@ import { App } from "../src/App";
 import { api, ApiError, write } from "../src/client-api";
 import {
   CHECKING_CONNECTION,
-  DISCONNECT_GRACE_MS,
   NOT_SENT_CHECKING,
+  READ_RETRY_MS,
   WAITING_FOR_CONNECTION,
+  WAITING_WITH_DRAFT,
 } from "../src/app/use-conversation";
+import { OUTAGE_GRACE_MS, OUTAGE_LASTING_MS, OUTAGE_MIN_SHOWN_MS } from "../src/app/outage";
+import { RESTORED_MS } from "../src/components/ConnectionPanel";
+import { ROSTER_CARRY_MS } from "../src/app/use-session";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import {
@@ -47,10 +51,13 @@ let mount: Mount, container: HTMLDivElement, boot: Bootstrap, conversation: Conv
 // What the next conversation read throws, as the client API reports it; undefined answers it.
 let failure: Error | undefined;
 let unexpected: string[];
+let draftRevision: number;
+// While set, a conversation read waits on it before it is answered.
+let held: Promise<void> | undefined;
 // A request that never reached the app, as the client API reports a failed fetch: it may be a blip.
 const blip = () =>
   new ApiError(
-    "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
+    "Can't reach the app. We'll reconnect automatically.",
     503,
     "CONNECTION_UNAVAILABLE",
   );
@@ -89,7 +96,9 @@ beforeEach(() => {
   );
   history.replaceState(null, "", "/");
   failure = undefined;
+  held = undefined;
   unexpected = [];
+  draftRevision = 0;
   parses.length = 0;
   boot = {
     user: { id: "one", name: "One", email: "one@example.test" },
@@ -130,6 +139,7 @@ beforeEach(() => {
     .mockImplementation(async <T>(path: string) => {
       if (path === "/bootstrap?roster=lean") return boot as T;
       if (path.startsWith("/bots/shared/conversation?")) {
+        if (held) await held;
         if (failure) throw failure;
         return conversation as T;
       }
@@ -144,10 +154,21 @@ beforeEach(() => {
     });
   vi.mocked(write)
     .mockReset()
-    .mockImplementation(async <T>(path: string, _body: unknown, method = "POST") => {
+    .mockImplementation(async <T>(path: string, body: unknown, method = "POST") => {
       // Presence and device activity report on their own schedule; any other write is a test failure.
       if (method === "PUT" && (path === "/bots/shared/presence" || path === "/devices/activity"))
         return {} as T;
+      // A typed draft saves itself, and the server answers the copy it kept under the next revision.
+      if (method === "PUT" && path === "/bots/shared/draft") {
+        const { text, attachments } = body as { text: string; attachments: [] };
+        return {
+          text,
+          attachments,
+          revision: ++draftRevision,
+          reason: "edit",
+          sentRevision: 0,
+        } as T;
+      }
       unexpected.push(`${method} ${path}`);
       throw new Error(`This test serves no ${method} ${path}`);
     });
@@ -180,7 +201,28 @@ const rosterChanged = async () => {
   });
   await advance(0);
 };
-const shown = () => container.querySelector('[aria-label="Hermes connection"]') !== null;
+const notice = () => container.querySelector('[aria-label="Hermes connection"]');
+const shown = () => notice() !== null;
+const says = () => notice()?.querySelector("h2")?.textContent;
+const reconnectNow = () =>
+  [...(notice()?.querySelectorAll("button") ?? [])].find(
+    (item) => item.textContent === "Reconnect now",
+  );
+const announced = () => container.querySelector("[data-connection-announcer]")!.textContent;
+// Whose avatars show the connection as lost, by the name each avatar is labeled with: in the list of
+// assistants, and in the open chat.
+const dimmedIn = (selector: string) =>
+  new Set(
+    [...container.querySelectorAll(`${selector} .avatar-wrap[data-state="disconnected"]`)].map(
+      (avatar) => avatar.getAttribute("aria-label")!.split(":")[0],
+    ),
+  );
+const dimmedInList = () => dimmedIn('[aria-label="Assistants"]');
+const dimmedInChat = () => dimmedIn("main");
+const conversationReads = () =>
+  vi
+    .mocked(api)
+    .mock.calls.filter(([path]) => String(path).startsWith("/bots/shared/conversation?")).length;
 const sendButton = () => container.querySelector<HTMLButtonElement>('button[aria-label^="Send"]')!;
 const stopButton = () =>
   container.querySelector<HTMLButtonElement>('button[aria-label="Stop response"]')!;
@@ -212,27 +254,32 @@ describe("a failed conversation read", () => {
     await opened();
     failure = blip();
     await read();
-    await advance(DISCONNECT_GRACE_MS - 1);
+    await advance(OUTAGE_GRACE_MS - 1);
     failure = undefined;
     await read();
-    await advance(DISCONNECT_GRACE_MS);
+    await advance(OUTAGE_GRACE_MS);
     expect(shown()).toBe(false);
   });
 
   // The app's one connection announcement follows what the chat shows, not the first failed read, so a
-  // blip that changes nothing on screen says nothing to a screen reader either.
-  it("announces the connection is down only once the chat shows it", async () => {
+  // blip that changes nothing on screen says nothing to a screen reader either. Someone who did hear of
+  // a loss hears that it is over.
+  it("announces the loss only once the chat shows it, and that it is over once it is", async () => {
     await opened();
-    const announced = () => container.querySelector("[data-connection-announcer]")!.textContent;
     failure = blip();
     await read();
+    await advance(OUTAGE_GRACE_MS - 1);
     expect(shown()).toBe(false);
     expect(announced()).toBe("");
-    await read();
+    await advance(1);
     expect(shown()).toBe(true);
-    expect(announced()).not.toBe("");
+    expect(announced()).toBe("Reconnecting…");
+    await advance(OUTAGE_MIN_SHOWN_MS);
     failure = undefined;
     await read();
+    expect(shown()).toBe(false);
+    expect(announced()).toBe("Connected again.");
+    await advance(RESTORED_MS);
     expect(announced()).toBe("");
   });
 
@@ -246,58 +293,462 @@ describe("a failed conversation read", () => {
     expect(shown()).toBe(false);
   });
 
-  it("shows the connection is down on a second failure in a row", async () => {
+  // Opening a chat asks for two reads back to back, so two failures can be milliseconds apart. Only time
+  // shows the loss, and the retries inside the grace period do not bring it forward.
+  it("shows it once reads have failed for 3 seconds, however many failed, not a millisecond sooner", async () => {
     await opened();
     failure = blip();
     await read();
-    expect(shown()).toBe(false);
     await read();
-    expect(shown()).toBe(true);
-  });
-
-  it("shows it once a failure goes 3 seconds without a successful read, not a millisecond sooner, and clears on the next success", async () => {
-    await opened();
-    failure = blip();
-    await read();
-    await advance(DISCONNECT_GRACE_MS - 1);
+    await advance(OUTAGE_GRACE_MS - 1);
     expect(shown()).toBe(false);
     await advance(1);
     expect(shown()).toBe(true);
+  });
+
+  // The server's own word that Hermes is unreachable can be one request that timed out, with Hermes and
+  // every other chat fine. It used to show the whole app as disconnected at once.
+  it("waits out a failure the server blames on Hermes like any other", async () => {
+    await opened();
+    failure = new ApiError("The Hermes operation could not be completed", 502, "unreachable");
+    await read();
+    expect(shown()).toBe(false);
+    await advance(OUTAGE_GRACE_MS);
+    expect(shown()).toBe(true);
+  });
+
+  it("says one plain line at first, then names the reason and offers a retry once the loss has lasted 10 seconds", async () => {
+    await opened();
+    failure = blip();
+    await read();
+    await advance(OUTAGE_LASTING_MS - 1);
+    expect(says()).toBe("Reconnecting…");
+    expect(notice()!.querySelector("p")).toBeNull();
+    expect(reconnectNow()).toBeUndefined();
+    await advance(1);
+    expect(says()).toBe("Can't refresh this chat");
+    expect(reconnectNow()).toBeDefined();
+    expect(announced()).toBe(
+      "Can't refresh this chat. New messages may not show yet. We'll keep trying.",
+    );
+  });
+
+  // A loss that ends just as its notice appears would flash it. The notice stays a second; what it
+  // refused does not wait for it.
+  it("keeps a notice that just appeared for a second, while Send works again at once", async () => {
+    await opened();
+    await typeInto(container.querySelector("textarea")!, "Check the gate");
+    failure = blip();
+    await read();
+    await advance(OUTAGE_GRACE_MS);
+    expect(shown()).toBe(true);
     failure = undefined;
     await read();
+    expect(sendButton().disabled).toBe(false);
+    await advance(OUTAGE_MIN_SHOWN_MS - 1);
+    expect(shown()).toBe(true);
+    await advance(1);
     expect(shown()).toBe(false);
   });
 
-  it.each([
-    [
-      "the browser is offline",
-      () => {
-        Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });
-        return blip();
-      },
-      true,
-    ],
-    [
-      "the server answers that Hermes is unreachable",
-      () => new ApiError("The Hermes operation could not be completed", 502, "unreachable"),
-      true,
-    ],
-    [
-      "the answer was unreadable",
-      () => new ApiError("The app returned an unreadable response.", 502, "INVALID_RESPONSE"),
-      false,
-    ],
-    ["the server failed without a code", () => new ApiError("Request failed (500)", 500), false],
-    ["the failure is not an API error", () => new Error("Hermes is restarting."), false],
-  ])(
-    "on one failure, shows at once only when it proves the connection is down: %s",
-    async (_name, make, atOnce) => {
+  describe("with another assistant on the roster", () => {
+    // What the other assistant's first read throws; undefined answers it.
+    let otherFailure: Error | undefined;
+    beforeEach(() => {
+      otherFailure = undefined;
+      boot = {
+        ...boot,
+        bots: [
+          ...boot.bots,
+          { id: "other", name: "Other", shared: true, model: "test", activity: "working" },
+        ],
+      };
+      const serve = vi.mocked(api).getMockImplementation()!;
+      vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+        if (path.startsWith("/bots/other/conversation?")) {
+          if (otherFailure) throw otherFailure;
+          return {
+            botId: "other",
+            messages: [{ id: "other-answer", role: "assistant", text: "Other's answer" }],
+            approvals: [],
+            files: [],
+            activity: { state: "idle" },
+          } as T;
+        }
+        if (path === "/bots/other/draft") return { text: "", attachments: [] } as T;
+        if (path === "/bots/other/routine-runs") return { runs: [], unavailable: [] } as T;
+        return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+      });
+      const send = vi.mocked(write).getMockImplementation()!;
+      vi.mocked(write).mockImplementation(
+        async <T>(path: string, body: unknown, method = "POST") => {
+          if (method === "PUT" && path === "/bots/other/presence") return {} as T;
+          // Leaving a chat saves where the reader was, and the server answers the position it kept.
+          if (method === "PUT" && /^\/bots\/(shared|other)\/read-position$/.test(path))
+            return body as T;
+          return (send as (path: string, body: unknown, method: string) => Promise<T>)(
+            path,
+            body,
+            method,
+          );
+        },
+      );
+    });
+    const openOther = async () => {
+      const row = [
+        ...container.querySelectorAll<HTMLElement>('[aria-label="Assistants"] button'),
+      ].find((item) => item.textContent?.includes("Other"))!;
+      await act(async () => row.click());
+      await advance(0);
+    };
+
+    // The app and Hermes answer bootstrap, so the failure is this chat's alone. The list of assistants
+    // is the roster's news: it neither dims the open one nor says "Reconnecting" under it.
+    it("shows a chat whose own reads fail in that chat alone", async () => {
       await opened();
-      failure = make();
+      failure = blip();
       await read();
-      expect(shown()).toBe(atOnce);
-    },
-  );
+      await advance(OUTAGE_LASTING_MS);
+      expect(says()).toBe("Can't refresh this chat");
+      expect(dimmedInChat()).toEqual(new Set(["Shared"]));
+      expect(dimmedInList()).toEqual(new Set());
+      expect(container.querySelector('[aria-label="Assistants"]')!.textContent).not.toContain(
+        "Reconnecting",
+      );
+    });
+
+    // A failed read asks bootstrap what is down. While Hermes is down the server lists its rows as
+    // disconnected, and those must not dim anything before the loss shows.
+    it("shows every assistant as disconnected once bootstrap says Hermes is down, and not before the loss shows", async () => {
+      await opened();
+      failure = new ApiError("The Hermes operation could not be completed", 502, "unreachable");
+      boot = {
+        ...boot,
+        bots: boot.bots.map((bot) => ({ ...bot, activity: "disconnected" as const })),
+        connection: { connected: false, code: "unreachable" },
+      };
+      await read();
+      await advance(OUTAGE_GRACE_MS - 1);
+      expect(shown()).toBe(false);
+      expect(dimmedInList()).toEqual(new Set());
+      expect(container.querySelector('[aria-label="Assistants"]')!.textContent).toContain(
+        "Working",
+      );
+      await advance(OUTAGE_LASTING_MS);
+      expect(says()).toBe("Hermes isn't answering");
+      expect(dimmedInList()).toEqual(new Set(["Shared", "Other"]));
+      expect(container.querySelector(".home-sync")?.textContent).toBe("Reconnecting");
+    });
+
+    // Who is on the roster is the server's word, outage or not. It filters its last roster for each
+    // member even while Hermes is down, so an assistant another member made private goes at once.
+    it("takes the server's roster during an outage, so an assistant made private goes at once", async () => {
+      await opened();
+      failure = new ApiError("The Hermes operation could not be completed", 502, "unreachable");
+      boot = {
+        ...boot,
+        bots: [{ ...boot.bots[0]!, activity: "disconnected" }],
+        connection: { connected: false, code: "unreachable" },
+      };
+      await read();
+      const rows = [...container.querySelectorAll('[aria-label="Assistants"] button')].map(
+        (row) => row.textContent ?? "",
+      );
+      expect(rows.some((row) => row.includes("Shared"))).toBe(true);
+      expect(rows.some((row) => row.includes("Other"))).toBe(false);
+    });
+
+    // A roster read can fail while Hermes stays connected. The server then lists its last roster with
+    // every row marked disconnected, which says the roster is stale, not that anything changed.
+    it("keeps what each assistant was doing when the server could not refresh the roster", async () => {
+      await opened();
+      boot = {
+        ...boot,
+        bots: boot.bots.map((bot) => ({ ...bot, activity: "disconnected" as const })),
+      };
+      await rosterChanged();
+      expect(dimmedInList()).toEqual(new Set());
+      expect(container.querySelector('[aria-label="Assistants"]')!.textContent).toContain(
+        "Working",
+      );
+      expect(shown()).toBe(false);
+    });
+
+    // The connection coming back is said when it comes back. The notice staying out its second, and
+    // whatever the person opens during it, change nothing about that.
+    it("says the connection is back when it is, even if another chat is opened while the notice lingers", async () => {
+      await opened();
+      failure = blip();
+      await read();
+      await advance(OUTAGE_GRACE_MS);
+      failure = undefined;
+      await read();
+      expect(shown()).toBe(true);
+      expect(announced()).toBe("Connected again.");
+      await openOther();
+      expect(announced()).toBe("Connected again.");
+    });
+
+    // The app comes back while this chat's own reads still fail. The chat's warning is what is being
+    // said then, so nothing is kept to say later, as when the person opens another chat.
+    it("keeps no word of a recovery behind another warning to say once that warning is gone", async () => {
+      await opened();
+      const healthy = boot;
+      failure = new ApiError("The Hermes operation could not be completed", 502, "unreachable");
+      boot = { ...boot, connection: { connected: false, code: "unreachable" } };
+      await read();
+      await advance(OUTAGE_LASTING_MS);
+      expect(says()).toBe("Hermes isn't answering");
+      // Hermes is back; this chat's reads still fail.
+      boot = healthy;
+      await rosterChanged();
+      await advance(OUTAGE_MIN_SHOWN_MS);
+      expect(says()).toBe("Can't refresh this chat");
+      await openOther();
+      expect(shown()).toBe(false);
+      expect(announced()).toBe("");
+    });
+
+    // Bootstraps are minutes apart while all is well, so the half minute counts from the first stale
+    // roster, not from the last fresh one.
+    it("keeps what each assistant was doing through one stale roster long after the last fresh one", async () => {
+      await opened();
+      const fresh = boot;
+      const stale = {
+        ...boot,
+        bots: boot.bots.map((bot) => ({ ...bot, activity: "disconnected" as const })),
+      };
+      // An earlier stale roster that a fresh one followed is over and done with.
+      boot = stale;
+      await rosterChanged();
+      boot = fresh;
+      await rosterChanged();
+      await advance(ROSTER_CARRY_MS + 5_000);
+      boot = stale;
+      await rosterChanged();
+      expect(dimmedInList()).toEqual(new Set());
+      expect(container.querySelector('[aria-label="Assistants"]')!.textContent).toContain(
+        "Working",
+      );
+    });
+
+    // The server says a roster is stale by marking its rows disconnected. Stale for a moment keeps
+    // what each assistant was doing; stale for half a minute is no longer known, and says so.
+    it("stops carrying what an assistant was doing once the roster has been stale for 30 seconds", async () => {
+      await opened();
+      boot = {
+        ...boot,
+        bots: boot.bots.map((bot) => ({ ...bot, activity: "disconnected" as const })),
+      };
+      await rosterChanged();
+      await advance(ROSTER_CARRY_MS - 2_000);
+      expect(dimmedInList()).toEqual(new Set());
+      // The stale roster is read again on the retries a failed bootstrap gets; the one past 30 seconds
+      // decides. The open chat's own read still says what its assistant is doing.
+      await advance(4_000);
+      expect(dimmedInList()).toEqual(new Set(["Other"]));
+      // Hermes still answers, so the app itself reports no loss.
+      expect(container.querySelector(".home-sync")).toBeNull();
+    });
+
+    // Leaving a chat is not its connection coming back.
+    it("does not carry one chat's notice, or a recovery that never happened, into the next chat", async () => {
+      await opened();
+      failure = blip();
+      await read();
+      await advance(OUTAGE_GRACE_MS);
+      expect(shown()).toBe(true);
+      await openOther();
+      expect(container.textContent).toContain("Other's answer");
+      expect(shown()).toBe(false);
+      expect(announced()).toBe("");
+    });
+
+    it("times the next chat's own failed read from its own start", async () => {
+      await opened();
+      failure = blip();
+      await read();
+      await advance(OUTAGE_GRACE_MS);
+      expect(shown()).toBe(true);
+      otherFailure = blip();
+      await openOther();
+      expect(shown()).toBe(false);
+      await advance(OUTAGE_GRACE_MS - 1);
+      expect(shown()).toBe(false);
+      await advance(1);
+      expect(shown()).toBe(true);
+    });
+  });
+
+  describe("retrying", () => {
+    // With its stream live, the chat would not read again for two minutes: the loss would show for all
+    // of them after one blip, and the message the failed read was asked for would wait as long.
+    it("reads again 1, 2 and 4 seconds after failed reads in a row, and stops once one succeeds", async () => {
+      await opened();
+      failure = blip();
+      await read();
+      const first = conversationReads();
+      await advance(READ_RETRY_MS[0] - 1);
+      expect(conversationReads()).toBe(first);
+      await advance(1);
+      expect(conversationReads()).toBe(first + 1);
+      await advance(READ_RETRY_MS[1] - 1);
+      expect(conversationReads()).toBe(first + 1);
+      await advance(1);
+      expect(conversationReads()).toBe(first + 2);
+      failure = undefined;
+      await advance(READ_RETRY_MS[2] - 1);
+      expect(shown()).toBe(true);
+      await advance(1);
+      expect(conversationReads()).toBe(first + 3);
+      expect(shown()).toBe(false);
+      // The read that succeeded set no retry of its own.
+      await advance(READ_RETRY_MS[3]);
+      expect(conversationReads()).toBe(first + 3);
+    });
+
+    it("starts the waits over after a success", async () => {
+      await opened();
+      failure = blip();
+      await read();
+      await advance(READ_RETRY_MS[0] + READ_RETRY_MS[1]);
+      // A change notice's read succeeds while the third retry is still 4 seconds off: that retry is dropped.
+      failure = undefined;
+      await read();
+      const settled = conversationReads();
+      await advance(READ_RETRY_MS[2]);
+      expect(conversationReads()).toBe(settled);
+      failure = blip();
+      await read();
+      const before = conversationReads();
+      await advance(READ_RETRY_MS[0]);
+      expect(conversationReads()).toBe(before + 1);
+    });
+
+    // A change notice can ask for a read just before the retry is due. That read is the retry: a second
+    // one queued behind it would read again after the connection is already back.
+    it("lets a read already on its way stand in for the retry, with no second read behind it", async () => {
+      await opened();
+      failure = blip();
+      await read();
+      const before = conversationReads();
+      await advance(READ_RETRY_MS[0] - 1);
+      failure = undefined;
+      let answer!: () => void;
+      held = new Promise<void>((resolve) => {
+        answer = resolve;
+      });
+      await read();
+      expect(conversationReads()).toBe(before + 1);
+      // The retry falls due while that read is still on its way.
+      await advance(2);
+      held = undefined;
+      await act(async () => answer());
+      await advance(0);
+      expect(shown()).toBe(false);
+      expect(conversationReads()).toBe(before + 1);
+    });
+
+    // Being shown again or back online reads anyway, so a retry made meanwhile would only fail.
+    it.each([
+      ["the device is offline", () => vi.spyOn(navigator, "onLine", "get").mockReturnValue(false)],
+      [
+        "the page is hidden",
+        () => vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden"),
+      ],
+    ])("makes no retry while %s", async (_name, away) => {
+      await opened();
+      failure = blip();
+      await read();
+      const before = conversationReads();
+      const spy = away();
+      await advance(READ_RETRY_MS[0] + READ_RETRY_MS[1]);
+      spy.mockRestore();
+      expect(conversationReads()).toBe(before);
+    });
+  });
+
+  // The notice stays a second after the connection is back so that it never flashes. Nothing it used to
+  // stand in for may stay refused, or become allowed, because of that second.
+  it("keeps Send refusing guidance the assistant cannot take while the notice lingers after the connection is back", async () => {
+    boot = {
+      ...boot,
+      capabilities: {
+        ...boot.capabilities,
+        steering: { supported: false, reason: "This Hermes cannot take guidance mid-task." },
+      },
+    };
+    await opened();
+    failure = blip();
+    await read();
+    await advance(OUTAGE_GRACE_MS);
+    // The read that ends the loss finds the assistant at work.
+    conversation = { ...conversation, activity: { state: "working", runId: "run-1" } };
+    failure = undefined;
+    await read();
+    await typeInto(container.querySelector("textarea")!, "Check the gate");
+    expect(shown()).toBe(true);
+    expect(sendButton().getAttribute("aria-label")).toBe("Send guidance");
+    expect(sendButton().disabled).toBe(true);
+  });
+
+  // The live region speaks when the connection changes. Typing is not a connection change.
+  it("announces a lasting loss once, however the draft changes meanwhile", async () => {
+    await opened();
+    const field = container.querySelector("textarea")!;
+    failure = blip();
+    await read();
+    await advance(OUTAGE_LASTING_MS);
+    const said = announced();
+    expect(said).toBe("Can't refresh this chat. New messages may not show yet. We'll keep trying.");
+    await typeInto(field, "Check the gate");
+    expect(notice()!.textContent).toContain("Your draft is kept.");
+    expect(announced()).toBe(said);
+    await typeInto(field, "");
+    expect(announced()).toBe(said);
+  });
+
+  it("says the draft is kept in the announcement when the loss finds one in the message box", async () => {
+    await opened();
+    await typeInto(container.querySelector("textarea")!, "Check the gate");
+    failure = blip();
+    await read();
+    await advance(OUTAGE_LASTING_MS);
+    expect(announced()).toBe(
+      "Can't refresh this chat. New messages may not show yet. Your draft is kept. We'll keep trying.",
+    );
+  });
+
+  // Going offline is waited out like any loss. Until it shows, nothing on screen may say it either.
+  it("keeps saying what the assistant is doing while going offline is still inside its grace period", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "run-1" } };
+    await opened();
+    const activity = () => container.querySelector(".conversation-activity")?.textContent;
+    expect(activity()).toContain("Shared is working...");
+    Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });
+    await act(async () => window.dispatchEvent(new Event("offline")));
+    await advance(OUTAGE_GRACE_MS - 1);
+    expect(activity()).toContain("Shared is working...");
+    await advance(1);
+    expect(says()).toBe("You're offline");
+    expect(activity()).toBeUndefined();
+  });
+
+  // A chat that was never read is not known to be empty, so it must not offer to start one.
+  it("says a chat that never loaded has not loaded, instead of calling it empty", async () => {
+    failure = blip();
+    await mount.render(createElement(App));
+    await advance(OUTAGE_GRACE_MS - 1);
+    expect(container.querySelector(".transcript")!.textContent).toBe("Opening your conversation…");
+    await advance(1);
+    expect(container.querySelector(".transcript h2")?.textContent).toBe(
+      "This conversation hasn't loaded yet",
+    );
+    expect(container.textContent).not.toContain("Start with Shared's role");
+    failure = undefined;
+    await advance(READ_RETRY_MS[2]);
+    expect(container.querySelector(".transcript [data-message-id]")).not.toBeNull();
+  });
 
   it("refuses a send and a stop during the grace period, says why, and allows them once a read succeeds", async () => {
     conversation = { ...conversation, activity: { state: "working", runId: "run-1" } };
@@ -340,32 +791,52 @@ describe("a failed conversation read", () => {
     await typeInto(field, "Check the gate");
     await submitWithKeyboard(field);
     expect(status().textContent).toBe(NOT_SENT_CHECKING);
-    await read();
+    await advance(OUTAGE_GRACE_MS);
     expect(shown()).toBe(true);
     // One notice explains it: the status line clears, and a refused send adds nothing to it.
     expect(status().textContent).toBe("");
     await submitWithKeyboard(field);
     expect(status().textContent).toBe("");
-    expect(sendButton().title).toBe(WAITING_FOR_CONNECTION);
     expect(sends()).toEqual([]);
+    // Send reassures about the draft only while there is one.
+    expect(sendButton().title).toBe(WAITING_WITH_DRAFT);
+    await typeInto(field, "  ");
+    expect(sendButton().title).toBe(WAITING_FOR_CONNECTION);
+  });
+
+  // The notice says a draft is kept only when the message box holds one.
+  it("mentions the draft in the notice only while there is one", async () => {
+    await opened();
+    const field = container.querySelector("textarea")!;
+    failure = blip();
+    await read();
+    await advance(OUTAGE_LASTING_MS);
+    expect(notice()!.textContent).not.toContain("draft");
+    await typeInto(field, "Check the gate");
+    expect(notice()!.querySelector("p")!.textContent).toBe(
+      "New messages may not show yet. Your draft is kept. We'll keep trying.",
+    );
+    await typeInto(field, "");
+    expect(notice()!.textContent).not.toContain("draft");
   });
 
   it.each([
-    ["one failure, still in its grace period", 1],
-    ["two failures in a row, shown as disconnected", 2],
+    ["still in its grace period", false],
+    ["already shown as disconnected", true],
   ])(
     "stops counting a failure once its chat is gone, so the empty state offers setup: %s",
-    async (_name, failures) => {
+    async (_name, alreadyShown) => {
       await opened();
       failure = blip();
-      for (let n = 0; n < failures; n++) await read();
-      expect(shown()).toBe(failures > 1);
+      await read();
+      if (alreadyShown) await advance(OUTAGE_GRACE_MS);
+      expect(shown()).toBe(alreadyShown);
       // The household refresh removes the last assistant while the chat's read is still failing.
       boot = { ...boot, bots: [] };
       await rosterChanged();
       expect(container.querySelector("[data-message-id]")).toBeNull();
       // Long past the grace period, and the failure belonged to a chat that no longer exists.
-      await advance(DISCONNECT_GRACE_MS * 2);
+      await advance(OUTAGE_GRACE_MS * 2);
       expect(shown()).toBe(false);
       // The transcript's own button; the home list has one too.
       const create = [...container.querySelectorAll(".transcript button")].find(
@@ -458,7 +929,7 @@ describe("a failed conversation read", () => {
     expect(quietRendered()).toBe(false);
     expect(lastSeen()).not.toContain("Last seen running");
     // The connection is down: the running tool says so, and no reply parses again.
-    await read();
+    await advance(OUTAGE_GRACE_MS);
     expect(shown()).toBe(true);
     expect(lastSeen()).toContain("Last seen running");
     expect(parsedSince()).toEqual([]);

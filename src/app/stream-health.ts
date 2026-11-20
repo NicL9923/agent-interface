@@ -77,6 +77,16 @@ export function useStreamsDown(names: readonly string[], afterMs: number) {
   return since !== undefined && Date.now() - since >= afterMs;
 }
 
+/**
+ * True while every one of `names` is open and has heard from the server since it last connected or
+ * failed. A stream that is closed, as on a hidden page or an offline device, is not up: nothing says
+ * live updates are back until the streams themselves do.
+ */
+export function useStreamsUp(names: readonly string[]) {
+  useSyncExternalStore(subscribe, () => version);
+  return names.every(streamUp);
+}
+
 /** Forgets every stream, as a test's fresh page would. */
 export function resetStreamHealth() {
   streams.clear();

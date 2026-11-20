@@ -1,0 +1,10 @@
+== src/app/Composer.tsx
+2 of 2 mutations caught
+== src/app/Conversation.tsx
+1 of 1 mutations caught
+== src/app/Sidebar.tsx
+1 of 1 mutations caught
+== src/components/Avatar.tsx
+1 of 1 mutations caught
+== src/client-api.ts
+1 of 1 mutations caught

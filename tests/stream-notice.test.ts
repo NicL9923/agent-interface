@@ -6,6 +6,7 @@ import {
   resetStreamHealth,
   streamUp,
   useStreamsDown,
+  useStreamsUp,
 } from "../src/app/stream-health";
 import { mountRoot } from "./ui-harness";
 
@@ -28,6 +29,34 @@ const advance = (ms: number) =>
     await vi.advanceTimersByTimeAsync(ms);
   });
 const report = (name: string, up: boolean | undefined) => act(async () => reportStream(name, up));
+
+// Live updates are back only when the streams say so. One that is closed says nothing.
+describe("streams up", () => {
+  let up: boolean[];
+  function UpProbe({ names }: { names: string[] }) {
+    up.push(useStreamsUp(names));
+    return null;
+  }
+  beforeEach(() => {
+    up = [];
+  });
+
+  it("is true only while every named stream has heard from the server, and not for one that is closed", async () => {
+    const { render } = mountRoot();
+    await render(createElement(UpProbe, { names: ["household", "chat:shared"] }));
+    expect(up.at(-1)).toBe(false);
+    await report("household", true);
+    expect(up.at(-1)).toBe(false);
+    await report("chat:shared", true);
+    expect(up.at(-1)).toBe(true);
+    await report("chat:shared", false);
+    expect(up.at(-1)).toBe(false);
+    await report("chat:shared", true);
+    // Closed, as when the page hides: not down, and not up either.
+    await report("household", undefined);
+    expect(up.at(-1)).toBe(false);
+  });
+});
 
 describe("streams down", () => {
   it("turns true 20 seconds into an outage, not a moment sooner, and false as soon as the stream hears anything", async () => {

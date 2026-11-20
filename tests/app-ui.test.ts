@@ -12,7 +12,8 @@ import { FakeEventSource } from "./fake-event-source";
 import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
 import { authEpochKey } from "../src/app/storage";
-import { DISCONNECT_GRACE_MS } from "../src/app/use-conversation";
+import { OUTAGE_GRACE_MS } from "../src/app/outage";
+import { READ_RETRY_MS } from "../src/app/use-conversation";
 import {
   advance,
   mountRoot,
@@ -641,7 +642,7 @@ describe("conversation state", () => {
         await advance(5000);
         expect(reads()).toBe(before + 20);
       });
-      it("keeps a turn whose read failed for the next read, without reading again for it", async () => {
+      it("keeps a turn whose read failed for the next read, which the failed read's own retry asks once", async () => {
         conversation = bootA();
         await render();
         failNextRead();
@@ -650,16 +651,19 @@ describe("conversation state", () => {
         await advance(0);
         // Another turn from that boot shares the read already asked.
         await act(async () => open().emit("turn", turn("z:1:3", [prompt, saved], "Found it")));
-        await advance(5000);
+        await advance(READ_RETRY_MS[0] - 1);
         expect(reads()).toBe(before + 1);
         expect(container.textContent).not.toContain("Found");
         expect(container.textContent).toContain("barn. Fou");
-        // The next read, from the turn's boot and older than it, takes the turn on top.
+        // The retry's read, from the turn's boot and older than it, takes the turn on top.
         conversation = at("z:1:1", "Looking in the");
-        await changed();
+        await advance(1);
         expect(reads()).toBe(before + 2);
         expect(count("Looking in the barn.")).toBe(1);
         expect(container.textContent).toContain("Found it");
+        // A read that succeeded asks for no other.
+        await advance(5000);
+        expect(reads()).toBe(before + 2);
       });
       /** Holds every conversation read from now on; each call answers the oldest one still held. */
       function holdReads() {
@@ -1295,18 +1299,16 @@ describe("conversation state", () => {
     });
     await changed();
     // One failed read that may be a blip shows once no read has succeeded for the grace period.
-    await advance(DISCONNECT_GRACE_MS);
-    expect(
-      avatarOf(container.querySelector(".conversation-activity")!, 52)?.getAttribute("data-state"),
-    ).toBe("disconnected");
-    expect(
-      avatarOf(container.querySelector(".conversation-activity")!, 52)?.querySelector(
-        ".avatar-prop",
-      ),
-    ).toBeNull();
-    expect(container.querySelector(".activity-copy")?.textContent).not.toContain(
-      "Shared is running terminal...",
+    await advance(OUTAGE_GRACE_MS);
+    // The row says what the assistant is doing, so a lost connection takes it away and the notice
+    // above the composer says the rest. The assistant's own avatar only quiets.
+    expect(container.querySelector(".conversation-activity")).toBeNull();
+    expect(container.textContent).not.toContain("Shared is running terminal...");
+    expect(container.textContent).not.toContain("Shared is reconnecting");
+    expect(container.querySelector(".chat-header .avatar-wrap")?.getAttribute("data-state")).toBe(
+      "disconnected",
     );
+    expect(container.querySelector(".chat-header .avatar-badge")).toBeNull();
   });
 
   it("names the run it shows when Stop is pressed, and names none when it shows none", async () => {
@@ -3516,7 +3518,7 @@ describe("conversation state", () => {
       ) as T;
     });
     await changed();
-    await advance(DISCONNECT_GRACE_MS);
+    await advance(OUTAGE_GRACE_MS);
     expect(
       container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent,
     ).toContain("Last seen running");

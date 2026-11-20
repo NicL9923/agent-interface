@@ -78,6 +78,21 @@ describe("client request recovery", () => {
     },
   );
 
+  // A read that never reached the app used to promise that a draft was kept, on screens with none.
+  it.each([
+    { method: undefined, draft: false },
+    { method: "POST", draft: true },
+  ])(
+    "mentions the draft only when a $method request that never reached the app was a write",
+    async ({ method, draft }) => {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+      await expect(api("/today", method ? { method, body: "{}" } : {})).rejects.toSatisfy(
+        (error: Error & { code?: string }) =>
+          error.code === "CONNECTION_UNAVAILABLE" && error.message.includes("draft") === draft,
+      );
+    },
+  );
+
   it("reads once more when an assistant turned private mid-read, and only once", async () => {
     const changed = {
       ok: false,

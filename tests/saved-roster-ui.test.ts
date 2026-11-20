@@ -637,7 +637,7 @@ describe("using the saved home before bootstrap answers", () => {
     await open();
     await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
     expect(railText()).toContain("Can't connect");
-    expect(announced()).toContain("Reconnecting to the app");
+    expect(announced()).toContain("Can't reach the app");
     expect(mainLandmark()?.textContent).toContain("Can't reach the app right now");
     await act(async () => button("Try again").click());
     await answer("GET /bootstrap?roster=lean", 200, one);

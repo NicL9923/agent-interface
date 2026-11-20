@@ -1854,13 +1854,29 @@
     max-height: 38dvh;
     overflow: auto;
   }
+  /* One line while the loss may still end on its own: an icon, what is happening and, once it lasts, a retry. */
+  .connection-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .connection-line > .icon {
+    flex-shrink: 0;
+    color: var(--muted);
+  }
+  .connection-line > .connection-copy {
+    flex: 1;
+    min-width: 0;
+  }
   .connection-panel.compact h2 {
-    font-size: 0.875rem;
-    margin-bottom: 5px;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    margin: 0;
   }
   .connection-panel.compact p {
     font-size: 0.75rem;
-    margin-bottom: 9px;
+    line-height: 1.45;
+    margin: 1px 0 0;
   }
   .connection-actions {
     display: flex;
@@ -1868,12 +1884,19 @@
     gap: 10px;
     margin: 18px 0 12px;
   }
-  .connection-panel.compact .connection-actions {
-    margin: 8px 0;
-  }
   .connection-panel.compact button {
-    padding: 7px 11px;
+    flex-shrink: 0;
+    padding: 6px 12px;
     font-size: 0.75rem;
+  }
+  .connection-panel.compact .connection-help {
+    margin: 4px 0 0 27px;
+  }
+  .connection-panel.compact .connection-help summary {
+    padding: 4px 0;
+  }
+  .connection-panel.compact .connection-help p {
+    margin: 6px 0;
   }
   .connection-help {
     color: var(--muted);

@@ -125,6 +125,21 @@ The [cancelled login-save review](evidence/native-vault-add-cancel-phone-review.
 shows a fixture that saves before losing its response: the form clears and blocks
 another Save, then dismissal refreshes metadata to reveal the stored login.
 
+## Not yet matched
+
+The web's connection states changed on November 19 and the native app still has the earlier ones.
+The record is [the November 19 ledger entry](../docs/ledger/20261120T040000Z-connection-states.md).
+
+- The web waits 3 seconds before it shows a lost connection and says one line, "Reconnecting…", for
+  the first 10. Native shows the connection card at once, with its reason, Reconnect now and details.
+- The web mentions a draft only when the message box holds one. `ConnectionCopy.compact` in
+  `ConversationView.swift` always says the draft is kept.
+- On the web a chat whose own reads fail shows the loss in that chat alone. Native sets
+  `appUnavailable` on any failed conversation read (`AppStore+Conversation.swift`), so one failed read
+  shows "Reconnecting to the app" and marks every assistant disconnected.
+- The web no longer puts a badge on a disconnected avatar. Native still draws the question mark
+  (`AvatarView.swift`, `badgeSymbol`).
+
 ## Native platform choices
 
 Device permission and Live Activities belong to iOS Settings; the in-app switch
