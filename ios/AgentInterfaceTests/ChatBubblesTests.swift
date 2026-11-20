@@ -119,12 +119,13 @@ final class ChatBubblesTests: XCTestCase {
     }
   }
   /// The cap lowers only lightness: the hue survives, and a color already dark enough stays as it is.
+  /// The cap is 0.52 on the web too, so both clients draw the same fill; 0.003 allows for 8-bit rounding.
   func testSolidFillKeepsTheHueAndLeavesDarkColorsAlone() throws {
     XCTAssertEqual(SolidBubble.fill("#292929"), "#292929")
     for color in ["#1084FE", "#FF6700", "#00BCA6", "#9159FE"] {
       let fill = try XCTUnwrap(SolidBubble.fill(color))
       XCTAssertEqual(Self.hue(fill), Self.hue(color), accuracy: 4, "\(color) became \(fill)")
-      XCTAssertLessThanOrEqual(Self.lightness(fill), SolidBubble.lightnessCap + 0.005, "\(color) became \(fill)")
+      XCTAssertEqual(Self.lightness(fill), 0.52, accuracy: 0.003, "\(color) became \(fill)")
     }
   }
   func testOnlyADrawnAvatarTintsTheBubble() {
