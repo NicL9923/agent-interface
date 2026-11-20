@@ -191,9 +191,11 @@ struct PreferencesView: View {
           if let value, !saving && !saveFailed { preferences = value }
         }
         // Once every save is in, the controls show what the server kept, which a server from before a
-        // setting, or another device, may have answered differently.
+        // setting, or another device, may have answered differently. Only when nothing changed here since
+        // the last save went out: onChange runs on the next update, so an edit made as the queue finished
+        // has not been queued yet and must not be replaced.
         .onChange(of: saving) { _, now in
-          if !now && !saveFailed, let value = store.bootstrap?.preferences { preferences = value }
+          if !now && !saveFailed && preferences == store.preferencesLastSent, let value = store.bootstrap?.preferences { preferences = value }
         }
         .onChange(of: preferences) { _, value in
           if loaded && value != store.preferencesDraft && value != store.bootstrap?.preferences { enqueueSave() }

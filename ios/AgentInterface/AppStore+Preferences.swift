@@ -55,6 +55,7 @@ extension AppStore {
         // Taken now, so a choice changed again during this save goes out with the next one.
         let choices = queuedChoices
         queuedChoices = []
+        preferencesLastSent = next
         let saved = await setPreferences(next, choices: choices)
         guard currentGeneration == generation else { return }
         if !saved {
