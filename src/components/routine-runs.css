@@ -35,12 +35,10 @@
     text-align: left;
     cursor: pointer;
   }
-  .routine-run-summary:hover {
-    background: color-mix(in srgb, var(--rail) 55%, transparent);
-  }
-  /* The app's button hover, restated here: the base layer's rule loses to this layer. */
+  /* Faint enough that the light theme's attention color, for running and undelivered runs, keeps 4.5:1 on it.
+     The app's button hover and a 55% fill both took it under. Specific enough to beat that hover in either cascade. */
   .routine-run-summary:hover:enabled {
-    background: var(--accent-soft);
+    background: color-mix(in srgb, var(--rail) 30%, transparent);
   }
   .routine-run-summary:focus-visible {
     outline: 3px solid var(--accent);

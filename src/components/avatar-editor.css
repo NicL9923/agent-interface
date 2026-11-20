@@ -53,7 +53,9 @@
       min-height: 44px;
     }
   }
-  .avatar-stage-states button[aria-pressed="true"] {
+  /* The selected state keeps its fill on hover, in either cascade: the hover fill under its light text read 1.18:1. */
+  .avatar-stage-states button[aria-pressed="true"],
+  .avatar-stage-states button[aria-pressed="true"]:hover:enabled {
     background: var(--accent);
     border-color: var(--accent);
     color: var(--surface);
