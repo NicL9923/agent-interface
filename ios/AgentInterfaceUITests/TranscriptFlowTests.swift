@@ -389,7 +389,8 @@ import XCTest
 
   /// A reply that streams and is then saved, in Bubbles and in Classic, captured as fast as XCTest allows
   /// with the reply's position, so a flicker or jump when the saved copy replaces the streamed one shows.
-  /// Runs only when screenshots are written.
+  /// Each style must catch the reply at least once while it streams and once saved. Runs only when
+  /// screenshots are written.
   func testStreamedReplySettlesForReview() throws {
     try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
     let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"]!).appendingPathComponent("stream")
@@ -401,18 +402,22 @@ import XCTest
       let last = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "I'll remind you")).firstMatch
       let table = app.scrollViews.matching(NSPredicate(format: "label == %@", "Table"))
       // The saved copy's time, which the streamed one does not show.
-      let saved = app.staticTexts["Oct 1, 02:21"]
+      let saved = app.descendants(matching: .any)["messageTime-stream-saved"]
       let start = Date()
-      var log = "ms,saved,firstMinY,tableMinY,lastMinY\n", index = 0
+      var log = "ms,saved,firstMinY,tableMinY,lastMinY\n", index = 0, streaming = 0, settled = 0
       while Date().timeIntervalSince(start) < 14 {
         let shot = XCUIScreen.main.screenshot()
         let ms = Int(Date().timeIntervalSince(start) * 1000)
         let tables = table.allElementsBoundByIndex.map(\.frame.minY).max() ?? 0
-        log += "\(ms),\(saved.exists),\(reply.exists ? reply.frame.minY : -1),\(tables),\(last.exists ? last.frame.minY : -1)\n"
+        let isSaved = saved.exists, first = reply.exists ? reply.frame.minY : -1
+        if first >= 0 { if isSaved { settled += 1 } else { streaming += 1 } }
+        log += "\(ms),\(isSaved),\(first),\(tables),\(last.exists ? last.frame.minY : -1)\n"
         try shot.pngRepresentation.write(to: directory.appendingPathComponent(String(format: "%@-%03d-%05d.png", style, index, ms)))
         index += 1
       }
       try log.write(to: directory.appendingPathComponent("\(style).csv"), atomically: true, encoding: .utf8)
+      XCTAssertGreaterThan(streaming, 0, "\(style): no sample caught the reply while it streamed; saved samples: \(settled)")
+      XCTAssertGreaterThan(settled, 0, "\(style): no sample caught the saved reply; streaming samples: \(streaming)")
       app.terminate()
     }
   }
