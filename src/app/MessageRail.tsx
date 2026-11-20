@@ -87,65 +87,96 @@ export const MessageRail = memo(function MessageRail({
 
   // Where each entry's message sits in the scrolled content, measured all at once only when the
   // messages, the content's size or the view's size change. A scroll searches it; see activeTick.
-  const places = useRef<{ ids: string[]; list: RailPlace[] } | null>(null);
+  // `width` is the column's when it was measured: a narrower column rewraps every turn.
+  const places = useRef<{ ids: string[]; list: RailPlace[]; width: number } | null>(null);
+  // Set when a turn above the last sent message changed size, which can move messages above it and leave it in place.
+  const stale = useRef(false);
   const offsetOf = (view: HTMLElement, row: Element) =>
     row.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop;
   const rowOf = (view: HTMLElement, id: string) =>
     view.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
-  const locate = (view: HTMLElement) => {
+  const locate = (view: HTMLElement, width: number) => {
     const index = new Map(ids.current.map((id, at) => [id, at]));
     const list: RailPlace[] = [];
     for (const row of view.querySelectorAll<HTMLElement>("[data-message-id]")) {
       const at = index.get(row.dataset.messageId!);
       if (at !== undefined) list.push({ index: at, offset: offsetOf(view, row) });
     }
-    places.current = { ids: ids.current, list: list.sort((a, b) => a.offset - b.offset) };
+    places.current = { ids: ids.current, list: list.sort((a, b) => a.offset - b.offset), width };
+    stale.current = false;
   };
-  // Growth below the last sent message, such as a streaming reply, moves no tick's message; anything
-  // above it moves that last one too. So one measurement tells whether the cache still holds.
-  const revalidate = (view: HTMLElement) => {
+  const lastRow = (view: HTMLElement) => {
     const cached = places.current;
     const last = cached?.list.at(-1);
-    const row = cached && last ? rowOf(view, cached.ids[last.index]!) : null;
-    if (
-      !cached ||
-      cached.ids !== ids.current ||
-      !last ||
-      !row ||
-      Math.abs(offsetOf(view, row) - last.offset) > 0.5
-    )
-      locate(view);
+    return cached && last ? rowOf(view, cached.ids[last.index]!) : null;
+  };
+  // Growth below the last sent message, such as a streaming reply, moves no tick's message. A turn above
+  // it that changed size, or a new column width, can move messages above it and leave it in place, so
+  // those measure all. Anything else that moved messages moved the last one too, so with `check` one
+  // measurement of it tells whether the cache still holds.
+  const revalidate = (view: HTMLElement, width: number, check: boolean) => {
+    const cached = places.current;
+    const last = cached?.list.at(-1);
+    if (!cached || cached.ids !== ids.current || !last || stale.current || cached.width !== width)
+      return locate(view, width);
+    if (!check) return;
+    const row = lastRow(view);
+    if (!row || Math.abs(offsetOf(view, row) - last.offset) > 0.5) locate(view, width);
   };
   const readActive = useRef(() => {});
   readActive.current = () => {
     const view = scroll.current;
     if (!view) return;
-    if (!places.current || places.current.ids !== ids.current) locate(view);
+    if (!places.current || places.current.ids !== ids.current)
+      locate(view, view.firstElementChild?.getBoundingClientRect().width ?? 0);
     const at = activeTick(places.current!.list, view.scrollTop, view.clientHeight, atTrueEnd(view));
     setActiveId(ids.current[at]);
   };
-  const measure = useRef(() => {});
-  measure.current = () => {
+  /** `check`: whether something may have moved the last sent message, so it is measured again. */
+  const measure = useRef((_check?: boolean) => {});
+  measure.current = (check = true) => {
     const view = scroll.current;
     const column = view?.firstElementChild;
     if (!view || !column)
       return setLayout((previous) => (sameLayout(previous, hidden) ? previous : hidden));
     const scrollbar = Math.max(0, view.offsetWidth - view.clientWidth);
+    const box = column.getBoundingClientRect();
     const next: Layout = {
       canHover: canHoverNow(),
-      gutter: view.getBoundingClientRect().right - scrollbar - column.getBoundingClientRect().right,
+      gutter: view.getBoundingClientRect().right - scrollbar - box.right,
       overflows: view.scrollHeight > view.clientHeight + 1,
       height: view.clientHeight - RAIL_INSET * 2,
       scrollbar,
     };
     setLayout((previous) => (sameLayout(previous, next) ? previous : next));
     if (!railShown({ ...next, count: ids.current.length })) return;
-    revalidate(view);
+    revalidate(view, box.width, check);
     readActive.current();
+  };
+  // Each turn in the column is watched for size changes; see `resized` below. Turns come and go with the
+  // messages and run cards, so the watched set follows the column's children without reading any layout.
+  const turnObserver = useRef<ResizeObserver>(undefined);
+  const watched = useRef(new Set<Element>());
+  const observeTurns = useRef(() => {});
+  observeTurns.current = () => {
+    const observer = turnObserver.current;
+    const column = scroll.current?.firstElementChild;
+    if (!observer || !column) return;
+    for (const turn of watched.current)
+      if (turn.parentElement !== column) {
+        observer.unobserve(turn);
+        watched.current.delete(turn);
+      }
+    for (const turn of column.children)
+      if (!watched.current.has(turn)) {
+        observer.observe(turn);
+        watched.current.add(turn);
+      }
   };
   // New messages, or an earlier page, change what overflows. Whether they moved any sent message is
   // revalidate's to tell: new IDs measure all, and anything else checks the last sent message alone.
   useLayoutEffect(() => {
+    observeTurns.current();
     measure.current();
   }, [entries]);
   useEffect(() => {
@@ -164,15 +195,44 @@ export const MessageRail = memo(function MessageRail({
     const media = typeof matchMedia === "function" ? matchMedia(HOVER_QUERY) : undefined;
     const changed = () => measure.current();
     media?.addEventListener?.("change", changed);
+    // The view, the column and each turn in it. A turn that ends above the last sent message makes the
+    // positions stale. The last turn, where a reply streams, and the column growing with it, do not:
+    // the render that grew them already checked the last sent message.
+    const resized = (entries: ResizeObserverEntry[] | undefined) => {
+      const last = lastRow(view);
+      let check = !entries || !last;
+      for (const { target } of entries ?? []) {
+        if (target === view) check = true;
+        // The column and the last turn hold the last sent message, so they pass here.
+        else if (
+          last &&
+          !target.contains(last) &&
+          target.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING
+        )
+          stale.current = true;
+      }
+      measure.current(check);
+    };
     const observer =
-      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(changed);
+      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(resized);
     observer?.observe(view);
     if (view.firstElementChild) observer?.observe(view.firstElementChild);
+    turnObserver.current = observer;
+    observeTurns.current();
+    // A run card can join the column without a message changing.
+    const joined =
+      typeof MutationObserver === "undefined"
+        ? undefined
+        : new MutationObserver(() => observeTurns.current());
+    if (view.firstElementChild) joined?.observe(view.firstElementChild, { childList: true });
     return () => {
       cancelAnimationFrame(frame);
       view.removeEventListener("scroll", scrolled);
       media?.removeEventListener?.("change", changed);
       observer?.disconnect();
+      joined?.disconnect();
+      turnObserver.current = undefined;
+      watched.current.clear();
     };
   }, [scroll]);
   const asked = hoverId ?? (focus?.visible ? focus.id : undefined);

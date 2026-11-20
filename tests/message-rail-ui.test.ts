@@ -181,9 +181,22 @@ describe("a chat with more sent messages than ticks fit", () => {
   const count = 64;
   // An image above every message can load late and push them all down.
   let shift = 0;
-  const top = (index: number) => 100 + index * 200 + shift;
+  // A reflow can move messages in the middle of the chat and leave the last one where it was.
+  let moved: (index: number) => number = () => 0;
+  let column = 900;
+  const top = (index: number) => 100 + index * 200 + shift + moved(index);
   let rowReads = 0;
-  let resized: (() => void)[] = [];
+  let resized: ((entries?: { target: Element }[]) => void)[] = [];
+  let observed = new Set<Element>();
+  /** What a browser reports: a size change of each element given that the rail observes. */
+  const resize = (...targets: Element[]) =>
+    act(async () =>
+      resized.forEach((callback) =>
+        callback(targets.filter((target) => observed.has(target)).map((target) => ({ target }))),
+      ),
+    );
+  const turnOf = (id: string) =>
+    container.querySelector(`[data-message-id="${id}"]`)!.closest(".conversation-turn")!;
   function longLayout() {
     vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(top(count) + 400);
     vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(608);
@@ -196,7 +209,7 @@ describe("a chat with more sent messages than ticks fit", () => {
       if (match && new Error().stack?.includes("MessageRail")) rowReads++;
       const offset = match ? top(Number(match[1] ?? match[2])) + (match[2] ? 100 : 0) : undefined;
       const y = offset === undefined ? 0 : offset - (this.closest(".transcript")?.scrollTop ?? 0);
-      const right = this.classList.contains("transcript-content") ? 900 : 1200;
+      const right = this.classList.contains("transcript-content") ? column : 1200;
       return {
         top: y,
         bottom: y + 60,
@@ -229,15 +242,25 @@ describe("a chat with more sent messages than ticks fit", () => {
   beforeEach(async () => {
     rowReads = 0;
     shift = 0;
+    moved = () => 0;
+    column = 900;
     resized = [];
+    observed = new Set();
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        constructor(callback: () => void) {
+        constructor(callback: (entries?: { target: Element }[]) => void) {
           resized.push(callback);
         }
-        observe() {}
-        disconnect() {}
+        observe(target: Element) {
+          observed.add(target);
+        }
+        unobserve(target: Element) {
+          observed.delete(target);
+        }
+        disconnect() {
+          observed.clear();
+        }
       },
     );
     conversation = {
@@ -342,6 +365,8 @@ describe("a chat with more sent messages than ticks fit", () => {
     await act(async () => stream.emit("inflight", live("Counting the herd")));
     await advance(400);
     expect(reply()).toBe("Counting the herd");
+    // The growing reply resizes the last turn and the column, as a browser reports it.
+    await resize(turnOf("s1-inflight"), transcript().firstElementChild!);
     // The reported case read all 64 sent messages. Checking the last one tells that none of them moved.
     expect(rowReads).toBeLessThanOrEqual(1);
     expect(current()).toBe("Jump to: Question 64");
@@ -379,6 +404,27 @@ describe("a chat with more sent messages than ticks fit", () => {
     expect(container.querySelector('[data-message-id="q64"]')).not.toBeNull();
     expect(names()).toHaveLength(20);
     expect(current()).toBe("Jump to: Question 65");
+  });
+
+  // The reviewer's case: a turn above the last sent message shrinks and a later one grows by as much, so the last
+  // sent message stays where it was while those between them move up across the reading line.
+  it("marks the turn the reading line meets after turns above the last sent message reflow", async () => {
+    await scrollTo(5800);
+    expect(current()).toBe("Jump to: Question 30");
+    // Question 31 moves from 6100 up to 5950, above the line at 6002; Question 41 on stays put.
+    moved = (index) => (index >= 30 && index < 40 ? -150 : 0);
+    await resize(turnOf("a29"), turnOf("a39"));
+    expect(current()).toBe("Jump to: Question 31");
+  });
+
+  it("measures again when the column's width changes", async () => {
+    await scrollTo(5800);
+    expect(current()).toBe("Jump to: Question 30");
+    // A narrower column wraps text above Question 31 and shrinks an image below it.
+    moved = (index) => (index >= 30 && index < 40 ? -150 : 0);
+    column = 700;
+    await resize(transcript().firstElementChild!);
+    expect(current()).toBe("Jump to: Question 31");
   });
 
   it("measures again once something above the messages changes size", async () => {
