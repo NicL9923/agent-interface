@@ -159,6 +159,9 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
   let discoveryFull = false;
   let discoveryGeneration = 0;
   let botCache: Bot[] = [];
+  // Which roster read, by the order reads began, last filled `botCache`.
+  let rosterReads = 0,
+    cachedRead = 0;
   const live = new Map<string, string>();
   const owners = new Map<string, string>();
   // Assistants with an open in flight, counted, for frames that arrive before its session is known.
@@ -1302,17 +1305,21 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
         return rosterReuse.bots.slice();
       if (rosterRequest) return rosterRequest;
       let request!: Promise<Bot[]>;
+      const read = ++rosterReads;
       request = (async () => {
         try {
           const roster = await rpc("profiles.list", { include_sessions: true }, false);
           const names = new Set(roster.profiles.map((row: Wire) => row.name));
           for (const name of descriptions.keys()) if (!names.has(name)) descriptions.delete(name);
           const bots = await named(roster.profiles.map((row: Wire) => toBot(row)));
-          // A change reported meanwhile cleared rosterRequest, so this read is not reused.
-          if (rosterRequest === request) {
+          // A change reported meanwhile cleared rosterRequest, so this read is not reused. It is still
+          // newer than the roster an outage would list, unless a read that began after it has
+          // answered: what Hermes last said is the best guess while it cannot be asked.
+          if (read > cachedRead) {
             botCache = bots;
-            rosterReuse = { at: Date.now(), bots };
+            cachedRead = read;
           }
+          if (rosterRequest === request) rosterReuse = { at: Date.now(), bots };
           return bots;
         } catch {
           return botCache.map((row) => ({ ...row, activity: "disconnected" as const }));

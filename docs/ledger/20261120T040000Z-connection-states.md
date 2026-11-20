@@ -292,6 +292,15 @@ The native findings and their fixes are in the iOS section below.
 
 The seventh round, which reviewed the native fixes, reviewed this fix and found nothing in it.
 
+### Eighth round, of the native fixes: one server cause
+
+The eighth round found that a roster Hermes answered while a native change was reported never reached
+`botCache`, so an outage listed the roster from before it. A client then treats an assistant added in
+between as removed. `listBots` now keeps the answer of the latest read to begin, whether or not a
+change made it unfit for reuse. `tests/hermes-adapter.test.ts` replays one such read and two that answer
+out of order; both mutants in `mutants/roster-cache.py` are caught. The native side of that finding,
+and the rest of the round, are in the iOS section.
+
 ## Checks
 
 On the fingerprint above, `.agents/tools/check-all --keep-going` under `linux-heavy-lock.sh`, and
