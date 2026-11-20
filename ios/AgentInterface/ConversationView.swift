@@ -817,7 +817,11 @@ struct MessageView: View {
   @Environment(\.sentAnchor) private var sentAnchor
   @Environment(\.chatBubbles) private var chatBubbles
   @Environment(\.ownBubbleFill) private var ownBubbleFill
-  private var bubble: Bool { message.role == "user" && !message.isAgentExchange }
+  /// Only words a person sent sit in the person's bubble. A scheduled delivery reads flat at the full
+  /// width, labeled at the leading edge, as on the web.
+  private var bubble: Bool { message.role == "user" && !message.isAgentExchange && !scheduled }
+  /// The solid fill, which applies only to the signed-in person's own words, never another member's.
+  private var solidFill: Color? { bubble && own && label.isEmpty ? ownBubbleFill : nil }
   private var scheduled: Bool { message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity }
   /// The person's own words, which sit on the right with their time beneath.
   private var own: Bool { message.role == "user" && !scheduled && !message.isInternalActivity }
@@ -834,8 +838,7 @@ struct MessageView: View {
           Text(label).font(.caption.weight(.semibold)).foregroundStyle(Palette.messageMetadata)
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        // Solid applies only to the signed-in person's own words, never another member's.
-        PersonBubble(solid: own && label.isEmpty ? ownBubbleFill : nil, found: foundMessage == message.id) {
+        PersonBubble(solid: solidFill, found: foundMessage == message.id) {
           VStack(alignment: .leading, spacing: 10) { content }.padding(.vertical, 10).padding(.horizontal, 14)
         }
       } else {
@@ -857,7 +860,7 @@ struct MessageView: View {
             && !message.text.isEmpty)
       }
     }
-      .modifier(SendingMessage(delivery: delivery))
+      .modifier(SendingMessage(delivery: delivery, solid: solidFill != nil))
       .background {
         if sentAnchor == message.id {
           GeometryReader { Color.clear.preference(key: SentAnchorTop.self, value: $0.frame(in: .named(SentAnchorTop.space)).minY) }
@@ -910,17 +913,18 @@ private struct ProgressLineStyle: ViewModifier {
 /// A sent message rises into the transcript at once, faint until Hermes accepts it, as on the web.
 private struct SendingMessage: ViewModifier {
   var delivery: SentEcho.Status?
+  var solid: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   /// False only for the first frame of a message that appears on its way.
   @State private var risen: Bool
-  init(delivery: SentEcho.Status?) {
-    self.delivery = delivery
+  init(delivery: SentEcho.Status?, solid: Bool) {
+    self.delivery = delivery; self.solid = solid
     _risen = State(initialValue: delivery == nil)
   }
   func body(content: Content) -> some View {
     let rising = delivery != nil && !risen && !reduceMotion
     content
-      .opacity(rising ? 0 : delivery == .sending ? 0.66 : 1)
+      .opacity(rising ? 0 : delivery == .sending ? PersonBubbles.sendingOpacity(solid: solid) : 1)
       .scaleEffect(rising ? 0.96 : 1, anchor: .bottomTrailing)
       .offset(y: rising ? 14 : 0)
       .animation(.easeInOut(duration: 0.24), value: delivery)

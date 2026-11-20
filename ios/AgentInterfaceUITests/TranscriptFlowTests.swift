@@ -319,6 +319,69 @@ import XCTest
     XCTAssertTrue(style.label.contains("Classic") || (style.value as? String) == "Classic", "The saved choice comes back: \(style.label)")
   }
 
+  /// A scheduled delivery reads as flat Markdown at the full column width, labeled at the leading edge, as on
+  /// the web. Only words a person sent sit in the person's bubble at the trailing edge.
+  func testAScheduledDeliveryStaysOutOfThePersonsBubble() throws {
+    let app = launch(["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1"])
+    let tables = app.scrollViews.matching(NSPredicate(format: "label == %@", "Table"))
+    XCTAssertTrue(waitFor { tables.count == 2 }, app.debugDescription)
+    let ordered = tables.allElementsBoundByIndex.sorted { $0.frame.minY < $1.frame.minY }
+    let delivery = ordered[0].frame, reply = ordered[1].frame
+    XCTAssertEqual(delivery.minX, reply.minX, accuracy: 2, "The delivery starts at the column edge, as a reply's table does")
+    XCTAssertGreaterThanOrEqual(delivery.width, reply.width - 2, "The delivery's table gets the full column: \(delivery.width) vs \(reply.width)")
+    let label = app.staticTexts["Scheduled"]
+    XCTAssertTrue(label.exists)
+    XCTAssertLessThan(label.frame.minX, app.frame.midX, "Its label sits at the leading edge: \(label.frame)")
+    let ask = app.staticTexts["Which one first?"]
+    XCTAssertGreaterThan(ask.frame.minX, app.frame.midX, "A person's words keep their bubble at the trailing edge: \(ask.frame)")
+  }
+
+  /// A server from before chat styles saves the rest of Settings and answers without the choice. Settings says
+  /// why the choice did not stick and shows what the server holds.
+  func testAServerWithoutChatStylesExplainsWhyTheChoiceDidNotSave() throws {
+    let app = launch(["AGENT_INTERFACE_UI_PROGRESS": "1", "AGENT_INTERFACE_UI_OLD_PREFERENCES": "1"])
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "It will be")).firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    let style = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Chat style")).firstMatch
+    for _ in 0..<6 where !style.canTap { app.swipeUp() }
+    style.tapWhenReady()
+    app.buttons["Classic"].tapWhenReady()
+    let notice = app.staticTexts["This server cannot save that setting yet. Update WildBots on the server to use it."]
+    XCTAssertTrue(notice.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(waitFor { style.label.contains("Bubbles") || (style.value as? String) == "Bubbles" }, "The control shows what the server holds: \(style.debugDescription)")
+  }
+
+  /// A reply that streams and is then saved, in Bubbles and in Classic, captured as fast as XCTest allows
+  /// with the reply's position, so a flicker or jump when the saved copy replaces the streamed one shows.
+  /// Runs only when screenshots are written.
+  func testStreamedReplySettlesForReview() throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"]!).appendingPathComponent("stream")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    for style in ["bubbles", "classic"] {
+      let app = launch(["AGENT_INTERFACE_UI_STREAM_SETTLE": "1", "AGENT_INTERFACE_UI_CHAT_STYLE": style, "AGENT_INTERFACE_UI_THEME": "light"])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Checking the gates")).firstMatch
+      let last = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "I'll remind you")).firstMatch
+      let table = app.scrollViews.matching(NSPredicate(format: "label == %@", "Table"))
+      // The saved copy's time, which the streamed one does not show.
+      let saved = app.staticTexts["Oct 1, 02:21"]
+      let start = Date()
+      var log = "ms,saved,firstMinY,tableMinY,lastMinY\n", index = 0
+      while Date().timeIntervalSince(start) < 14 {
+        let shot = XCUIScreen.main.screenshot()
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        let tables = table.allElementsBoundByIndex.map(\.frame.minY).max() ?? 0
+        log += "\(ms),\(saved.exists),\(reply.exists ? reply.frame.minY : -1),\(tables),\(last.exists ? last.frame.minY : -1)\n"
+        try shot.pngRepresentation.write(to: directory.appendingPathComponent(String(format: "%@-%03d-%05d.png", style, index, ms)))
+        index += 1
+      }
+      try log.write(to: directory.appendingPathComponent("\(style).csv"), atomically: true, encoding: .utf8)
+      app.terminate()
+    }
+  }
+
   /// The chat styles for visual review: Bubbles and Classic, tinted and solid own messages, light and
   /// dark, and one at an accessibility text size. Runs only when screenshots are written.
   func testChatBubbleScreens() throws {
@@ -353,6 +416,24 @@ import XCTest
         try shoot("nested-code-\(style)-\(theme)", ["AGENT_INTERFACE_UI_NESTED_CODE": "1", "AGENT_INTERFACE_UI_THEME": theme,
           "AGENT_INTERFACE_UI_CHAT_STYLE": style], ready: "Copy code")
       }
+    }
+    // Review fixes: a quote in a bubble with a table after it, a scheduled delivery holding a table, and solid
+    // bubbles with Increase Contrast on and while a message is on its way.
+    for theme in ["light", "dark"] {
+      try shoot("review-solid-\(theme)", ["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1", "AGENT_INTERFACE_UI_THEME": theme,
+        "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid"], ready: "Which one first?")
+      try shoot("review-contrast-\(theme)", ["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1", "AGENT_INTERFACE_UI_THEME": theme,
+        "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid", "AGENT_INTERFACE_UI_INCREASE_CONTRAST": "1"], ready: "Which one first?")
+      let app = launch(["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1", "AGENT_INTERFACE_UI_THEME": theme, "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid",
+        "AGENT_INTERFACE_UI_SEND_HOLD": "1"])
+      let composer = app.textViews["messageComposer"]
+      XCTAssertTrue(composer.waitForExistence(timeout: 15))
+      composer.tapWhenReady()
+      composer.typeText("Thanks, heading out now.")
+      app.buttons["sendMessage"].tapWhenReady()
+      XCTAssertTrue(app.staticTexts["Thanks, heading out now."].waitForExistence(timeout: 5))
+      try capture(app, "iphone-review-sending-\(theme)")
+      app.terminate()
     }
     try shoot("progress-bubbles-accessibility-xl", ["AGENT_INTERFACE_UI_PROGRESS": "1"],
       arguments: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])

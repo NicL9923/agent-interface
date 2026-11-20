@@ -43,6 +43,11 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     private var notModifiedCount = 0
     /// Per assistant, once `versionDrafts` is called: drafts then follow the app server's revision rules.
     private var draftRecords: [String: [String: Any]]?
+    /// The chat style choices a preferences save last kept, as the app server keeps an omitted one.
+    private var savedChoices: [String: Any] = [:]
+    private var choicesUnknown = false
+    /// Answers preference saves as a server from before chat styles: without either choice.
+    func answerPreferencesAsOldServer() { lock.withLock { choicesUnknown = true } }
     let origin = URL(string: "https://native-\(UUID().uuidString.lowercased()).example.test")!
     var user: String { get { lock.withLock { currentUser } } set { lock.withLock { currentUser = newValue } } }
     func answerSends(_ extras: [String: Any]) { lock.withLock { sendReceiptExtras = extras } }
@@ -365,7 +370,16 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
                  "members": [["member_id": "bot", "profile": "bot", "handle": "bot"], ["member_id": "family", "profile": "family", "handle": "family"]]] }])
         }
         else if path == "/api/native/push/config" { data = Self.json(["available": lock.withLock { pushAvailable }]) }
-        else if path == "/api/preferences" { data = FakeExchange.body(request) ?? Data() }
+        else if path == "/api/preferences" {
+            if var saved = FakeExchange.body(request).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) {
+                lock.withLock {
+                    for key in ["chatStyle", "ownBubble"] {
+                        if choicesUnknown { saved[key] = nil } else if let value = saved[key] { savedChoices[key] = value } else { saved[key] = savedChoices[key] }
+                    }
+                }
+                data = Self.json(saved)
+            } else { data = FakeExchange.body(request) ?? Data() }
+        }
         else if path == "/api/auth/logout" {
             let failure = lock.withLock { (status: logoutStatus, code: logoutCode) }
             status = failure.status
@@ -838,6 +852,86 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(object["ownBubble"] as? String, "solid")
         XCTAssertEqual(value.bootstrap?.preferences.chatStyleChoice, .classic)
         XCTAssertEqual(value.bootstrap?.preferences.ownBubbleChoice, .solid)
+    }
+
+    private func lastPreferencesSave(_ server: NativeMockServer) throws -> [String: Any] {
+        let request = try XCTUnwrap(server.requests.last { $0.url?.path == "/api/preferences" })
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(FakeExchange.body(request))) as? [String: Any])
+    }
+    /// Changing one chat style choice sends only that one. This device last read Tinted while another device
+    /// has since chosen Solid, so sending the stale Tinted would undo that choice.
+    func testASettingsSaveSendsOnlyTheChatStyleChoiceThePersonChanged() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.bootstrap?.preferences.ownBubble = "tint"
+        var preferences = try XCTUnwrap(value.bootstrap?.preferences)
+        preferences.chatStyleChoice = .classic
+        value.queuePreferences(preferences)
+        try await until { !value.preferencesSaving }
+        var sent = try lastPreferencesSave(server)
+        XCTAssertEqual(sent["chatStyle"] as? String, "classic")
+        XCTAssertNil(sent["ownBubble"], "The choice the person left alone stays the server's")
+        preferences = try XCTUnwrap(value.bootstrap?.preferences)
+        preferences.ownBubbleChoice = .solid
+        value.queuePreferences(preferences)
+        try await until { !value.preferencesSaving }
+        sent = try lastPreferencesSave(server)
+        XCTAssertEqual(sent["ownBubble"] as? String, "solid")
+        XCTAssertNil(sent["chatStyle"])
+        XCTAssertEqual(value.bootstrap?.preferences.chatStyleChoice, .classic, "The server kept the earlier choice")
+    }
+    /// A person who changes a choice and changes it back while the first save is still out ends on what they
+    /// chose last.
+    func testAChoiceChangedBackDuringASaveGoesOutAgain() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var preferences = try XCTUnwrap(value.bootstrap?.preferences)
+        server.hold("/api/preferences")
+        preferences.chatStyleChoice = .classic
+        value.queuePreferences(preferences)
+        try await server.waitForHeld("/api/preferences")
+        preferences.chatStyleChoice = .bubbles
+        value.queuePreferences(preferences)
+        server.release("/api/preferences")
+        try await until { !value.preferencesSaving }
+        XCTAssertEqual(try lastPreferencesSave(server)["chatStyle"] as? String, "bubbles")
+        XCTAssertEqual(value.bootstrap?.preferences.chatStyleChoice, .bubbles)
+    }
+    /// A value from a newer client is never sent back, whatever else the person changes.
+    func testAnUnknownChatStyleChoiceIsNeverSentBack() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.bootstrap?.preferences.chatStyle = "compact"
+        value.bootstrap?.preferences.ownBubble = "gradient"
+        var preferences = try XCTUnwrap(value.bootstrap?.preferences)
+        preferences.theme = "dark"
+        value.queuePreferences(preferences)
+        try await until { !value.preferencesSaving }
+        var sent = try lastPreferencesSave(server)
+        XCTAssertNil(sent["chatStyle"], "A server whose schema rejects it would refuse the whole save")
+        XCTAssertNil(sent["ownBubble"])
+        preferences.ownBubbleChoice = .solid
+        value.queuePreferences(preferences)
+        try await until { !value.preferencesSaving }
+        sent = try lastPreferencesSave(server)
+        XCTAssertEqual(sent["ownBubble"] as? String, "solid")
+        XCTAssertNil(sent["chatStyle"])
+    }
+    /// A server from before chat styles saves the rest and answers without the choice. The app says why the
+    /// setting did not stick and keeps what the server holds. An absent choice at sign-in is normal.
+    func testAServerThatDropsAChatStyleChoiceSaysItCannotSaveIt() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.answerPreferencesAsOldServer()
+        XCTAssertNil(value.preferencesNotice, "No choice at bootstrap is not an error")
+        var preferences = try XCTUnwrap(value.bootstrap?.preferences)
+        preferences.theme = "dark"
+        value.queuePreferences(preferences)
+        try await until { !value.preferencesSaving }
+        XCTAssertNil(value.preferencesNotice, "A save that carried no choice has nothing to report")
+        preferences.chatStyleChoice = .classic
+        value.queuePreferences(preferences)
+        try await until { !value.preferencesSaving }
+        XCTAssertEqual(value.preferencesNotice, "This server cannot save that setting yet. Update WildBots on the server to use it.")
+        XCTAssertEqual(value.bootstrap?.preferences.chatStyleChoice, .bubbles, "The app shows what the server holds")
+        XCTAssertEqual(value.bootstrap?.preferences.theme, "dark")
+        XCTAssertFalse(value.preferencesSaveFailed, "The rest of the save went through")
     }
 
     func testAdvancedRoutineOverridesRoundTripAndClearExplicitly() throws {

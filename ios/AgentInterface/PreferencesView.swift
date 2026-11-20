@@ -77,6 +77,9 @@ struct PreferencesView: View {
           }
         }
         if saveFailed { Section { Button("Retry saving settings") { enqueueSave() } } }
+        if let notice = store.preferencesNotice {
+          Section { NoticeBanner(message: notice) { store.preferencesNotice = nil }.accessibilityIdentifier("preferencesNotice") }
+        }
         Section("Display") {
           Picker("Appearance", selection: $preferences.theme) {
             Text("Follow device").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
@@ -186,6 +189,13 @@ struct PreferencesView: View {
         .onAppear { preferences = store.preferencesDraft ?? store.bootstrap?.preferences ?? Preferences(); loaded = true }
         .onChange(of: store.bootstrap?.preferences) { _, value in
           if let value, !saving && !saveFailed { preferences = value }
+        }
+        // Once every save is in, the controls show what the server kept, which a server from before a
+        // setting, or another device, may have answered differently. Only when nothing changed here since
+        // the last save went out: onChange runs on the next update, so an edit made as the queue finished
+        // has not been queued yet and must not be replaced.
+        .onChange(of: saving) { _, now in
+          if !now && !saveFailed && preferences == store.preferencesLastSent, let value = store.bootstrap?.preferences { preferences = value }
         }
         .onChange(of: preferences) { _, value in
           if loaded && value != store.preferencesDraft && value != store.bootstrap?.preferences { enqueueSave() }
