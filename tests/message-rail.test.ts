@@ -68,22 +68,6 @@ describe("railEntries", () => {
     expect(entries[1].reply).toBeUndefined();
   });
 
-  // A reaction is a tap, not a question to find again; it reads the message alone, so its place does not matter.
-  it("gives a reaction no tick, and ends the reply of the tick before it", () => {
-    const entries = railEntries([
-      user("q", "Add salt to the list?"),
-      reply("a", "Want me to add it to the list?"),
-      user("react", "👍"),
-      user("member", "🎉", { sender: { id: "two", name: "Two" } }),
-      user("after", "And pepper"),
-      user("lone", "👍"),
-      reply("b", "Added pepper."),
-      user("emoji", "🔥"),
-    ]);
-    expect(entries.map((entry) => entry.id)).toEqual(["q", "after", "emoji"]);
-    expect(entries[1].reply).toBeUndefined();
-  });
-
   it("names a message without words by its files, on one line", () => {
     const [files, spaced] = railEntries([
       user("f", "  ", { files: [{ id: "1", name: "gate.jpg", mime: "image/jpeg" }] }),

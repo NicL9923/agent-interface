@@ -67,9 +67,6 @@ const placeElement = (container: HTMLElement, id: string) =>
 const editable = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
-/** A key pressed in a field or an open menu is that control's own, such as Home in the React menu, not a scroll. */
-const ownsKeys = (target: EventTarget | null) =>
-  editable(target) || (target instanceof Element && !!target.closest('[role="menu"]'));
 /**
  * After a failed read that may be one unlucky request, how long the chat waits for a read to succeed
  * before it shows it is disconnected. A second failure in a row shows it sooner. The failure asks for no
@@ -198,7 +195,6 @@ export function useConversation(
   const requestEarlier = useRef<() => void>(() => {});
   const requestStart = useRef<(messageId: string) => void>(() => {});
   const rebind = useRef<() => void>(() => {});
-  const requestRead = useRef<() => void>(() => {});
   const botIdRef = useRef(botId);
   botIdRef.current = botId;
   useEffect(() => {
@@ -481,9 +477,6 @@ export function useConversation(
         }
       }
     };
-    requestRead.current = () => {
-      if (live) void load();
-    };
     requestEarlier.current = () => {
       if (!live || more) return;
       more = true;
@@ -615,7 +608,6 @@ export function useConversation(
       live = false;
       stopWaiting();
       requestEarlier.current = () => {};
-      requestRead.current = () => {};
       requestStart.current = () => {};
       rebind.current = () => {};
       stopPolling();
@@ -867,7 +859,7 @@ export function useConversation(
   };
   const listen = (element: HTMLElement) => {
     const input = (event: Event) => {
-      if (event.type === "keydown" && ownsKeys(event.target)) return;
+      if (event.type === "keydown" && editable(event.target)) return;
       const intent = scrollIntent(event as WheelEvent & KeyboardEvent);
       if (intent) intend(intent);
     };
@@ -970,8 +962,6 @@ export function useConversation(
    * Brings a loaded message to the top of the view, with the gap a send leaves, and marks it briefly,
    * as the message rail does. The reader is left there, free of the end. False when it is not on the page.
    */
-  /** Reads the chat again now, as after the server refused a reaction because the chat had moved on. */
-  const refresh = useCallback(() => requestRead.current(), []);
   const jumpTo = useCallback((messageId: string) => {
     const element = scroll.current;
     const item = element ? messageElement(element, messageId) : undefined;
@@ -1074,7 +1064,6 @@ export function useConversation(
       openMessage,
       openAt,
       jumpTo,
-      refresh,
     }),
     [
       hasEarlier,
@@ -1090,7 +1079,6 @@ export function useConversation(
       openMessage,
       openAt,
       jumpTo,
-      refresh,
     ],
   );
   return {

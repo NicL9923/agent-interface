@@ -346,14 +346,12 @@ export function withEchoes(
 /**
  * Whether the composer is showing the copy that is on its way. The echo carries it in the
  * transcript, so the composer reads empty, and read-only so the copy stays the one sent. Once the
- * draft is anything else, such as the server's cleared copy, the composer is free again. A reaction
- * answer is never the draft's copy, even when the draft holds the same emoji.
+ * draft is anything else, such as the server's cleared copy, the composer is free again.
  */
 export function sendingDraft(draft: Draft, pending: Pending | null, sending: boolean) {
   return (
     sending &&
     !!pending &&
-    pending.answering === undefined &&
     draft.botId === pending.botId &&
     isSentCopy(draft) &&
     sameDraft(draft, pending)

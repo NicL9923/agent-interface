@@ -540,12 +540,7 @@ export function useDraftPersistence({
       !draft.dirty ||
       offline ||
       appUnavailable ||
-      // The copy on its way is not new work. A reaction answer is never the draft's copy.
-      (pending &&
-        pending.answering === undefined &&
-        pending.botId === botId &&
-        isSentCopy(draft) &&
-        sameDraft(pending, draft))
+      (pending && pending.botId === botId && isSentCopy(draft) && sameDraft(pending, draft))
     )
       return;
     const epoch = identityEpoch.current;

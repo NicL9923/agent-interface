@@ -1,10 +1,6 @@
 import type { Message } from "../shared/types";
-import { isReactionMessage } from "../shared/reactions";
 
-/**
- * This person's own messages in a chat, newest first, without repeats of the same text. A reaction,
- * one emoji of the set, is a tap on a reply, not words to send again, so it is left out.
- */
+/** This person's own messages in a chat, newest first, without repeats of the same text. */
 export function ownPrompts(messages: readonly Message[] | undefined, userId: string) {
   const seen = new Set<string>();
   const prompts: string[] = [];
@@ -13,8 +9,7 @@ export function ownPrompts(messages: readonly Message[] | undefined, userId: str
     if (
       message.role !== "user" ||
       message.sender?.id !== userId ||
-      message.id.endsWith("-inflight") ||
-      isReactionMessage(message)
+      message.id.endsWith("-inflight")
     )
       continue;
     const text = message.text.trim();

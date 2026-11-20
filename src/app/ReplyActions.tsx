@@ -6,7 +6,6 @@ import { Icon } from "../components/Icon";
 import { When } from "../components/When";
 import { useAction } from "./use-action";
 import type { ReplySpeech } from "./use-reply-speech";
-import { ReactionPicker } from "./Reactions";
 
 /** What reply actions need from the conversation around them. Kept in context so the memoized transcript never re-renders for it. */
 export type TranscriptTools = {
@@ -25,12 +24,6 @@ export type TranscriptTools = {
   formKey?: string;
   startFormSend?: (botId: string, senderId: string, text: string) => (requestId: string) => void;
   settleFormSend?: (receipt: SubmissionReceipt, own: boolean) => void;
-  /** The reply a reaction can answer now, which alone shows React. See reactTo in Conversation.tsx. */
-  reactTo?: string;
-  /** Sends a reaction to `reactTo` as an ordinary message that names it. */
-  react?: (emoji: string) => void;
-  /** Moves focus to the conversation region, as when the React menu that held it goes away. */
-  focusTranscript?: () => void;
 };
 export const TranscriptTools = createContext<TranscriptTools | null>(null);
 
@@ -64,9 +57,7 @@ export function MessageMeta({
   const tools = useContext(TranscriptTools);
   // Always visible, unlike the actions, so a refused reply is never hidden by the pointer leaving.
   const speechError = tools?.speech.error?.id === message.id ? tools.speech.error.text : undefined;
-  // React answers the reply, words or not, so a reply of files alone offers it too.
-  const reactable = !pending && !!tools?.react && tools.reactTo === message.id;
-  if (!when && !delivery && !actions && !reactable) return null;
+  if (!when && !delivery && !actions) return null;
   return (
     <>
       <div
@@ -81,9 +72,7 @@ export function MessageMeta({
         ) : (
           when && <When value={when} />
         )}
-        {(actions || reactable) && (
-          <MessageActions message={message} text={actions} react={reactable} />
-        )}
+        {actions && <MessageActions message={message} />}
       </div>
       {speechError && (
         <p className="speech-error" role="alert">
@@ -94,19 +83,8 @@ export function MessageMeta({
   );
 }
 
-/**
- * With `text`, copy on any message, and for a reply also listen, share, save and quote. With `react`, React
- * on the reply that ends the chat. Shown on hover or focus with a mouse, always with touch.
- */
-function MessageActions({
-  message,
-  text,
-  react,
-}: {
-  message: Message;
-  text: boolean;
-  react: boolean;
-}) {
+/** Copy on any message, and for a reply also listen, share, save and quote. Shown on hover or focus with a mouse, always with touch. */
+function MessageActions({ message }: { message: Message }) {
   const tools = useContext(TranscriptTools);
   const save = useAction();
   const [copied, setCopied] = useState(false);
@@ -173,18 +151,16 @@ function MessageActions({
       role="group"
       aria-label={reply ? "Reply actions" : "Message actions"}
     >
-      {text && (
-        <button
-          type="button"
-          className="reply-action"
-          onClick={() => void copy()}
-          aria-label={copied ? "Copied" : `Copy ${noun}`}
-          title={`Copy ${noun}`}
-        >
-          <Icon name={copied ? "check" : "copy"} size={16} />
-        </button>
-      )}
-      {text && reply && (
+      <button
+        type="button"
+        className="reply-action"
+        onClick={() => void copy()}
+        aria-label={copied ? "Copied" : `Copy ${noun}`}
+        title={`Copy ${noun}`}
+      >
+        <Icon name={copied ? "check" : "copy"} size={16} />
+      </button>
+      {reply && (
         <>
           {/* Preparing can be cancelled too, so the button never dead-ends while audio loads. */}
           <button
@@ -251,9 +227,6 @@ function MessageActions({
             <Icon name="quote" size={16} />
           </button>
         </>
-      )}
-      {react && tools.react && (
-        <ReactionPicker onReact={tools.react} onGone={tools.focusTranscript} />
       )}
     </div>
   );

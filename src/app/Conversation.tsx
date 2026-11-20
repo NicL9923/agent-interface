@@ -39,8 +39,6 @@ import { useDeclined } from "./decline-handoff";
 import { FindBar } from "./FindBar";
 import { MessageRail } from "./MessageRail";
 import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
-import { reactionName } from "./Reactions";
-import { answerableReply } from "../shared/reactions";
 import { useReplySpeech } from "./use-reply-speech";
 import { useTalkLive } from "./talk-live";
 import { quoteBlock } from "./transcript-logic";
@@ -119,8 +117,6 @@ export const Conversation = memo(function Conversation({
   settleFormSend,
   computerOpen = false,
   reviewed = false,
-  canReact = false,
-  onReact,
 }: {
   boot: Bootstrap;
   selected?: Bot;
@@ -166,10 +162,6 @@ export const Conversation = memo(function Conversation({
   computerOpen?: boolean;
   /** The person reviewed an interrupted task in the message box; form cards send under the same review. */
   reviewed?: boolean;
-  /** The message box could send now, so the reply that ends the chat offers React. */
-  canReact?: boolean;
-  /** Sends a reaction to the reply `answering` names, through the message box's own submit path. */
-  onReact?: (emoji: string, answering: string) => void;
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
@@ -205,10 +197,6 @@ export const Conversation = memo(function Conversation({
         : continueChips(windowChips, settled, live, files, earlier),
     [loaded, unknownEarlier, windowChips, settled, live, files, earlier],
   );
-  // React is offered on the reply that ends the chat (src/shared/reactions.ts). The send names that reply,
-  // and the server admits it only while the reply still ends the chat, whatever this copy shows.
-  const messages = conversation?.messages ?? noMessages;
-  const answerable = useMemo(() => answerableReply(messages), [messages]);
   // Email drafts that revise an earlier one here, so their cards can mark what changed. The map keeps
   // its identity while the live rows add no draft, so the cards reading it do not re-render.
   const settledRevisions = useMemo(() => settleRevisions(settled), [settled]);
@@ -296,14 +284,6 @@ export const Conversation = memo(function Conversation({
     );
     requestAnimationFrame(() => document.getElementById("message")?.focus());
   });
-  const reactTo = canReact && onReact ? answerable : undefined;
-  const react = useStableCallback((emoji: string) => {
-    if (!onReact || !reactTo) return;
-    onReact(emoji, reactTo);
-    announce(`${reactionName(emoji)}.`);
-  });
-  // The React menu goes when a send or an update takes it away, so keyboard focus continues from the transcript.
-  const focusTranscript = useStableCallback(() => scroll.current?.focus({ preventScroll: true }));
   // Live Talk owns the speaker, so replies are not read aloud while it runs.
   const talking = useTalkLive();
   // A reply already playing stops only once the chat shows it is disconnected; starting one is refused at once (`tools.unavailable`).
@@ -320,9 +300,6 @@ export const Conversation = memo(function Conversation({
       formKey: boot.formKey,
       startFormSend,
       settleFormSend,
-      reactTo,
-      react,
-      focusTranscript,
     }),
     [
       botId,
@@ -335,9 +312,6 @@ export const Conversation = memo(function Conversation({
       boot.formKey,
       startFormSend,
       settleFormSend,
-      reactTo,
-      react,
-      focusTranscript,
     ],
   );
   const frame = useRef<HTMLDivElement>(null);
