@@ -161,6 +161,9 @@ const EXTRA: GuardScreen[] = [
         .locator(".activity-status")
         .getByRole("button", { name: "Watch Ranch Hand on the computer" })
         .waitFor();
+      // The peek's close button is read on this screen too. A peek that failed to open would leave the activity
+      // line's Watch in place and the comparison passing without it.
+      await page.getByRole("button", { name: "Hide the computer preview" }).waitFor();
     },
     async (page) => {
       await page.route(/\/api\/bots\/ranch\/conversation/, async (route) => {
