@@ -241,6 +241,9 @@ import XCTest
     let dark = launch(["AGENT_INTERFACE_UI_ROUTINE_RUNS": "1", "AGENT_INTERFACE_UI_THEME": "dark"])
     let failed = dark.buttons["routineRun-rr-cert-1"]
     XCTAssertTrue(failed.waitForExistence(timeout: 15))
+    // The first run sits above the first message, so it can open under the header; bring it into view.
+    let header = dark.buttons["botProfile"]
+    for _ in 0..<4 where header.exists && failed.frame.minY < header.frame.maxY { dark.scrollViews["conversationTranscript"].swipeDown() }
     try capture(dark, "routine-runs-dark-collapsed")
     failed.tapWhenReady()
     XCTAssertTrue(dark.buttons["routineRunSave"].waitUntilHittable())
