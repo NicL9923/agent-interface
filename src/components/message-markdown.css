@@ -50,6 +50,13 @@
       border-color: var(--message-meta);
     }
   }
+  /* A browser that forces colors paints the transparent border by itself. One that only reports the setting, as
+     WebKit does, needs to be told. */
+  @media (forced-colors: active) {
+    .reply-bubble {
+      border-color: CanvasText;
+    }
+  }
   .reply-bubble > :first-child {
     margin-top: 0;
   }

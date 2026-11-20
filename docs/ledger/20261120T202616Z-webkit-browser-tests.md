@@ -56,3 +56,32 @@ and back-forward cache tests WebKit already skipped.
 - Finding out why routes do not reach the page in Playwright's WebKit. It keeps two of main's smoke
   tests red and is recorded on issue #462.
 - A browser-level check of the app in Safari itself.
+
+## Later the same day: the scoping was replaced
+
+An independent review of the commit above objected to the file-wide skip: the plain screens had
+passed in WebKit, the skip would also cover any later test in the file, and a Chromium-only guard
+leaves a layer-induced change in Safari unread. It also pointed at tests in this repository that
+use the same route pattern in WebKit and pass, because they block the service worker. All three
+skips are gone.
+
+| Finding                                            | What the evidence showed                                                                                                                                              | Change                                                                                                                             |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| The routed screens timed out                       | With `serviceWorkers: "block"` the routed content arrived at once. Worker-owned requests bypass page routing in WebKit, as `e2e/bot-exchanges.spec.ts` already says   | The guard and the hover contrast tests block the worker                                                                            |
+| Nine guard tests then failed the page-health check | Each reported "ResizeObserver loop completed with undelivered notifications." The same three screens opened without swapping the cascade raised none in 24 of 24 runs | A new `allowPageError` fixture, beside `allowConsoleError`; the guard allows that one message                                      |
+| The forced-colors bubble edge                      | WebKit reports `(forced-colors: active)` as matching and does not recolor a transparent border, so the reply bubble's border stayed transparent                       | Both bubbles get an explicit `forced-colors` border in `CanvasText`. The test skips only when the page does not report the setting |
+
+The first table's cause, "the routes never reach the page", was an inference. The worker is the
+cause: blocking it is the only change between the timeouts and the passes.
+
+| Check                                                                            | Result                                                                | Evidence                               |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | -------------------------------------- |
+| Guard in WebKit with the worker blocked and no allowance                         | 36 passed, 9 failed on the ResizeObserver message                     | `.private/webkit/guard-sw-blocked.log` |
+| The three rich screens opened without the swap, WebKit, twice each in four views | 24 passed                                                             | `.private/webkit/guard-reach-only.log` |
+| Whole suite, WebKit, before the forced-colors rule                               | 137 passed, 3 skipped, 2 failed: the forced-colors edge and smoke 811 | `.private/webkit/full-webkit-2.log`    |
+| `accessibility.spec.ts` and `cascade-layers.spec.ts`, WebKit, with the rule      | Runtime-exercised: 56 passed                                          | `.private/webkit/webkit-3.log`         |
+| Those two plus `phone-overlays` and `stylesheet-order`, Chromium                 | Runtime-exercised: 74 passed                                          | `.private/webkit/chromium-final.log`   |
+
+The three skips that remain in WebKit are the worker badge and back-forward cache tests it skipped
+before this branch. `e2e/smoke.spec.ts:811` still fails there as it does on main; it does not block
+the worker, which is the likely fix and is noted on issue #462.

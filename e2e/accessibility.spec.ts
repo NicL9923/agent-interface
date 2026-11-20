@@ -122,17 +122,16 @@ for (const theme of ["light", "dark"]) {
 // avatar preview state, whose light text met the pale hover fill at 1.18:1, and a routine card whose status word, in
 // the attention color, met the app's hover fill at 3.83:1. Bare elements with the components' classes carry the
 // cascade's answer; they sit inside the settings dialog because the page behind a modal cannot be hovered.
-for (const colorScheme of ["light", "dark"] as const) {
+test.describe("hover fills under text", () => {
+  // The route below changes an API answer. Worker-owned requests bypass page routing in WebKit.
+  test.use({ serviceWorkers: "block" });
+  for (const colorScheme of ["light", "dark"] as const) hoverContrast(colorScheme);
+});
+
+function hoverContrast(colorScheme: "light" | "dark") {
   test(`hovered routine cards and the selected avatar state keep readable text, ${colorScheme}`, async ({
     page,
-    browserName,
   }) => {
-    // The colors and their contrast are the stylesheet's, the same in every engine. In Playwright's WebKit the route
-    // below never reaches the page, so the assistant's settings, which load the avatar editor's styles, never open.
-    test.skip(
-      browserName !== "chromium",
-      "Opening the assistant's settings needs a route WebKit does not deliver",
-    );
     await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
     // The e2e runtime's assistant has no instructions, which the settings read requires.
     await page.route(/\/api\/bots\/ranch$/, async (route) => {
@@ -257,14 +256,15 @@ for (const [mode, media] of [
   ["increased contrast", { contrast: "more" }],
   ["forced colors", { forcedColors: "active" }],
 ] as const) {
-  test(`both chat bubbles draw an edge under ${mode}`, async ({ page, browserName }) => {
-    // Playwright's WebKit takes the forced-colors setting and draws as if it were off.
-    test.skip(
-      browserName === "webkit" && mode === "forced colors",
-      "WebKit does not emulate forced colors",
-    );
+  test(`both chat bubbles draw an edge under ${mode}`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce", ...media });
     await signIn(page);
+    // Asked of the page itself: a browser that takes the setting and draws as if it were off has nothing to read.
+    const applied = await page.evaluate(
+      (query) => matchMedia(query).matches,
+      mode === "forced colors" ? "(forced-colors: active)" : "(prefers-contrast: more)",
+    );
+    test.skip(!applied, `This browser does not apply the ${mode} setting`);
     await assistants(page)
       .getByRole("button", { name: /Ranch Hand/ })
       .click();

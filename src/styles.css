@@ -662,6 +662,11 @@
       border-color: var(--message-meta);
     }
   }
+  @media (forced-colors: active) {
+    .message-bubble {
+      border-color: CanvasText;
+    }
+  }
   .message-attribution {
     display: flex;
     flex-wrap: wrap;
