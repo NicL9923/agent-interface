@@ -15,7 +15,7 @@ import type {
   SubmissionReceipt,
 } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia, waitForUi } from "./ui-harness";
+import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
 
 // Only the client API is faked. Each fake throws on a call the test did not configure.
 vi.mock("../src/client-api", async (original) =>
@@ -86,6 +86,9 @@ let unexpected: string[];
 let reads: number;
 /** The transcript's scrolled height; jsdom lays nothing out. */
 let height: number;
+/** The draft the server holds when the chat opens, and the texts of every draft save after it. */
+let serverDraft: string;
+let draftSaves: string[];
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -94,6 +97,8 @@ beforeEach(() => {
   unexpected = [];
   reads = 0;
   height = 2600;
+  serverDraft = "Feed the horses";
+  draftSaves = [];
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   stubMatchMedia();
@@ -124,7 +129,7 @@ beforeEach(() => {
   vi.mocked(api).mockImplementation(async <T>(path: string) => {
     if (path === "/bootstrap?roster=lean") return bootstrap as T;
     if (path === "/bots/shared/draft")
-      return { text: "Feed the horses", attachments: [], revision: 3 } as T;
+      return { text: serverDraft, attachments: [], revision: 3 } as T;
     if (path.startsWith("/bots/shared/conversation?")) {
       reads++;
       return structuredClone(conversation) as T;
@@ -142,6 +147,11 @@ beforeEach(() => {
       (/^\/bots\/shared\/(presence|read-position)$/.test(path) || path === "/devices/activity")
     )
       return {} as T;
+    if (method === "PUT" && path === "/bots/shared/draft") {
+      const { text } = body as { text: string };
+      draftSaves.push(text);
+      return { text, attachments: [], revision: 3 + draftSaves.length } as T;
+    }
     if (path === "/bots/shared/messages")
       return await new Promise<T>((resolve, reject) => {
         const request = body as NonNullable<typeof sent>["body"];
@@ -298,6 +308,28 @@ describe("reaction answers", () => {
     );
     await open();
     expect(reactButton()).toBeNull();
+  });
+
+  // The draft holds the same emoji the picker sends, but was never sent: it is not the copy on its way.
+  it("keeps a 👍 draft shown and editable while a picker 👍 is on its way", async () => {
+    serverDraft = "👍";
+    await open();
+    expect(textarea().value).toBe("👍");
+    await react("Thumbs up");
+    expect(textarea().value).toBe("👍");
+    expect(textarea().readOnly).toBe(false);
+    await act(async () => sent!.resolve({ messageId: "u1" }));
+    expect(textarea().value).toBe("👍");
+  });
+
+  it("saves a 👍 typed into the draft while a picker 👍 is on its way", async () => {
+    await open();
+    await typeInto(textarea(), "👍");
+    // Picked before the draft's save timer runs, so the save is due while the answer is unresolved.
+    await react("Thumbs up");
+    await advance(400);
+    expect(draftSaves).toEqual(["👍"]);
+    expect(textarea().value).toBe("👍");
   });
 
   it("puts no emoji in the draft when Hermes refuses the reaction", async () => {
