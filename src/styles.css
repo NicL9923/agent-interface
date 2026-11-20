@@ -22,8 +22,10 @@
   --danger: #a33c32;
   --attention: #9b6733;
   --user: #e7eee4;
-  /* Glass for controls floating over the transcript: see the phone composer. */
-  --glass-fill: color-mix(in srgb, var(--raised) 64%, transparent);
+  /* Glass for controls floating over the transcript: see the phone composer. The fill and the backdrop's
+     tone keep its muted placeholder at 4.5:1 or better even over a black image (white in dark themes). */
+  --glass-fill: color-mix(in srgb, var(--raised) 80%, transparent);
+  --glass-backdrop: blur(20px) saturate(1.8) contrast(0.5) brightness(1.5);
   --glass-edge: #ffffffb3;
   --glass-shadow:
     inset 0 1px 0 #ffffffa6, 0 1px 3px #1b251a14, 0 8px 28px #1b251a1f;
@@ -49,6 +51,8 @@
   --danger: #faafa0;
   --attention: #ebc188;
   --user: #2a3a2e;
+  --glass-fill: color-mix(in srgb, var(--raised) 72%, transparent);
+  --glass-backdrop: blur(20px) saturate(1.8) brightness(0.5);
   --glass-edge: #ffffff1a;
   --glass-shadow:
     inset 0 1px 0 #ffffff14, 0 1px 3px #0000004d, 0 8px 28px #00000059;
@@ -68,6 +72,8 @@
     --danger: #faafa0;
     --attention: #ebc188;
     --user: #2a3a2e;
+    --glass-fill: color-mix(in srgb, var(--raised) 72%, transparent);
+    --glass-backdrop: blur(20px) saturate(1.8) brightness(0.5);
     --glass-edge: #ffffff1a;
     --glass-shadow:
       inset 0 1px 0 #ffffff14, 0 1px 3px #0000004d, 0 8px 28px #00000059;
@@ -1684,6 +1690,11 @@ a {
   .composer-area > * {
     pointer-events: auto;
   }
+  /* What floats over the transcript must stay above the box, which can cover most of a short view. */
+  .transcript-frame .find-bar,
+  .transcript-frame .quote-selection {
+    z-index: 5;
+  }
   .composer {
     padding: 4px;
     border-radius: 26px;
@@ -1692,8 +1703,8 @@ a {
     background: var(--glass-fill);
     border-color: var(--glass-edge);
     box-shadow: var(--glass-shadow);
-    -webkit-backdrop-filter: blur(20px) saturate(1.8);
-    backdrop-filter: blur(20px) saturate(1.8);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
   }
   .composer-area > .composer:focus-within {
     border-color: var(--accent);

@@ -699,8 +699,11 @@ export function useConversation(
       sent = sentMessage(),
       anchor = sendAnchor.current;
     if (!element || !space) return;
+    // The end padding is not content: on a phone it grows with the floating composer (styles.css), and a
+    // draft growing there must not count as the reply filling the space.
     const reserve = space.offsetHeight,
-      content = element.scrollHeight - reserve;
+      content =
+        element.scrollHeight - reserve - (parseFloat(getComputedStyle(element).paddingBottom) || 0);
     const next =
       sent && anchor?.filled !== sent
         ? endReserve({

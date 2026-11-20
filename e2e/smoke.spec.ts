@@ -763,10 +763,7 @@ test.describe("on a phone held sideways with its on-screen keyboard up", () => {
 
 test.describe("on a phone held upright", () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-
-  test("the message box floats over the transcript, whose latest message rests just above it", async ({
-    page,
-  }) => {
+  test.beforeEach(async ({ page }) => {
     // As in the sideways test: Safari reports its keyboard as a shorter visual viewport.
     await page.addInitScript(() => {
       const viewport = Object.assign(new EventTarget(), {
@@ -803,6 +800,17 @@ test.describe("on a phone held upright", () => {
         json: body,
       });
     });
+  });
+  const openKeyboard = (page: Page, height: number) =>
+    page.evaluate(
+      (visible) =>
+        (window as unknown as { openKeyboard(height: number): void }).openKeyboard(visible),
+      height,
+    );
+
+  test("the message box floats over the transcript, whose latest message rests just above it", async ({
+    page,
+  }) => {
     await signIn(page);
     await assistants(page)
       .getByRole("button", { name: /Ranch Hand/ })
@@ -836,14 +844,46 @@ test.describe("on a phone held upright", () => {
 
     // Above a portrait keyboard the box still sits on it, the latest message above it, and Send in reach.
     await field.tap();
-    await page.evaluate(() =>
-      (window as unknown as { openKeyboard(height: number): void }).openKeyboard(480),
-    );
+    await openKeyboard(page, 480);
     await expect
       .poll(layout)
       .toEqual({ underArea: 0, lastClear: true, gapReachesTranscript: true });
     const send = (await page.getByRole("button", { name: "Send message" }).boundingBox())!;
     expect(send.y + send.height).toBeLessThanOrEqual(480);
+  });
+
+  // The end padding grows with the box; a draft growing there is not the reply filling the space below.
+  test("a sent message held near the top stays there while the next draft grows and clears", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await assistants(page)
+      .getByRole("button", { name: /Ranch Hand/ })
+      .click();
+    const field = page.getByRole("textbox", { name: "Message Ranch Hand" });
+    await field.fill("Is the gate latched?");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(
+      conversation(page).getByText("Howdy, partner. You said: Is the gate latched?", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    const sentTop = () =>
+      page.evaluate(() => {
+        const sent = [...document.querySelectorAll(".transcript-content .message-user")].at(-1)!;
+        return Math.round(
+          sent.getBoundingClientRect().top -
+            document.querySelector(".transcript")!.getBoundingClientRect().top,
+        );
+      });
+    await expect.poll(sentTop).toBeLessThan(80);
+    const held = await sentTop();
+    await field.tap();
+    await openKeyboard(page, 355);
+    await field.fill("One\nTwo\nThree\nFour\nFive");
+    await field.fill("");
+    await openKeyboard(page, 844);
+    await expect.poll(sentTop).toBe(held);
   });
 });
 
