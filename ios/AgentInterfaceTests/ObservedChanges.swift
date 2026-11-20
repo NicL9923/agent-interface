@@ -17,7 +17,7 @@ extension AppStore {
       "sendingRequests": \.sendingRequests, "appUnavailable": \.appUnavailable, "interruptionReviewed": \.interruptionReviewed,
       "authConfig": \.authConfig, "restoring": \.restoring, "sessionExpired": \.sessionExpired,
       "conversationRequest": \.conversationRequest, "preferencesSaving": \.preferencesSaving,
-      "preferencesSaveFailed": \.preferencesSaveFailed, "preferencesDraft": \.preferencesDraft, "groupCatalog": \.groupCatalog, "groupNoticeScope": \.groupNoticeScope, "homeRequest": \.homeRequest,
+      "preferencesSaveFailed": \.preferencesSaveFailed, "preferencesDraft": \.preferencesDraft, "preferencesNotice": \.preferencesNotice, "groupCatalog": \.groupCatalog, "groupNoticeScope": \.groupNoticeScope, "homeRequest": \.homeRequest,
       "deviceNotifications": \.deviceNotifications, "openedFile": \.openedFile, "computerStatus": \.computerStatus,
       "replyAnnouncement": \.replyAnnouncement, "offlineSavedAt": \.offlineSavedAt, "cachedChats": \.cachedChats,
       "earlierFileCache": \.earlierFileCache, "loadingEarlierFiles": \.loadingEarlierFiles,

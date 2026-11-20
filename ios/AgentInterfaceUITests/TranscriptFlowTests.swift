@@ -319,6 +319,22 @@ import XCTest
     XCTAssertTrue(style.label.contains("Classic") || (style.value as? String) == "Classic", "The saved choice comes back: \(style.label)")
   }
 
+  /// A server from before chat styles saves the rest of Settings and answers without the choice. Settings says
+  /// why the choice did not stick and shows what the server holds.
+  func testAServerWithoutChatStylesExplainsWhyTheChoiceDidNotSave() throws {
+    let app = launch(["AGENT_INTERFACE_UI_PROGRESS": "1", "AGENT_INTERFACE_UI_OLD_PREFERENCES": "1"])
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "It will be")).firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    let style = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Chat style")).firstMatch
+    for _ in 0..<6 where !style.canTap { app.swipeUp() }
+    style.tapWhenReady()
+    app.buttons["Classic"].tapWhenReady()
+    let notice = app.staticTexts["This server cannot save that setting yet. Update WildBots on the server to use it."]
+    XCTAssertTrue(notice.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(waitFor { style.label.contains("Bubbles") || (style.value as? String) == "Bubbles" }, "The control shows what the server holds: \(style.debugDescription)")
+  }
+
   /// The chat styles for visual review: Bubbles and Classic, tinted and solid own messages, light and
   /// dark, and one at an accessibility text size. Runs only when screenshots are written.
   func testChatBubbleScreens() throws {

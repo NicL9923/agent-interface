@@ -1235,7 +1235,13 @@
           if method == "PATCH" {
             // As the server: model stars, the main assistant and its check-ins keep their own routes.
             let kept = ["modelFavorites", "mainBotId", "checkIns"].reduce(into: [String: Any]()) { $0[$1] = Self.preferences[$1] }
+            // An omitted chat style choice keeps the saved one; a server from before them drops both.
+            let choices = ["chatStyle", "ownBubble"].reduce(into: [String: Any]()) { $0[$1] = body[$1] ?? Self.preferences[$1] }
             Self.preferences = body; Self.preferences.merge(kept) { _, old in old }
+            Self.preferences.merge(choices) { _, saved in saved }
+            if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_OLD_PREFERENCES"] == "1" {
+              Self.preferences["chatStyle"] = nil; Self.preferences["ownBubble"] = nil
+            }
           }
           object = Self.preferences
         }

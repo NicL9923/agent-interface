@@ -167,6 +167,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var preferencesDraft: Preferences?
   @ObservationIgnored var preferencesFailureMessage: String?
   @ObservationIgnored var queuedPreferences: Preferences?
+  /// The chat style choices the person changed that no save has carried yet. Only these go out.
+  @ObservationIgnored var queuedChoices: Set<PreferenceChoice> = []
+  /// Set when the server answered a save without the choice the person made, as one from before it does.
+  var preferencesNotice: String?
   /// This device's notification switch and onboarding card for the signed-in account.
   var deviceNotifications = DeviceNotificationState()
   var openedFile: PreviewFile?
