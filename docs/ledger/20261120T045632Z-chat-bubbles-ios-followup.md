@@ -36,7 +36,7 @@ The quote break was applied by hand to `8aaa18c4`, run with `IOS_VALIDATION_FRES
 | This branch, `8aaa18c4` | 5 + 15 | 18 | 2 |
 | origin/main, `2eb5a123` | 5 + 15 | 19 | 1 |
 
-Every failure, on both sides, is the same assertion at line 99: no alert after the coordinate tap on the Always allow menu row. The failed branch run's recording shows the menu open and its row at a stable frame; the tap leaves the menu open. Because main fails the same way, this is a baseline flake and the test is unchanged. Results: `.private/ios-test-20261120T043934Z-90395.xcresult` and `.private/ios-test-20261120T044510Z-97586.xcresult` on the branch; on main, the same files under a detached worktree at `/Volumes/DevSSD/scratch/chat-bubbles-ios/main-2eb5a123/.private/` (`ios-test-20261120T044153Z-93265`, `ios-test-20261120T045030Z-4150`).
+Every failure, on both sides, is the same assertion at line 99: no alert after the coordinate tap on the Always allow menu row. The failed branch run's recording shows the menu open and its row at a stable frame; the tap leaves the menu open. Because main fails the same way, this is a baseline flake and the test is unchanged. Results: `.private/ios-test-20261120T043934Z-90395.xcresult` and `.private/ios-test-20261120T044510Z-97586.xcresult` on the branch; on main, the result bundles went with the detached worktree they ran in, and the console output remains in `flake-main.log` and `flake-main-15.log`.
 
 ## Validation
 
