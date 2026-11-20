@@ -176,6 +176,39 @@ for (const colorScheme of ["light", "dark"] as const) {
   }
 }
 
+// A layer's rank is set where its name first appears, so the statement that ranks them has to be the first layer rule
+// the page meets. A component sheet ahead of it ranks components under base, and the base `button` rule then beats
+// every component's own buttons. Both orders the screens above compare would be wrong together, so they cannot see it.
+test("the built app ranks its cascade layers before any layered rule", async ({ page }) => {
+  await signIn(page);
+  await assistants(page)
+    .getByRole("button", { name: /Ranch Hand/ })
+    .click();
+  await page.getByText("Morning. The north fence is fixed.").waitFor();
+  const read = await page.evaluate(() => {
+    let first: { kind: string; names: string[] } | undefined;
+    for (const sheet of document.styleSheets) {
+      for (const rule of sheet.cssRules) {
+        if (rule instanceof CSSLayerStatementRule)
+          first ??= { kind: "statement", names: [...rule.nameList] };
+        else if (rule instanceof CSSLayerBlockRule) first ??= { kind: "block", names: [rule.name] };
+      }
+      if (first) break;
+    }
+    // A bare button with a component's class carries the cascade's answer for that class.
+    const button = document.createElement("button");
+    button.className = "reply-action";
+    document.querySelector(".message")?.appendChild(button);
+    return { first, border: getComputedStyle(button).borderTopWidth };
+  });
+  expect(read.first).toEqual({
+    kind: "statement",
+    names: ["theme", "base", "components", "motion", "utilities"],
+  });
+  // The base layer gives every button a 1 px border; a reply's action button removes it.
+  expect(read.border).toBe("0px");
+});
+
 // The lit edge is drawn with the button's own drop shadow, not in place of it.
 test("the jump button keeps its drop shadow under the dark lit edge", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });

@@ -17,6 +17,12 @@
     <link rel="icon" type="image/svg+xml" sizes="any" href="/icon.svg" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>WildBots</title>
+    <!-- Before every stylesheet: a cascade layer's rank is fixed where its name first appears, and the build links
+         component stylesheets, which open the components layer, ahead of the one that holds src/ui.css. Without
+         this, components ranks under base and the base button rule beats every component's own buttons. -->
+    <style>
+      @layer theme, base, components, motion, utilities;
+    </style>
     <!-- Before the app's code and styles: applies the saved theme and starts the first read. See public/boot.js. -->
     <script src="/boot.js"></script>
   </head>
