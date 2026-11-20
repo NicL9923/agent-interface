@@ -1248,6 +1248,10 @@
           object = Self.inference
         }
       } else if path == "/api/preferences" {
+        // A slow settings save, so a test can change a choice again while one is out.
+        if method == "PATCH", let delay = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PREFERENCES_DELAY_MS"].flatMap(Double.init) {
+          Self.lock.unlock(); Thread.sleep(forTimeInterval: delay / 1000); Self.lock.lock()
+        }
         if method == "PATCH" && Self.preferencesFailures > 0 {
           Self.preferencesFailures -= 1; status = 503; object = ["error": "Fixture settings save failed"]
         } else {

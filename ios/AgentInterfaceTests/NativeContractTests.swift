@@ -934,6 +934,46 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertFalse(value.preferencesSaveFailed, "The rest of the save went through")
     }
 
+    /// In Settings, a choice changed and changed back while the first save is out ends on the last choice, though
+    /// the change back equals what the server held before.
+    func testSettingsSavesAChoiceChangedBackToTheSavedOneWhileASaveIsOut() async throws {
+        let cases: [(key: String, path: WritableKeyPath<Preferences, String?>, choice: PreferenceChoice, saved: String, away: String)] = [
+            ("chatStyle", \.chatStyle, .chatStyle, "bubbles", "classic"), ("ownBubble", \.ownBubble, .ownBubble, "tint", "solid")]
+        for (key, path, choice, saved, away) in cases {
+            let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+            value.bootstrap?.preferences[keyPath: path] = saved
+            let form = SettingsForm(); form.load(value)
+            server.hold("/api/preferences")
+            var next = form.shown; next[keyPath: path] = away
+            form.edit(next, changed: [choice], store: value)
+            try await server.waitForHeld("/api/preferences")
+            next[keyPath: path] = saved
+            form.edit(next, changed: [choice], store: value)
+            server.release("/api/preferences")
+            try await until { !value.preferencesSaving }
+            // What the view's observers do once the saves are in.
+            form.resync(value)
+            XCTAssertEqual(try lastPreferencesSave(server)[key] as? String, saved, "\(key): the change back goes out")
+            XCTAssertEqual(value.bootstrap?.preferences[keyPath: path], saved, key)
+            XCTAssertEqual(form.shown[keyPath: path], saved, "\(key): Settings shows the last choice")
+        }
+    }
+    /// A picker edit and a change to the server's copy can reach Settings in the same view update, here a refresh
+    /// that brings another device's theme. The form keeps the edit and saves it.
+    func testSettingsKeepsAnEditWhenTheServersCopyChangesInTheSameUpdate() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let form = SettingsForm(); form.load(value)
+        var next = form.shown; next.chatStyleChoice = .classic
+        form.edit(next, changed: [.chatStyle], store: value)
+        value.bootstrap?.preferences.theme = "dark"
+        form.resync(value)
+        XCTAssertEqual(form.shown.chatStyleChoice, .classic, "The edit stays on screen")
+        try await until { server.requestCount("/api/preferences") > 0 && !value.preferencesSaving }
+        form.resync(value)
+        XCTAssertEqual(try lastPreferencesSave(server)["chatStyle"] as? String, "classic", "The edit is saved")
+        XCTAssertEqual(form.shown.chatStyleChoice, .classic)
+    }
+
     func testAdvancedRoutineOverridesRoundTripAndClearExplicitly() throws {
         let source = Data(#"{"id":"abc123","botId":"bot","name":"Morning","prompt":"","schedule":"1h","enabled":false,"skills":["weather"],"model":"saved","provider":"configured","script":"reports/morning.py","noAgent":true,"enabledToolsets":[],"contextFrom":["self","def456"]}"#.utf8)
         var routine = try JSONDecoder().decode(Routine.self, from: source)

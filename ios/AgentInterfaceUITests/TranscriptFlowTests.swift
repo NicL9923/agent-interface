@@ -352,6 +352,41 @@ import XCTest
     XCTAssertTrue(waitFor { style.label.contains("Bubbles") || (style.value as? String) == "Bubbles" }, "The control shows what the server holds: \(style.debugDescription)")
   }
 
+  /// A person who changes a chat style choice and changes it back while the first save is still out ends on
+  /// what they chose last, though the change back matches what the server held before. Each save takes 15
+  /// seconds here, and reopening a menu takes XCTest about 5.
+  func testAChoiceChangedBackWhileItsSaveIsOutStays() throws {
+    let app = launch(["AGENT_INTERFACE_UI_PROGRESS": "1", "AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "tint",
+      "AGENT_INTERFACE_UI_PREFERENCES_DELAY_MS": "15000"])
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "It will be")).firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    let saving = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving…")).firstMatch
+    func control(_ title: String) -> XCUIElement { app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch }
+    func shows(_ element: XCUIElement, _ choice: String) -> Bool { element.label.hasSuffix(choice) || (element.value as? String) == choice }
+    for (title, away, back) in [("Chat style", "Classic", "Bubbles"), ("Your messages", "Solid color", "Tinted")] {
+      let picker = control(title)
+      for _ in 0..<6 where !picker.canTap { app.swipeUp() }
+      picker.tapWhenReady()
+      app.buttons[away].tapWhenReady()
+      let sent = Date()
+      XCTAssertTrue(saving.waitForExistence(timeout: 3), "\(title): the first save is out")
+      picker.tapWhenReady()
+      app.buttons[back].tapWhenReady()
+      XCTAssertLessThan(Date().timeIntervalSince(sent), 12, "\(title): the change back must land while the first save is out")
+      XCTAssertTrue(saving.waitForDisappearance(timeout: 40), "\(title): every save finished")
+      XCTAssertTrue(shows(picker, back), "\(title) shows the last choice once the saves are in: \(picker.debugDescription)")
+    }
+    app.buttons["Close"].tapWhenReady()
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    for (title, back) in [("Chat style", "Bubbles"), ("Your messages", "Tinted")] {
+      let picker = control(title)
+      for _ in 0..<6 where !picker.canTap { app.swipeUp() }
+      XCTAssertTrue(shows(picker, back), "\(title) reopens on what the server saved: \(picker.debugDescription)")
+    }
+  }
+
   /// A reply that streams and is then saved, in Bubbles and in Classic, captured as fast as XCTest allows
   /// with the reply's position, so a flicker or jump when the saved copy replaces the streamed one shows.
   /// Runs only when screenshots are written.

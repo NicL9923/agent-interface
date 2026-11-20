@@ -167,8 +167,6 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var preferencesDraft: Preferences?
   @ObservationIgnored var preferencesFailureMessage: String?
   @ObservationIgnored var queuedPreferences: Preferences?
-  /// The last settings the queue sent, so Settings can tell whether the person changed anything since.
-  @ObservationIgnored var preferencesLastSent: Preferences?
   /// The chat style choices the person changed that no save has carried yet. Only these go out.
   @ObservationIgnored var queuedChoices: Set<PreferenceChoice> = []
   /// Set when the server answered a save without the choice the person made, as one from before it does.

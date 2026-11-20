@@ -39,11 +39,12 @@ extension AppStore {
     } catch { if currentGeneration == generation { report(error) }; return false }
   }
   /// Account-owned queue survives closing Settings. A slow earlier save cannot win over a later edit.
-  func queuePreferences(_ value: Preferences) {
+  /// `changed` names the chat style choices this edit made, as Settings knows them from the control. Without
+  /// it, the choices that differ from what the person was shown go out: the draft while saves are out.
+  func queuePreferences(_ value: Preferences, changed: Set<PreferenceChoice>? = nil) {
     if preferencesSaveFailed && error == preferencesFailureMessage { error = nil }
     preferencesFailureMessage = nil
-    // What the person changed is measured against what they were shown: the draft while saves are out.
-    queuedChoices.formUnion(value.choices(changedFrom: preferencesDraft ?? bootstrap?.preferences))
+    queuedChoices.formUnion(changed ?? value.choices(changedFrom: preferencesDraft ?? bootstrap?.preferences))
     preferencesDraft = value; queuedPreferences = value; preferencesSaveFailed = false
     guard !preferencesSaving else { return }
     preferencesSaving = true
@@ -55,7 +56,6 @@ extension AppStore {
         // Taken now, so a choice changed again during this save goes out with the next one.
         let choices = queuedChoices
         queuedChoices = []
-        preferencesLastSent = next
         let saved = await setPreferences(next, choices: choices)
         guard currentGeneration == generation else { return }
         if !saved {
