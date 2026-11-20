@@ -55,6 +55,12 @@ export function messageOrigin(message: Message): MessageOrigin | undefined {
 }
 export const isActivityMessage = (message: Message) =>
   messageOrigin(message)?.visibility === "activity";
+/** A message a person wrote, as opposed to scheduled prompts, agent envelopes and other activity. */
+export function isHumanMessage(message: Message) {
+  if (message.role !== "user" || isActivityMessage(message)) return false;
+  const kind = messageOrigin(message)?.kind;
+  return !kind || kind === "human";
+}
 /** A progress line, which the assistant wrote before using tools. It is not an answer. */
 export const isProgressLine = (message: Message) =>
   message.role === "assistant" &&
@@ -128,7 +134,7 @@ export function wireOrigin(
     : messageOrigin(message);
 }
 /** Responses inherit provenance until the next user prompt, including desktop prompts. */
-export function withMessageOrigins(messages: Message[], seed?: MessageOrigin): Message[] {
+export function withMessageOrigins(messages: readonly Message[], seed?: MessageOrigin): Message[] {
   return continueOrigins(messages, seed).messages;
 }
 /**
@@ -136,7 +142,7 @@ export function withMessageOrigins(messages: Message[], seed?: MessageOrigin): M
  * list's seed gives what one call over both lists gives, so the messages before a live reply are read once.
  */
 export function continueOrigins(
-  messages: Message[],
+  messages: readonly Message[],
   seed?: MessageOrigin,
 ): { messages: Message[]; prompt?: MessageOrigin } {
   let prompt = seed;
