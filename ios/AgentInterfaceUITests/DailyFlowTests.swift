@@ -51,8 +51,9 @@ import XCTest
     XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
     let transcript = app.scrollViews["conversationTranscript"]
     XCTAssertGreaterThan(transcript.frame.maxY, composer.frame.maxY, "The transcript reaches under the message box")
-    // At the end, the latest message still rests above the box, not behind it.
-    let card = app.descendants(matching: .any)["composerCard"]
+    // At the end, the latest message still rests above the box, not behind it. iOS 27 flattens the glass card
+    // into the composer area, whose top is the card's, or higher when notices sit above it.
+    let card = app.descendants(matching: .any)["composerArea"]
     let shown = transcript.staticTexts.allElementsBoundByIndex.filter { $0.frame.height > 0 && $0.frame.minY > 0 }
     let last = try XCTUnwrap(shown.max { $0.frame.maxY < $1.frame.maxY })
     XCTAssertLessThanOrEqual(last.frame.maxY, card.frame.minY, "\(last.label) sits behind the message box")
