@@ -1,7 +1,8 @@
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ApiError, write } from "../client-api";
+import { ApiError, request } from "../client-api";
+import { routeUrl } from "../shared/api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import type { Bot } from "../shared/types";
@@ -145,7 +146,8 @@ export function HermesUpgradePanel({
   const { busy: submitting, setError } = action;
   // Polls and actions are separate: a click during a poll must not be dropped, and a
   // poll that started before a click must not overwrite the click's fresher status.
-  const upgrade = useResource<UpgradeStatus>("/hermes/upgrade", {
+  const upgrade = useResource<UpgradeStatus>(routeUrl("GET /hermes/upgrade", {}), {
+    load: (_, signal) => request("GET /hermes/upgrade", { signal }),
     // Polling runs while the dialog is open or work is in progress, even after it closes.
     enabled: (current) => open || uncertain || (!!current && runningPhases.includes(current.phase)),
     pollMs: 3000,
@@ -223,12 +225,14 @@ export function HermesUpgradePanel({
     if (install ? !status.canInstall || !status.candidate : !status.canCheck) return;
     await submit(
       () =>
-        write<UpgradeStatus>(
-          `/hermes/upgrade/${install ? "install" : "check"}`,
-          install
-            ? { candidateRevision: status.candidate!.revision, requestId: crypto.randomUUID() }
-            : {},
-        ),
+        install
+          ? request("POST /hermes/upgrade/install", {
+              body: {
+                candidateRevision: status.candidate!.revision,
+                requestId: crypto.randomUUID(),
+              },
+            })
+          : request("POST /hermes/upgrade/check", { body: {} }),
       "The connection dropped before we could confirm the request. Checking the update status…",
     );
   };
@@ -252,10 +256,12 @@ export function HermesUpgradePanel({
     setConfirmation(null);
     await submit(
       () =>
-        write<UpgradeStatus>("/hermes/upgrade/control", {
-          action: control,
-          operationId,
-          requestId: crypto.randomUUID(),
+        request("POST /hermes/upgrade/control", {
+          body: {
+            action: control,
+            operationId,
+            requestId: crypto.randomUUID(),
+          },
         }),
       "The recovery request may have reached Hermes. Checking its status before you try again…",
     );

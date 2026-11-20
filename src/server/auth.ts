@@ -8,6 +8,7 @@ import type { Store } from "./store.js";
 import type { User } from "../shared/types.js";
 import { installNativeAuth } from "./native-auth.js";
 import { isApiRequest, routePattern } from "./route-path.js";
+import { timingSafeEqualText } from "./timing-safe.js";
 import { SESSION_MAX_AGE_MS } from "../shared/session.js";
 // The only 401 that means this person's session is gone. Clients clear a stored
 // credential on this code alone, never on a bare 401.
@@ -118,7 +119,7 @@ export async function installAuth(
         return;
       if (req.headers.origin !== config.origin)
         return reply.code(403).send({ error: "Request origin must match this application" });
-      if (!publicRoute && req.headers["x-csrf-token"] !== req.csrfToken)
+      if (!publicRoute && !timingSafeEqualText(req.headers["x-csrf-token"], req.csrfToken))
         return reply.code(403).send({ error: "Invalid CSRF token" });
     }
   });

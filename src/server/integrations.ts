@@ -6,8 +6,11 @@ import {
   requestableConnectionId,
   type ConnectionRequestResult,
   type IntegrationCatalog,
+  type IntegrationConnection,
+  type IntegrationFlow,
   type IntegrationRequest,
 } from "../shared/integrations.js";
+import { apiRoute } from "./api-route.js";
 import { httpError } from "./http-error.js";
 const profile = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
 const fields = z.record(z.string().max(100), z.string().max(20000));
@@ -32,73 +35,106 @@ export async function installIntegrationsRoutes(
         "Only a household integration administrator can change shared Hermes connections.",
       );
   };
-  app.get("/api/integrations", async (req) => ({
-    ...(await request({
+  apiRoute(app, "GET /integrations", {}, async (req) => ({
+    ...((await request({
       operation: "list",
       profile: z.object({ profile }).parse(req.query).profile,
-    })),
+    })) as IntegrationCatalog),
     canManage: options.canManage(req),
   }));
-  for (const operation of ["check", "connect", "disconnect"] as const) {
-    app.post(`/api/integrations/:id/${operation}`, async (req) => {
-      if (operation !== "check") manage(req);
-      const input = body.parse(req.body);
-      const id = z
-        .object({ id: z.string().regex(/^[A-Za-z0-9_:.-]{1,200}$/) })
-        .parse(req.params).id;
-      return request({
-        operation,
-        id,
-        ...input,
-        redirectUri: `${options.origin}/integrations/google/callback`,
-      });
+  const idParam = z.object({ id: z.string().regex(/^[A-Za-z0-9_:.-]{1,200}$/) });
+  const integrationAction = async (
+    operation: "check" | "connect" | "disconnect",
+    req: FastifyRequest,
+    input: z.output<typeof body>,
+  ) => {
+    if (operation !== "check") manage(req);
+    const id = idParam.parse(req.params).id;
+    return request({
+      operation,
+      id,
+      ...input,
+      redirectUri: `${options.origin}/integrations/google/callback`,
     });
-  }
-  app.post("/api/integrations/mcp", async (req) => {
-    manage(req);
-    const { profile: selected, ...mcp } = z
-      .object({
-        profile,
-        name: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
-        url: z.string().url().max(2048),
-        auth: z.enum(["none", "bearer", "oauth"]),
-        token: z.string().min(1).max(20000).optional(),
-      })
-      .strict()
-      .parse(req.body);
-    return request({ operation: "add_mcp", profile: selected, mcp });
-  });
-  app.get("/api/integrations/flows/:flowId", async (req) => {
+  };
+  apiRoute(
+    app,
+    "POST /integrations/:id/check",
+    { body },
+    async (req, input) =>
+      integrationAction("check", req, input) as Promise<
+        IntegrationConnection | IntegrationFlow | IntegrationCatalog | { ok: true }
+      >,
+  );
+  apiRoute(
+    app,
+    "POST /integrations/:id/connect",
+    { body },
+    async (req, input) =>
+      integrationAction("connect", req, input) as Promise<IntegrationFlow | IntegrationConnection>,
+  );
+  apiRoute(
+    app,
+    "POST /integrations/:id/disconnect",
+    { body },
+    async (req, input) =>
+      integrationAction("disconnect", req, input) as Promise<
+        IntegrationConnection | IntegrationFlow | { ok: true }
+      >,
+  );
+  apiRoute(
+    app,
+    "POST /integrations/mcp",
+    {
+      before: async (req) => manage(req),
+      body: z
+        .object({
+          profile,
+          name: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
+          url: z.string().url().max(2048),
+          auth: z.enum(["none", "bearer", "oauth"]),
+          token: z.string().min(1).max(20000).optional(),
+        })
+        .strict(),
+    },
+    async (_req, { profile: selected, ...mcp }) =>
+      request({ operation: "add_mcp", profile: selected, mcp }) as Promise<
+        IntegrationConnection | IntegrationFlow | IntegrationCatalog | { ok: true }
+      >,
+  );
+  apiRoute(app, "GET /integrations/flows/:flowId", {}, async (req) => {
     manage(req);
     return request({
       operation: "flow",
       profile: z.object({ profile }).parse(req.query).profile,
       flowId: z.object({ flowId: z.string().regex(/^[A-Za-z0-9_-]{20,128}$/) }).parse(req.params)
         .flowId,
-    });
+    }) as Promise<IntegrationFlow>;
   });
-  app.delete("/api/integrations/flows/:flowId", async (req) => {
+  apiRoute(app, "DELETE /integrations/flows/:flowId", {}, async (req) => {
     manage(req);
     return request({
       operation: "cancel",
       profile: z.object({ profile }).parse(req.query).profile,
       flowId: z.object({ flowId: z.string().regex(/^[A-Za-z0-9_-]{20,128}$/) }).parse(req.params)
         .flowId,
-    });
+    }) as Promise<IntegrationFlow>;
   });
-  app.post("/api/integrations/flows/:flowId/callback", async (req) => {
-    manage(req);
-    const input = z
-      .object({ profile, callbackUrl: z.string().url().max(20000) })
-      .strict()
-      .parse(req.body);
-    return request({
-      operation: "callback",
-      ...input,
-      flowId: z.object({ flowId: z.string().regex(/^[A-Za-z0-9_-]{20,128}$/) }).parse(req.params)
-        .flowId,
-    });
-  });
+  apiRoute(
+    app,
+    "POST /integrations/flows/:flowId/callback",
+    {
+      before: async (req) => manage(req),
+      body: z.object({ profile, callbackUrl: z.string().url().max(20000) }).strict(),
+    },
+    async (req, input) =>
+      request({
+        operation: "callback",
+        ...input,
+        flowId: z.object({ flowId: z.string().regex(/^[A-Za-z0-9_-]{20,128}$/) }).parse(req.params)
+          .flowId,
+      }) as Promise<IntegrationFlow>,
+  );
   // Continue or Not now on an assistant's request to set up a connection. Bot access already
   // checked this person sees the assistant. Continue is refused until the catalog reads as set up.
   const requestId = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
@@ -110,11 +146,12 @@ export async function installIntegrationsRoutes(
       connection: z.string().regex(requestableConnectionId),
     })
     .strict();
-  app.post(
-    "/api/bots/:id/connection-requests/:requestId",
-    async (req): Promise<ConnectionRequestResult> => {
-      const params = z.object({ id: profile, requestId }).strict().parse(req.params),
-        input = settleBody.parse(req.body);
+  apiRoute(
+    app,
+    "POST /bots/:id/connection-requests/:requestId",
+    { body: settleBody },
+    async (req, input): Promise<ConnectionRequestResult> => {
+      const params = z.object({ id: profile, requestId }).strict().parse(req.params);
       if (!runtime.connectionRequest)
         throw httpError(
           409,

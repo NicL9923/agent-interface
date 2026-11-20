@@ -903,7 +903,7 @@ it("offers restore and restart only for receipts that attest the appropriate rev
     );
     writeFileSync(receiptPath, JSON.stringify(deployed));
     expect(
-      installation.upgrades["recoveryEligibility"](
+      await installation.upgrades["recoveryEligibility"](
         state as Parameters<(typeof installation.upgrades)["recoveryEligibility"]>[0],
       ),
     ).toMatchObject({ restore, restart });

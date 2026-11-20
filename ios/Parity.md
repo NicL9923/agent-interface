@@ -143,9 +143,8 @@ Send. On-screen Return adds a line, as is usual on iOS; a hardware keyboard send
 
 Deliberate differences: native asks before installing a Hermes update and before
 discarding unsaved assistant edits, guarding against stray taps. Library and
-camera photos are named "Photo HH.MM.SS" rather than the web's "Pasted image". A
-vault change that Hermes definitely rejected (4xx) does not lock the vault, since
-nothing changed; the web locks after any failure. Native copy says "Allow it in
+camera photos are named "Photo HH.MM.SS" rather than the web's "Pasted image".
+Native copy says "Allow it in
 iOS Settings" where the web names the browser.
 
 ## External acceptance

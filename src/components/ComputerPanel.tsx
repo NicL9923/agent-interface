@@ -5,13 +5,9 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
 import type { Terminal } from "@xterm/xterm";
-import { api, ApiError, write } from "../client-api";
+import { ApiError, request, write } from "../client-api";
 import { isChunkFailure, useRaise } from "../app/chunk-failure";
-import {
-  terminalCommandPattern,
-  type ComputerStatus,
-  type ComputerStreamTicket,
-} from "../shared/computer";
+import { terminalCommandPattern, type ComputerStatus } from "../shared/computer";
 import { desktopKeys, keysymsFor, limitPaste, pasteLimit } from "../lib/desktop-keys";
 import { attachDesktopTouch, type DesktopTouch } from "../lib/desktop-touch";
 import { computerSocketUrl } from "../lib/socket-url";
@@ -202,7 +198,7 @@ export function ComputerPanel({
       if (loading || navigator.onLine === false) return;
       loading = true;
       try {
-        const next = await api<ComputerStatus>("/computer", { signal: controller.signal });
+        const next = await request("GET /computer", { signal: controller.signal });
         if (controller.signal.aborted) return;
         setStatus(next);
         setStatusError("");
@@ -505,9 +501,8 @@ function DesktopView({
       setControlling(false);
       const [{ default: RemoteFrameBuffer }, ticket] = await Promise.all([
         import("@novnc/novnc"),
-        api<ComputerStreamTicket>("/computer/desktop", {
-          method: "POST",
-          body: JSON.stringify({ viewerId: viewerId.current }),
+        request("POST /computer/desktop", {
+          body: { viewerId: viewerId.current },
           signal,
         }),
       ]);
@@ -642,9 +637,8 @@ function DesktopView({
     client.viewOnly = true;
     setControlling(false);
     try {
-      const next = await write<ComputerStatus>("/computer/control", {
-        action,
-        viewerId: viewerId.current,
+      const next = await request("POST /computer/control", {
+        body: { action, viewerId: viewerId.current },
       });
       if (epoch !== attachmentEpoch.current || client !== rfb.current) return;
       onStatus(next);
@@ -877,7 +871,7 @@ function TerminalView({
       const [{ Terminal: Emulator }, { FitAddon }, ticket] = await Promise.all([
         import("@xterm/xterm"),
         import("@xterm/addon-fit"),
-        api<ComputerStreamTicket>("/computer/terminal", { method: "POST", body: "{}", signal }),
+        request("POST /computer/terminal", { body: {}, signal }),
       ]);
       if (signal.aborted || !surface.current) return;
       if (!ticket.sessionId) throw new Error("The terminal did not provide a shell session.");
@@ -957,7 +951,7 @@ function TerminalView({
     stop();
     socket.current?.close();
     try {
-      await write("/computer/terminal/end", { sessionId: sessionId.current });
+      await request("POST /computer/terminal/end", { body: { sessionId: sessionId.current } });
       stopped.current = true;
       socket.current?.close();
       setConnection("ended");

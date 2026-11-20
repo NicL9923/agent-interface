@@ -385,26 +385,19 @@ export class BackgroundWorker {
         // Rebuild the frozen membership's display after revocation, preserving its
         // tag and each endpoint's delivery receipts without exposing removed titles.
         const original = JSON.parse(item.payload);
+        const itemPayloads = item.items.map((row) => JSON.parse(row.payload));
         const display =
-          original.url === "/?view=today"
-            ? { ...original, ...digestCopy(item.items.map((row) => JSON.parse(row.payload))) }
-            : original;
+          original.url === "/?view=today" ? { ...original, ...digestCopy(itemPayloads) } : original;
         // The person's app badge as of this delivery, including what it is about to tell them.
-        const badge = badgeFor(
-          await roster(),
-          this.store,
-          item.user_id,
-          item.items.map((row) => JSON.parse(row.payload)),
-        );
-        const deliveryPayload = JSON.stringify(
-          badge === undefined ? display : { ...display, badge },
-        );
+        const badge = badgeFor(await roster(), this.store, item.user_id, itemPayloads);
         // Every payload names the account it is for, so a phone or browser signed in as someone else since
         // shows none of it and refuses its actions (scripts/service-worker.js). Older web workers ignore it.
-        const accountPayload = JSON.stringify({
-          ...JSON.parse(deliveryPayload),
+        const accountBody = {
+          ...display,
+          ...(badge === undefined ? {} : { badge }),
           account: accountMarker(item.user_id),
-        });
+        };
+        const accountPayload = JSON.stringify(accountBody);
         const subscriptions = this.send ? this.store.subscriptions(item.user_id) : [];
         const devices =
           this.sendApns && this.config.apns
@@ -414,8 +407,8 @@ export class BackgroundWorker {
         if (!subscriptions.length && !devices.length) continue;
         // A browser's Decline action carries its own single-use authority; the service worker has no session.
         const single =
-          item.items.length === 1
-            ? (JSON.parse(item.items[0].payload) as {
+          itemPayloads.length === 1
+            ? (itemPayloads[0] as {
                 kind?: string;
                 botId?: unknown;
                 approvalId?: unknown;
@@ -435,7 +428,7 @@ export class BackgroundWorker {
               })
             : undefined;
         const webPayload = declineToken
-          ? JSON.stringify({ ...JSON.parse(accountPayload), declineToken })
+          ? JSON.stringify({ ...accountBody, declineToken })
           : accountPayload;
         let failed: string | undefined;
         // A send can take a while; an assistant made private meanwhile stops the rest of this
@@ -541,18 +534,16 @@ export class BackgroundWorker {
         // use, or none of those reachable, every device does, as before. Security alerts reach every
         // device, since the one in use could be the one the alert is about.
         const active = security ? new Set<string>() : this.store.activeDevices(item.user_id);
-        const focused = targets.filter(
-          (target) => target.deviceId !== undefined && active.has(target.deviceId),
+        const focusedSet = new Set(
+          targets.filter((target) => target.deviceId !== undefined && active.has(target.deviceId)),
         );
-        let reached = false;
-        for (const target of focused) {
-          if ((await attempt(target)) === "sent") reached = true;
-          if (revoked) break;
-        }
-        for (const target of revoked ? [] : targets) {
-          if (focused.includes(target)) continue;
-          if (reached) await skip(target);
-          else if ((await attempt(target)) === "revoked") break;
+        const focused = [...focusedSet];
+        const remaining = targets.filter((target) => !focusedSet.has(target));
+        const focusedOutcomes = await Promise.all(focused.map((target) => attempt(target)));
+        const reached = focusedOutcomes.includes("sent");
+        if (!revoked && remaining.length) {
+          if (reached) await Promise.all(remaining.map((target) => skip(target)));
+          else await Promise.all(remaining.map((target) => attempt(target)));
         }
         if (revoked) continue;
         let abandoned = 0;
@@ -594,13 +585,19 @@ export class BackgroundWorker {
         rows: { id: string; endpoint: string }[];
       }
     >();
+    const devicesByUser = new Map<string, NativeDevice[]>();
     for (const row of this.store.readOnDevices()) {
       // A device left quiet showed nothing to remove, only a badge to lower.
       const skipped = row.endpoint.startsWith("skipped:");
       const endpoint = skipped ? row.endpoint.slice("skipped:".length) : row.endpoint;
-      const device = this.store
-        .nativeDevices(row.user_id, environment)
-        .find((device) => `apns:${device.environment}:${device.token}` === endpoint);
+      let userDevices = devicesByUser.get(row.user_id);
+      if (!userDevices) {
+        userDevices = this.store.nativeDevices(row.user_id, environment);
+        devicesByUser.set(row.user_id, userDevices);
+      }
+      const device = userDevices.find(
+        (candidate) => `apns:${candidate.environment}:${candidate.token}` === endpoint,
+      );
       const entry = byDevice.get(endpoint) ?? { device, userId: row.user_id, tags: [], rows: [] };
       byDevice.set(endpoint, entry);
       entry.rows.push({ id: row.outbox_id, endpoint: row.endpoint });

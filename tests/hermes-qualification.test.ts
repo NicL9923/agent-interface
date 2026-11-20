@@ -79,6 +79,7 @@ describe("exact Hermes upgrade qualification", () => {
       "src/server/security-headers.ts": "HTTP headers",
       "src/server/send-timing.ts": "send latency logging",
       "src/server/static-cache.ts": "static asset caching",
+      "src/server/timing-safe.ts": "constant-time string comparison",
       "src/shared/device-activity.ts": "which device a person is using, for notification routing",
     };
     const unbound = new Map<string, string>();

@@ -8,6 +8,7 @@ import type {
   ComputerHandoffResult,
   ComputerStatus,
 } from "../shared/computer.js";
+import { apiRoute } from "./api-route.js";
 import { hash, signedIn } from "./auth.js";
 import { allowedIdentity, type Config } from "./config.js";
 import type { Store } from "./store.js";
@@ -38,11 +39,14 @@ const frameSize = (data: RawData) =>
 // The WebSocket plugin admits frames up to a linked Mac's 8 MiB; these sockets keep their own 256 KiB limit.
 export const socketFrameLimit = 256 * 1024;
 const confirmationWindow = 2 * 3600000;
+// Cap retained desktop viewer IDs per member so long-running watch previews never grow unboundedly.
+const MAX_VIEWERS_PER_USER = 64;
+const VIEWER_TTL_MS = 24 * 3600_000;
 type Terminals = Pick<
   SystemTerminal,
-  | "available"
+  | "isAvailable"
   | "target"
-  | "reason"
+  | "getReason"
   | "sessionId"
   | "sessions"
   | "attach"
@@ -65,11 +69,39 @@ export async function installComputerRoutes(
   terminals: Terminals = new SystemTerminal(config.computerTerminal),
 ) {
   const tickets = new Map<string, Attachment>();
-  const viewers = new Map<string, Set<string>>();
+  const viewers = new Map<string, Map<string, number>>();
   const sockets = new Set<WebSocket>();
   const desktopViewers = new Map<string, number>();
   const timers = new Set<NodeJS.Timeout>();
   let closing = false;
+  function rememberViewer(userId: string, viewerId: string) {
+    const now = Date.now();
+    const owned = viewers.get(userId) ?? new Map<string, number>();
+    for (const [id, seenAt] of owned) {
+      if (now - seenAt > VIEWER_TTL_MS && !desktopViewers.has(id)) owned.delete(id);
+    }
+    owned.delete(viewerId);
+    owned.set(viewerId, now);
+    while (owned.size > MAX_VIEWERS_PER_USER) {
+      const oldest = [...owned.keys()].find((id) => !desktopViewers.has(id));
+      if (!oldest) break;
+      owned.delete(oldest);
+    }
+    viewers.set(userId, owned);
+  }
+  function hasViewer(userId: string, viewerId: string) {
+    const owned = viewers.get(userId);
+    const seenAt = owned?.get(viewerId);
+    if (seenAt === undefined) return false;
+    const now = Date.now();
+    if (now - seenAt > VIEWER_TTL_MS && !desktopViewers.has(viewerId)) {
+      owned!.delete(viewerId);
+      return false;
+    }
+    owned!.delete(viewerId);
+    owned!.set(viewerId, now);
+    return true;
+  }
   function source(req: FastifyRequest): Session {
     const userId = signedIn(req).id;
     if (req.nativeSessionHash) return { kind: "native", hash: req.nativeSessionHash, userId };
@@ -108,10 +140,14 @@ export async function installComputerRoutes(
     const at = confirmedAt(source(req));
     return at !== undefined && Date.now() - at <= confirmationWindow;
   }
-  function requireShell(req: FastifyRequest, fresh: boolean) {
+  async function requireShell(req: FastifyRequest, fresh: boolean) {
     const denied = shellDenial(req);
     if (denied) throw httpError(403, denied);
-    if (!terminals.available) throw httpError(409, terminals.reason!);
+    if (!(await terminals.isAvailable()))
+      throw httpError(
+        409,
+        (await terminals.getReason()) ?? "The system terminal service is not running on this host.",
+      );
     // Open shells continue past the window; only new attachments need a recent sign-in.
     if (fresh && !confirmed(req))
       throw httpError(401, "Confirm it's you to open the terminal.", {
@@ -174,13 +210,14 @@ export async function installComputerRoutes(
       native = { ...native, control: { kind: "bot" } };
     const denied = shellDenial(req);
     if (denied) return { ...native, terminal: { available: false, target: "", reason: denied } };
-    const available = terminals.available;
+    const available = await terminals.isAvailable();
+    const reason = available ? undefined : await terminals.getReason();
     return {
       ...native,
       terminal: {
         available,
         target: terminals.target,
-        reason: available ? undefined : terminals.reason,
+        reason,
         ...(available && !confirmed(req) ? { confirmationRequired: true } : {}),
       },
     };
@@ -211,34 +248,37 @@ export async function installComputerRoutes(
     if (!runtime.computerRequest || !runtime.connectComputerDisplay)
       throw httpError(409, "The Hermes desktop integration is unavailable.");
   }
-  app.get("/api/computer", async (req) => status(req));
-  app.post("/api/computer/desktop", async (req) => {
-    const input = z.object({ viewerId: viewer.optional() }).strict().parse(req.body);
-    requireDesktop();
-    const native = (await runtime.computerRequest!({
-      action: "observe",
-      ...actor(req),
-      ...input,
-    })) as ComputerAttachment;
-    if (native.path !== "/api/display/ws" || !viewer.safeParse(native.viewerId).success)
-      throw httpError(502, "Hermes returned an invalid desktop attachment");
-    const owned = viewers.get(signedIn(req).id) ?? new Set<string>();
-    owned.add(native.viewerId);
-    viewers.set(signedIn(req).id, owned);
-    return issue(req, "desktop", native);
-  });
-  app.post("/api/computer/control", async (req) => {
-    const input = z
-      .object({ action: z.enum(["take", "release"]), viewerId: viewer })
-      .strict()
-      .parse(req.body);
-    requireDesktop();
-    if (!viewers.get(signedIn(req).id)?.has(input.viewerId))
-      throw httpError(403, "Open the desktop before changing its control.");
-    if (input.action === "take") fence();
-    await runtime.computerRequest!({ ...input, ...actor(req) });
-    return status(req);
-  });
+  apiRoute(app, "GET /computer", {}, async (req) => status(req));
+  apiRoute(
+    app,
+    "POST /computer/desktop",
+    { body: z.object({ viewerId: viewer.optional() }).strict() },
+    async (req, input) => {
+      requireDesktop();
+      const native = (await runtime.computerRequest!({
+        action: "observe",
+        ...actor(req),
+        ...input,
+      })) as ComputerAttachment;
+      if (native.path !== "/api/display/ws" || !viewer.safeParse(native.viewerId).success)
+        throw httpError(502, "Hermes returned an invalid desktop attachment");
+      rememberViewer(signedIn(req).id, native.viewerId);
+      return issue(req, "desktop", native);
+    },
+  );
+  apiRoute(
+    app,
+    "POST /computer/control",
+    { body: z.object({ action: z.enum(["take", "release"]), viewerId: viewer }).strict() },
+    async (req, input) => {
+      requireDesktop();
+      if (!hasViewer(signedIn(req).id, input.viewerId))
+        throw httpError(403, "Open the desktop before changing its control.");
+      if (input.action === "take") fence();
+      await runtime.computerRequest!({ ...input, ...actor(req) });
+      return status(req);
+    },
+  );
   // Not now on an assistant's request to take over. Take over itself is the ordinary control route.
   const handoffParams = z
     .object({
@@ -253,11 +293,12 @@ export async function installComputerRoutes(
       sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),
     })
     .strict();
-  app.post(
-    "/api/bots/:id/computer-handoffs/:requestId",
-    async (req): Promise<ComputerHandoffResult> => {
-      const params = handoffParams.parse(req.params),
-        body = handoffBody.parse(req.body);
+  apiRoute(
+    app,
+    "POST /bots/:id/computer-handoffs/:requestId",
+    { body: handoffBody },
+    async (req, body): Promise<ComputerHandoffResult> => {
+      const params = handoffParams.parse(req.params);
       if (!visibleTo(store, params.id, signedIn(req).id))
         throw httpError(404, "Assistant not found");
       requireDesktop();
@@ -275,24 +316,27 @@ export async function installComputerRoutes(
       return { status: result.status };
     },
   );
-  app.post("/api/computer/terminal", async (req) => {
-    empty.parse(req.body);
+  apiRoute(app, "POST /computer/terminal", { body: empty }, async (req) => {
     fence();
-    requireShell(req, true);
+    await requireShell(req, true);
     const ticket = issue(req, "terminal");
     audit(req, "ticket", source(req));
     return ticket;
   });
-  app.post("/api/computer/terminal/end", async (req) => {
-    const input = z.object({ sessionId: z.string() }).strict().parse(req.body);
-    fence();
-    requireShell(req, false);
-    if (input.sessionId !== terminals.sessionId(signedIn(req).id))
-      throw httpError(403, "This terminal belongs to another household member.");
-    await terminals.end(signedIn(req).id);
-    audit(req, "end", source(req));
-    return { ok: true };
-  });
+  apiRoute(
+    app,
+    "POST /computer/terminal/end",
+    { body: z.object({ sessionId: z.string() }).strict() },
+    async (req, input) => {
+      fence();
+      await requireShell(req, false);
+      if (input.sessionId !== terminals.sessionId(signedIn(req).id))
+        throw httpError(403, "This terminal belongs to another household member.");
+      await terminals.end(signedIn(req).id);
+      audit(req, "end", source(req));
+      return { ok: true };
+    },
+  );
 
   function guard(type: Attachment["type"]) {
     return async (req: FastifyRequest) => {
@@ -535,7 +579,7 @@ export async function installComputerRoutes(
   );
   // Removed members and non-administrators keep no shell across restarts. Without a known
   // administrator (fresh database or mistyped list), pruning could end the owner's shell.
-  if (admins().length && terminals.available) {
+  if (admins().length && (await terminals.isAvailable())) {
     const keep = new Set(
       store
         .users()
@@ -545,7 +589,7 @@ export async function installComputerRoutes(
     if (!keep.size)
       app.log.warn("Skipped terminal pruning: no terminal administrator has signed in yet");
     else
-      for (const sessionId of terminals.sessions()) {
+      for (const sessionId of await terminals.sessions()) {
         if (keep.has(sessionId)) continue;
         try {
           await terminals.endSession(sessionId);

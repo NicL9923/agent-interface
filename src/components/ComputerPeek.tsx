@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
-import { api } from "../client-api";
-import type { ComputerStreamTicket } from "../shared/computer";
+import { request } from "../client-api";
 import { computerSocketUrl } from "../lib/socket-url";
 import { openComputer } from "./ComputerHandoffCard";
 import { Icon } from "./Icon";
@@ -23,9 +22,8 @@ export function ComputerPeek({ name }: { name: string }) {
       try {
         const [{ default: RemoteFrameBuffer }, ticket] = await Promise.all([
           import("@novnc/novnc"),
-          api<ComputerStreamTicket>("/computer/desktop", {
-            method: "POST",
-            body: JSON.stringify({}),
+          request("POST /computer/desktop", {
+            body: {},
             signal: controller.signal,
           }),
         ]);

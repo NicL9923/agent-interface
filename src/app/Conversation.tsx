@@ -1,7 +1,7 @@
 import { matchCombo, shortcuts } from "./shortcuts";
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode, RefCallback, RefObject } from "react";
-import type { ActivityState, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
+import type { RefCallback, RefObject } from "react";
+import type { ActivityState, Bootstrap, Bot, FileRef, Message } from "../shared/types";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
 import { ReplyMarkdown } from "../components/MessageMarkdown";
@@ -11,17 +11,13 @@ import { NotificationOnboarding } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
 import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
 import {
-  AgentExchange,
-  AgentExchangeGroup,
   ExchangeBots,
   exchangeDisplay,
   exchangeWork,
   isAgentExchange,
 } from "../components/AgentExchange";
-import { ActionReceipt } from "../components/ActionReceipt";
 import { T3ThreadCard } from "../components/T3ThreadCard";
 import { t3ThreadLaunch } from "../shared/t3-code";
-import { When } from "../components/When";
 import { Shimmer } from "../components/Shimmer";
 import { ComputerPeek } from "../components/ComputerPeek";
 import { WorkTape } from "./WorkTape";
@@ -31,7 +27,6 @@ import { receipt } from "../shared/discovery";
 import { activityAction } from "../shared/activity-sentence";
 import { MAX_ATTACHMENTS } from "../shared/uploads";
 import { messageOrigin } from "../shared/message-origin";
-import { withoutBotTag } from "../shared/event-copy";
 import type { SavedConversation } from "./storage";
 import type { SentEcho } from "./sent-echo";
 import { CHECKING_CONNECTION, type useConversation } from "./use-conversation";
@@ -45,13 +40,7 @@ import { FindBar } from "./FindBar";
 import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
 import { useReplySpeech } from "./use-reply-speech";
 import { useTalkLive } from "./talk-live";
-import {
-  foldSummary,
-  isHumanMessage,
-  quoteBlock,
-  turnDuration,
-  workGroups,
-} from "./transcript-logic";
+import { quoteBlock } from "./transcript-logic";
 import { RoutineRunCard } from "../components/RoutineRunCard";
 import { placeRuns, type RoutineRun } from "../shared/routine-runs";
 import { useRoutineRuns } from "./use-routine-runs";
@@ -69,18 +58,20 @@ import {
   type Turn,
 } from "./transcript-window";
 import { useEarlierFiles } from "./use-earlier-files";
-import {
-  imageSize,
-  neverLeaves,
-  readerSees,
-  rememberImageSize,
-  reshapes,
-  rowOf,
-  scrollerOf,
-} from "./image-sizes";
-import type { ImageSize } from "./image-sizes";
 import "./transcript.css";
 // The panel loads when a file chip first opens it, as it does from the assistant's details.
+import { sameFiles, sameTurn } from "./conversation/turn-equality";
+import {
+  ExchangeMessages,
+  FileLink,
+  HistoryEdge,
+  HistorySkeleton,
+  isPrivateAssistant,
+  isReplyRow,
+  latestReasoning,
+  TurnWork,
+  UNKNOWN_SENDER,
+} from "./conversation/TurnDetails";
 const ArtifactsPanel = lazy(() =>
   import("../components/Artifacts").then((module) => ({ default: module.ArtifactsPanel })),
 );
@@ -694,92 +685,6 @@ export const Conversation = memo(function Conversation({
   );
 });
 /** The last line of reasoning in the running turn, after the person's latest message. */
-function latestReasoning(messages: Message[]) {
-  const start = messages.findLastIndex(isHumanMessage) + 1;
-  const text =
-    messages
-      .slice(start)
-      .findLast((message) => message.role === "assistant" && message.reasoning?.trim())
-      ?.reasoning ?? "";
-  return text
-    .trim()
-    .split("\n")
-    .findLast((line) => line.trim())
-    ?.trim();
-}
-// The sweep copy is hidden from assistive technology; see .shimmer-band for how it moves.
-function HistorySkeleton() {
-  return (
-    <div className="history-skeleton" role="status">
-      <span className="sr-only">Opening your conversation…</span>
-      {["reply", "prompt", "reply long"].map((kind, index) => (
-        <div key={index} className={`skeleton-message ${kind}`} aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </div>
-      ))}
-    </div>
-  );
-}
-// Earlier turns load as the reader nears the top. The button serves keyboards and retries.
-function HistoryEdge({
-  history,
-  scroll,
-  name,
-  disabled,
-}: {
-  history: ReturnType<typeof useConversation>["history"];
-  scroll: RefObject<HTMLDivElement | null>;
-  name: string;
-  disabled: boolean;
-}) {
-  const edge = useRef<HTMLDivElement>(null);
-  const { earlier, loading, failed, loadEarlier } = history;
-  const automatic = earlier && !loading && !failed && !disabled;
-  // A new observer reports at once, so a page that still leaves the edge in view loads the next.
-  useEffect(() => {
-    if (
-      !automatic ||
-      !edge.current ||
-      !scroll.current ||
-      typeof IntersectionObserver === "undefined"
-    )
-      return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) loadEarlier();
-      },
-      { root: scroll.current, rootMargin: "600px 0px 0px 0px" },
-    );
-    observer.observe(edge.current);
-    return () => observer.disconnect();
-  }, [automatic, loadEarlier, scroll]);
-  if (history.complete)
-    return (
-      <p className="history-edge history-start">
-        This is the start of your conversation with {name}.
-      </p>
-    );
-  if (!earlier) return null;
-  return (
-    <div className="history-edge" ref={edge}>
-      <button
-        type="button"
-        className="with-progress"
-        disabled={loading || disabled}
-        onClick={loadEarlier}
-      >
-        {loading && <Icon name="spinner" className="spin" size={16} />}
-        {loading
-          ? "Loading earlier messages…"
-          : failed
-            ? "Try loading earlier messages again"
-            : "Show earlier messages"}
-      </button>
-    </div>
-  );
-}
 type TurnProps = {
   block: Turn;
   advanced: boolean;
@@ -881,75 +786,6 @@ const Turns = memo(function Turns({
 });
 // A stream changes the latest reply up to ten times a second, and `turns` rebuilds every block each
 // time. A turn is compared by what it shows, so finished turns, and a reload with the same content, bail out.
-const sameFile = (a: FileRef, b: FileRef) =>
-  a === b ||
-  (a.id === b.id && a.name === b.name && a.mime === b.mime && a.size === b.size && a.url === b.url);
-const sameCall = (a?: ToolCall, b?: ToolCall) =>
-  a === b ||
-  (!!a &&
-    !!b &&
-    a.id === b.id &&
-    a.name === b.name &&
-    a.status === b.status &&
-    a.arguments === b.arguments &&
-    a.result === b.result &&
-    a.error === b.error &&
-    a.startedAt === b.startedAt &&
-    a.completedAt === b.completedAt);
-const sameOrigin = (a?: Message["origin"], b?: Message["origin"]) =>
-  a === b ||
-  (!!a &&
-    !!b &&
-    a.kind === b.kind &&
-    a.visibility === b.visibility &&
-    a.title === b.title &&
-    a.name === b.name &&
-    a.handle === b.handle);
-function sameMessage(a: Message, b: Message) {
-  if (a === b) return true;
-  return (
-    a.id === b.id &&
-    a.role === b.role &&
-    a.text === b.text &&
-    a.interim === b.interim &&
-    a.createdAt === b.createdAt &&
-    a.reasoning === b.reasoning &&
-    a.toolName === b.toolName &&
-    a.runId === b.runId &&
-    a.sender?.id === b.sender?.id &&
-    a.sender?.name === b.sender?.name &&
-    sameOrigin(a.origin, b.origin) &&
-    sameCall(a.toolCall, b.toolCall) &&
-    (a.files === b.files ||
-      (!!a.files &&
-        !!b.files &&
-        a.files.length === b.files.length &&
-        a.files.every((file, index) => sameFile(file, b.files![index]))))
-  );
-}
-const sameMessages = (a: Message[], b: Message[]) =>
-  a === b || (a.length === b.length && a.every((message, index) => sameMessage(message, b[index])));
-function sameTurn(a: Turn, b: Turn) {
-  if (a === b) return true;
-  if (
-    a.replyAt !== b.replyAt ||
-    a.reasoning.length !== b.reasoning.length ||
-    a.reasoning.some((part, index) => part !== b.reasoning[index])
-  )
-    return false;
-  if (
-    !sameMessages(a.messages, b.messages) ||
-    a.tools.size !== b.tools.size ||
-    a.order.length !== b.order.length ||
-    a.order.some((id, index) => id !== b.order[index])
-  )
-    return false;
-  const left = [...a.tools],
-    right = [...b.tools];
-  return left.every(
-    ([id, message], index) => id === right[index][0] && sameMessage(message, right[index][1]),
-  );
-}
 const sameTurnProps = (a: TurnProps, b: TurnProps) =>
   a.advanced === b.advanced &&
   a.unavailable === b.unavailable &&
@@ -965,13 +801,6 @@ const sameTurnProps = (a: TurnProps, b: TurnProps) =>
   a.onOpenFile === b.onOpenFile &&
   sameFiles(a.files, b.files) &&
   sameTurn(a.block, b.block);
-const sameFiles = (a: TurnProps["files"], b: TurnProps["files"]) =>
-  a === b ||
-  (!!a &&
-    !!b &&
-    a.replyId === b.replyId &&
-    a.artifacts.length === b.artifacts.length &&
-    a.artifacts.every((artifact, index) => sameFile(artifact.file, b.artifacts[index].file)));
 const TurnView = memo(function TurnView({
   block,
   advanced,
@@ -1162,322 +991,3 @@ const TurnView = memo(function TurnView({
   if (foldAt === undefined) rows.push(...afterFold);
   return <div className="conversation-turn">{rows}</div>;
 }, sameTurnProps);
-function ExchangeMessages({
-  messages,
-  recipient,
-  sources,
-}: {
-  messages: Message[];
-  recipient: string;
-  sources: Map<string, string>;
-}) {
-  return (
-    <AgentExchangeGroup messages={messages} recipient={recipient}>
-      {messages.map((message) => (
-        <article
-          className="message message-agent"
-          key={message.id}
-          data-message-id={message.id}
-          data-source-message-id={sources.get(message.id)}
-        >
-          <AgentExchange message={message} recipient={recipient} />
-          {message.files?.map((file) => (
-            <FileLink key={file.id} file={file} />
-          ))}
-        </article>
-      ))}
-    </AgentExchangeGroup>
-  );
-}
-/**
- * One row for a turn's intermediate work: "Worked for 2m 14s · 3 tool calls, 1 subagent". Open, it
- * shows the grouped accordions as before, with reasoning first.
- */
-function TurnWork({
-  work,
-  reasoning,
-  messages,
-  advanced,
-  disconnected,
-  recipient,
-  live,
-}: {
-  work: Message[];
-  reasoning: string[];
-  messages: Message[];
-  advanced: boolean;
-  disconnected: boolean;
-  recipient: string;
-  live: boolean;
-}) {
-  const summary = foldSummary(work, live ? undefined : turnDuration({ messages, work }), live);
-  return (
-    <details className="turn-work">
-      <summary>
-        <span>{summary}</span>
-      </summary>
-      <div className="turn-work-content">
-        {reasoning.length > 0 && <Reasoning parts={reasoning} />}
-        {work.length > 0 && (
-          <ToolCalls
-            messages={work}
-            advanced={advanced}
-            disconnected={disconnected}
-            recipient={recipient}
-          />
-        )}
-      </div>
-    </details>
-  );
-}
-/** The label for a person's message that names no sender, in a chat other members share. Matches the unresolved author in group chats (src/server/group-latest.ts). */
-const UNKNOWN_SENDER = "Household member";
-/** Only its owner can see a personal assistant that is not shared, so nobody else writes in that chat. Mirrors `visible` in src/server/bot-access.ts. */
-const isPrivateAssistant = (bot: Bot) => bot.shared === false && !!bot.ownerId;
-const isReplyRow = (message: Message) =>
-  message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
-function Reasoning({ parts }: { parts: string[] }) {
-  return (
-    <details className="tool-calls reasoning-calls">
-      <summary>
-        <Icon name="brain" size={16} />
-        <span>Reasoning</span>
-        {parts.length > 1 && <span className="tool-count">{parts.length}</span>}
-      </summary>
-      <div className="tool-calls-content">
-        {parts.map((part, index) => (
-          <p className="reasoning-part" key={index}>
-            {part}
-          </p>
-        ))}
-      </div>
-    </details>
-  );
-}
-function ToolCalls({
-  messages,
-  advanced,
-  disconnected,
-  recipient,
-}: {
-  messages: Message[];
-  advanced: boolean;
-  disconnected: boolean;
-  recipient: string;
-}): ReactNode {
-  return workGroups(messages).map((group) => (
-    <details className="tool-calls" key={group.label}>
-      <summary>
-        <Icon name={group.label === "Subagents" ? "robot" : "terminal"} size={16} />
-        <span>{group.label}</span>
-        <span className="tool-count">{group.items.length}</span>
-        {group.items.some((message) => message.toolCall?.status === "running") && (
-          <span className="muted">{disconnected ? "Last seen running" : "Running"}</span>
-        )}
-      </summary>
-      <div className="tool-calls-content">
-        {group.items.map((message) => (
-          <div key={message.id}>
-            {isAgentExchange(message) ? (
-              <AgentExchange message={message} recipient={recipient} />
-            ) : message.toolCall ? (
-              advanced ? (
-                <ToolCallDetail call={message.toolCall} disconnected={disconnected} />
-              ) : (
-                <ActionReceipt call={message.toolCall} />
-              )
-            ) : (
-              <details className="message-detail">
-                <summary>
-                  {withoutBotTag(messageOrigin(message)?.title ?? "") ||
-                    message.toolName ||
-                    group.label}
-                  {message.createdAt && (
-                    <>
-                      {" "}
-                      · <When value={message.createdAt} inline />
-                    </>
-                  )}
-                </summary>
-                <pre role="region" tabIndex={0} aria-label="Activity output">
-                  {message.text || "No result was exposed by Hermes."}
-                </pre>
-              </details>
-            )}
-            {message.files?.map((file) => (
-              <FileLink key={file.id} file={file} />
-            ))}
-          </div>
-        ))}
-      </div>
-    </details>
-  ));
-}
-function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?: boolean }) {
-  return (
-    <details className="message-detail tool-call-detail" data-tool-call-id={call.id}>
-      <summary>
-        <span>{call.name}</span>
-        <span className={`tool-call-status tool-call-${call.status}`}>
-          {call.status === "running"
-            ? disconnected
-              ? "Last seen running"
-              : "Running"
-            : call.status === "failed"
-              ? "Failed"
-              : "Completed"}
-        </span>
-      </summary>
-      <dl>
-        <div>
-          <dt>Call</dt>
-          <dd>
-            <code>{call.id}</code>
-          </dd>
-        </div>
-        {call.startedAt && (
-          <div>
-            <dt>Started</dt>
-            <dd>
-              <When value={call.startedAt} />
-            </dd>
-          </div>
-        )}
-        {call.completedAt && (
-          <div>
-            <dt>Finished</dt>
-            <dd>
-              <When value={call.completedAt} />
-            </dd>
-          </div>
-        )}
-      </dl>
-      {call.arguments !== undefined && (
-        <>
-          <h3>Arguments</h3>
-          <pre role="region" tabIndex={0} aria-label={`Arguments for ${call.name}`}>
-            {call.arguments}
-          </pre>
-        </>
-      )}
-      {call.result !== undefined && (
-        <>
-          <h3>Result</h3>
-          <pre role="region" tabIndex={0} aria-label={`Result from ${call.name}`}>
-            {call.result}
-          </pre>
-        </>
-      )}
-      {call.error && (
-        <>
-          <h3 className="danger">Error</h3>
-          <pre className="danger" role="region" tabIndex={0} aria-label={`Error from ${call.name}`}>
-            {call.error}
-          </pre>
-        </>
-      )}
-      {call.status === "running" && call.result === undefined && (
-        <p>
-          {disconnected
-            ? "The current tool status will be checked when Hermes reconnects."
-            : "Waiting for the result from Hermes."}
-        </p>
-      )}
-    </details>
-  );
-}
-function FileLink({ file }: { file: FileRef }) {
-  // The frame around the image holds its space: the image's natural shape when this page knows it, else the 4:3
-  // frame in styles.css. A loaded image far from its frame's shape takes its own once (see reshapes), at once unless
-  // the reader is looking at it, else as soon as nothing being read would move: the row left the view, or the reader
-  // is back at the end (see readerSees). A row that no scroll can take out of view, as in a short thread, takes it at
-  // once, since waiting would keep it letterboxed for good (see neverLeaves). One that fails leaves the frame as it
-  // was. The frame, not the image, carries the shape, because a browser drops a failed image's aspect ratio.
-  const [shape, setShape] = useState(() => imageSize(file.id));
-  const [waiting, setWaiting] = useState<ImageSize>();
-  const [failed, setFailed] = useState(false);
-  const frame = useRef<HTMLSpanElement>(null);
-  const href = file.url || `/api/files/${encodeURIComponent(file.id)}`;
-  const image = file.mime.startsWith("image/");
-  useEffect(() => {
-    const element = frame.current;
-    if (!waiting || !element) return;
-    let done = false;
-    const apply = () => {
-      if (done) return;
-      done = true;
-      setShape(waiting);
-      setWaiting(undefined);
-    };
-    const check = () => {
-      if (!readerSees(element) || neverLeaves(element)) apply();
-    };
-    check();
-    if (done) return;
-    // Scrolling is how a reader leaves the row or comes back to the end; the observer also hears the row pushed away.
-    const scroller = scrollerOf(element);
-    scroller?.addEventListener("scroll", check, { passive: true });
-    const observer =
-      typeof IntersectionObserver === "undefined"
-        ? undefined
-        : new IntersectionObserver(
-            (entries) => {
-              if (!entries.some((entry) => entry.isIntersecting)) apply();
-            },
-            { root: scroller },
-          );
-    observer?.observe(rowOf(element));
-    return () => {
-      scroller?.removeEventListener("scroll", check);
-      observer?.disconnect();
-    };
-  }, [waiting]);
-  // The card's width follows the frame's ratio, so an image the height cap binds, such as a tall screenshot, keeps
-  // its own shape in a narrower card instead of sitting between bars. See `.file-image` in styles.css.
-  const ratio = shape ? shape.width / shape.height : undefined;
-  return (
-    <a
-      className={`file-link${image ? " file-image" : ""}`}
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      style={ratio ? ({ "--file-ratio": ratio } as CSSProperties) : undefined}
-    >
-      {image && (
-        <span
-          className="file-frame"
-          ref={frame}
-          style={shape && { aspectRatio: `${shape.width} / ${shape.height}` }}
-        >
-          {failed ? (
-            <span className="file-failed">
-              <Icon name="file" size={20} />
-              Couldn't load this image
-            </span>
-          ) : (
-            <img
-              src={href}
-              alt={file.name}
-              loading="lazy"
-              decoding="async"
-              onError={() => setFailed(true)}
-              onLoad={(event) => {
-                const loaded = {
-                  width: event.currentTarget.naturalWidth,
-                  height: event.currentTarget.naturalHeight,
-                };
-                rememberImageSize(file.id, event.currentTarget);
-                if (!reshapes(shape, loaded)) return;
-                if (frame.current && readerSees(frame.current)) setWaiting(loaded);
-                else setShape(loaded);
-              }}
-            />
-          )}
-        </span>
-      )}
-      <span className="file-name">
-        <Icon name={image ? "download" : "file"} size={16} /> {file.name}
-      </span>
-    </a>
-  );
-}

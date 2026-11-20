@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { write } from "../client-api";
+import { ApiError, request } from "../client-api";
+import { routeUrl } from "../shared/api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import type { AddVaultLogin, ProfileVault, VaultSourceName } from "../shared/vault";
@@ -48,7 +49,7 @@ export function VaultPanel({ botId }: { botId: string }) {
     identifier: "",
     identifierType: "email",
   });
-  const path = `/bots/${encodeURIComponent(botId)}/vault`;
+  const path = routeUrl("GET /bots/:id/vault", { id: botId });
   const vaultResource = useResource<ProfileVault>(path, {
     errorMessage: () =>
       "Could not load this Hermes profile's logins. Check the connection and reload.",
@@ -93,7 +94,17 @@ export function VaultPanel({ botId }: { botId: string }) {
         setAdding(false);
         void vaultResource.reload();
       },
-      onError: () => {
+      onError: (cause) => {
+        // Definite 4xx rejections (other than ambiguous 409 state conflicts) mean Hermes refused
+        // before mutating the vault, so report the reason without locking the panel.
+        if (
+          cause instanceof ApiError &&
+          cause.status >= 400 &&
+          cause.status < 500 &&
+          cause.status !== 409
+        ) {
+          return `${cause.message} Secret fields have been cleared.`;
+        }
         setUncertain(true);
         return "Hermes could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared.";
       },
@@ -205,7 +216,10 @@ export function VaultPanel({ botId }: { botId: string }) {
               return;
             }
             const input = { ...form, password };
-            void mutate(() => write(path + "/logins", input), "Login saved in Hermes.");
+            void mutate(
+              () => request("POST /bots/:id/vault/logins", { params: { id: botId }, body: input }),
+              "Login saved in Hermes.",
+            );
           }}
         >
           <label>
@@ -337,11 +351,9 @@ export function VaultPanel({ botId }: { botId: string }) {
                           onClick={() =>
                             void mutate(
                               () =>
-                                write(
-                                  path + `/logins/${encodeURIComponent(item.id)}`,
-                                  {},
-                                  "DELETE",
-                                ),
+                                request("DELETE /bots/:id/vault/logins/:itemId", {
+                                  params: { id: botId, itemId: item.id },
+                                }),
                               "Login removed from Hermes.",
                             )
                           }
@@ -407,7 +419,11 @@ export function VaultPanel({ botId }: { botId: string }) {
                           onChange={(event) => {
                             const enabled = event.target.checked;
                             void mutate(
-                              () => write(path + `/sources/${source.name}`, { enabled }, "PUT"),
+                              () =>
+                                request("PUT /bots/:id/vault/sources/:source", {
+                                  params: { id: botId, source: source.name },
+                                  body: { enabled },
+                                }),
                               enabled ? "Vault source enabled." : "Vault source disabled.",
                             );
                           }}
@@ -448,7 +464,11 @@ export function VaultPanel({ botId }: { botId: string }) {
                         onClick={() => {
                           returnToUnlock.current = source.name;
                           void mutate(
-                            () => write(path + `/sources/${source.name}/lock`, {}),
+                            () =>
+                              request("POST /bots/:id/vault/sources/:source/lock", {
+                                params: { id: botId, source: source.name },
+                                body: {},
+                              }),
                             "Vault source locked.",
                           );
                         }}
@@ -466,7 +486,11 @@ export function VaultPanel({ botId }: { botId: string }) {
                       event.preventDefault();
                       const value = master;
                       void mutate(
-                        () => write(path + `/sources/${source.name}/unlock`, { password: value }),
+                        () =>
+                          request("POST /bots/:id/vault/sources/:source/unlock", {
+                            params: { id: botId, source: source.name },
+                            body: { password: value },
+                          }),
                         "Vault source unlocked for this profile.",
                       );
                     }}

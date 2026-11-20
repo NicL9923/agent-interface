@@ -3,7 +3,8 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
 import { useEffect, useId, useRef, useState } from "react";
-import { api, ApiError, write } from "../client-api";
+import { ApiError, request } from "../client-api";
+import { routeUrl } from "../shared/api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import { integrationFlowKey } from "../app/storage";
@@ -133,13 +134,22 @@ export function IntegrationList({
   const [flow, setFlow] = useState<IntegrationFlow>();
   const [callback, setCallback] = useState("");
   const [custom, setCustom] = useState(false);
-  const [mcp, setMcp] = useState({ name: "", url: "", auth: "none", token: "" });
+  const [mcp, setMcp] = useState<{
+    name: string;
+    url: string;
+    auth: "none" | "bearer" | "oauth";
+    token: string;
+  }>({ name: "", url: "", auth: "none", token: "" });
   const flowKey = integrationFlowKey(accountScope, profile);
   // A chat card has no Refresh button: it rereads on return to the tab and every 15 seconds, so a
   // connection someone finishes on another device still continues the assistant.
   const connections = useResource<IntegrationCatalog>(
-    `/integrations?profile=${encodeURIComponent(profile)}`,
-    { wake: true, pollMs: only ? 15000 : undefined },
+    routeUrl("GET /integrations", {}, { profile }),
+    {
+      load: (_, signal) => request("GET /integrations", { query: { profile }, signal }),
+      wake: true,
+      pollMs: only ? 15000 : undefined,
+    },
   );
   const { data: everything, loading, reload: refresh } = connections;
   const catalog =
@@ -173,9 +183,15 @@ export function IntegrationList({
   const pendingFlow = flow?.status === "pending" ? flow.flowId : undefined;
   const flowCheck = useResource<IntegrationFlow>(
     pendingFlow
-      ? `/integrations/flows/${encodeURIComponent(pendingFlow)}?profile=${encodeURIComponent(profile)}`
+      ? routeUrl("GET /integrations/flows/:flowId", { flowId: pendingFlow }, { profile })
       : null,
     {
+      load: (_, signal) =>
+        request("GET /integrations/flows/:flowId", {
+          params: { flowId: pendingFlow! },
+          query: { profile },
+          signal,
+        }),
       pollMs: 2500,
       onData: (next) => {
         setFlow(next);
@@ -227,19 +243,29 @@ export function IntegrationList({
         ? "The connection check could not finish. Refresh status or try the check again."
         : "We couldn't confirm the connection change. Refresh status before trying again. Your request won't be sent again automatically."
       : (cause as Error).message;
-  const act = (id: string, operation: string, payload: unknown = { profile }) =>
+  const act = (
+    id: string,
+    operation: "check" | "connect" | "disconnect",
+    payload: { profile: string; fields?: Record<string, string> } = { profile },
+  ) =>
     action.run(
       async ({ current }) => {
         setWorking(id);
-        const next = await write<IntegrationFlow>(
-          `/integrations/${encodeURIComponent(id)}/${operation}`,
-          payload,
-        );
+        const route =
+          operation === "check"
+            ? ("POST /integrations/:id/check" as const)
+            : operation === "connect"
+              ? ("POST /integrations/:id/connect" as const)
+              : ("POST /integrations/:id/disconnect" as const);
+        const next = await request(route, { params: { id }, body: payload });
         if (!current()) return;
-        if (operation === "connect") {
+        if (operation === "connect" && "kind" in next) {
           setFields({});
           setEditing(undefined);
           acceptFlow(next, catalog?.connections.find((item) => item.id === id)?.name, id);
+        } else if (operation === "connect") {
+          setFields({});
+          setEditing(undefined);
         }
         setDisconnect("");
         await refresh();
@@ -251,12 +277,15 @@ export function IntegrationList({
     const { flowId } = flow;
     return action.run(async ({ current }) => {
       setWorking("flow");
-      const path = `/integrations/flows/${encodeURIComponent(flowId)}`;
       const next = cancel
-        ? await api<IntegrationFlow>(`${path}?profile=${encodeURIComponent(profile)}`, {
-            method: "DELETE",
+        ? await request("DELETE /integrations/flows/:flowId", {
+            params: { flowId },
+            query: { profile },
           })
-        : await write<IntegrationFlow>(`${path}/callback`, { profile, callbackUrl: callback });
+        : await request("POST /integrations/flows/:flowId/callback", {
+            params: { flowId },
+            body: { profile, callbackUrl: callback },
+          });
       // A check that started before this answer could otherwise replace it with the older state.
       if (current()) {
         flowCheck.invalidate();
@@ -598,10 +627,13 @@ export function IntegrationList({
                 e.preventDefault();
                 void action.run(
                   async ({ current }) => {
-                    const next = await write<IntegrationFlow | IntegrationConnection>(
-                      "/integrations/mcp",
-                      { profile, ...mcp, token: mcp.auth === "bearer" ? mcp.token : undefined },
-                    );
+                    const next = await request("POST /integrations/mcp", {
+                      body: {
+                        profile,
+                        ...mcp,
+                        token: mcp.auth === "bearer" ? mcp.token : undefined,
+                      },
+                    });
                     if (!current()) return;
                     if ("kind" in next) acceptFlow(next, mcp.name);
                     setMcp({ name: "", url: "", auth: "none", token: "" });
@@ -636,7 +668,13 @@ export function IntegrationList({
                 Sign-in method
                 <NativeSelect
                   value={mcp.auth}
-                  onChange={(e) => setMcp({ ...mcp, auth: e.target.value, token: "" })}
+                  onChange={(e) =>
+                    setMcp({
+                      ...mcp,
+                      auth: e.target.value as "none" | "bearer" | "oauth",
+                      token: "",
+                    })
+                  }
                 >
                   <option value="none">No sign-in</option>
                   <option value="oauth">Sign in with browser</option>

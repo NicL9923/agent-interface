@@ -2115,11 +2115,12 @@ describe("live work", () => {
       },
     ];
     // The desktop ticket never arrives here, so the preview stays as it first appears.
-    const fallback = vi.mocked(api).getMockImplementation()!;
-    vi.mocked(api).mockImplementation(async <T>(path: string, init?: RequestInit) =>
-      path === "/computer/desktop"
-        ? new Promise<T>(() => {})
-        : (fallback(path, init) as Promise<T>),
+    const fallback = vi.mocked(write).getMockImplementation()!;
+    vi.mocked(write).mockImplementation(
+      async <T>(path: string, body?: unknown, method?: string, init?: RequestInit) =>
+        path === "/computer/desktop"
+          ? new Promise<T>(() => {})
+          : (fallback(path, body, method, init) as Promise<T>),
     );
     try {
       conversation = {

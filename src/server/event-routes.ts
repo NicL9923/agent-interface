@@ -42,7 +42,9 @@ export function installEventRoutes(
     collaborators;
   // Gateway frames are hints, not roster changes. Compare each viewer's visible
   // projection after one shared, cheap evaluation, at most once per second.
-  const rosterListeners = new Set<(bots: Bot[], nativeAvatar: boolean) => void>();
+  const rosterListeners = new Set<
+    (bots: Bot[], nativeAvatar: boolean, projected: Map<string, string>) => void
+  >();
   let rosterPending: ReturnType<typeof setTimeout> | undefined;
   let rosterEvaluating = false,
     rosterAgain = false,
@@ -79,8 +81,10 @@ export function installEventRoutes(
             roster.note(bots);
             // The bootstrap each client sends on the notice below reuses this read.
             if (status) snapshot.keep({ bots, capabilities, connection: status }, began);
+            // Memoize per userId so multiple tabs for one household member serialize the roster once.
+            const projected = new Map<string, string>();
             for (const changed of rosterListeners)
-              changed(bots, capabilities.avatarMetadata.supported);
+              changed(bots, capabilities.avatarMetadata.supported, projected);
           })
           .catch(() => {
             /* The fallback bootstrap retries unavailable runtime reads. */
@@ -137,12 +141,17 @@ export function installEventRoutes(
               `event: group\ndata: ${JSON.stringify({ roomId: group, latestSeq: state.room.latest_seq ?? 0 })}\n\n`,
             );
           });
-    const changed = (bots: Bot[], nativeAvatar: boolean) => {
+    const changed = (bots: Bot[], nativeAvatar: boolean, projected: Map<string, string>) => {
       if (!stillSignedIn(store, config, req)) {
         stream?.end();
         return;
       }
-      const next = rosterProjection(bots, signedIn(req).id, nativeAvatar);
+      const viewerId = signedIn(req).id;
+      let next = projected.get(viewerId);
+      if (next === undefined) {
+        next = rosterProjection(bots, viewerId, nativeAvatar);
+        projected.set(viewerId, next);
+      }
       if (next === projection) return;
       projection = next;
       stream?.send("event: roster\ndata: roster\n\n");
