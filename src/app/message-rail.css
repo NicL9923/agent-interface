@@ -58,6 +58,24 @@
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+/* Toward ticks the window hides, above or below the ticks: a chevron, so it never rests on color alone.
+   It draws in the stroke color, which forced colors map to the system text color. */
+.message-rail-more {
+  position: absolute;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 16px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.message-rail-more-earlier {
+  bottom: calc(100% - 8px);
+}
+.message-rail-more-later {
+  top: calc(100% - 8px);
+}
 .message-rail-preview {
   position: absolute;
   right: calc(100% - 12px);

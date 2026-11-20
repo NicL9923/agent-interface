@@ -69,10 +69,45 @@ export function railEntries(messages: Message[]): RailEntry[] {
 /** A tick's accessible name. The preview card is hidden from assistive tech, so this carries the words. */
 export const tickName = (entry: RailEntry) => `Jump to: ${entry.text.slice(0, NAME_CHARS)}`;
 
-/** The most recent entries whose ticks fit in `height`, oldest first. */
-export function fitTicks<T>(entries: T[], height: number, pitch = RAIL_PITCH): T[] {
-  const room = Math.floor(Math.max(0, height) / pitch);
-  return room > 0 ? entries.slice(-room) : [];
+/** How many ticks fit in `height`. A partial pitch does not fit one. */
+export const railRoom = (height: number, pitch = RAIL_PITCH) =>
+  Math.max(0, Math.floor(height / pitch));
+
+/**
+ * Which entries get ticks when not all fit: `room` of `count` in a row, always holding `anchor`, the
+ * turn in view or the tick focus moved to. The window stays at `previous` while the anchor is inside it
+ * with one tick to spare toward a hidden side, and otherwise moves only as far as that takes, so ticks
+ * hold still under the pointer while the reader scrolls within them. Without `previous` it ends at the latest.
+ */
+export function railWindow(
+  count: number,
+  room: number,
+  anchor: number,
+  previous?: number,
+): { start: number; end: number } {
+  const size = Math.min(count, room);
+  if (size <= 0) return { start: 0, end: 0 };
+  const last = count - size;
+  const at = Math.min(Math.max(anchor, 0), count - 1);
+  const margin = size >= 3 ? 1 : 0;
+  let start = Math.min(Math.max(previous ?? last, 0), last);
+  if (at < start + margin) start = at - margin;
+  else if (at > start + size - 1 - margin) start = at - size + 1 + margin;
+  start = Math.min(Math.max(start, 0), last);
+  return { start, end: start + size };
+}
+
+/** What the rail says to assistive tech about entries outside its window, or undefined when all show. */
+export function railHidden(earlier: number, later: number) {
+  if (!earlier && !later) return undefined;
+  const total = earlier + later;
+  const which =
+    earlier && later
+      ? `${earlier} earlier and ${later} later`
+      : earlier
+        ? `${earlier} earlier`
+        : `${later} later`;
+  return `${which} ${total === 1 ? "message is" : "messages are"} not shown. Up and Down reach them.`;
 }
 
 /** Whether the rail shows. It never covers the reading column, and needs a pointer that can hover. */
@@ -91,19 +126,34 @@ export function railShown({
   return canHover && overflows && gutter >= RAIL_SPACE && count >= RAIL_MIN_MESSAGES;
 }
 
+/** Where an entry's message sits: its index among the entries and its top in the scrolled content. */
+export type RailPlace = { index: number; offset: number };
+
 /**
  * The entry whose turn is being read: the last message that has reached the upper third of the view,
  * or, at the end of the transcript, the last one in view. Above every message, the first one in view.
- * `tops` are each message's top relative to the view's top, undefined for one not on the page.
+ * `places` are the entries on the page, in content order, measured once and kept until the content or
+ * its size changes, so a scroll only searches them. -1 when none is.
  */
-export function activeTick(tops: (number | undefined)[], height: number, atEnd: boolean) {
-  const line = atEnd ? height : Math.max(ANCHOR_GAP + 1, height / 3);
-  let active = -1;
-  tops.forEach((top, index) => {
-    if (top !== undefined && (atEnd ? top < line : top <= line)) active = index;
-  });
-  if (active >= 0) return active;
-  return tops.findIndex((top) => top !== undefined && top >= 0 && top < height);
+export function activeTick(
+  places: readonly RailPlace[],
+  scrollTop: number,
+  height: number,
+  atEnd: boolean,
+) {
+  const line = scrollTop + (atEnd ? height : Math.max(ANCHOR_GAP + 1, height / 3));
+  let low = 0,
+    high = places.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    const offset = places[middle]!.offset;
+    if (atEnd ? offset < line : offset <= line) low = middle + 1;
+    else high = middle;
+  }
+  if (low > 0) return places[low - 1]!.index;
+  const first = places[0];
+  const top = first ? first.offset - scrollTop : -1;
+  return first && top >= 0 && top < height ? first.index : -1;
 }
 
 /** The tick a rail key moves to. Up and Down stop at the ends rather than wrapping. */

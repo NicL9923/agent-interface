@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api } from "../src/client-api";
 import { ANCHOR_GAP } from "../src/app/scroll-follow";
@@ -174,4 +174,138 @@ it("jumps to a sent message from its tick, leaves the reader there, and keeps th
   expect(document.activeElement).toBe(tick("First question"));
   expect(tick("First question").tabIndex).toBe(0);
   expect(tick("Second question").tabIndex).toBe(-1);
+});
+
+describe("a chat with more sent messages than ticks fit", () => {
+  // 64 questions, each with its answer, 200 px apart; the rail has room for 20 ticks (608 - 2 × 64 = 480).
+  const count = 64;
+  // An image above every message can load late and push them all down.
+  let shift = 0;
+  const top = (index: number) => 100 + index * 200 + shift;
+  let rowReads = 0;
+  let resized: (() => void)[] = [];
+  function longLayout() {
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(top(count) + 400);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(608);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      const id = (this as HTMLElement).dataset.messageId ?? "";
+      const match = /^q(\d+)$|^a(\d+)$/.exec(id);
+      // Only the rail's own reads count; the transcript keeps the reader's place with a search of its own.
+      if (match && new Error().stack?.includes("MessageRail")) rowReads++;
+      const offset = match ? top(Number(match[1] ?? match[2])) + (match[2] ? 100 : 0) : undefined;
+      const y = offset === undefined ? 0 : offset - (this.closest(".transcript")?.scrollTop ?? 0);
+      const right = this.classList.contains("transcript-content") ? 900 : 1200;
+      return {
+        top: y,
+        bottom: y + 60,
+        left: 0,
+        right,
+        width: right,
+        height: 60,
+        x: 0,
+        y,
+        toJSON() {},
+      };
+    });
+  }
+  const rail = () =>
+    container.querySelector<HTMLElement>('nav[aria-label="Messages you sent in this chat"]')!;
+  const names = () =>
+    [...rail().querySelectorAll("button")].map((button) => button.getAttribute("aria-label"));
+  const current = () =>
+    rail().querySelector('button[aria-current="location"]')?.getAttribute("aria-label");
+  const transcript = () => container.querySelector<HTMLElement>(".transcript")!;
+  const press = (key: string) =>
+    act(async () =>
+      document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })),
+    );
+  async function scrollTo(y: number) {
+    transcript().scrollTop = y;
+    await act(async () => transcript().dispatchEvent(new Event("scroll")));
+    await advance(20);
+  }
+  beforeEach(async () => {
+    rowReads = 0;
+    shift = 0;
+    resized = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resized.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    conversation = {
+      ...conversation,
+      messages: Array.from({ length: count }, (_, index) => [
+        prompt(`q${index}`, `Question ${index + 1}`),
+        answer(`a${index}`, `Answer ${index + 1}`),
+      ]).flat(),
+    };
+    longLayout();
+    await act(async () => root.render(createElement(App)));
+    await advance(20);
+  });
+
+  it("marks the first message when the reader scrolls to it, and says more are later", async () => {
+    expect(names()).toHaveLength(20);
+    expect(current()).toBe("Jump to: Question 64");
+    await scrollTo(0);
+    // The reported case: the newest 20 stayed, so the first message had no tick to mark.
+    expect(current()).toBe("Jump to: Question 1");
+    expect(names()[0]).toBe("Jump to: Question 1");
+    const said = () =>
+      document.getElementById(rail().getAttribute("aria-describedby") ?? "")?.textContent;
+    expect(rail().querySelector(".message-rail-more-earlier")).toBeNull();
+    expect(rail().querySelector(".message-rail-more-later")).not.toBeNull();
+    expect(said()).toBe("44 later messages are not shown. Up and Down reach them.");
+    await scrollTo(top(count));
+    expect(current()).toBe("Jump to: Question 64");
+    expect(rail().querySelector(".message-rail-more-earlier")).not.toBeNull();
+    expect(rail().querySelector(".message-rail-more-later")).toBeNull();
+    expect(said()).toBe("44 earlier messages are not shown. Up and Down reach them.");
+  });
+
+  it("reaches every sent message with Home, End and the arrows, from one tab stop", async () => {
+    const stop = rail().querySelector<HTMLButtonElement>('button[tabindex="0"]')!;
+    expect(stop.getAttribute("aria-label")).toBe("Jump to: Question 64");
+    await act(async () => stop.focus());
+    await press("Home");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Jump to: Question 1");
+    expect(rail().querySelectorAll('button[tabindex="0"]')).toHaveLength(1);
+    await press("ArrowDown");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Jump to: Question 2");
+    await press("End");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Jump to: Question 64");
+    // Up walks past the window's first tick, and the window moves with it.
+    for (let step = 0; step < 25; step++) await press("ArrowUp");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Jump to: Question 39");
+    expect(names()).toContain("Jump to: Question 38");
+    await act(async () => (document.activeElement as HTMLButtonElement).click());
+    expect(transcript().scrollTop).toBe(top(38) - ANCHOR_GAP);
+  });
+
+  it("reads where each message sits once, not on every scroll", async () => {
+    await scrollTo(4000);
+    rowReads = 0;
+    for (let y = 4000; y < 6000; y += 200) await scrollTo(y);
+    expect(rowReads).toBe(0);
+    // The active tick still follows the reader: 5800 puts the line at 5800 + 202, Question 30's top.
+    expect(current()).toBe("Jump to: Question 30");
+  });
+
+  it("measures again once something above the messages changes size", async () => {
+    await scrollTo(5800);
+    expect(current()).toBe("Jump to: Question 30");
+    shift = 1000;
+    await act(async () => resized.forEach((callback) => callback()));
+    await scrollTo(5800);
+    // Every message moved down 1000 px, so the line at 6002 now meets Question 25.
+    expect(current()).toBe("Jump to: Question 25");
+  });
 });
