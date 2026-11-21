@@ -505,8 +505,10 @@ it("queues nothing for an edit that returns the value it was given", async () =>
   await expect(result).resolves.toBe("unchanged");
 });
 
-// A new main assistant comes back from its own route while a pin still waits. Both stay on screen.
-it("keeps the saves still waiting on screen over an answer from another route", async () => {
+// A new main assistant comes back from its own route while a pin still waits. Both stay on screen. This stops
+// checking the screen before the pin's save settles, so it does not cover an older preferences answer putting
+// back what the other route cleared; see `confirm`.
+it("keeps the saves still waiting on screen over an answer from another route, until the next save answers", async () => {
   const s = slowServer(base);
   const pin = s.queue.edit((value) => ({ ...value, favorites: ["ranch"] }), base, ["favorites"]);
   s.queue.confirm({ ...base, mainBotId: "sage" });

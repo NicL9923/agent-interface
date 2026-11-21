@@ -960,7 +960,11 @@ A partial save follows these rules:
   `followBots`, `hiddenRoutineRuns`) replaces the saved list whole, so send the full
   list. Two devices that change different fields from stale copies both keep their
   change. Two devices that change the same list each send their whole copy, and the
-  later save wins. That narrower overwrite is accepted.
+  later save wins. That narrower overwrite is accepted, and it can bring back an item
+  another device deleted: a device whose copy predates the deletion still offers the
+  item, and a change made there saves the list with the item in it again, such as a
+  deleted section returning with an assistant moved into it. Nothing on the server
+  refuses a list built on an older copy yet.
 - `null` clears `defaultBotId`, `startPage`, `chatStyle`, `ownBubble`, `notifications`,
   `hiddenRoutineRuns` or `mainSuggestionDismissed`. `null` for `presentation`, `theme`,
   `favorites`, `sections` or `followBots` answers 400 with the field in
@@ -1001,15 +1005,17 @@ The client sends only the fields the person changed, one save at a time:
   new copy the next edit builds on.
 - **When a save is refused,** take its patch out of that overlay and tell the person
   wherever they are, in place of any "done" notice it contradicts. Still send the
-  patches behind it as built. Each carries the refused change only in the fields it
-  names. A later patch that names the same field was built on a screen that showed the
-  change, so it saves the change again; one refused because its value is invalid is
-  refused again. A later patch that names other fields leaves the refused field as the
-  server has it. For example, a refused Dark theme followed by a chat style save ends
-  at the server's Light theme with the new chat style.
+  patches behind it as built. A later patch that names the same field carries the value
+  worked out for that later edit on a screen that showed the refused change. That value
+  may repeat the refused change, as a list edit built on it does, which is then refused
+  again if the value was invalid. It may instead replace it: picking Dark, then Light
+  while Dark waits, saves Light whatever happens to Dark. A later patch that names other
+  fields leaves the refused field as the server has it, so a refused Dark followed by a
+  chat style save ends at the server's Light theme with the new chat style.
 - **A lost answer** looks like a refusal to the client, but the server may have stored
-  the change. A later patch that names the same field saves it again. One that names
-  other fields leaves it alone, and its answer brings the stored value back on screen.
+  the change. A later patch that names the same field saves the value worked out for
+  that later edit, which may repeat the lost change or replace it. One that names other
+  fields leaves the stored value alone, and its answer brings it back on screen.
 - **Drop the preferences of any bootstrap read that overlapped a save,** even one that
   arrives after the queue has emptied. It may have been read before a save that has
   since answered. Take the next read that started and finished with no save running.
@@ -1023,7 +1029,12 @@ The client sends only the fields the person changed, one save at a time:
 - **Retry is a new tap.** Run the same edit again on the copy the screen shows now and
   queue its patch; do not resend the refused patch, which was built on an older copy.
   The web client has no Retry button for these saves: the change leaves the screen, a
-  notice says why, and the person makes it again.
+  notice says why, and the person makes it again. A text field that saves when the
+  person leaves it, such as a section name, sends only what the person typed since it
+  last matched the screen. Until they type, it shows the screen's copy, so another
+  device's rename shows there and Back sends nothing. Once a rename is sent, the field
+  lets go of the text: if the rename is refused, the field shows the screen's name again
+  and nothing is sent until the person types again.
 
 A field the save names says everything about that field, whatever an older copy held.
 A named field the new value lacks goes as `null`. A named `notifications` goes with

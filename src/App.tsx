@@ -57,6 +57,7 @@ import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
 import type { EditPreferences } from "./app/use-preference-edits";
+import type { Refusal } from "./app/SaveRefusal";
 import { useShortcuts } from "./app/shortcuts";
 import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph";
 import { tintProps } from "./app/bot-tint";
@@ -231,8 +232,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       // A refused or lost preferences save has already left the screen; say so wherever the person is,
       // in place of any "done" notice it would contradict.
       onPreferencesRefused: (message) => {
-        setSaveRefusal(message);
-        toast.show(`Your change didn't save. ${message}`);
+        setSaveRefusal({ message, id: ++refusalCount.current });
+        toast.show(message);
       },
       onBotGone: gone,
     },
@@ -242,10 +243,11 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const userId = boot?.user.id;
   const toast = useToast(session.auth ? undefined : userId);
   /** Why the last preferences save was refused, for the open sheet; a new edit or closing it clears it. */
-  const [saveRefusal, setSaveRefusal] = useState("");
+  const [saveRefusal, setSaveRefusal] = useState<Refusal | null>(null);
+  const refusalCount = useRef(0);
   const editPreferences: EditPreferences = useStableCallback(
     (...[edit, chosen]: Parameters<EditPreferences>) => {
-      setSaveRefusal("");
+      setSaveRefusal(null);
       return session.editPreferences(edit, chosen);
     },
   );
@@ -437,12 +439,14 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // At most one message is on its way; accepted ones read as ordinary messages.
   const outgoing = echoes.find((echo) => echo.status !== "accepted") ?? null;
   const theme = boot?.preferences.theme || "system";
+  // The next launch paints the theme the server confirmed, not one still on its way.
+  const confirmedTheme = session.confirmedPreferences?.theme || "system";
   useEffect(() => {
     // Until bootstrap answers, the theme public/boot.js applied from this device stays. Signed out, the system's.
     if (!userId && !session.auth) return;
     document.documentElement.dataset.theme = userId ? theme : "system";
-    if (userId) rememberTheme(userId, theme);
-  }, [theme, userId, session.auth]);
+    if (userId) rememberTheme(userId, confirmedTheme);
+  }, [theme, confirmedTheme, userId, session.auth]);
   // The connecting and sign-in screens that follow this account show the theme a signed-out page has.
   useEffect(
     () => () => {
@@ -680,7 +684,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const [leaving] = useState(waitingOnClose<Destination>);
   /** A sheet with its own close closed; a notification waiting on that sheet opens now. */
   const sheetClosed = (kind: Panel["kind"]) => {
-    setSaveRefusal("");
+    setSaveRefusal(null);
     const next = leaving.take(panelClose.current?.sheet, userId);
     closePanels(kind);
     if (next) goTo(next);
@@ -866,9 +870,12 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0, boot?.user.id);
   // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live roster.
   const connected = !!boot?.connection.connected;
+  // It keeps the pins and sections the server confirmed, so a change still on its way is never drawn as saved.
+  const confirmedPreferences = session.confirmedPreferences;
   useEffect(() => {
-    if (boot && connected) rememberRoster(boot, catalog ? rooms : null);
-  }, [boot, connected, catalog, rooms]);
+    if (boot && connected && confirmedPreferences)
+      rememberRoster({ ...boot, preferences: confirmedPreferences }, catalog ? rooms : null);
+  }, [boot, confirmedPreferences, connected, catalog, rooms]);
   // Read for the account the sign-in hint names (see readSavedRoster), once per account generation:
   // every change of account, in this tab or another, mounts a new one (see App).
   const early = !boot && saved ? saved : null;
@@ -1214,6 +1221,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
               setPanel({ kind: "routine", botId, routineId });
             }}
             editPreferences={editPreferences}
+            saveRefusal={saveRefusal}
             onSaved={() => void session.refresh()}
             onCreated={(id) =>
               void session.refresh().then((next) => {
@@ -1246,7 +1254,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             onCheckIns={setCheckIns}
             onSettings={(bot) => open({ kind: "settings", bot })}
             onClose={() => {
-              setSaveRefusal("");
+              setSaveRefusal(null);
               closePanels("details");
             }}
           />

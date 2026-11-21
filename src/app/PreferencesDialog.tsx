@@ -1,7 +1,7 @@
 import { Dialog } from "../components/ui/dialog";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { FormMessage } from "../components/ui/form-message";
+import { SaveRefusal, type Refusal } from "./SaveRefusal";
 import { NativeSelect } from "../components/ui/native-select";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
@@ -67,7 +67,7 @@ export function PreferencesDialog({
   offline: boolean;
   editPreferences: EditPreferences;
   /** Why the last preferences save was refused; its change has already left the screen. */
-  saveRefusal?: string;
+  saveRefusal?: Refusal | null;
   notifications: ReturnType<typeof useDeviceNotifications>;
   installEvent: InstallEvent | null;
   notice: string;
@@ -202,11 +202,7 @@ export function PreferencesDialog({
         </h2>
       </header>
       <div className="sheet-body" ref={body}>
-        {saveRefusal && (
-          <FormMessage tone="error" className="settings-footnote">
-            Your change didn't save. {saveRefusal}
-          </FormMessage>
-        )}
+        <SaveRefusal refusal={saveRefusal} />
         {shown.kind === "following" ? (
           <FollowingPage preferences={prefs} bots={bots} commit={commit} />
         ) : shown.kind === "section" ? (
@@ -795,13 +791,20 @@ function SectionPage({
   beforeLeave: RefObject<(() => boolean) | null>;
   onDeleted: () => void;
 }) {
-  const [name, setName] = useState(section.name);
+  // What the person typed since the field was last in step with the screen, or null. An untouched field shows
+  // the screen's name, so another tab's rename shows here, and a sent rename lets go of its text: if it is
+  // refused, the field goes back to the name the screen holds, and Back does not send it again.
+  const [typed, setTyped] = useState<string | null>(null);
+  const name = typed ?? section.name;
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const field = useRef<HTMLInputElement>(null);
-  const changed = name.trim().replace(/\s+/g, " ") !== section.name;
+  const changed = typed !== null && typed.trim().replace(/\s+/g, " ") !== section.name;
   const saveName = () => {
-    if (!changed) return true;
+    if (!changed) {
+      setTyped(null);
+      return true;
+    }
     const checked = checkSectionName(preferences, name, section.id);
     if ("error" in checked) {
       setError(checked.error);
@@ -809,7 +812,7 @@ function SectionPage({
       return false;
     }
     commit((value) => renameSection(value, section.id, checked.name), ["sections"]);
-    setName(checked.name);
+    setTyped(null);
     return true;
   };
   useEffect(() => {
@@ -834,7 +837,7 @@ function SectionPage({
           maxLength={100}
           value={name}
           onChange={(event) => {
-            setName(event.target.value);
+            setTyped(event.target.value);
             setError("");
           }}
         />
@@ -855,7 +858,7 @@ function SectionPage({
           <Button
             type="button"
             onClick={() => {
-              setName(section.name);
+              setTyped(null);
               setError("");
               field.current?.focus();
             }}

@@ -24,6 +24,7 @@ import type { SavedConversation } from "./storage";
 import type { EditPreferences } from "./use-preference-edits";
 import "./home.css";
 import { FormMessage } from "../components/ui/form-message";
+import { SaveRefusal, type Refusal } from "./SaveRefusal";
 import { CHECK_IN_HOURS, checkInFrequencyLabel, mainEligible } from "../shared/main-assistant";
 import type { CheckInSettings, Preferences } from "../shared/types";
 
@@ -65,7 +66,7 @@ export function BotDetails({
   startNewSection?: boolean;
   editPreferences: EditPreferences;
   /** Why the last preferences save was refused; its change has already left the screen. */
-  saveRefusal?: string;
+  saveRefusal?: Refusal | null;
   /** Makes this assistant the main one, or clears it with null; rejects with the reason it couldn't. */
   onMain?: (botId: string | null) => Promise<Preferences>;
   onCheckIns?: (change: Partial<CheckInSettings>) => Promise<Preferences>;
@@ -279,9 +280,10 @@ export function BotDetails({
             {mainError}
           </FormMessage>
         )}
-        {(saveRefusal || moveNotice) && (
+        <SaveRefusal refusal={saveRefusal} />
+        {moveNotice && (
           <FormMessage tone="error" className="settings-footnote">
-            {saveRefusal ? `Your change didn't save. ${saveRefusal}` : moveNotice}
+            {moveNotice}
           </FormMessage>
         )}
         <div className="settings-group">

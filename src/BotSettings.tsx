@@ -15,6 +15,7 @@ import { useResource } from "./app/use-resource";
 import { CatalogEditor } from "./components/CatalogEditor";
 import { SettingsConfirmation } from "./components/SettingsConfirmation";
 import { FormMessage } from "./components/ui/form-message";
+import { SaveRefusal, type Refusal } from "./app/SaveRefusal";
 import { IntegrationList } from "./components/IntegrationsPanel";
 import { Icon } from "./components/Icon";
 import { defaultAvatar } from "./components/Avatar";
@@ -84,6 +85,7 @@ function LoadedBotSettings({
   onDeleted,
   onOpenRoutine,
   editPreferences,
+  saveRefusal,
   loading,
   closer,
 }: {
@@ -100,6 +102,8 @@ function LoadedBotSettings({
   onOpenRoutine?: (botId: string, routineId: string) => void;
   /** Saves this person's preferences, for "Show runs in chat". */
   editPreferences?: EditPreferences;
+  /** Why the last preferences save was refused; its change has already left the screen. */
+  saveRefusal?: Refusal | null;
 }) {
   // Creating saves the assistant and then its avatar. Once it exists, this same sheet edits it,
   // so an avatar that failed to save is still here to retry.
@@ -626,6 +630,7 @@ function LoadedBotSettings({
               </FormMessage>
             )}
             {notice && !portraitNotice && <FormMessage tone="notice">{notice}</FormMessage>}
+            <SaveRefusal refusal={saveRefusal} />
             {confirmDiscard && (
               <div className="capability-note" role="alert">
                 <p>Discard your unsaved changes?</p>
