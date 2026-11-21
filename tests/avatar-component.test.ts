@@ -4,7 +4,8 @@ import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 import { Avatar, motionOwner } from "../src/components/Avatar";
-import { outside, shapes } from "../src/components/avatar-shapes";
+import { flattenOutline } from "../src/components/avatar-outline";
+import { shapes } from "../src/components/avatar-shapes";
 import {
   avatarShapes,
   type ActivityState,
@@ -45,11 +46,43 @@ const advance = async (seconds: number) => {
 };
 const svg = () => container.querySelector("svg")!.innerHTML;
 const body = () => container.querySelector(".avatar-body")!.getAttribute("d")!;
-/** Where each visible eye is drawn across the body, left to right. */
-const eyeXs = () =>
+/** Each visible eye, left to right: its center, and how far its style reaches either side of it. */
+const drawnEyes = (halfWidth = 5.5, halfHeight = 12.5) =>
   [...container.querySelectorAll("svg g[clip-path] g[fill] > g")]
-    .map((eye) => Number(/translate\(([-\d.]+)/.exec(eye.getAttribute("transform")!)![1]))
-    .sort((a, b) => a - b);
+    .map((eye) => {
+      const [x, y] = /translate\(([-\d.]+) ([-\d.]+)/
+        .exec(eye.getAttribute("transform")!)!
+        .slice(1);
+      const [sx, sy] = /scale\(([-\d.e]+) ([-\d.e]+)/
+        .exec(eye.firstElementChild!.getAttribute("transform")!)!
+        .slice(1);
+      return { x: +x, y: +y, reach: halfWidth * +sx, rise: halfHeight * +sy };
+    })
+    .sort((a, b) => a.x - b.x);
+const eyeXs = () => drawnEyes().map((eye) => eye.x);
+/** Whether a point is on a shape's body: inside its outside contour, by the even-odd crossing count. */
+function onBody(shape: AvatarShape, x: number, y: number) {
+  const line = flattenOutline(shapes[shape].path);
+  let inside = false;
+  for (let i = 0, j = line.length - 1; i < line.length; j = i++) {
+    const [ax, ay] = line[i];
+    const [bx, by] = line[j];
+    if (ay > y !== by > y && x < ((bx - ax) * (y - ay)) / (by - ay) + ax) inside = !inside;
+  }
+  return inside;
+}
+/**
+ * The eyes that leave the body. Every eye style is rounded, so it is the ends of its two axes that
+ * reach farthest: the left and right of its middle, and its top and bottom.
+ */
+const eyesOffBody = (shape: AvatarShape, halfWidth?: number, halfHeight?: number) =>
+  drawnEyes(halfWidth, halfHeight).filter(
+    ({ x, y, reach, rise }) =>
+      !onBody(shape, x - reach, y) ||
+      !onBody(shape, x + reach, y) ||
+      !onBody(shape, x, y - rise) ||
+      !onBody(shape, x, y + rise),
+  );
 
 beforeEach(() => {
   now = 0;
@@ -72,14 +105,6 @@ beforeEach(() => {
       disconnect() {}
     },
   );
-  // jsdom has no SVG geometry; a flat path is enough to exercise the rig. It runs 100 units for
-  // each contour it was given, so a test can tell which contours were walked.
-  Object.assign(SVGElement.prototype, {
-    getTotalLength(this: SVGElement) {
-      return 100 * (this.getAttribute("d")?.match(/M/g)?.length ?? 1);
-    },
-    getPointAtLength: (length: number) => ({ x: length, y: 0 }),
-  });
   ({ container, root } = mountRoot());
 });
 
@@ -118,27 +143,6 @@ describe("avatar animation loop", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("samples a shape once however many avatars draw it", async () => {
-    // Each sampling is 72 calls into the browser's path geometry, the main cost of a phone opening home.
-    const sample = vi.spyOn(
-      SVGElement.prototype as unknown as { getPointAtLength: (length: number) => DOMPoint },
-      "getPointAtLength",
-    );
-    await act(async () =>
-      root.render(
-        createElement(
-          "div",
-          null,
-          ...Array.from({ length: 20 }, (_, index) =>
-            createElement(Avatar, { key: index, state: "idle", size: 40, name: "Hay shed" }),
-          ),
-        ),
-      ),
-    );
-    await advance(0.5);
-    expect(sample.mock.calls.length).toBeLessThanOrEqual(72);
   });
 
   it("draws several working avatars from one frame callback", async () => {
@@ -251,13 +255,14 @@ describe("avatar shapes", () => {
     expect(avatarShapes.filter((shape) => !contours.test(shapes[shape].path))).toEqual([]);
   });
 
-  it("keeps each face on its body, with room for the eyes at their largest", () => {
-    // The eye sliders reach 1.5 times; a face anchored off its part would show clipped eyes.
-    const cramped = avatarShapes.filter((shape) => {
-      const { cx = 50, cy, scale, spacing = 30 * scale, radius = 42, top } = shapes[shape].face;
-      return spacing / 2 + 5.5 * scale > radius || cy - 12.5 * scale <= top || cx < 30 || cx > 70;
-    });
-    expect(cramped).toEqual([]);
+  it("draws every shape's eyes wholly on its body", async () => {
+    reduceMotion = true;
+    const clipped: string[] = [];
+    for (const shape of avatarShapes) {
+      await render("idle", shaped(shape));
+      if (drawnEyes().length !== 2 || eyesOffBody(shape).length) clipped.push(shape);
+    }
+    expect(clipped).toEqual([]);
   });
 
   it("looks out from the part that carries the face, not the middle of the box", async () => {
@@ -283,42 +288,59 @@ describe("avatar shapes", () => {
     );
   });
 
-  it("keeps a turning face on a narrow body", async () => {
-    // A rocket is 45 units wide. On the blob's 42-unit sphere its eyes would swing out past its hull.
+  it("keeps a working rocket's eyes on its hull as its face turns", async () => {
+    // The blob's face turns on a 42-unit sphere. A rocket is 45 units wide, so on that sphere its
+    // eyes would swing out past the hull and be cut off by it.
     await render("working", shaped("rocket"));
-    const { cx = 50, radius } = shapes.rocket.face;
     let farthest = 0;
+    const cut: number[] = [];
     for (let frame = 0; frame < 5 * 60; frame++) {
       await advance(1 / 60);
-      for (const x of eyeXs()) farthest = Math.max(farthest, Math.abs(x - cx));
+      if (eyesOffBody("rocket").length) cut.push(frame);
+      for (const { x } of drawnEyes()) farthest = Math.max(farthest, Math.abs(x - 50));
     }
-    expect(radius).toBeLessThan(25);
-    // The scan and the spin both carry the eyes most of the way to the edge of the sphere.
-    expect(farthest).toBeGreaterThan(radius! * 0.6);
-    expect(farthest).toBeLessThanOrEqual(radius!);
+    expect(cut).toEqual([]);
+    // The scan and the spin did carry the eyes out toward the edge, so the check above saw them there.
+    expect(farthest).toBeGreaterThan(shapes.rocket.face.radius! * 0.8);
   });
 
-  it("morphs along the outside of a shape with a hole and lands on its real outline", async () => {
+  it("stops tuned eyes growing at the edge of the part the face sits on", async () => {
+    const widest = { eyes: "visor", eyeWidth: 1.5, eyeHeight: 1.5, eyeSpacing: 1.5 } as const;
+    // A visor at full width and spacing is 47 units across on a paint brush whose bristles are 43.
+    await render("working", shaped("paint-brush", widest));
+    const cut: number[] = [];
+    for (let frame = 0; frame < 5 * 60; frame++) {
+      await advance(1 / 60);
+      if (eyesOffBody("paint-brush", 10, 4.5).length) cut.push(frame);
+    }
+    expect(cut).toEqual([]);
+    // The blob has room for them, so there they are as large and as far apart as chosen.
+    reduceMotion = true;
+    await render("idle", shaped("blob", widest));
+    const [left, right] = drawnEyes(10, 4.5);
+    expect(right.x - left.x).toBeCloseTo(45, 6);
+    expect(left.reach).toBeGreaterThan(13);
+  });
+
+  it("morphs through 72 samples and lands on the real outline, hole and all", async () => {
     await render("idle", shaped("blob"));
     await render("idle", shaped("mug"));
     await advance(0.1);
-    // Mid-morph the body is the 72 samples. Walking the handle's hole as well would put them
-    // on 200 units of path instead of the outside's 100.
-    const samples = body()
-      .slice(1, -1)
-      .split(" L")
-      .map((point) => Number(point.split(" ")[0]));
-    expect(samples).toHaveLength(72);
-    expect(Math.max(...samples)).toBeLessThan(100);
+    // Mid-morph the body is the samples on their way from one outside to the other.
+    expect(body().split(" L")).toHaveLength(72);
     await advance(0.4);
+    // The mug's second contour is its handle's hole, which the samples never carried.
     expect(shapes.mug.path.match(/M/g)).toHaveLength(2);
     expect(body()).toBe(shapes.mug.path);
-    expect(outside(shapes.mug.path)).toBe(shapes.mug.path.slice(0, shapes.mug.path.indexOf(" M")));
   });
 
-  it("draws a shape from a newer release as the blob instead of failing", async () => {
-    await render("idle", shaped("tesseract" as AvatarShape));
-    expect(body()).toBe(shapes.blob.path);
+  it("draws a shape it does not have as the blob instead of failing", async () => {
+    // A newer release's shape, and the name of a property every object inherits, which Hermes
+    // metadata could hold and a plain lookup would find.
+    for (const shape of ["tesseract", "constructor", "toString"]) {
+      await render("idle", shaped(shape as AvatarShape));
+      expect(body()).toBe(shapes.blob.path);
+    }
   });
 
   it("edges a very light body so it holds its shape on the cream surface", async () => {

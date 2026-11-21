@@ -55,3 +55,32 @@ All 25 went red in the test written for them.
 | an arc slips into an outline            | `src/components/avatar-shapes.ts`  | writes every outline as closed contours the native reader can parse                         |
 | a face sits above its head              | `src/components/avatar-shapes.ts`  | keeps each face on its body, with room for the eyes at their largest                        |
 | a light exclamation has no edge         | `src/components/Avatar.tsx`        | edges a very light exclamation too, so a white assistant that needs help can be seen        |
+
+## Review fixes
+
+After the independent review, at the commit that follows `63d18a56`: `npm run typecheck` and
+`npm run lint` clean, `npx vitest run` 231 files, 4153 tests passed. With aligned samples the
+smallest body any of the 2,862 ordered shape pairs passes through mid-morph is 89% of the smaller
+shape's area; before, a blob halfway to a reindeer was 24% of the reindeer's.
+
+Red runs for the lines these fixes added, 15 in all. One first survived: the tie-break
+between two equally central samples, because the test's two samples were at the same height. The
+test was rewritten with one above the other and the same break then failed it.
+
+| Break                                          | File                               | Test that failed                                                                          |
+| ---------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| shape lookup finds inherited names             | `src/components/Avatar.tsx`        | draws a shape it does not have as the blob instead of failing                             |
+| season lookup finds inherited names            | `src/app/season.ts`                | gives each seasonal shape its season and leaves holiday-looking everyday shapes plain     |
+| samples keep the way the outline was drawn     | `src/components/avatar-outline.ts` | starts at the top and runs clockwise, wherever and whichever way the outline was drawn    |
+| samples keep the outline's own start           | `src/components/avatar-outline.ts` | starts at the top and runs clockwise, wherever and whichever way the outline was drawn    |
+| equally central samples start at the lower one | `src/components/avatar-outline.ts` | starts between two equally central samples at the higher one                              |
+| the sampler walks the hole too                 | `src/components/avatar-outline.ts` | walks only the outside of an outline, evenly, in every command the outlines use           |
+| tuned eyes never shrink to fit                 | `src/components/Avatar.tsx`        | stops tuned eyes growing at the edge of the part the face sits on                         |
+| tuned eyes shrink on every body                | `src/components/Avatar.tsx`        | looks out from the part that carries the face, not the middle of the box                  |
+| face radius ignores the anchor                 | `src/components/Avatar.tsx`        | keeps a working rocket's eyes on its hull as its face turns                               |
+| morph never lands on the outline               | `src/components/Avatar.tsx`        | morphs through 72 samples and lands on the real outline, hole and all                     |
+| any mascot family is saved                     | `src/server/schemas.ts`            | saves an avatar through native metadata and round-trips it through household presentation |
+| a saved copy refuses a shape it does not have  | `src/app/saved-roster.ts`          | is drawn at every bound's limit, so a copy bootstrap could produce always shows           |
+| a saved copy takes any text as a shape         | `src/app/saved-roster.ts`          | is not drawn with a geometric avatar's shape that is not a name                           |
+| a saved copy takes a shape of any length       | `src/app/saved-roster.ts`          | is not drawn with a geometric avatar's shape past any name's length                       |
+| equally central samples keep the first met     | `src/components/avatar-outline.ts` | starts between two equally central samples at the higher one                              |

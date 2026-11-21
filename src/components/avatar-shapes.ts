@@ -149,5 +149,3 @@ export const seasonalColors: Record<SeasonalShape, string> = {
 export function isSeasonal(shape: AvatarShape): shape is SeasonalShape {
   return Object.hasOwn(seasonalColors, shape);
 }
-/** An outline without its holes, such as a mug's handle. A shape morphs along its outside only. */
-export const outside = (path: string) => path.slice(0, path.indexOf("Z") + 1);

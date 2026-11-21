@@ -3,7 +3,6 @@ import { currentAvatar, legacyMascots } from "../shared/avatar-legacy";
 import {
   avatarAccessories,
   avatarEyes,
-  avatarShapes,
   defaultPreferences,
   type Avatar,
   type Bootstrap,
@@ -90,11 +89,15 @@ const face = (value: Record<string, unknown>) =>
   scale(value.eyeWidth) &&
   scale(value.eyeHeight) &&
   scale(value.eyeSpacing);
+// A shape is a name, not one of this release's names. A page still running an older bundle meets
+// shapes a newer server sends, and one that refused them would throw away the whole saved home
+// over one assistant's avatar. Avatar draws a shape it does not have as the blob.
+const shapeName = (value: unknown) => text(value, 40) && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
 const savedAvatar = (value: unknown) =>
   value === undefined ||
   (record(value) &&
     (value.mode === "geometric"
-      ? oneOf(avatarShapes)(value.shape) && face(value)
+      ? shapeName(value.shape) && face(value)
       : // A copy saved before mascots were retired holds them as that release's server sent them;
         // savedHome draws each as the shape that took its place.
         value.mode === "mascot"

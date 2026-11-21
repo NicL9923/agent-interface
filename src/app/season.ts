@@ -60,7 +60,9 @@ export function homeSeason(date: Date, pinned: Bot[]): Season | null {
   const calendar = seasonOn(date);
   if (calendar) return calendar;
   for (const bot of pinned) {
-    const season = bot.avatar?.mode === "geometric" ? shapeSeasons[bot.avatar.shape] : undefined;
+    // A shape read from Hermes metadata may be any text, such as the name of an inherited property.
+    const shape = bot.avatar?.mode === "geometric" ? bot.avatar.shape : undefined;
+    const season = shape && Object.hasOwn(shapeSeasons, shape) ? shapeSeasons[shape] : undefined;
     if (season) return season;
   }
   return null;

@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { ActivityState, Avatar as AvatarConfig, AvatarShape } from "../shared/types";
+import type { ActivityState, Avatar as AvatarConfig, AvatarShape, Eyes } from "../shared/types";
 import {
   FACE_RADIUS,
   animatesAt,
@@ -30,7 +30,8 @@ import { startFrames } from "./avatar-frames";
 import { avatarConductor } from "./avatar-conductor";
 import { useAvatarAttention, useAvatarReactions, withGaze } from "./avatar-attention";
 import "./avatar.css";
-import { outside, shapes } from "./avatar-shapes";
+import { sampleOutline, type Points } from "./avatar-outline";
+import { shapes } from "./avatar-shapes";
 
 export const avatarStates: ActivityState[] = [
   "idle",
@@ -73,8 +74,14 @@ export const defaultAvatar: Extract<AvatarConfig, { mode: "geometric" }> = {
   accessory: "none",
 };
 
-/** A shape's outline and face. One from newer data than this release still draws, as the blob. */
-const artOf = (shape: AvatarShape) => shapes[shape] ?? shapes.blob;
+/**
+ * A shape's outline and face. A shape this release does not have still draws, as the blob: one a
+ * newer release saved, or anything else Hermes metadata holds, such as the name of a property
+ * every object inherits.
+ */
+const artOf = (shape: AvatarShape) => (Object.hasOwn(shapes, shape) ? shapes[shape] : shapes.blob);
+/** Half the width of each eye style at full size, in avatar units. */
+const eyeHalfWidths: Record<Eyes, number> = { oval: 5.5, round: 7.5, visor: 10, spark: 10 };
 const trailColors = ["#ff729d", "#85bcfb", "#b790fc", "#92d899"];
 const trailOrbits = [
   [58, 13, -0.24],
@@ -96,35 +103,12 @@ function useReducedMotion(force?: boolean) {
   return system || !!force;
 }
 
-type Points = readonly (readonly number[])[];
-/**
- * Each shape's samples, kept by path. Sampling walks the path 72 times in the browser's geometry code: every
- * avatar on a page did it twice as it mounted, which took 2 to 3 s of a phone's main thread opening home. A
- * shape's samples never change. The avatar editor makes a new shape per change, so the oldest go past the cap.
- */
-const samples = new Map<string, Points>();
-const SAMPLED_SHAPES = 256;
-function sampledPath(path: string): Points {
-  const kept = samples.get(path);
-  if (kept) return kept;
-  const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  // Walking a hole after the outside would draw a line between the two.
-  node.setAttribute("d", outside(path));
-  const length = node.getTotalLength();
-  const points = Array.from({ length: 72 }, (_, i) => {
-    const p = node.getPointAtLength((length * i) / 72);
-    return [p.x, p.y];
-  });
-  samples.set(path, points);
-  if (samples.size > SAMPLED_SHAPES) samples.delete(samples.keys().next().value!);
-  return points;
-}
 function useShapeTransition(desired: string, reduce: boolean) {
   const points = useRef<Points | null>(null);
-  if (!points.current) points.current = sampledPath(desired);
+  if (!points.current) points.current = sampleOutline(desired);
   const [path, setPath] = useState(desired);
   useEffect(() => {
-    const target = sampledPath(desired);
+    const target = sampleOutline(desired);
     // A mounting avatar already shows its shape: there is nothing to move between.
     if (reduce || points.current === target) {
       points.current = target;
@@ -360,7 +344,12 @@ export function Avatar({
   const eyeHeight = avatar.mode === "portrait" ? 1 : (avatar.eyeHeight ?? 1);
   const eyeSpacing = avatar.mode === "portrait" ? 1 : (avatar.eyeSpacing ?? 1);
   const eyeY = anchor.cy + pose.gazeY * 3 * reach + (state === "waiting" ? 2 * reach : 0);
-  const eyeOffset = ((anchor.spacing ?? 30 * eyeScale) / 2) * eyeSpacing;
+  // Tuned eyes stop growing at the edge of the part the face sits on. A visor at full width and
+  // spacing fits the blob, but on a paint brush it would run past the bristles and be cut off.
+  const widest = eyeHalfWidths[eyes] * eyeScale * eyeWidth;
+  const spread = ((anchor.spacing ?? 30 * eyeScale) / 2) * eyeSpacing;
+  const fit = Math.min(1, (faceRadius - 1) / (spread + widest));
+  const eyeOffset = spread * fit;
   const center = project(pose.gazeX * 2 * reach, pose.yaw, faceRadius);
   const open = Math.max(face.open * pose.blink * eyeHeight * eyeScale, 0.04);
   // A pitched face rolls everything painted on it around the sphere.
@@ -402,7 +391,7 @@ export function Avatar({
     if (!p.visible) return null;
     const side = -direction;
     // Near eyes read a little larger as the face turns, and a pop of surprise grows both.
-    const size = perspective(p.scale) * pose.eyeScale * dotShrink;
+    const size = perspective(p.scale) * pose.eyeScale * dotShrink * fit;
     return (
       <g key={direction} transform={`translate(${faceX + p.x} ${eyeY})`}>
         <g
@@ -419,13 +408,13 @@ export function Avatar({
             strokeWidth="4.5"
             strokeLinecap="round"
             opacity={face.happy}
-            transform={`scale(${p.scale * eyeWidth * eyeScale} ${eyeScale})`}
+            transform={`scale(${p.scale * eyeWidth * eyeScale * fit} ${eyeScale * fit})`}
           />
         )}
         {accessory === "glasses" && (
           <ellipse
-            rx={12.5 * eyeScale * p.scale}
-            ry={12.5 * eyeScale}
+            rx={12.5 * eyeScale * p.scale * fit}
+            ry={12.5 * eyeScale * fit}
             fill="none"
             stroke={ink}
             strokeWidth="2.5"

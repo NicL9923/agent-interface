@@ -46,13 +46,27 @@ slabs mid-stride. Rocky is a rock carapace on four legs with the fifth limb rais
 
 Each shape has a face anchor (`Face` in `avatar-shapes.ts`). `cx` and `cy` are the middle of the
 eye pair, so a mug looks out from its cup and not from the middle of the box. `scale` sizes the
-eyes and `spacing` sets them apart. `radius` is the half-width of the part the face sits on: the
-face turns on a sphere of that radius, which keeps a turning rocket's eyes on its hull. `top` and
-`hat` place the cowboy hat on that part.
+eyes and `spacing` sets them apart. `radius` is nine tenths of the half-width of the part the face
+sits on: the face turns on a sphere of that radius, which keeps a turning rocket's eyes on its
+hull. `top` and `hat` place the cowboy hat on that part.
+
+The eye sliders reach 150%. Eyes stop growing where the widest style at the chosen width and
+spacing would pass the edge of that sphere, so a visor tuned to the limit fills the blob and
+shrinks to fit a paint brush.
 
 The tool measures all of these. Three kinds of shape fool it, and `manifest.json` overrides the
 value: a part beside the face at eye level (a bat's wings, a bull's ears, a barbell's plates)
 widens `radius`, and ears or horns beside the head widen `hat`.
+
+## Morphing between shapes
+
+Changing shape morphs the body over 280 ms. `src/components/avatar-outline.ts` walks the outside
+of each outline into 72 evenly spaced samples, and sample `i` of one shape moves to sample `i` of
+the next. The samples are put in one order first: clockwise, starting at the top. Outlines are
+drawn from wherever their author began and either way round, and without that step a blob on its
+way to a reindeer crossed over itself and shrank to a quarter of the reindeer's size. A hole, such
+as a mug's handle, is not sampled; the exact outline takes over when the morph ends. The iOS app
+samples and orders the same way in `AvatarGeometry.points`.
 
 ## Adding a shape
 
@@ -65,16 +79,29 @@ widens `radius`, and ears or horns beside the head widen `hat`.
 5. Look at it in every state, with a hat and with glasses, on `/avatar-specimen/` under
    `npm run dev:client`. Override `radius` or `hat` in the manifest if the measurement is off.
 6. Run `UPDATE_AVATAR_ART=1 npx vitest run tests/avatar-art-parity.test.ts`, which rewrites the
-   iOS catalog, and commit both files it writes.
+   iOS catalog, and commit both files it writes. `tests/avatar-component.test.ts` then checks the
+   new shape's eyes sit on its body and `tests/avatar-outline.test.ts` that it morphs to and from
+   every other shape without collapsing.
 
 ## Retired mascots
 
 Mascots are still stored in Hermes profile metadata, in the app's own store, in rosters saved on
 devices, and iOS builds from before the change still save them. `currentAvatar` in
 `src/shared/avatar-legacy.ts` reads one as its shape wherever the server or the web reads an
-avatar it did not just validate, and the iOS app does the same when it decodes one. Color, eyes,
-accessory and eye tuning carry over. Nothing rewrites stored data: a mascot becomes a shape in
-storage the next time someone saves that avatar.
+stored avatar, and the iOS app does the same when it decodes one. Color, eyes, accessory and eye
+tuning carry over. No migration rewrites stored data. A mascot becomes a shape in storage the next
+time the app writes that assistant's avatar or, in the app's own store, its sharing, which rewrites
+the whole row.
+
+A save from an older client is stricter than a read. `PUT /bots/:id/avatar` reads a mascot as its
+shape only when the family is one of the 18 below and the rest of the avatar is valid; anything
+else is refused, as it was before. A reader is lenient instead, because it has to draw something:
+a family the app never had is drawn as the blob.
+
+Clients that have not updated draw a shape they do not have as the blob, so an older iOS build or
+a page still running an older web bundle shows new and converted shapes that way until it updates.
+Release the iOS build before deploying the server: the new build reads mascots from an older
+server, and the older build cannot draw the new shapes.
 
 | Mascot     | Shape     | Color                                            |
 | ---------- | --------- | ------------------------------------------------ |

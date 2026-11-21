@@ -14,7 +14,6 @@ import {
   type RequireCapability,
   type Runtime,
 } from "../shared/types.js";
-import { currentAvatar } from "../shared/avatar-legacy.js";
 import { unreadSince } from "../shared/unread.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
@@ -287,26 +286,14 @@ export function installBotRoutes(
     rosterChanged();
     return { ok: true };
   });
-  apiRoute(
-    app,
-    "PUT /bots/:id/avatar",
-    {
-      body: avatar,
-      // iOS builds from before mascots were retired still save one. It is stored as its shape.
-      before: (req) => {
-        req.body = currentAvatar(req.body);
-        return Promise.resolve();
-      },
-    },
-    async (req, value) => {
-      const bot = (await runtime.listBots()).find((b) => b.id === req.params.id);
-      if (!bot) throw httpError(404, "Bot not found");
-      if ((await runtime.capabilities(bot.id)).avatarMetadata?.supported && runtime.setAvatar)
-        await runtime.setAvatar(bot.id, value);
-      store.saveAvatar(bot.id, value, bot.shared);
-      return value;
-    },
-  );
+  apiRoute(app, "PUT /bots/:id/avatar", { body: avatar }, async (req, value) => {
+    const bot = (await runtime.listBots()).find((b) => b.id === req.params.id);
+    if (!bot) throw httpError(404, "Bot not found");
+    if ((await runtime.capabilities(bot.id)).avatarMetadata?.supported && runtime.setAvatar)
+      await runtime.setAvatar(bot.id, value);
+    store.saveAvatar(bot.id, value, bot.shared);
+    return value;
+  });
   // Like the avatar, anyone who sees the assistant may change how it sounds.
   apiRoute(
     app,

@@ -71,8 +71,9 @@ it("gives each seasonal shape its season and leaves holiday-looking everyday sha
     "winter",
   ]);
   // A ghost, a star, a bunny or a clover is an everyday pick, so it must not turn home seasonal
-  // all year. Nor does a shape this release has never heard of.
-  expect(["ghost", "star", "bunny", "clover", "witch-hat", "tesseract"].map(season)).toEqual(
-    Array(6).fill(null),
-  );
+  // all year. Nor does a shape this release has never heard of, nor the name of a property every
+  // object inherits, which Hermes metadata could hold.
+  expect(
+    ["ghost", "star", "bunny", "clover", "witch-hat", "tesseract", "constructor"].map(season),
+  ).toEqual(Array(7).fill(null));
 });

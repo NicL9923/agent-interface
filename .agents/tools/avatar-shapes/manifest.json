@@ -7,7 +7,7 @@
     {
       "id": "barbell",
       "face": {
-        "radius": 25,
+        "radius": 21,
         "hat": 0.5
       }
     },
@@ -35,7 +35,7 @@
     {
       "id": "bull",
       "face": {
-        "radius": 29,
+        "radius": 25,
         "hat": 0.6
       }
     },
@@ -120,7 +120,7 @@
     {
       "id": "bat",
       "face": {
-        "radius": 24
+        "radius": 19.5
       }
     },
     {

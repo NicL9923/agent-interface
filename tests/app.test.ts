@@ -309,6 +309,12 @@ describe("authentication and household state", () => {
       await refused({ ...value, shape: "tesseract" }, "shape");
       await refused({ ...mascot, family: "santa", color: "red" }, "color");
       await refused({ ...mascot, family: "santa", eyes: "laser" }, "eyes");
+      // Only a mascot an older client could have sent is read as a shape. Any other would save
+      // the blob over the avatar that was there.
+      await refused(mascot, "family");
+      await refused({ ...mascot, family: "dragon" }, "family");
+      await refused({ ...mascot, family: 7 }, "family");
+      await refused({ ...mascot, family: "constructor" }, "family");
       await refused({ mode: "hologram" }, "mode");
       expect(nativeAvatar).toEqual(hat);
     } finally {

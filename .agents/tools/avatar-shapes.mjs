@@ -16,7 +16,7 @@
 //
 // A manifest entry may set "face": { "radius": n, "hat": n } where the measurement is fooled: a
 // part beside the face at eye level, such as a bat's wings, widens the radius, and ears or horns
-// beside the head widen the hat.
+// beside the head widen the hat. Give a radius nine tenths of the half-width of the part itself.
 //
 // To add an avatar: save its JSON as avatar-shapes/definitions/<id>.json, list it in
 // avatar-shapes/manifest.json, run this, then add the id to avatarShapes in src/shared/types.ts
@@ -104,10 +104,11 @@ function anchor(definition, shape, scale, overrides = {}) {
     while (distance < 60 && inside(cx + direction * (distance + 0.25), y)) distance += 0.25;
     return distance;
   };
-  // The face turns on a sphere as wide as the part it sits on, so the eyes stay on that part.
+  // The face turns on a sphere a little narrower than the part it sits on, as the blob's does
+  // (42 against a body 47 wide at the eyes): an eye at the edge of the sphere is still on the part.
   const radius =
     overrides.radius ??
-    Math.min(42, Math.max(spacing / 2 + 6, Math.min(reach(-1, cy), reach(1, cy))));
+    Math.min(42, Math.max(spacing / 2 + 6, 0.9 * Math.min(reach(-1, cy), reach(1, cy))));
   // A hat sits on the top of that part: as far up as the body stays as wide as the eyes.
   let top = cy;
   while (top > 0 && inside(cx - spacing / 2, top - 0.25) && inside(cx + spacing / 2, top - 0.25))
