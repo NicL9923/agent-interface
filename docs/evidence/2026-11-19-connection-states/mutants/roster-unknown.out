@@ -1,0 +1,17 @@
+caught   unknown-roster.ts: 'unknown.add(bots);'
+caught   hermes.ts: 'return cachedRead ? rows : unknownRoster(rows);'
+caught   hermes.ts: 'return cachedRead ? rows : unknownRoster(rows);'
+caught   runtime-router.ts: 'return lists.some(([, bots]) => isUnknownRoster(bots)) ? unknownRoster(rows) : rows;'
+caught   runtime-snapshot.ts: 'rosterUnknown: isUnknownRoster(bots),'
+caught   runtime-snapshot.ts: '!value.rosterUnknown &&'
+caught   event-routes.ts: 'rosterUnknown: isUnknownRoster(bots) }'
+caught   event-routes.ts: '(isUnknownRoster(bots) ? "unknown:" : "") +'
+server: 8 of 8 caught
+caught   use-session.ts: 'const knowsRoster = (next: Bootstrap) => next.connection.connected && next.rosterUnknown !'
+caught   use-session.ts: 'if (next.rosterUnknown === true || (!next.connection.connected && !next.bots.length))'
+caught   use-session.ts: 'return next.rosterUnknown === true && saved ? saved : next.bots;'
+caught   use-session.ts: 'if (knowsRoster(next))'
+caught   use-session.ts: 'if (knowsRoster(next) && open && !next.bots.some((bot) => bot.id === open))'
+caught   use-session.ts: 'if (!knowsRoster(next)) return previous;'
+caught   App.tsx: 'savedRoster: (user) => (saved?.user === user ? savedHome(saved).bots : undefined),'
+web: 7 of 7 caught

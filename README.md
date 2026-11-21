@@ -638,10 +638,11 @@ changes, not when a draft does.
 
 A failed conversation read is retried after 1, 2, 4, 8 and 16 seconds, then every 30. A bootstrap that
 failed, found Hermes down or brought a stale roster is retried after 1, 2, 4, 8 and 16 seconds, then by
-the 45-second poll. The server says a roster is its cache with bootstrap's `rosterCached`, and lists its
-rows as disconnected, while Hermes is down or after a roster read that failed; the list of assistants
-then keeps what each was doing for up to 30 seconds from the first stale roster, and takes who is on it
-from the server at once, unless the cached roster is empty.
+the 45-second poll. The server marks a roster stale by listing its rows as disconnected, while Hermes is
+down or after a roster read that failed; the list of assistants then keeps what each was doing for up
+to 30 seconds from the first stale roster, and takes who is on it from the server at once. A server
+that has had no roster from Hermes since it started says so with bootstrap's `rosterUnknown`, and the
+list, the open chat and the saved home stay as they were.
 A hidden page or an offline device skips these and reads when shown or back online. A failure belongs
 to its chat, so it refuses nothing once that chat is closed or gone. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays

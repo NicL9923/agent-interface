@@ -11,7 +11,7 @@ import { eventStreamConnection, type EventStream } from "./event-stream.js";
 import type { GroupCatalogWatch } from "./group-catalog-watch.js";
 import type { GroupWatch } from "./group-watch.js";
 import { routePattern } from "./route-path.js";
-import { isCachedRoster } from "./cached-roster.js";
+import { isUnknownRoster } from "./unknown-roster.js";
 import { changesRoster, type RuntimeSnapshots } from "./runtime-snapshot.js";
 import { id } from "./schemas.js";
 import type { Store } from "./store.js";
@@ -83,7 +83,7 @@ export function installEventRoutes(
             // The bootstrap each client sends on the notice below reuses this read.
             if (status)
               snapshot.keep(
-                { bots, capabilities, connection: status, rosterCached: isCachedRoster(bots) },
+                { bots, capabilities, connection: status, rosterUnknown: isUnknownRoster(bots) },
                 began,
               );
             // Memoize per userId so multiple tabs for one household member serialize the roster once.
@@ -154,7 +154,11 @@ export function installEventRoutes(
       const viewerId = signedIn(req).id;
       let next = projected.get(viewerId);
       if (next === undefined) {
-        next = rosterProjection(bots, viewerId, nativeAvatar);
+        // A roster the server could not know reads differently from a known one with the same rows,
+        // so learning it, even with no one on it, still sends a notice.
+        next =
+          (isUnknownRoster(bots) ? "unknown:" : "") +
+          rosterProjection(bots, viewerId, nativeAvatar);
         projected.set(viewerId, next);
       }
       if (next === projection) return;

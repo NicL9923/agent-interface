@@ -171,7 +171,7 @@ Tests changed because the behavior did:
 
 Each line was broken with `~/.agents/tools/mutate.py`, the named tests run, and the source restored.
 The lists and the tool's output from the final pass, after all the review rounds, are in
-[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 125 mutants, 125 caught. The last
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 129 mutants, 129 caught. The last
 five rows were run after the fifth, sixth, eighth and ninth review rounds.
 
 | File                                                | Mutants | Result    |
@@ -187,7 +187,7 @@ five rows were run after the fifth, sixth, eighth and ninth review rounds.
 | `ConnectionAnnouncer`, partial live return          | 5       | 5 caught  |
 | Live-updates scope, `App.tsx` and `stream-health`   | 4       | 4 caught  |
 | `hermes.ts` roster cache order                      | 2       | 2 caught  |
-| `rosterCached`, server and web                      | 11      | 11 caught |
+| `rosterUnknown`, server and web                     | 15      | 15 caught |
 
 Mutants that survived on the way, and what was done:
 
@@ -307,19 +307,34 @@ and the rest of the round, are in the iOS section.
 
 The server fix passed. The ninth round found that an empty roster with Hermes connected, which the
 server answers when its first `profiles.list` fails, has no rows to mark `disconnected`, so a client
-took it for a fresh roster with no one on it: the native app closed the open chat and cleared its saved
-data, and the web dropped every assistant from the list. The cause is that bootstrap had no way to say
-the roster was its cache, the same gap that left the third round's first finding open.
+took it for a known roster with no one on it: the native app closed the open chat and cleared its saved
+data, and the web dropped every assistant from the list.
 
-Bootstrap now carries `rosterCached`. The Hermes adapter marks every roster it answers from cache
-(`src/server/cached-roster.ts`), the runtime snapshot and the roster stream's evaluation both set the
-field from that mark or from rows marked by an older runtime, and a cached roster is never held for
-reuse. The web reads it in `staleRoster` and keeps its rows through an empty cached roster, while an
-empty fresh one empties the list. Tests: `hermes-adapter` (an empty cache from a failed read and from a
-lost socket, and a fresh read unmarked), `connection-server` (bootstrap's field, empty or not, never
-held), `conversation-events` (the evaluation's cached read), `connection-grace-ui` (an empty cached
-roster kept, an empty fresh one taken). The mutants are `mutants/roster-cached-*.py`, 11 of 11 caught.
-The native findings and their fixes are in the iOS section.
+A first answer, `rosterCached` (`6adbc343`), marked every roster the adapter answered from cache. Its
+review found five P2s: the production runtime router builds a new list and dropped the mark, so
+production never sent it; the web still closed the open chat on it; a first bootstrap with it erased
+the saved home; it kept a row the server had filtered out for visibility; and iOS did not read it yet.
+It was replaced before any client shipped it.
+
+The replacement is narrower. After the eighth round's fix, the adapter's cache holds the newest roster
+Hermes gave, and visibility is filtered from this app's store, so a cached roster with rows says who is
+on it. Only an empty cache from before any read succeeded says nothing. Bootstrap now carries
+`rosterUnknown` for exactly that (`src/server/unknown-roster.ts`): the Hermes adapter marks such a list,
+the router marks its merged list when any runtime's list is marked, and the snapshot and the roster
+stream's evaluation set the field from it. An unknown roster is never held for reuse, and learning the
+roster sends a stream notice even when its rows do not change. The web treats an unknown roster as no
+roster: it keeps the rows, the open chat, the selection and the sign-in hint's chats, and a first
+bootstrap keeps the saved home. A known empty roster, as when the last visible assistant is made
+private, still empties the list, which also closes the third round's first finding.
+
+Tests: `hermes-adapter` (unknown before any read succeeds, from a failed read and from a lost socket;
+neither a fresh nor a cached roster with rows), `runtime-router` (the mark survives the router, and
+bootstrap through it says so), `connection-server` (the field and that it is never held),
+`conversation-events` (the evaluation's read, and a notice on learning the roster), `connection-grace-ui`
+(the list and the open chat kept, then emptied by a known empty roster) and `saved-roster-ui` (the saved
+home, the saved copy and the hint kept through a first unknown bootstrap). `mutants/roster-unknown-run.sh`
+breaks 15 lines; 15 are caught. One more, the saved home's write guard, survived as equivalent and the
+guard was removed. The native findings and their fixes are in the iOS section.
 
 ## Checks
 
@@ -356,12 +371,7 @@ run had included:
 - iOS matched these states afterwards; see "iOS" below.
 - Safari, Firefox, a screen reader and a real phone: not run. The live region and tooltips were checked
   in jsdom and by reading the DOM in Chromium.
-- The ninth round's server and web fix has had no review of its own.
-- A member's last visible assistant made private during a Hermes outage stays listed until Hermes is
-  back (third round, finding 1). On `main` too. Bootstrap now says the roster is cached, but a cached
-  roster that the member's visibility filters down to no one still looks like a cache with nothing in
-  it, and is kept on purpose. Telling the two apart needs the server to say whether the filter removed
-  rows.
+- The ninth round's `rosterUnknown` change has had no review of its own.
 - The server still answers one timed-out Hermes call with the code `unreachable`. The client no longer
   treats it as proof, so nothing depends on it, but the code says more than the server knows.
 - The live-updates notice still clears about 10 seconds after a stream reconnects, because a stream

@@ -367,6 +367,24 @@ describe("the home this device saved", () => {
     expect(savedRoster()).toBeNull();
   });
 
+  // Hermes connected, but the server has had no roster from it yet. Its empty list is no word that every
+  // assistant is gone, so the saved home stays on the page and on the device, and the hint keeps its chats.
+  it("stays, on the page and the device, through a first bootstrap whose server knows no roster", async () => {
+    store(signInHintKey, hintFor("one"));
+    store(savedRosterKey, savedOne);
+    await open();
+    expect(showsSavedHome()).toBe(true);
+    await answer("GET /bootstrap?roster=lean", 200, { ...one, bots: [], rosterUnknown: true });
+    expect(showsSavedHome()).toBe(true);
+    expect(order()).toEqual(["Home", "Ranch Hand", "Trail Cook", "Supper plans"]);
+    expect(savedRoster()).toEqual(savedOne);
+    expect(JSON.parse(localStorage.getItem(signInHintKey)!).bots).toEqual([
+      "home",
+      "ranch",
+      "trail",
+    ]);
+  });
+
   it("draws none of what a copy should not hold, even when one holds it", async () => {
     store(signInHintKey, hintFor("one"));
     store(savedRosterKey, {

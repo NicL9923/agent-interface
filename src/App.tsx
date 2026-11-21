@@ -234,6 +234,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       },
       onError: setError,
       onBotGone: gone,
+      savedRoster: (user) => (saved?.user === user ? savedHome(saved).bots : undefined),
     },
     start,
   );
@@ -892,7 +893,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     undo: () => toast.undo(),
   });
   useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0, boot?.user.id);
-  // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live roster.
+  // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live
+  // roster. One whose server has had no roster yet shows the rows it kept, so saving them changes nothing.
   const connected = !!boot?.connection.connected;
   useEffect(() => {
     if (boot && connected) rememberRoster(boot, catalog ? rooms : null);

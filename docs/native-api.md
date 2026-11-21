@@ -425,14 +425,17 @@ routes retain full configuration for native build 5 and cached web bundles.
 Build 5 can decode missing fields, but its settings form treats them as empty
 and can erase saved configuration. It must receive the full default roster.
 
-Bootstrap's `rosterCached` is true when `bots` is the server's last good roster
-because Hermes could not be asked: the socket is down, or `profiles.list` failed.
-Its rows are then marked `activity: "disconnected"`, but an empty cached roster has
-no rows to mark, so read the field. Who is on a cached roster may be out of date in
-either direction. Show it, but never treat an assistant it leaves out as removed:
-keep its chat, draft, saved transcript and notifications until a roster with
-`rosterCached` false leaves it out too. An older server omits the field; treat any
-`disconnected` row as cached then.
+While Hermes cannot be asked, bootstrap lists the server's last roster with
+every row marked `activity: "disconnected"` in the lean roster; the full roster's
+detail rows are not marked. Who is on that roster stands: the server keeps the
+newest roster Hermes gave and filters it by this member's visibility, which is
+always current. What each assistant is doing does not.
+
+`rosterUnknown` is true when the server has had no roster from Hermes since it
+started, so `bots` is empty for that reason, or missing a runtime's assistants,
+and says nothing about who is on the roster. Treat such a bootstrap as no roster:
+keep the rows already shown, the open chat and everything stored per assistant,
+and write no saved roster or widget from it. Absent means false.
 
 `GET /api/events` is an authenticated household SSE stream. `event: roster`
 with `data: roster` means refresh bootstrap. It carries no assistant IDs or

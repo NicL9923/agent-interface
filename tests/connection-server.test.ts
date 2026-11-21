@@ -2,7 +2,7 @@ import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
-import { cachedRoster } from "../src/server/cached-roster.js";
+import { unknownRoster } from "../src/server/unknown-roster.js";
 import { loadConfig } from "../src/server/config.js";
 import {
   defaultPreferences,
@@ -228,23 +228,22 @@ describe("connection recovery API", () => {
       expect((await bootstrap(app, headers)).statusCode).toBe(200);
       expect(status).toHaveBeenCalledTimes(2);
     });
-    // An empty roster with Hermes connected can be a fresh answer or the server having no roster yet.
-    // Bootstrap says which, so a client never takes a failed read for every assistant being gone.
-    it("says when the roster is the runtime's cached copy, empty or not", async () => {
+    // An empty roster with Hermes connected can be a fresh answer or the server having had no roster
+    // yet. Bootstrap says which, so a client never takes a failed read for every assistant being gone.
+    it("says when the server has no roster to give, and never holds that answer", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
-      let answer: () => Bot[] = () => cachedRoster([]);
+      let answer: () => Bot[] = () => unknownRoster([]);
       const { app } = await installation({ listBots: vi.fn(async () => answer()) });
       const headers = await identity(app);
       const first = (await bootstrap(app, headers)).json();
-      expect(first).toMatchObject({ bots: [], rosterCached: true });
+      expect(first).toMatchObject({ bots: [], rosterUnknown: true });
       expect(first.connection.connected).toBe(true);
-      // A cached roster is never held, so the next bootstrap asks again.
       answer = () => rows();
-      expect((await bootstrap(app, headers)).json()).toMatchObject({ rosterCached: false });
-      // A runtime that only marks its rows is cached too.
+      expect((await bootstrap(app, headers)).json()).toMatchObject({ rosterUnknown: false });
+      // A cached roster with rows is known: who is on it stands.
       vi.setSystemTime(Date.now() + 2_000);
       answer = () => rows("disconnected");
-      expect((await bootstrap(app, headers)).json()).toMatchObject({ rosterCached: true });
+      expect((await bootstrap(app, headers)).json()).toMatchObject({ rosterUnknown: false });
     });
     it("never holds a disconnected runtime", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });

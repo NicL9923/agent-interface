@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Bootstrap, Preferences } from "../shared/types";
+import type { Bootstrap, Bot, Preferences } from "../shared/types";
 import {
   AccountChanged,
   ApiError,
@@ -23,6 +23,8 @@ type SessionEvents = {
   onError(message: string): void;
   /** The open assistant left this person's roster, as when another member made it personal. */
   onBotGone(botId: string): void;
+  /** The roster this device saved for `userId`, if any, for a first bootstrap that knows none. */
+  savedRoster?(userId: string): Bot[] | undefined;
 };
 /**
  * Dispatched on window when this person's group catalog may have changed: the household stream's
@@ -45,22 +47,32 @@ const groupsChanged = () => window.dispatchEvent(new Event(GROUPS_EVENT));
 export const ROSTER_CARRY_MS = 30_000;
 /**
  * Whether the server could list only its last roster, not a fresh one: while Hermes is down, and after a
- * roster read that failed with Hermes connected. It says so with `rosterCached`; an older server only
- * marks the rows `disconnected`.
+ * roster read that failed with Hermes connected. It marks such rows `disconnected`, and says when it has
+ * no roster at all (`rosterUnknown`).
  */
 const staleRoster = (next: Bootstrap) =>
-  next.rosterCached === true || next.bots.some((bot) => bot.activity === "disconnected");
+  next.rosterUnknown === true || next.bots.some((bot) => bot.activity === "disconnected");
+/** Whether a bootstrap says anything about who is on the roster (see `Bootstrap.rosterUnknown`). */
+const knowsRoster = (next: Bootstrap) => next.connection.connected && next.rosterUnknown !== true;
 /**
  * The roster a bootstrap brings, for the member the page already shows. Who is on it is always the
  * server's word: it filters even its last roster for each member, so an assistant made private goes at
  * once. What each assistant is doing is the server's word only when it knows. A stale row says nothing
  * changed, so while `carry` holds the row keeps the activity it had here; whether the app shows a loss,
- * and when, is `useOutage`'s business. A stale roster that lists no one keeps the rows as they were: it
- * may only mean the server has had no roster from Hermes yet.
+ * and when, is `useOutage`'s business. A bootstrap that knows no roster, because Hermes is down and it
+ * lists no one or because the server has had no roster yet, keeps the rows as they were; the first one
+ * for a member keeps the roster this device saved for them.
  */
-function rosterFrom(next: Bootstrap, previous: Bootstrap | null, carry: boolean) {
-  if (previous?.user.id !== next.user.id) return next.bots;
-  if (!next.bots.length && (staleRoster(next) || !next.connection.connected)) return previous.bots;
+function rosterFrom(
+  next: Bootstrap,
+  previous: Bootstrap | null,
+  carry: boolean,
+  saved: Bot[] | undefined,
+) {
+  if (previous?.user.id !== next.user.id)
+    return next.rosterUnknown === true && saved ? saved : next.bots;
+  if (next.rosterUnknown === true || (!next.connection.connected && !next.bots.length))
+    return previous.bots;
   if (!carry) return next.bots;
   const before = new Map(previous.bots.map((bot) => [bot.id, bot.activity]));
   return next.bots.map((bot) =>
@@ -151,7 +163,7 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
           handlers.current.onFirstBootstrap(next);
         }
         setCsrf(next.csrfToken ?? "");
-        if (next.connection.connected)
+        if (knowsRoster(next))
           rememberChats(
             next.user.id,
             next.bots.map((bot) => bot.id),
@@ -169,7 +181,12 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
             ? previous
             : {
                 ...next,
-                bots: rosterFrom(next, previous, carry),
+                bots: rosterFrom(
+                  next,
+                  previous,
+                  carry,
+                  handlers.current.savedRoster?.(next.user.id),
+                ),
                 preferences:
                   stalePreferences && previous?.user.id === next.user.id
                     ? previous.preferences
@@ -185,10 +202,10 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
           clearTimeout(retryTimer.current);
         } else retryLater.current();
         const open = botIdRef.current;
-        if (next.connection.connected && open && !next.bots.some((bot) => bot.id === open))
+        if (knowsRoster(next) && open && !next.bots.some((bot) => bot.id === open))
           handlers.current.onBotGone(open);
         setBotId((previous) => {
-          if (!next.connection.connected) return previous;
+          if (!knowsRoster(next)) return previous;
           if (next.bots.some((bot) => bot.id === previous)) return previous;
           return (
             next.bots.find((bot) => bot.id === next.preferences.defaultBotId)?.id ||

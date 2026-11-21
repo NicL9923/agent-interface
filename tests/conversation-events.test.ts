@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as realDelay } from "node:timers/promises";
 import { request as httpRequest } from "node:http";
 import { createApp } from "../src/server/app.js";
-import { cachedRoster } from "../src/server/cached-roster.js";
+import { unknownRoster } from "../src/server/unknown-roster.js";
 import { LIVE_TICK_MS, TURN_HOLD_MS, TURN_TICK_MS } from "../src/server/conversation-routes.js";
 import { loadConfig } from "../src/server/config.js";
 import { hash } from "../src/server/auth.js";
@@ -1126,20 +1126,29 @@ describe("roster compatibility and household events", () => {
     await events.close();
   });
 
-  // The evaluation's read found only the cache, an empty one, with Hermes connected. The bootstrap
-  // that follows must say so rather than serve it as a fresh roster with no one on it.
-  it("never serves a cached roster from a roster evaluation as a fresh one", async () => {
+  // The evaluation's read found no roster, with Hermes connected. The bootstrap that follows must say
+  // so rather than serve it as a fresh roster with no one on it, and learning the roster, even an
+  // empty one, is news.
+  it("never serves an unknown roster from a roster evaluation as a known one, and notices learning it", async () => {
     const s = await setup();
     const events = await stream(`${s.base}/api/events`, s.cookie);
     await events.until(() => events.text.includes("retry"));
-    s.runtime.listBots = vi.fn(async () => cachedRoster([]));
+    s.runtime.listBots = vi.fn(async () => unknownRoster([]));
     s.rosterChanged();
     await events.until(() => events.text.includes("event: roster"));
     expect(s.runtime.listBots).toHaveBeenCalledTimes(1);
-    const boot = (await (
-      await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })
-    ).json()) as { bots: Bot[]; rosterCached: boolean };
-    expect(boot).toMatchObject({ bots: [], rosterCached: true });
+    const boot = async () =>
+      (await (
+        await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })
+      ).json()) as { bots: Bot[]; rosterUnknown: boolean };
+    expect(await boot()).toMatchObject({ bots: [], rosterUnknown: true });
+    const notices = () => events.text.split("event: roster").length - 1;
+    const before = notices();
+    s.runtime.listBots = vi.fn(async () => []);
+    await pass(1_000);
+    s.rosterChanged();
+    await events.until(() => notices() > before);
+    expect(await boot()).toMatchObject({ bots: [], rosterUnknown: false });
     await events.close();
   });
 

@@ -474,9 +474,9 @@ describe("a failed conversation read", () => {
       expect(shown()).toBe(false);
     });
 
-    // Hermes connected, but the server has had no roster from it yet: it lists none, and says the list is
-    // its cache. That is no reason to drop every assistant. A fresh empty roster is.
-    it("keeps the assistants through an empty cached roster, and drops them for an empty fresh one", async () => {
+    // Hermes connected, but the server has had no roster from it yet: it lists none, and says it does not
+    // know. That is no reason to drop every assistant or close the open chat. A known empty roster is.
+    it("keeps the assistants and the open chat through an unknown roster, and drops them for a known empty one", async () => {
       await opened();
       const names = boot.bots.map((bot) => bot.name);
       const listed = () =>
@@ -485,13 +485,17 @@ describe("a failed conversation read", () => {
             row.textContent?.includes(name),
           ),
         );
+      const chatOpen = () => container.querySelector(".transcript [data-message-id]") !== null;
       expect(listed()).toEqual(names);
-      boot = { ...boot, bots: [], rosterCached: true };
+      boot = { ...boot, bots: [], rosterUnknown: true };
       await rosterChanged();
       expect(listed()).toEqual(names);
-      boot = { ...boot, rosterCached: false };
+      expect(chatOpen()).toBe(true);
+      expect(container.textContent).not.toContain("no longer available");
+      boot = { ...boot, rosterUnknown: false };
       await rosterChanged();
       expect(listed()).toEqual([]);
+      expect(chatOpen()).toBe(false);
     });
 
     // The connection coming back is said when it comes back. The notice staying out its second, and

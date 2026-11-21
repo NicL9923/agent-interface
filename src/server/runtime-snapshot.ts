@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { Bootstrap, Runtime } from "../shared/types.js";
-import { isCachedRoster } from "./cached-roster.js";
+import { isUnknownRoster } from "./unknown-roster.js";
 import { routePattern } from "./route-path.js";
 
 /**
@@ -12,7 +12,7 @@ import { routePattern } from "./route-path.js";
  */
 export const SNAPSHOT_TTL_MS = 1500;
 export type RuntimeSnapshot = Pick<Bootstrap, "bots" | "capabilities" | "connection"> & {
-  rosterCached: boolean;
+  rosterUnknown: boolean;
 };
 /** A read's start, from `begin`, which decides whether it may still publish. */
 export type SnapshotRead = { startedAt: number; order: number };
@@ -36,7 +36,11 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
     if (order < readPublished) return;
     readPublished = order;
     snapshotKept =
-      value.connection.connected && !value.rosterCached ? { value, at: startedAt } : undefined;
+      value.connection.connected &&
+      !value.rosterUnknown &&
+      !value.bots.some((bot) => bot.activity === "disconnected")
+        ? { value, at: startedAt }
+        : undefined;
     // Callers that arrive now take this read, not an older one still in flight.
     snapshotRead = undefined;
   };
@@ -58,7 +62,7 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
         bots,
         capabilities,
         connection: await runtime.status(),
-        rosterCached: isCachedRoster(bots),
+        rosterUnknown: isUnknownRoster(bots),
       };
     })();
     snapshotRead = reading;

@@ -4,6 +4,7 @@ import { loadConfig } from "../src/server/config.js";
 import { MainAssistants, ReconcileError } from "../src/server/main-assistant.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { createRuntimeRouter, hermesRuntimeId } from "../src/server/runtime-router.js";
+import { isUnknownRoster, unknownRoster } from "../src/server/unknown-roster.js";
 import { Store } from "../src/server/store.js";
 import type { Bot, Runtime, RuntimeEvent } from "../src/shared/types.js";
 import {
@@ -123,6 +124,42 @@ describe("runtime router", () => {
     expect((await router.routines("barn")).map((row) => `${row.botId}/${row.id}`)).toEqual([
       "barn/feed",
     ]);
+  });
+
+  // A runtime that has had no roster yet says nothing about who is on it, so neither does the whole
+  // answer. Bootstrap reads that through the router, which builds a new list, so the router must say it.
+  it("says the roster is unknown when one runtime does not know its own, and bootstrap says so too", async () => {
+    let hermesRows: () => Bot[] = () => unknownRoster([]);
+    const router = routerOver(
+      {
+        listBots: async () => hermesRows(),
+        capabilities: async () => capabilitiesFixture(),
+        status: async () => ({ connected: true }),
+        close: async () => {},
+      },
+      { listBots: async () => [bot("barn")], close: async () => {} },
+    );
+    const listed = await router.listBots();
+    expect(listed.map((row) => row.id)).toEqual(["barn"]);
+    expect(isUnknownRoster(listed)).toBe(true);
+    const { app } = await createApp(
+      loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+      router,
+      { background: false },
+    );
+    try {
+      const headers = await localLogin(app, "http://127.0.0.1:3000");
+      expect((await app.inject({ url: "/api/bootstrap", headers })).json()).toMatchObject({
+        rosterUnknown: true,
+      });
+      hermesRows = () => [bot("ranch")];
+      expect(isUnknownRoster(await router.listBots())).toBe(false);
+      expect((await app.inject({ url: "/api/bootstrap", headers })).json()).toMatchObject({
+        rosterUnknown: false,
+      });
+    } finally {
+      await app.close();
+    }
   });
 
   it("fails the roster and the routine inventory whole when one runtime fails, since callers prune by what they leave out", async () => {

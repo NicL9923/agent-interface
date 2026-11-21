@@ -519,12 +519,12 @@ export interface Bootstrap {
   capabilities: Capabilities;
   connection: RuntimeStatus;
   /**
-   * True when `bots` is the server's last good roster because Hermes could not be asked. Who is on it
-   * may be out of date, and an empty one may only mean the server has no roster yet, so a client acts on
-   * an omission only when this is false. Absent from an older server, which marks such rows
-   * `disconnected` instead.
+   * True when the server has had no roster from Hermes since it started, so `bots` is empty, or missing
+   * a runtime's assistants, for that reason and says nothing about who is on the roster. Treat it as no
+   * roster: keep what was shown. A cached roster with rows is not this; its rows are marked
+   * `disconnected` and who is on it stands. Absent from an older server.
    */
-  rosterCached?: boolean;
+  rosterUnknown?: boolean;
   csrfToken: string | null;
   /** This person's private key for deriving form request IDs; see formRequestId. Absent from an older server. */
   formKey?: string;

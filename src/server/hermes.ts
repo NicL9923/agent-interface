@@ -48,7 +48,7 @@ import {
   nothingToStopMessage,
   runChangedMessage,
 } from "../shared/errors.js";
-import { cachedRoster } from "./cached-roster.js";
+import { unknownRoster } from "./unknown-roster.js";
 import { httpError } from "./http-error.js";
 import {
   BEFORE_ADMISSION,
@@ -1297,10 +1297,16 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
       return contract.canonicalSubmit;
     },
     async listBots() {
+      // What Hermes last listed, each row marked as not current. Before any read succeeded that is
+      // nothing, which says nothing about who is on the roster.
+      const fromCache = () => {
+        const rows = botCache.map((row) => ({ ...row, activity: "disconnected" as const }));
+        return cachedRead ? rows : unknownRoster(rows);
+      };
       try {
         await connect();
       } catch {
-        return cachedRoster(botCache.map((row) => ({ ...row, activity: "disconnected" as const })));
+        return fromCache();
       }
       if (rosterReuse && Date.now() - rosterReuse.at < ROSTER_REUSE_MS)
         return rosterReuse.bots.slice();
@@ -1323,9 +1329,7 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
           if (rosterRequest === request) rosterReuse = { at: Date.now(), bots };
           return bots;
         } catch {
-          return cachedRoster(
-            botCache.map((row) => ({ ...row, activity: "disconnected" as const })),
-          );
+          return fromCache();
         }
       })();
       rosterRequest = request;
