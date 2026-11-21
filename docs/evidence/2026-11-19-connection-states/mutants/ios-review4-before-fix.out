@@ -43,3 +43,13 @@ ios/AgentInterfaceTests/NativeReachTests.swift:98: error: -[AgentInterfaceTests.
 ios/AgentInterfaceTests/NativeReachTests.swift:99: error: -[AgentInterfaceTests.NativeReachTests testABackgroundReadOfAnUnknownRosterLeavesTheSnapshotAlone] : XCTAssertNil failed: "WidgetSnapshot(scope: "aHR0cHM6Ly9mYWtlLTNjYWJjNmE3LTE4NjMtNDFkNi05ZDMwLWViNmRhZjRiOGViNC5leGFtcGxlLnRlc3R8b25l", generatedAt: 2026-11-21 02:52:24 +0000, assistants: [AgentInterface.WidgetSnapshot.Assistant(id: "kitchen", name: "Kitchen", activity: "idle", lastMessage: Optional("Milk is low"), lastMessageAt: Optional(2026-11-06 12:00:00 +0000), color: nil, pinned: false)])" - It never replaces the snapshot, rows: true
 Test Case '-[AgentInterfaceTests.NativeReachTests testABackgroundReadOfAnUnknownRosterLeavesTheSnapshotAlone]' failed (0.040 seconds).
 	 Executed 7 tests, with 29 failures (0 unexpected) in 1.599 (1.603) seconds
+# The finding 4 test as committed in 0249e8fd, three iterations on 6adbc343:
+Test Case '-[AgentInterfaceTests.NativeContractTests testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait]' started (Iteration 1 of 3).
+ios/AgentInterfaceTests/NativeContractTests.swift:4403: error: -[AgentInterfaceTests.NativeContractTests testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait] : XCTAssertEqual failed: ("1") is not equal to ("0") - No conversation read goes out offline
+Test Case '-[AgentInterfaceTests.NativeContractTests testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait]' failed (1.476 seconds).
+Test Case '-[AgentInterfaceTests.NativeContractTests testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait]' started (Iteration 2 of 3).
+Test Case '-[AgentInterfaceTests.NativeContractTests testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait]' failed (0.400 seconds).
+Test Case '-[AgentInterfaceTests.NativeContractTests testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait]' started (Iteration 3 of 3).
+Test Case '-[AgentInterfaceTests.NativeContractTests testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait]' failed (0.163 seconds).
+	 Executed 3 tests, with 3 failures (0 unexpected) in 2.038 (2.044) seconds
+	 Executed 3 tests, with 3 failures (0 unexpected) in 2.038 (2.045) seconds

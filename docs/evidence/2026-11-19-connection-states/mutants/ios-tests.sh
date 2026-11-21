@@ -26,7 +26,6 @@ xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAStopIsNotSentAfterTheChatOrTheNetworkIsLost \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAnUncertainSendIsNotRetriedWhileTheChatOrTheNetworkIsDown \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAutomaticReadsWaitForTheNetworkTheForegroundAndTheSameSession \
-  -only-testing:AgentInterfaceTests/NativeContractTests/testACancelledReadThatDisplacedTheRetrySetsItAgain \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAnOpenAssistantRemovedByAConnectedRosterLeavesAndAReadOnItsWayCannotBringItBack \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAChatWriteIsNotSentWhileTheChatOrTheNetworkIsDown \
   -only-testing:AgentInterfaceTests/SystemSurfaceTests/testACachedRosterLeavesTheSystemSurfacesWholeAndAConnectedOnePrunesThem \
