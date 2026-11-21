@@ -1001,7 +1001,14 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/dev.agentinterface.loopba
 ```
 
 `npm run test:e2e` runs Playwright against Chromium and WebKit. Run `npm run build`
-first, and `npx playwright install chromium webkit` once per Playwright version. The accessibility spec
+first, and `npx playwright install chromium webkit` once per Playwright version. On a Linux host
+without WebKit's system libraries, such as Fedora, run the WebKit project in Playwright's container
+instead; `.agents/tools/check-all` does this on its own:
+`podman run --rm --security-opt label=disable --userns=keep-id --ipc=host -v "$PWD:$PWD" -w "$PWD" -e HOME=/tmp mcr.microsoft.com/playwright:v1.65.0-noble npx playwright test --project=webkit`.
+The image version is the installed `@playwright/test`. A test that routes requests with
+`page.route` or `context.route` must set `test.use({ serviceWorkers: "block" })`: WebKit sends a
+worker-controlled page's requests past the routes, and `e2e/fixtures.ts` makes such a route fail
+at once in both browsers. The accessibility spec
 scans home, a chat with a reply, Settings, assistant details and Today at phone and desktop sizes in
 light and dark. It fails on serious and critical axe WCAG 2.2 AA violations. `e2e/server.ts`
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,
@@ -1017,8 +1024,8 @@ console errors or CSP violation reports. It runs in full Chromium (`channel: "ch
 `npx playwright install chromium` installs beside the headless shell): the shell crashes the
 page when a service worker calls the badge API, which the worker does for every page it controls,
 and it has no back-forward cache. Playwright WebKit skips the worker badge instrumentation and the two back-forward cache tests. It uses a fake push service. It does not cover real Hermes behavior, push
-delivery, Google sign-in, the iOS app, or other browsers. Main pushes and manual CI runs execute it in the `browser` job, while PR CI excludes it
-and uploads the report and traces when it fails.
+delivery, Google sign-in, the iOS app, or other browsers. Main pushes and manual CI runs execute it in the `browser` job, one job per
+browser in Playwright's container image, pinned by digest, while PR CI excludes it. Each job uploads its report and traces when it fails.
 
 The [validation ledger](docs/ledger/README.md) distinguishes application tests,
 real Hermes execution using a deterministic local provider, visual checks, and
