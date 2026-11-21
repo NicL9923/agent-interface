@@ -111,6 +111,10 @@ extension AppStore {
         "/auth/native/exchange", ["code": code, "state": pkce.state, "codeVerifier": pkce.verifier])
       guard generation == authGeneration else { return }
       try SecureToken.save(result.token, host: api.baseURL.absoluteString)
+      // Another member: the last one's account goes before the new token is in place, so nothing of
+      // theirs, such as a failed settings save or an unsaved draft, can be sent under it. The same
+      // member keeps their draft and failed save, as after any expired sign-in.
+      if let previous = bootstrap?.user.id, previous != result.user.id { leaveAccount() }
       api.token = result.token
       sessionExpired = false
       renewalAttemptedAt = nil
@@ -220,6 +224,13 @@ extension AppStore {
     stopPolling()
     resetAccountContent()
     return true
+  }
+  /// Leaves the signed-in account for another member's: drops its offline copy, keeps the open draft on
+  /// this device under that account's name, then clears what it owns.
+  func leaveAccount() {
+    clearOfflineLibrary()
+    persistDraft()
+    resetAccountContent()
   }
   /// Every account boundary clears the same account-owned content and async request identities.
   func resetAccountContent() {

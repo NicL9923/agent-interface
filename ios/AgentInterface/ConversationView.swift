@@ -868,6 +868,8 @@ struct MessageView: View {
       }
       .modifier(ReplyActions(message: message))
       .accessibilityElement(children: .contain)
+      // Names the row, so a UI test can tell a streamed reply from its saved copy.
+      .accessibilityIdentifier("message-" + message.id)
   }
   @ViewBuilder private var content: some View {
     if message.isAgentExchange {
