@@ -19,10 +19,14 @@ recorded in its own section below once it has run on the Mac mini.
 Not exercised here: the dark theme, motion in a real browser beyond the specimen's still frames,
 a phone, and the iOS app.
 
+The specimen's state matrix showed a white mug's and ghost's blocked exclamation mark missing on
+the light theme: the mark was drawn in the body color with no edge. It now takes the same soft
+edge as a very light body.
+
 ## Red runs
 
 Each guarded line was broken by hand once, the named test file run, and the line restored.
-All 24 went red in the test written for them.
+All 25 went red in the test written for them.
 
 | Break                                   | File                               | Test that failed                                                                            |
 | --------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -50,3 +54,4 @@ All 24 went red in the test written for them.
 | portrait forgets the drawn character    | `src/components/AvatarEditor.tsx`  | restores the drawn character after trying a portrait                                        |
 | an arc slips into an outline            | `src/components/avatar-shapes.ts`  | writes every outline as closed contours the native reader can parse                         |
 | a face sits above its head              | `src/components/avatar-shapes.ts`  | keeps each face on its body, with room for the eyes at their largest                        |
+| a light exclamation has no edge         | `src/components/Avatar.tsx`        | edges a very light exclamation too, so a white assistant that needs help can be seen        |

@@ -330,4 +330,18 @@ describe("avatar shapes", () => {
     await render("idle", shaped("ghost", { color: "#FF6700" }));
     expect(edges()).toHaveLength(0);
   });
+
+  it("edges a very light exclamation too, so a white assistant that needs help can be seen", async () => {
+    reduceMotion = true;
+    // The mark is the only circle the rig draws for a pill-eyed shape.
+    const mark = () => container.querySelector("svg circle")!.closest("g[fill]")!;
+    await render("blocked", shaped("ghost", { color: "#F4F4F4" }));
+    expect(mark().getAttribute("fill")).toBe("#F4F4F4");
+    expect([mark().getAttribute("stroke"), mark().getAttribute("stroke-width")]).toEqual([
+      "#cdcdcd",
+      "2.2",
+    ]);
+    await render("blocked", shaped("ghost", { color: "#FF6700" }));
+    expect(mark().getAttribute("stroke")).toBeNull();
+  });
 });

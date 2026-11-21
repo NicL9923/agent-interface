@@ -553,7 +553,8 @@ export function Avatar({
             {trailLayer("front")}
           </g>
           {heldProp}
-          <g fill={color}>
+          {/* The symbol stands in for the body, so a very light one keeps the body's soft edge. */}
+          <g fill={color} stroke={edge ?? undefined} strokeWidth={edge ? 2.2 : undefined}>
             {bang > 0.01 && (
               <g
                 opacity={smoothstep(bang)}
