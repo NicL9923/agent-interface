@@ -979,19 +979,36 @@ A partial save follows these rules:
   save would, and any 400 saves nothing.
 - The answer is the whole `Preferences` as saved and as the caller may see them. Put it
   on screen.
-- A body sent as `application/merge-patch+json` to any other route answers 415.
-  A body over the 1 MB limit answers 413 before that.
+- This is the only route that accepts `application/merge-patch+json`. Send it nowhere
+  else.
 - The merge patch parser refuses an empty body with 400 `FST_ERR_CTP_EMPTY_JSON_BODY`,
   and malformed JSON or a `__proto__` or `constructor.prototype` key with 400
   `FST_ERR_CTP_INVALID_JSON_BODY`.
 
-The client sends only the fields the person changed. Send one save at a time, and run
-each queued edit when its save is about to go out, on the preferences the server
-answered to the save before it. The edit then starts from what the person sees, and a
-refused save's change is not carried into the edits behind it. The control the person
-used names the fields it set, and the client also sends any field whose value differs
-from the value the edit ran on. Values alone cannot show every change: a pick can
-equal what the server holds while the screen still shows another device's value.
+The client sends only the fields the person changed, one save at a time:
+
+- **Build each patch once, when the person taps.** Run the edit on what the person
+  sees: the preferences the server last answered, with the patches still waiting or in
+  flight laid over them in order. Do not run the edit again later. "Move this assistant
+  to that section", "append this pin" and "swap these two rows" give a different result
+  on a different list.
+- **Send the patch as it was built.** Never recompute it when its turn comes.
+- **Put each answer on screen** with the patches still waiting laid over it. It is the
+  new copy the next edit builds on.
+- **When a save is refused,** take its patch out of that overlay, tell the person, and
+  still send the patches behind it as built. They were built on a screen that showed
+  the refused change, so they carry it. A change refused for a passing reason then lands
+  with the next save. One refused because its value is invalid is refused again, so
+  nothing half-applied is stored.
+- **A lost answer** is a refusal to the client. The server may have stored that change.
+  The patches behind it carry it, so the next save keeps it.
+- **While saves wait,** keep the copy they build on. A bootstrap read that overlapped a
+  save may be older than its answer, so do not take its preferences until the queue
+  is empty.
+- **The patch names a field** when the control the person used set it, and when its
+  value differs from the value the edit ran on. A pick can equal what the screen shows
+  while the control still showed the person's earlier copy, so the control's name is
+  what sends it.
 
 A field the save names says everything about that field, whatever an older copy held.
 A named field the new value lacks goes as `null`. A named `notifications` goes with

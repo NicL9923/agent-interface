@@ -1,14 +1,20 @@
+import { applyMergePatch } from "../shared/merge-patch";
 import type { Preferences, PreferencesPatch } from "../shared/types";
 
 /**
  * Saves preferences one at a time. Two saves in flight could land in either order and the older one
- * would win, so each waits for the one before it. An edit runs when its turn comes, on what the server
- * answered to the save before it, so a quick second tap builds on the first and on anything another
- * device saved that the answer brought.
+ * would win, so each waits for the one before it.
  *
- * Every saved answer goes on screen, so the screen always holds what the server last confirmed
- * and a failed save leaves nothing to recover. A bootstrap read that overlapped a save may hold
- * older preferences; `fresh` tells the session whether to take its copy.
+ * An edit runs once, when the person taps, on what they see: the preferences the server last
+ * confirmed with the patches still waiting or in flight laid over them in order. Its patch holds the
+ * finished value of each field it set, and the save sends that patch as built. Running an edit later,
+ * on a base the person never saw, would move, append or swap against a different list.
+ *
+ * Each answer becomes the confirmed copy, and the screen shows it with the patches still waiting laid
+ * over it. A refused save's patch leaves that overlay and the person is told; the patches behind it
+ * still go out as built, and they already hold its change, because they were built on a screen that
+ * showed it. A bootstrap read never changes the confirmed copy while saves wait: `fresh` tells the
+ * session to hold such a read's preferences back, and the next answer replaces the copy anyway.
  *
  * A save carries only the fields the edit behind it set. The server keeps a field a save leaves out,
  * and this tab's copy may be older than a change made since on another device, which sending the
@@ -81,22 +87,26 @@ export function preferenceQueue(options: {
   account(): number;
 }) {
   let tail: Promise<void> = Promise.resolve();
-  // What the server last answered for the account whose saves are queued, or the screen's copy
-  // when the first of them was queued. Each edit runs on it when its turn to send comes.
+  // What the server last answered for the account whose saves wait, or the screen's copy when the first
+  // of them was queued.
   let confirmed: { value: Preferences; account: number } | null = null;
-  // Saves queued or running, per account.
-  const queued = new Map<number, number>();
+  // Patches waiting or in flight, oldest first.
+  let waiting: { patch: PreferencesPatch; account: number }[] = [];
   // Counts saves starting and settling, so a read can tell whether one overlapped it.
   let generation = 0;
   let saving = 0;
+  /** What the person sees: the confirmed copy with this account's waiting patches laid over it. */
+  const seen = (account: number, value: Preferences) =>
+    waiting
+      .filter((entry) => entry.account === account)
+      .reduce((shown, entry) => applyMergePatch(shown, entry.patch) as Preferences, value);
   /**
-   * Queues `change`. It runs when every save before it has settled, on what the server answered last,
-   * so it starts from what the person now sees and a failed save's change is not carried into it.
+   * Runs `change` now, on what the person sees, and queues the patch it makes.
    *
-   * `saved` is the screen's current preferences, the starting point when nothing is queued for this
-   * account. `chosen` names the fields the person set with this edit, which a control knows and the
-   * values cannot always show: a pick can equal what the server holds while the screen shows another
-   * device's value. A field the edit changes without naming it is sent too.
+   * `saved` is the screen's current preferences, the starting point when nothing waits for this account.
+   * `chosen` names the fields the person set with this edit, which a control knows and the values cannot
+   * always show: a pick can equal what a waiting save holds while the screen shows another device's value.
+   * A field the edit changes without naming it is sent too.
    */
   const edit = (
     change: (value: Preferences) => Preferences,
@@ -105,37 +115,45 @@ export function preferenceQueue(options: {
   ) => {
     const account = options.account();
     const current = () => options.account() === account;
-    if (!queued.get(account) || confirmed?.account !== account)
+    waiting = waiting.filter((entry) => entry.account === account);
+    if (!waiting.length || confirmed?.account !== account)
       confirmed = saved ? { value: saved, account } : null;
     if (!confirmed) return Promise.resolve();
-    queued.set(account, (queued.get(account) ?? 0) + 1);
+    const base = seen(account, confirmed.value);
+    const next = change(base);
+    const entry = {
+      patch: patchFor(
+        next,
+        PREFERENCE_FIELDS.filter(
+          (field) => chosen.includes(field) || !same(next[field], base[field]),
+        ),
+      ),
+      account,
+    };
+    waiting.push(entry);
     generation++;
     saving++;
+    const settle = () => {
+      waiting = waiting.filter((other) => other !== entry);
+    };
     const run = tail
       .then(async () => {
-        if (!current() || confirmed?.account !== account) return;
-        const base = confirmed.value;
-        const next = change(base);
-        const patch = patchFor(
-          next,
-          PREFERENCE_FIELDS.filter(
-            (field) => chosen.includes(field) || !same(next[field], base[field]),
-          ),
-        );
+        if (!current()) return;
         try {
-          const saved = await options.send(patch);
+          const answer = await options.send(entry.patch);
           if (!current()) return;
-          confirmed = { value: saved, account };
-          options.apply(saved);
+          confirmed = { value: answer, account };
+          settle();
+          options.apply(seen(account, answer));
         } catch (error) {
           if (!current()) return;
+          settle();
+          if (confirmed?.account === account) options.apply(seen(account, confirmed.value));
           options.failed(error as Error);
         }
       })
       .finally(() => {
-        const left = (queued.get(account) ?? 1) - 1;
-        if (left) queued.set(account, left);
-        else queued.delete(account);
+        settle();
         saving--;
         generation++;
       });
