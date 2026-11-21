@@ -34,10 +34,17 @@ sheets no longer keep a draft.
 
 ## Checks
 
-| Check                                  | Result                      |
-| -------------------------------------- | --------------------------- |
-| `npm run typecheck`, `npm run lint`    | Compiled and passed         |
-| `.agents/tools/check-all --keep-going` | Recorded in the next commit |
+| Check                                                | Result              |
+| ---------------------------------------------------- | ------------------- |
+| `npm run typecheck`, `npm run lint`                  | Compiled and passed |
+| `.agents/tools/check-all --keep-going` on `e0f501a1` | See below           |
+
+`check-all` on `e0f501a1` passed typecheck, lint, ruff, build, the Python tests (52 files), Vitest
+(4,299 tests in 233 files) and all 202 Chromium browser tests. The WebKit half in its container
+failed 2 of 202: `e2e/contained-scroll.spec.ts:8` timed out on a click, and
+`e2e/photo-upload.spec.ts:210` found the wrong count. Neither touches preferences. Rerun with no
+change, both passed alone, and the whole WebKit suite then passed: 199 passed and 3 skipped. They are
+flaky under load, not caused by this change.
 
 ### Red runs
 
