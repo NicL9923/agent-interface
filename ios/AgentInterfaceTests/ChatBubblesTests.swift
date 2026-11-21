@@ -180,6 +180,20 @@ final class ChatBubblesTests: XCTestCase {
       XCTAssertLessThanOrEqual(max(abs(r - er), abs(g - eg), abs(b - eb)), 1, "\(color) became \(fill), expected \(expected)")
     }
   }
+  /// The web's solidFill reads the same cases (tests/solid-bubble.test.ts), so both clients fill a person's bubble
+  /// with one color. This algorithm is the reference: a case that fails here is reported, not edited to pass.
+  func testSolidFillMatchesTheSharedVectors() throws {
+    struct Case: Decodable { var name: String; var color: String; var fill: String? }
+    struct Vectors: Decodable { var cases: [Case] }
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Vectors/solid-bubble.json")
+    let cases = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: url)).cases
+    XCTAssertFalse(cases.isEmpty)
+    for vector in cases {
+      XCTAssertEqual(SolidBubble.fill(vector.color), vector.fill, "\(vector.name): \(vector.color)")
+    }
+    let covered = Set(cases.map(\.color))
+    XCTAssertEqual(AvatarConfig.colors.filter { !covered.contains($0) }, [], "Every avatar color has a vector")
+  }
   func testOnlyADrawnAvatarTintsTheBubble() {
     XCTAssertEqual(SolidBubble.tint(AvatarConfig(color: "#FF6700")), "#FF6700")
     XCTAssertNil(SolidBubble.tint(AvatarConfig(mode: .portrait, color: "#FF6700", src: "/api/files/me")), "A portrait keeps the tint")
