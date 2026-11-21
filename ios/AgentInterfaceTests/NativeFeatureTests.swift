@@ -140,14 +140,16 @@ import XCTest
     XCTAssertNil(IntentLinks.takePending(from: location), "In the app the link opens at once instead of waiting")
   }
 
-  func testAPushedActivityEndsBesideTheAppsOwnOrForAnotherAccount() {
-    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", among: [(id: "local", scope: "one")]))
-    XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", among: []), "The first activity is kept")
-    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: "two", among: []), "A start that arrived after sign-out goes")
-    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: nil, among: []),
+  func testAPushedActivityEndsBesideTheAppsOwnForAnotherAccountOrWithTheSwitchOff() {
+    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", turnedOn: true, among: [(id: "local", scope: "one")]))
+    XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", turnedOn: true, among: []), "The first activity is kept")
+    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: "two", turnedOn: true, among: []), "A start that arrived after sign-out goes")
+    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: nil, turnedOn: true, among: []),
       "Nobody signed in here, as after an offline sign-out")
-    XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", among: [(id: "old", scope: "two")]),
+    XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", turnedOn: true, among: [(id: "old", scope: "two")]),
       "Another account's leftover is ended by the foreground check, not by keeping this one out")
+    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", turnedOn: false, among: []),
+      "A start the server pushed before it heard the switch went off goes")
   }
 
   func testOnDeviceTranscriptionComesFirstAndTheServerCoversWhatItCannot() async throws {

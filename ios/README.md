@@ -112,7 +112,8 @@ when what the widget shows changes, at most every 15 minutes, and iOS runs a bac
 refresh now and then. Either way the app reads the household with its own sign-in and
 rewrites the snapshot. iOS may skip both, for example after you force-quit the app. One aggregate Live Activity shows working and waiting
 assistants on the Lock Screen and in the Dynamic Island. It starts in the foreground
-after you send, follows server pushes, and respects the device's Live Activities setting in iOS Settings.
+after you send and follows server pushes. Settings has a Live Activities switch for this device, and
+the app also respects the Live Activities setting in iOS Settings.
 On iOS 18 and later the server also starts it when work begins away from the phone, such as a routine or a
 message sent from the web. Dismissing it keeps that work off the Lock Screen until a new run starts.
 Its first row has one button: **Decline** when the assistant waits on an approval the server
