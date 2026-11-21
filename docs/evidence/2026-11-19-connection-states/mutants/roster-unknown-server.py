@@ -42,10 +42,12 @@ MUTANTS = [
     # event-routes.ts: a stream opened while the roster is unknown starts from a known one.
     ("event-routes.ts", "      initial.rosterUnknown,\n", "      false,\n"),
     # hermes.ts: a read from a replaced connection makes the cache current.
+    ("hermes.ts", "          if (on !== connection) return unknownRoster(bots);\n", ""),
+    # hermes.ts: a read from a replaced connection answers its caller as a known roster.
     (
         "hermes.ts",
-        "          if (read > cachedRead && on === connection) {",
-        "          if (read > cachedRead) {",
+        "          if (on !== connection) return unknownRoster(bots);",
+        "          if (on !== connection) return bots;",
     ),
     # hermes.ts: a new connection is not counted.
     ("hermes.ts", "      connection++;\n", ""),

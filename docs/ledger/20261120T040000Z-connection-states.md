@@ -171,7 +171,7 @@ Tests changed because the behavior did:
 
 Each line was broken with `~/.agents/tools/mutate.py`, the named tests run, and the source restored.
 The lists and the tool's output from the final pass, after all the review rounds, are in
-[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 138 mutants, 138 caught. The last
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 139 mutants, 139 caught. The last
 five rows were run after the fifth, sixth, eighth and ninth review rounds.
 
 | File                                                | Mutants | Result    |
@@ -187,7 +187,7 @@ five rows were run after the fifth, sixth, eighth and ninth review rounds.
 | `ConnectionAnnouncer`, partial live return          | 5       | 5 caught  |
 | Live-updates scope, `App.tsx` and `stream-health`   | 4       | 4 caught  |
 | `hermes.ts` roster cache order                      | 2       | 2 caught  |
-| `rosterUnknown`, server and web                     | 24      | 24 caught |
+| `rosterUnknown`, server and web                     | 25      | 25 caught |
 
 Mutants that survived on the way, and what was done:
 
@@ -364,6 +364,12 @@ break 21 lines; 21 are caught.
 Tests in `hermes-adapter`: a read held in its model names across a reconnect is answered but not kept, and
 the roster becoming known tells the watchers once. The `roster-unknown` lists now break 24 lines; 24 are
 caught.
+
+The twelfth round's review of these fixes stopped early: the reviewer's provider flagged the run as a
+possible cybersecurity risk and ended it. Its last message named one more path, which held: the read from
+a replaced connection still answered its caller, such as a bootstrap, as a known roster, which the
+snapshot then held. That read now answers as `rosterUnknown`, and the same test asserts it. The lists
+break 25 lines; 25 are caught.
 
 ## Checks
 

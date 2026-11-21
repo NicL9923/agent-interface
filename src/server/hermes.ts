@@ -1335,9 +1335,10 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
           // A change reported meanwhile cleared rosterRequest, so this read is not reused. It is still
           // newer than the roster an outage would list, unless a read that began after it has
           // answered: what Hermes last said is the best guess while it cannot be asked.
-          // A read begun on a connection since replaced may be another Hermes's roster: it answers its
-          // caller and is kept for nothing.
-          if (read > cachedRead && on === connection) {
+          // A read begun on a connection since replaced may be another Hermes's roster. It is kept for
+          // nothing, and its caller hears that it says nothing about who is on the roster now.
+          if (on !== connection) return unknownRoster(bots);
+          if (read > cachedRead) {
             botCache = bots;
             cachedRead = read;
             // Who is on the roster is known again; a stream that heard it was not is told.

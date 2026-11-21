@@ -3372,7 +3372,8 @@ describe("Hermes transport liveness and diagnostics", () => {
   });
 
   // A read that Hermes answered on one connection can still be naming its models when the adapter
-  // reconnects, perhaps to another Hermes. That read answers its caller and is kept for nothing.
+  // reconnects, perhaps to another Hermes. That read is kept for nothing, and its caller, such as a
+  // bootstrap, hears that it says nothing about who is on the roster now.
   it("keeps no roster read begun on a connection since replaced", async () => {
     await runtime.listBots();
     sockets.at(-1)!.close();
@@ -3403,7 +3404,9 @@ describe("Hermes transport liveness and diagnostics", () => {
     await runtime.reconnect!();
     rpcErrors.set("profiles.list", { code: -1, message: "Busy" });
     release();
-    expect((await old).map((bot) => bot.id)).toEqual(["only-here"]);
+    const answered = await old;
+    expect(answered.map((bot) => bot.id)).toEqual(["only-here"]);
+    expect(isUnknownRoster(answered)).toBe(true);
     expect(isUnknownRoster(await runtime.listBots())).toBe(true);
   });
 
