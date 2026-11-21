@@ -129,6 +129,40 @@ already skipped.
 
 Not exercised: Safari itself, and motion in any browser beyond still frames and the unit tests.
 
+## After merging main, at `8c4b3c7b`
+
+`c7f02959` merges `origin/main` at `320740c3`, which brought in #466 (connection and reconnect
+states). It touched the avatar rig and models on both platforms; the only textual conflict was the
+generated Xcode project, regenerated with `ios/tools/generate-project.py`.
+
+`~/.agents/tools/linux-heavy-lock.sh` around `check-all --keep-going` and then the WebKit container
+run, queued 13 minutes 30 seconds and ran 26 minutes 12 seconds:
+
+| Check                        | Result                                             |
+| ---------------------------- | -------------------------------------------------- |
+| typecheck, lint, ruff        | passed                                             |
+| test                         | unit-passed: 233 files, 4244 tests                 |
+| build                        | built: 915 modules                                 |
+| py                           | passed: 52 files                                   |
+| e2e, Chromium                | runtime-exercised: 142 of 142 passed               |
+| e2e, WebKit on this host     | not run: all 142 failed at launch, as before       |
+| e2e, WebKit in the container | runtime-exercised: 136 passed, 3 skipped, 3 failed |
+
+An earlier `npx vitest run` on the merge, outside the lock with the load average at 94, had two
+15 second timeouts, one each in `account-transitions-ui.test.ts` and `message-markdown.test.ts`.
+Both files passed alone (195 tests) and in the run above: flaky under load.
+
+The three WebKit failures are main's. Its own CI, the Browser smoke job on the push of `320740c3`
+(run 44920781588), failed `e2e/smoke.spec.ts:40` ("the app opens offline from the service worker")
+and `:811` ("the message box floats over the transcript"), and marked `:352` ("a returning
+member's home is drawn from this device before bootstrap answers") flaky: it failed and passed on
+CI's one retry. The run here has no retry, so `:352` counts as a failure. `:40` and `:811` also
+failed on the push of `f103ecfc`, the #466 merge; before #466 only `:811` did, and this branch's
+run at `2c5727be` matched that.
+
+GitHub's PR checks on `8c4b3c7b` (run 44927252277): Node on `.node-version`, Node 26.13.0, Python
+3.14.7 and the release archive build passed. Browser smoke does not run on pull requests.
+
 ## iOS
 
 The native port on `t3/refresh-bot-avatars`, through web commit `2c5727be`, on the Mac mini with
