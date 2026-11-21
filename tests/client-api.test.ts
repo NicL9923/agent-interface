@@ -422,6 +422,22 @@ describe("typed route requests", () => {
     expect(headers.get("Content-Type")).toBeNull();
     expect(headers.get("X-CSRF-Token")).toBe("current-session-csrf");
   });
+  // The server reads an application/json preferences body as a whole object and clears what it leaves out.
+  it("sends a preferences save as a merge patch and other bodies as JSON", async () => {
+    const fetch = vi.fn().mockResolvedValue(ok({}));
+    vi.stubGlobal("fetch", fetch);
+    await request("PATCH /preferences", { body: { theme: "dark" } });
+    await request("PUT /preferences/models", { body: { modelFavorites: [] } });
+    // A server from before partial saves gets the save whole, as plain JSON.
+    await request("PATCH /preferences", { body: { theme: "dark" }, plainJson: true });
+    const sent = fetch.mock.calls.map(([, init]) => new Headers(init.headers));
+    expect(sent.map((headers) => headers.get("Content-Type"))).toEqual([
+      "application/merge-patch+json",
+      "application/json",
+      "application/json",
+    ]);
+    expect(sent[0].get("X-CSRF-Token")).toBe("current-session-csrf");
+  });
   it("shares the GET cache with api() for the same path", async () => {
     const fetch = vi
       .fn()

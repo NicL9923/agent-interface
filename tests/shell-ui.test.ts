@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement, Profiler } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { preferenceServer } from "./helpers/preference-server";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
 import { ShortcutsDialog } from "../src/app/ShortcutsDialog";
@@ -116,8 +117,10 @@ beforeEach(() => {
               ? { hits: [], unavailableBots: [] }
               : null) as T,
   );
+  const preferences = preferenceServer(() => boot.preferences);
   vi.mocked(write).mockImplementation(
-    async <T>(path: string, value?: unknown) => (path === "/preferences" ? value : {}) as T,
+    async <T>(path: string, value?: unknown) =>
+      (path === "/preferences" ? preferences(value) : {}) as T,
   );
   mount = mountRoot();
 });
@@ -409,6 +412,25 @@ describe("undo toast", () => {
     });
     await act(async () => document.body.dispatchEvent(plain));
     expect(plain.defaultPrevented).toBe(false);
+  });
+
+  // This tab loaded before another device chose the dark theme; a pin from it must not undo that.
+  it("saves a pin and its undo as the pins alone, keeping another device's newer theme", async () => {
+    const server = preferenceServer(() => ({ ...boot.preferences, theme: "dark" }));
+    let stored = boot.preferences;
+    vi.mocked(write).mockImplementation(
+      async <T>(path: string, value?: unknown) =>
+        (path === "/preferences" ? (stored = server(value)) : {}) as T,
+    );
+    await render();
+    await pinFromMenu("Shared", "Pin to top");
+    await key({ key: "z", ctrlKey: true });
+    const bodies = vi
+      .mocked(write)
+      .mock.calls.filter(([path]) => path === "/preferences")
+      .map(([, body]) => body);
+    expect(bodies).toEqual([{ favorites: ["kitchen", "shared"] }, { favorites: ["kitchen"] }]);
+    expect(stored).toMatchObject({ theme: "dark", favorites: ["kitchen"] });
   });
 
   it("restores an unpinned assistant to its place with the Undo button, and leaves after five seconds", async () => {
@@ -846,7 +868,7 @@ describe("composer", () => {
     vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) =>
       path === "/bots/shared/messages"
         ? new Promise<T>(() => {})
-        : ((path === "/preferences" ? value : {}) as T),
+        : ((path === "/preferences" ? preferenceServer(() => boot.preferences)(value) : {}) as T),
     );
     await render();
     await typeInto(field(), "Feed the horses");
@@ -929,7 +951,7 @@ describe("composer", () => {
         (path === "/bots/shared/messages"
           ? { requestId: (value as { requestId: string }).requestId, status: "uncertain" }
           : path === "/preferences"
-            ? value
+            ? preferenceServer(() => boot.preferences)(value)
             : {}) as T,
     );
     vi.mocked(api).mockImplementation(

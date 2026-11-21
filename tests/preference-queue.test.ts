@@ -1,8 +1,17 @@
 import { expect, it, vi } from "vitest";
-import { preferenceQueue } from "../src/app/preference-queue";
-import type { Preferences } from "../src/shared/types";
+import { patchFor, preferenceQueue } from "../src/app/preference-queue";
+import { applyMergePatch } from "../src/shared/merge-patch";
+import type { Preferences, PreferencesPatch } from "../src/shared/types";
 
 const base = { favorites: [], followBots: [], sections: [] } as unknown as Preferences;
+/** A server that keeps what each save leaves out, as PATCH /preferences does with a merge patch. */
+const server = (stored: Preferences) => ({
+  stored,
+  save(patch: PreferencesPatch) {
+    this.stored = applyMergePatch(this.stored, patch) as Preferences;
+    return this.stored;
+  },
+});
 const deferred = () => {
   let resolve!: (value: Preferences) => void, reject!: (error: Error) => void;
   const promise = new Promise<Preferences>((a, b) => {
@@ -14,7 +23,7 @@ const deferred = () => {
 
 it("sends one save at a time, builds each edit on the last, and shows each saved answer", async () => {
   const replies = [deferred(), deferred()];
-  const sent: Preferences[] = [],
+  const sent: PreferencesPatch[] = [],
     applied: Preferences[] = [];
   const queue = preferenceQueue({
     send: (value) => {
@@ -29,22 +38,23 @@ it("sends one save at a time, builds each edit on the last, and shows each saved
   const second = queue.edit((value) => ({ ...value, favorites: [...value.favorites, "b"] }), base);
   await Promise.resolve();
   expect(sent.map((value) => value.favorites)).toEqual([["a"]]);
-  replies[0].resolve(sent[0]);
+  replies[0].resolve({ ...base, favorites: ["a"] });
   await first;
   expect(sent.map((value) => value.favorites)).toEqual([["a"], ["a", "b"]]);
-  replies[1].resolve(sent[1]);
+  replies[1].resolve({ ...base, favorites: ["a", "b"] });
   await second;
   expect(applied.map((value) => value.favorites)).toEqual([["a"], ["a", "b"]]);
 });
 
 it("keeps an earlier saved answer on screen when a later save fails, so the next edit keeps it", async () => {
   let screen = base;
-  const sent: Preferences[] = [],
-    failed = vi.fn();
-  const send = async (value: Preferences) => {
-    sent.push(value);
-    if (value.favorites.includes("b")) throw new Error("Refused");
-    return value;
+  const sent: PreferencesPatch[] = [],
+    failed = vi.fn(),
+    held = server(base);
+  const send = async (patch: PreferencesPatch) => {
+    sent.push(patch);
+    if (patch.favorites?.includes("b")) throw new Error("Refused");
+    return held.save(patch);
   };
   const queue = preferenceQueue({
     send,
@@ -59,8 +69,9 @@ it("keeps an earlier saved answer on screen when a later save fails, so the next
   expect(failed).toHaveBeenCalledWith(expect.objectContaining({ message: "Refused" }));
   expect(screen.favorites).toEqual(["a"]);
   // An edit made right after the failure builds on the confirmed pin, with no reload to wait for.
-  await queue.edit((value) => ({ ...value, followBots: ["ranch"] }), screen);
-  expect(sent.at(-1)).toMatchObject({ favorites: ["a"], followBots: ["ranch"] });
+  await queue.edit((value) => ({ ...value, favorites: [...value.favorites, "c"] }), screen);
+  expect(sent.at(-1)).toEqual({ favorites: ["a", "c"] });
+  expect(held.stored.favorites).toEqual(["a", "c"]);
 });
 
 it("treats a read that overlapped any save as stale for preferences", async () => {
@@ -85,12 +96,13 @@ it("treats a read that overlapped any save as stale for preferences", async () =
 it("never carries one account's queued preferences into another account's edit", async () => {
   let account = 1;
   const reply = deferred(),
-    sent: Preferences[] = [],
+    sent: PreferencesPatch[] = [],
     applied: Preferences[] = [];
+  const theirs = server({ ...base, followBots: ["their follow"] });
   const queue = preferenceQueue({
-    send: (value) => {
-      sent.push(value);
-      return sent.length === 1 ? reply.promise : Promise.resolve(value);
+    send: (patch) => {
+      sent.push(patch);
+      return reply.promise;
     },
     apply: (value) => applied.push(value),
     failed: vi.fn(),
@@ -98,24 +110,28 @@ it("never carries one account's queued preferences into another account's edit",
   });
   void queue.edit((value) => ({ ...value, favorites: ["first account pin"] }), base);
   account = 2;
-  const theirs = { ...base, followBots: ["their follow"] };
-  const edit = queue.edit((value) => ({ ...value, favorites: ["second account pin"] }), theirs);
+  const edit = queue.edit(
+    (value) => ({ ...value, favorites: [...value.favorites, "second account pin"] }),
+    theirs.stored,
+  );
   // The first account's save never goes out; the second account's is the first one sent.
   await vi.waitFor(() => expect(sent).toHaveLength(1));
-  reply.resolve(sent[0]);
+  reply.resolve(theirs.save(sent[0]));
   await edit;
-  expect(sent.at(-1)).toEqual({ ...theirs, favorites: ["second account pin"] });
-  expect(applied).toEqual([{ ...theirs, favorites: ["second account pin"] }]);
+  expect(sent).toEqual([{ favorites: ["second account pin"] }]);
+  expect(applied).toEqual([
+    { ...base, followBots: ["their follow"], favorites: ["second account pin"] },
+  ]);
 });
 
 // The server keeps a chat style choice a save leaves out. A tab can hold an older copy of one than the server does,
 // set since on another device, so a save carries a choice only when this edit changed it.
 it("sends a chat style choice only with the edit that changed it", async () => {
-  const sent: Preferences[] = [];
+  const sent: PreferencesPatch[] = [];
   const queue = preferenceQueue({
     send: async (value) => {
       sent.push(value);
-      return value;
+      return value as Preferences;
     },
     apply: vi.fn(),
     failed: vi.fn(),
@@ -134,7 +150,7 @@ it("sends a chat style choice only with the edit that changed it", async () => {
 
 it("sends a chat style choice changed back while the first change is still saving", async () => {
   const replies = [deferred(), deferred()];
-  const sent: Preferences[] = [];
+  const sent: PreferencesPatch[] = [];
   const queue = preferenceQueue({
     send: (value) => {
       sent.push(value);
@@ -159,7 +175,7 @@ it("sends a chat style choice changed back while the first change is still savin
 });
 
 it("keeps a choice a later edit builds on, though that edit does not send it", async () => {
-  const sent: Preferences[] = [],
+  const sent: PreferencesPatch[] = [],
     applied: Preferences[] = [];
   const queue = preferenceQueue({
     // The server answers with what it holds: the choices it was sent, over the ones it had.
@@ -183,7 +199,7 @@ it("keeps a choice a later edit builds on, though that edit does not send it", a
 // save holds, so only the pick itself says the choice changed.
 it("sends a choice the person picks though a save still waiting holds that value", async () => {
   const replies = [deferred(), deferred(), deferred()];
-  const sent: Preferences[] = [];
+  const sent: PreferencesPatch[] = [];
   const held = { ...base, theme: "light", chatStyle: "bubbles" } as Preferences;
   let screen = held;
   const queue = preferenceQueue({
@@ -209,4 +225,72 @@ it("sends a choice the person picks though a save still waiting holds that value
   replies[2].resolve({ ...screen, chatStyle: "bubbles" });
   await third;
   expect(screen.chatStyle).toBe("bubbles");
+});
+
+// Each tab holds a copy older than the other's save. A whole object from either would undo the other's change.
+it("lands two saves of different fields made from the same stale copy", async () => {
+  const held = { ...base, theme: "light", favorites: ["ranch"] } as Preferences;
+  const shared = server(held);
+  const sent: PreferencesPatch[] = [];
+  const tab = () =>
+    preferenceQueue({
+      send: async (patch) => {
+        sent.push(patch);
+        return shared.save(patch);
+      },
+      apply: vi.fn(),
+      failed: vi.fn(),
+      account: () => 1,
+    });
+  await tab().edit((value) => ({ ...value, theme: "dark" }), held, ["theme"]);
+  await tab().edit((value) => ({ ...value, favorites: [...value.favorites, "creek"] }), held, [
+    "favorites",
+  ]);
+  expect(sent).toEqual([{ theme: "dark" }, { favorites: ["ranch", "creek"] }]);
+  expect(shared.stored).toMatchObject({ theme: "dark", favorites: ["ranch", "creek"] });
+});
+
+it("clears a field the edit removed, and the quiet hours a notifications edit dropped", async () => {
+  const held = {
+    ...base,
+    defaultBotId: "ranch",
+    notifications: { timezone: "UTC", quietStart: "22:00", quietEnd: "07:00", batchMinutes: 5 },
+  } as Preferences;
+  const shared = server(held);
+  const sent: PreferencesPatch[] = [];
+  const queue = preferenceQueue({
+    send: async (patch) => {
+      sent.push(patch);
+      return shared.save(patch);
+    },
+    apply: vi.fn(),
+    failed: vi.fn(),
+    account: () => 1,
+  });
+  await queue.edit(({ defaultBotId: _, ...value }) => value, held, ["defaultBotId"]);
+  await queue.edit(
+    (value) => ({ ...value, notifications: { timezone: "UTC", batchMinutes: 5 } }),
+    shared.stored,
+    ["notifications"],
+  );
+  expect(sent).toEqual([
+    { defaultBotId: null },
+    { notifications: { timezone: "UTC", batchMinutes: 5, quietStart: null, quietEnd: null } },
+  ]);
+  expect(shared.stored).not.toHaveProperty("defaultBotId");
+  expect(shared.stored.notifications).toEqual({ timezone: "UTC", batchMinutes: 5 });
+});
+
+it("sends a key an object field set to undefined as null", () => {
+  const held = {
+    ...base,
+    notifications: { timezone: "UTC", quietStart: "22:00", quietEnd: "07:00", batchMinutes: 0 },
+  } as Preferences;
+  const next = {
+    ...held,
+    notifications: { ...held.notifications!, quietStart: undefined, quietEnd: undefined },
+  };
+  expect(patchFor(next, ["notifications"])).toEqual({
+    notifications: { timezone: "UTC", batchMinutes: 0, quietStart: null, quietEnd: null },
+  });
 });

@@ -944,16 +944,96 @@ nothing else; the add-on fixes the session, so the app sends only microphone aud
 (24 kHz mono PCM), the tool loop's events, and `conversation.item.truncate` when
 the person speaks over the voice.
 
+### Saving preferences
+
+`PATCH /api/preferences` takes two kinds of body, and its `Content-Type` header says
+which. The server never infers the kind from the fields a body holds.
+
+| `Content-Type`                 | Kind                                        | A field the body leaves out                                                                                                                                                                                                                                    |
+| ------------------------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `application/merge-patch+json` | Partial save, a JSON Merge Patch (RFC 7396) | Keeps its saved value.                                                                                                                                                                                                                                         |
+| `application/json`             | Whole object, as released clients send      | Is cleared, except `modelFavorites`, `startPage`, `chatStyle`, `ownBubble`, `notifications`, `hiddenRoutineRuns` and `mainSuggestionDismissed`, which keep their saved values. `presentation`, `theme`, `favorites`, `sections` and `followBots` are required. |
+
+A partial save follows these rules:
+
+- Each field it sends replaces the saved one. A list (`favorites`, `sections`,
+  `followBots`, `hiddenRoutineRuns`) replaces the saved list whole, so send the full
+  list. Two devices that change different fields from stale copies both keep their
+  change. Two devices that change the same list each send their whole copy, and the
+  later save wins. That narrower overwrite is accepted.
+- `null` clears `defaultBotId`, `startPage`, `chatStyle`, `ownBubble`, `notifications`,
+  `hiddenRoutineRuns` or `mainSuggestionDismissed`. `null` for `presentation`, `theme`,
+  `favorites`, `sections` or `followBots` answers 400 with the field in
+  `details[].path`.
+- `notifications` merges key by key. A key it sends replaces the saved one,
+  `"quietStart": null` and `"quietEnd": null` clear the quiet hours, and a key it leaves
+  out keeps the saved one. The merged settings must still be whole and valid: a
+  `timezone`, a `batchMinutes` from 0 to 60, and both quiet times or neither, which
+  differ. Otherwise the answer is 400 with `["notifications"]` or
+  `["notifications", "<key>"]` in `details[].path`.
+- The server ignores `mainBotId`, `checkIns` and `modelFavorites`. They change only
+  through `PUT /api/preferences/main`, `PUT /api/preferences/check-ins` and
+  `PUT /api/preferences/models`. Both kinds of save ignore keys the server does not
+  know.
+- The body must be a JSON object. The server validates every value it holds as a whole
+  save would, and any 400 saves nothing.
+- The answer is the whole `Preferences` as saved and as the caller may see them. Put it
+  on screen.
+- Any other route answers 415 to `application/merge-patch+json`.
+
+The client sends only the fields the person changed. The control the person used names
+the fields it set, and the client also sends any field whose value differs from the
+copy the edit was made on, a queued save's copy included. Values alone cannot show
+every change: the screen may hold another device's value while a save still waiting
+holds the one the person now picks. For `notifications`, send every key the new
+settings hold and `null` for each key the edit removed. Swift's synthesized `Codable`
+leaves a `nil` optional out, so encode a cleared field as an explicit JSON `null`.
+Never send a partial body as `application/json`: every server reads that as a whole
+object.
+
+Change the theme and clear the default assistant:
+
+```http
+PATCH /api/preferences
+Content-Type: application/merge-patch+json
+
+{"theme":"dark","defaultBotId":null}
+```
+
+Pin an assistant and turn the quiet hours off:
+
+```http
+PATCH /api/preferences
+Content-Type: application/merge-patch+json
+
+{"favorites":["ranch","creek"],"notifications":{"timezone":"America/Chicago","batchMinutes":0,"quietStart":null,"quietEnd":null}}
+```
+
+A server from before partial saves has no parser for `application/merge-patch+json`. It
+answers 415 with `{"error":"Unsupported Media Type","code":"FST_ERR_CTP_INVALID_MEDIA_TYPE"}`
+and saves nothing. On a 415 from this route, read `GET /api/bootstrap`, apply the patch
+to its `preferences` by RFC 7396, drop `modelFavorites`, and send the result whole as
+`application/json`. Building on a copy read after the refusal keeps another device's
+newer values. That server still keeps the optional fields a whole save leaves out, so a
+cleared `startPage`, `chatStyle`, `ownBubble`, `notifications`,
+`hiddenRoutineRuns` or `mainSuggestionDismissed` stays saved there; a cleared
+`defaultBotId` is cleared. Any other failure is a failed save, as before. The web
+client does this in `savePreferencePatch` in `src/app/use-session.ts`. A client may
+remember the refusal for the server it talks to and skip the first request until that
+server's version changes.
+
 ### Chat style
 
 `chatStyle` (`"bubbles"` or `"classic"`) and `ownBubble` (`"tint"` or `"solid"`) are
 optional `Preferences` fields; servers before them omit both. Read an absent
 `chatStyle` as `"bubbles"` and an absent `ownBubble` as `"tint"`. They are per person
 and sync to every device like `theme`. `PATCH /api/preferences` answers 400 for any
-other value, with the field's name in `details[].path`. An omitted value keeps the
-saved one, so a client that predates them cannot clear them; send the default
-explicitly to go back to it. A client sends `chatStyle` or `ownBubble` only when the
-person changed it, and only a value it knows, so one device cannot write its stale copy over a choice made on another. The web client's preference queue follows the same rule (`src/app/preference-queue.ts`). On both clients the control the person used names the choice it set, because the values cannot always show it: the screen may hold another device's choice while a save still waiting holds the one the person now picks. A save answered without a value the app sent means the server predates the field; the iOS app says so to the person and shows what the server holds. The web client shows no notice: a tab left open across a server rollback gets the same answer, and its picker goes back to what the server holds.
+other value, with the field's name in `details[].path`. A whole save that leaves them
+out keeps the saved values, so a client that predates them cannot clear them. A partial
+save may clear them with `null`, which reads as the default. A client sends `chatStyle`
+or `ownBubble` only when the person changed it, as [Saving preferences](#saving-preferences)
+says for every field, and only a value it knows. The web client's preference queue
+follows the same rule (`src/app/preference-queue.ts`). A save answered without a value the app sent means the server predates the field; the iOS app says so to the person and shows what the server holds. The web client shows no notice: a tab left open across a server rollback gets the same answer, and its picker goes back to what the server holds.
 
 In `"bubbles"`, each run of a reply's consecutive prose blocks (paragraphs, lists,
 block quotes and headings) shares one bubble, and every other block (a table, code

@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { preferenceServer } from "./helpers/preference-server";
 import { App } from "../src/App";
 import { api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
@@ -144,11 +145,12 @@ beforeEach(() => {
       finishedAt: undefined,
     }),
   ];
+  const saved = preferenceServer(() => preferences);
   vi.mocked(write)
     .mockReset()
     .mockImplementation(
       async (path: string, body: unknown) =>
-        (path === "/preferences" ? body : { id: "saved" }) as never,
+        (path === "/preferences" ? saved(body) : { id: "saved" }) as never,
     );
   vi.mocked(api).mockImplementation(async <T>(path: string) => {
     const result =

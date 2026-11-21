@@ -526,8 +526,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // Home menu changes can be taken back for a few seconds, by the toast's Undo or Cmd+Z. The
   // toast belongs to whoever made the change; useToast drops it for anyone else.
   const undoable = (change: UndoableEdit) => {
-    void session.editPreferences(change.apply);
-    toast.show(change.message, () => void session.editPreferences(change.undo));
+    void session.editPreferences(change.apply, change.fields);
+    toast.show(change.message, () => void session.editPreferences(change.undo, change.fields));
   };
   const togglePin = useStableCallback((bot: Bot) => {
     if (boot) undoable(togglePinEdit(boot.preferences, bot.id, bot.name));
@@ -547,7 +547,11 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   );
   const chooseMainFromHome = useStableCallback(() => setChoosingMain(true));
   const dismissMainSuggestion = useStableCallback(
-    () => void session.editPreferences((value) => ({ ...value, mainSuggestionDismissed: true })),
+    () =>
+      void session.editPreferences(
+        (value) => ({ ...value, mainSuggestionDismissed: true }),
+        ["mainSuggestionDismissed"],
+      ),
   );
   // "Ask Sage…" from the palette opens the main assistant's chat with the question in its draft, once that draft has loaded.
   const asking = useRef<{ botId: string; text: string } | null>(null);
@@ -594,6 +598,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       apply: (value) => withRunsShown(value, botId, routineId, false),
       undo: (value) => withRunsShown(value, botId, routineId, true),
       message: `Hid ${name} runs from this chat`,
+      fields: ["hiddenRoutineRuns"],
     }),
   );
   // Home is memoized, so its group props keep one identity until something they show changes.
@@ -629,7 +634,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   });
   const setTheme = useStableCallback(
     (theme: Preferences["theme"]) =>
-      void session.editPreferences((preferences) => ({ ...preferences, theme })),
+      void session.editPreferences((preferences) => ({ ...preferences, theme }), ["theme"]),
   );
   const showShortcuts = useStableCallback(() => setOverlay("shortcuts"));
   // Find in chat belongs to the transcript, which listens for this once the chat is on screen.

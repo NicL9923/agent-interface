@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Bootstrap, Preferences } from "../shared/types";
+import type { Bootstrap, Preferences, PreferencesPatch } from "../shared/types";
 import {
   AccountChanged,
   ApiError,
@@ -7,7 +7,8 @@ import {
   request as apiRequest,
   setCsrf,
 } from "../client-api";
-import { preferenceQueue, type OwnChoice } from "./preference-queue";
+import { preferenceQueue, type PreferenceField } from "./preference-queue";
+import { applyMergePatch } from "../shared/merge-patch";
 import { prefetchLinkedChat, settleLinkedChat } from "./linked-chat";
 import {
   accountEpoch,
@@ -18,6 +19,24 @@ import {
 } from "./account-epoch";
 import { finishSignOut } from "./account-change";
 import { reportStream, streamUp } from "./stream-health";
+/**
+ * Sends a partial preferences save. A server from before partial saves refuses its media type with 415
+ * and saves nothing; then the patch goes whole, as older clients send, over a copy read just now, so
+ * the save overwrites as little as that server allows.
+ */
+async function savePreferencePatch(patch: PreferencesPatch): Promise<Preferences> {
+  try {
+    return await apiRequest("PATCH /preferences", { body: patch });
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 415)) throw error;
+    const { preferences: current } = await apiRequest("GET /bootstrap", {
+      query: { roster: "lean" },
+    });
+    // Model stars have their own route; leaving them out keeps that server's list.
+    const { modelFavorites: _, ...whole } = applyMergePatch(current, patch) as Preferences;
+    return apiRequest("PATCH /preferences", { body: whole, plainJson: true });
+  }
+}
 type SessionEvents = {
   onFirstBootstrap(next: Bootstrap): void;
   onError(message: string): void;
@@ -258,21 +277,19 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   }, [boot?.user.id, auth, refresh]);
   const preferences = useRef<ReturnType<typeof preferenceQueue> | null>(null);
   preferences.current ??= preferenceQueue({
-    // Model stars have their own endpoint; leaving them out keeps the server's current list.
-    send: ({ modelFavorites: _, ...value }) => apiRequest("PATCH /preferences", { body: value }),
+    send: savePreferencePatch,
     apply: (saved) =>
       setBoot((previous) => (previous ? { ...previous, preferences: saved } : previous)),
     failed: (error) => handlers.current.onError(error.message),
     account: () => accountEpoch.current,
   });
-  const savePreferences = (value: Preferences) => preferences.current!.save(value);
   /** Puts preferences a server route answered with on screen, such as a new main assistant. */
   const applyPreferences = (value: Preferences) =>
     setBoot((previous) => (previous ? { ...previous, preferences: value } : previous));
   /** Applies an edit to the newest preferences, including a save still on its way. */
   const editPreferences = (
     edit: (value: Preferences) => Preferences,
-    chosen?: readonly OwnChoice[],
+    chosen: readonly PreferenceField[],
   ) => preferences.current!.edit(edit, bootRef.current?.preferences, chosen);
   return {
     boot,
@@ -286,7 +303,6 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     identityEpoch: accountEpoch,
     refresh,
     reconnect,
-    savePreferences,
     editPreferences,
     applyPreferences,
     /** This server sends `groups` notices, so a slow fallback poll is enough. */

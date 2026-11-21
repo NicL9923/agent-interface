@@ -21,6 +21,7 @@ import {
 } from "./preferences-editing";
 import type { SavedConversation } from "./storage";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
+import type { PreferenceField } from "./preference-queue";
 import "./home.css";
 import { FormMessage } from "../components/ui/form-message";
 import { CHECK_IN_HOURS, checkInFrequencyLabel, mainEligible } from "../shared/main-assistant";
@@ -61,7 +62,7 @@ export function BotDetails({
   connectionLost: boolean;
   /** Opens with the new section field ready, as from the home menu. */
   startNewSection?: boolean;
-  editPreferences: (edit: PreferenceEdit) => Promise<void>;
+  editPreferences: (edit: PreferenceEdit, chosen: readonly PreferenceField[]) => Promise<void>;
   /** Makes this assistant the main one, or clears it with null; rejects with the reason it couldn't. */
   onMain?: (botId: string | null) => Promise<Preferences>;
   onCheckIns?: (change: Partial<CheckInSettings>) => Promise<Preferences>;
@@ -111,7 +112,7 @@ export function BotDetails({
       return;
     }
     const id = newSectionId();
-    commit((value) => addSection(value, checked.name, id, bot.id));
+    commit((value) => addSection(value, checked.name, id, bot.id), ["sections"]);
     setCreating(false);
     setName("");
     setNameError("");
@@ -149,12 +150,15 @@ export function BotDetails({
             className={`bot-details-action${pinned ? " on" : ""}`}
             aria-pressed={pinned}
             onClick={() =>
-              commit((value) => ({
-                ...value,
-                favorites: pinned
-                  ? value.favorites.filter((id) => id !== bot.id)
-                  : [...value.favorites, bot.id],
-              }))
+              commit(
+                (value) => ({
+                  ...value,
+                  favorites: pinned
+                    ? value.favorites.filter((id) => id !== bot.id)
+                    : [...value.favorites, bot.id],
+                }),
+                ["favorites"],
+              )
             }
           >
             <Icon name="pin" filled={pinned} />
@@ -292,7 +296,7 @@ export function BotDetails({
               checked={following}
               onChange={(event) => {
                 const on = event.target.checked;
-                commit((value) => setFollowing(value, bot.id, on));
+                commit((value) => setFollowing(value, bot.id, on), ["followBots"]);
               }}
             />
           </label>
@@ -307,7 +311,7 @@ export function BotDetails({
                   return;
                 }
                 setCreating(false);
-                commit((current) => moveBotToSection(current, bot.id, value || null));
+                commit((current) => moveBotToSection(current, bot.id, value || null), ["sections"]);
               }}
             >
               <option value="">None</option>
