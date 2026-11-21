@@ -543,7 +543,9 @@ import CryptoKit
       revealFormControl(element, in: form, app: XCUIApplication(), up: up)
       return
     }
-    for _ in 0..<10 {
+    // Creation carries the whole shape picker, 54 tiles, between the name and the bottom Next.
+    let attempts = form.identifier == "assistantCreationForm" ? 30 : 10
+    for _ in 0..<attempts {
       if element.hasFrame && element.frame.minY >= form.frame.minY + 12 && element.frame.maxY <= form.frame.maxY - 12 { return }
       let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: up ? 0.8 : 0.3))
       let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: up ? 0.3 : 0.8))
@@ -3310,7 +3312,7 @@ import CryptoKit
       // is checked in the specimen's state grid, which shows the tapped shape.
       if group == "objects" { app.buttons["specimenShape.mug"].tapWhenReady() }
     }
-    for _ in 0..<12 where !app.switches["Reduced motion"].isHittable { scroller.swipeDown() }
+    for _ in 0..<12 where !app.switches["Reduced motion"].canTap { scroller.swipeDown() }
     try capture("23-specimen-white-mug-states")
     app.swipeUp()
     try capture("23b-specimen-white-mug-states")
