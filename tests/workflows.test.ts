@@ -38,6 +38,9 @@ const recordedDigests = JSON.parse(readFileSync(join(root, DIGESTS_FILE), "utf8"
   string
 >;
 const PLAYWRIGHT_IMAGE = /^mcr\.microsoft\.com\/playwright:v([\w.-]+)-noble@(sha256:[0-9a-f]{64})$/;
+// An offline test cannot ask the registry, so a wrong digest copied into both this record and the workflow passes
+// here. The browser jobs catch it: an image from another Playwright version carries other browser builds, so they
+// fail at launch on the first push to main. Look the digest up with this command rather than copying one.
 const lookUp = (version: string) =>
   `skopeo inspect --format '{{.Digest}}' docker://mcr.microsoft.com/playwright:v${version}-noble`;
 

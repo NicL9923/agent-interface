@@ -65,6 +65,11 @@ const signedOutProbe = (message: ConsoleMessage) =>
  * The guard replaces the route methods on Playwright's BrowserContext and Page classes, once per worker process and
  * before any test fixture runs, so it covers fixture setup, `browser.newContext()` and every page alike. Each call
  * reads the serviceWorkers option its own context was made with.
+ *
+ * It exists to catch a mistake: a `page.route` written in a test or fixture with the worker forgotten. Deliberate
+ * ways around it are out of its scope, such as a worker-scoped `browser` fixture override that routes before this
+ * fixture installs, or a module that loads Playwright through `createRequire` or from outside `e2e/`, which the
+ * lint rule in .oxlintrc.json does not see. Nobody writes those by accident.
  */
 const routeMethods = ["route", "routeFromHAR"] as const;
 const guarded = Symbol("routes need a blocked service worker");

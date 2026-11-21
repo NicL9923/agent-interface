@@ -27,15 +27,17 @@ can shut down the web server it started in a process group of its own, and kills
 seconds. Nothing here needs a package outside the standard library.
 
 WebKit needs system libraries that some Linux hosts lack (Fedora has no libicu74 or libjpeg-turbo8). Before e2e,
-check-all launches WebKit once, in a process group of its own that a timeout stops whole. When WebKit starts, e2e
+check-all launches WebKit once, in a process group of its own that is stopped whole when it ends. When WebKit starts, e2e
 runs both browser projects on the host as one check. When it cannot, the e2e check runs in two steps under the
 same slot and ports: Chromium on the host, then WebKit under podman in Playwright's container for the installed
 @playwright/test. It names the image by tag, which CI's Browser smoke job pins by digest. The table shows a row
 for each step. Without podman it refuses to run, so WebKit is never skipped silently. The container's network is
 its own, so two worktrees' containers never share a port. The lock descriptors are never passed to podman, whose
 helpers could outlive the run: check-all holds them while it waits for the container, and on every stop removes
-the container before it lets them go. A removal that fails is reported with the container's name, and a stopped
-check's output is read for at most a few seconds more, since a container its client left behind can hold it open.
+the container before it lets them go. A removal that fails is reported with the container's name. A check's output
+is read for at most a few seconds after the check exits or is stopped, since a process outside its group, such as
+a container its client left behind, can hold it open; past that the check is stopped as a timeout would stop it,
+its log is closed with what it printed, and the table says the output was cut short.
 check-all killed by SIGKILL frees the locks while the container runs on; podman's --timeout ends that container
 after --check-timeout.
 """
@@ -531,16 +533,21 @@ def find_ruff(root, cache, env=None, bootstrap_python=sys.executable, note=None)
 # ---------------------------------------------------------------------------------------------------------------
 # Where WebKit runs.
 
-WEBKIT_PROBE = """
-import { webkit } from "@playwright/test";
+# Playwright starts the browser in a process group of its own, which stopping Node's group does not reach, so the
+# probe hands the launch Playwright's own timeout: when it expires, Playwright kills the browser's group itself,
+# even one paused at launch. Node then exits as soon as the answer is written instead of lingering.
+WEBKIT_LAUNCH_TIMEOUT = 45
+WEBKIT_PROBE = f"""
+import {{ webkit }} from "@playwright/test";
 let message = null;
-try {
-  await (await webkit.launch()).close();
-} catch (error) {
+try {{
+  await (await webkit.launch({{ timeout: {WEBKIT_LAUNCH_TIMEOUT * 1000} }})).close();
+}} catch (error) {{
   message = String(error?.message ?? error);
-}
-console.log(JSON.stringify({ ok: message === null, message }));
+}}
+process.stdout.write(JSON.stringify({{ ok: message === null, message }}) + "\\n", () => process.exit(0));
 """
+# The probe's own limit, for a Node that hangs outside the launch.
 WEBKIT_PROBE_TIMEOUT = 60
 
 
@@ -561,9 +568,12 @@ def webkit_failure(
 ):
     """Why WebKit cannot start on this host, or None when it starts. It launches the browser once, as a test would.
 
-    Node runs in a process group of its own. Playwright starts the browser in another group and kills it when Node
-    gets SIGINT, so a probe that hangs is stopped the way a run is: SIGINT, then SIGKILL for its group after `grace`.
-    """
+    Node runs in a process group of its own, which is stopped once Node is done, every time: SIGINT, so Playwright
+    closes a browser it still has, then SIGKILL after `grace` for anything left in the group. A Node that hangs
+    is stopped the same way at `timeout`. The browser's own group is left to Playwright's launch timeout (see
+    WEBKIT_PROBE); if WebKit hangs past it as well, one idle browser process can be left behind.
+
+    `grace` is waited out only when something in the group ignores SIGINT."""
     process = subprocess.Popen(
         ["node", "--input-type=module", "-e", WEBKIT_PROBE],
         cwd=root,
@@ -584,6 +594,8 @@ def webkit_failure(
     except BaseException:
         stop_group(process, grace)
         raise
+    # A child that closed its output can outlive Node in the group.
+    stop_group(process, grace)
     try:
         info = json.loads(stdout.strip().splitlines()[-1])
     except IndexError, ValueError:
@@ -849,6 +861,8 @@ class Result:
         self.check = check or name
         # Something a person must act on that the result itself does not show, such as a container left running.
         self.warning = None
+        # The output was cut off while another process still held it, so a summary and its counts may be missing.
+        self.cut_short = False
 
 
 # How long a stopped check gets to shut itself down after SIGINT before its group is killed.
@@ -908,7 +922,8 @@ NODE_KEEPS_BELOW = 16
 def run_process(
     argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start=None, on_stop=None
 ):
-    """Run `argv` in its own process group, saving its output. Returns (returncode or None on timeout, output).
+    """Run `argv` in its own process group, saving its output. Returns (returncode or None on timeout, output, and
+    whether the output was cut short because another process still held the pipe).
 
     The descriptors in `inherit` (the lock files) go to the child, so the locks last as long as it does, even if
     this process is killed. They must be below 16: Node keeps those from its own children, so only the npm wrapper
@@ -936,8 +951,10 @@ def run_process(
         pass_fds=tuple(inherit),
     )
     expired = threading.Event()
+    stops = []
 
     def stop():
+        stops.append(True)
         try:
             stop_group(process)
         finally:
@@ -950,44 +967,56 @@ def run_process(
 
     chunks = []
     log = log_path.open("w")
+    log_lock = threading.Lock()
 
     def read():
         for line in process.stdout:
-            chunks.append(line)
-            log.write(line)
-            if verbose:
-                sys.stderr.write(line)
+            with log_lock:
+                if log.closed:
+                    return
+                chunks.append(line)
+                log.write(line)
+                if verbose:
+                    sys.stderr.write(line)
 
-    # The output is read on its own thread, so a stopped check is not held up by a process outside its group that
-    # still has the pipe open, such as a container whose client is gone.
+    # The output is read on its own thread. A process outside the check's group can hold the pipe open after the
+    # check has exited or been stopped, such as a web server in a session of its own or a container whose client is
+    # gone, so the output is read for at most OUTPUT_GRACE after either. Past that, the check counts as stopped: the
+    # stop a timeout makes runs for what is left, and the locks are freed when this returns.
     reader = threading.Thread(target=read, daemon=True)
     timer = threading.Timer(timeout, expire)
     timer.start()
-    stopped = False
     try:
         if on_start:
             on_start(process.pid)
         reader.start()
         process.wait()
+        reader.join(OUTPUT_GRACE)
     except BaseException:
-        stopped = True
         stop()
         raise
     finally:
         timer.cancel()
         timer.join()  # a timeout's stop finishes before the caller releases its locks
-        stopped = stopped or expired.is_set()
-        if reader.ident is not None:
-            reader.join(OUTPUT_GRACE if stopped else None)
-        if reader.is_alive():
-            # The reader keeps the pipe and the log until the holder lets go or this process ends.
-            chunks.append(
-                f"\ncheck-all: stopped reading the output {OUTPUT_GRACE:g}s after the stop; a process outside the check's group still holds it\n"
-            )
-        else:
-            process.stdout.close()
+        if reader.ident is not None and reader.is_alive():
+            if not stops:
+                stop()
+            reader.join(OUTPUT_GRACE)
+        with log_lock:
+            cut_short = reader.is_alive()
+            if cut_short:
+                note = f"\ncheck-all: stopped reading the output {OUTPUT_GRACE:g}s after the check ended; a process outside the check's group still holds it\n"
+                chunks.append(note)
+                log.write(note)
+            # Closed here however the reading ended, so what the check printed is on disk.
             log.close()
-    return (None if expired.is_set() else process.returncode), "".join(chunks)
+        if not cut_short:
+            process.stdout.close()
+    return (
+        None if expired.is_set() else process.returncode,
+        "".join(chunks),
+        cut_short,
+    )
 
 
 def tail(output, lines=40):
@@ -1024,6 +1053,8 @@ def render_table(results):
                 else "-"
             )
         )
+        if result.cut_short:
+            text = "output cut short" + (f": {text}" if text != "-" else "")
         rows.append(
             (
                 result.name,
@@ -1297,10 +1328,12 @@ class Step:
     container: tuple | None = None
 
 
-def step_result(name, step, code, output, seconds, log_path, queued, timeout):
+def step_result(
+    name, step, code, output, cut_short, seconds, log_path, queued, timeout
+):
     counts = parse_counts(name, output)
     if code is None:
-        return Result(
+        result = Result(
             step.label,
             "timeout",
             queued,
@@ -1311,17 +1344,20 @@ def step_result(name, step, code, output, seconds, log_path, queued, timeout):
             log_path,
             name,
         )
-    return Result(
-        step.label,
-        "pass" if code == 0 else "fail",
-        queued,
-        seconds,
-        counts,
-        "",
-        tail(output) if code else "",
-        log_path,
-        name,
-    )
+    else:
+        result = Result(
+            step.label,
+            "pass" if code == 0 else "fail",
+            queued,
+            seconds,
+            counts,
+            "",
+            tail(output) if code else "",
+            log_path,
+            name,
+        )
+    result.cut_short = cut_short
+    return result
 
 
 def run_one(root, name, steps, env, logs, cache, slots, args, requested, log, report):
@@ -1369,7 +1405,7 @@ def run_one(root, name, steps, env, logs, cache, slots, args, requested, log, re
             left_running = None
             log_path = logs / f"{step.label.split(' ')[0].replace(':', '-')}.log"
             try:
-                code, output = run_process(
+                code, output, cut_short = run_process(
                     step.argv,
                     root,
                     env,
@@ -1396,6 +1432,7 @@ def run_one(root, name, steps, env, logs, cache, slots, args, requested, log, re
                 step,
                 code,
                 output,
+                cut_short,
                 time.monotonic() - started,
                 log_path,
                 queued if step is steps[0] else 0.0,
