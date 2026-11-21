@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, createElement, Profiler } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { preferenceServer } from "./helpers/preference-server";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
@@ -1166,6 +1166,32 @@ describe("preferences while saves wait", () => {
     await tap(document.body.querySelector(".bot-details-action[aria-pressed]")!);
     await held.saves[1].refuse();
     expect(alert(".bot-details")).toBe("Your change didn't save. The server refused that change.");
+  });
+
+  // A quiet hours switch sits far down Settings, so its refusal at the top of the sheet would be out of view.
+  it("brings a refusal inside Settings into view", async () => {
+    const scrolled = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: function (this: HTMLElement) {
+        scrolled(this);
+      },
+    });
+    onTestFinished(() => {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    });
+    boot.preferences = {
+      ...boot.preferences,
+      sections: ["A", "B"].map((id) => ({ id, name: id, botIds: [] })),
+    };
+    const held = holdSaves();
+    await render();
+    await openSettings();
+    await tap(document.body.querySelector('[aria-label="Move B up"]')!);
+    await held.saves[0].refuse();
+    expect(scrolled).toHaveBeenCalledWith(
+      document.body.querySelector('.settings-sheet [role="alert"]'),
+    );
   });
 
   it("says when a theme change from the palette is refused", async () => {

@@ -116,6 +116,31 @@ describe("a server that predates partial saves", () => {
     await start(new ApiError("Invalid request", 400));
     expect(vi.mocked(api)).not.toHaveBeenCalled();
     expect(vi.mocked(write)).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith("Invalid request");
+    expect(onError).toHaveBeenCalledWith("Your change didn't save. Invalid request");
+  });
+  // The client's network messages are written for a chat message, which keeps a draft. A preference has none.
+  it("says a save that never reached the app did not save, and one that timed out may not have", async () => {
+    await start(
+      new ApiError(
+        "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
+        503,
+        "CONNECTION_UNAVAILABLE",
+      ),
+    );
+    expect(onError).toHaveBeenLastCalledWith(
+      "Your change didn't save because the app can't be reached. Make it again once you're connected.",
+    );
+    await act(async () => root.unmount());
+    ({ root } = mountRoot());
+    await start(
+      new ApiError(
+        "The app took too long to respond. Your draft is kept; sent messages will be checked before retrying.",
+        504,
+        "CONNECTION_UNAVAILABLE",
+      ),
+    );
+    expect(onError).toHaveBeenLastCalledWith(
+      "The app took too long to answer, so your change may not have saved. If it's missing after a reload, make it again.",
+    );
   });
 });

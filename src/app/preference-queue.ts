@@ -178,6 +178,12 @@ export function preferenceQueue(options: {
   /**
    * Takes preferences another route answered with, such as a new main assistant, as the confirmed copy,
    * and puts them on screen with the patches still waiting laid over them.
+   *
+   * Not covered: an answer to a preferences save that was already in flight still replaces this copy
+   * when it lands. If it was read before the other route's change, it puts back what that route cleared,
+   * such as a main assistant, check-ins or a default assistant, until the next clean bootstrap read
+   * corrects it. Main has the same gap. Closing it means sending those routes' saves through this queue,
+   * one at a time with the preference saves, so no answer can be older than one applied before it.
    */
   const confirm = (value: Preferences) => {
     const account = options.account();
@@ -187,5 +193,16 @@ export function preferenceQueue(options: {
   /** Taken when a read starts; `fresh` is true only if no save was running or ran since. */
   const mark = () => (saving ? -1 : generation);
   const fresh = (marked: number) => marked === generation && !saving;
-  return { edit, confirm, mark, fresh };
+  /**
+   * What the server last confirmed while saves wait for this account, or undefined when none wait and the
+   * screen's copy is the confirmed one. Anything kept for a later launch is written from this, never from
+   * the screen, so a change still on its way is not drawn as saved when the tab closes first.
+   */
+  const confirmedCopy = () => {
+    const account = options.account();
+    return confirmed?.account === account && waiting.some((entry) => entry.account === account)
+      ? confirmed.value
+      : undefined;
+  };
+  return { edit, confirm, confirmedCopy, mark, fresh };
 }

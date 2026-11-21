@@ -37,9 +37,20 @@ async function savePreferencePatch(patch: PreferencesPatch): Promise<Preferences
     return apiRequest("PATCH /preferences", { body: whole, plainJson: true });
   }
 }
+/**
+ * What a person reads when a preferences save fails. The client's network messages are written for a
+ * chat message, which keeps a draft; a preference change has none and has already left the screen.
+ */
+function refusalMessage(error: Error) {
+  if (error instanceof ApiError && error.code === "CONNECTION_UNAVAILABLE")
+    return error.status === 504
+      ? "The app took too long to answer, so your change may not have saved. If it's missing after a reload, make it again."
+      : "Your change didn't save because the app can't be reached. Make it again once you're connected.";
+  return `Your change didn't save. ${error.message}`;
+}
 type SessionEvents = {
   onFirstBootstrap(next: Bootstrap): void;
-  /** A preferences save was refused or lost; its change has left the screen. */
+  /** A preferences save was refused or lost; its change has left the screen. `message` says so in full. */
   onPreferencesRefused(message: string): void;
   /** The open assistant left this person's roster, as when another member made it personal. */
   onBotGone(botId: string): void;
@@ -281,7 +292,7 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     send: savePreferencePatch,
     apply: (saved) =>
       setBoot((previous) => (previous ? { ...previous, preferences: saved } : previous)),
-    failed: (error) => handlers.current.onPreferencesRefused(error.message),
+    failed: (error) => handlers.current.onPreferencesRefused(refusalMessage(error)),
     account: () => accountEpoch.current,
   });
   /**
@@ -299,6 +310,10 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   ) => preferences.current!.edit(edit, bootRef.current?.preferences, chosen);
   return {
     boot,
+    /** The preferences the server confirmed, without the saves still waiting: what to keep for a later launch. */
+    confirmedPreferences: boot
+      ? (preferences.current.confirmedCopy() ?? boot.preferences)
+      : undefined,
     auth,
     botId,
     setBotId,
