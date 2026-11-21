@@ -3307,6 +3307,13 @@ import CryptoKit
       bring(app.buttons["specimenShape.\(first)"], in: scroller, below: belowNav)
       try capture("22-specimen-\(group)")
     }
+    // Home shows a blocked assistant's state in words, so the white mug's edged exclamation mark is
+    // checked here, in the specimen's state grid.
+    app.buttons["specimenShape.mug"].tapWhenReady()
+    bring(app.switches["Reduced motion"], in: scroller, below: belowNav)
+    try capture("23-specimen-white-mug-states")
+    app.swipeUp()
+    try capture("23b-specimen-white-mug-states")
   }
 
   func testScreenshotTour() throws {
