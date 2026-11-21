@@ -57,6 +57,21 @@ final class ExperienceTests: XCTestCase {
       XCTAssertTrue(ReplyCards.parse(source).allSatisfy { $0.cards == nil })
     }
   }
+  /// The server and the web take a card only from a fence at the margin (`replyCardsFromText`). One
+  /// indented inside a list item stays code in that item on the web, and its list stays whole.
+  func testACardFenceNestedInAListItemStaysInItsListAsCode() throws {
+    let card = #"{"version":1,"cards":[{"id":"feed","type":"checklist","title":"Feed","items":[{"id":"hay","text":"Hay"}]}]}"#
+    let text = "1. Water the mare.\n2. Feed her:\n\n   ```agent-ui\n   \(card)\n   ```\n3. Close the gate."
+    let parts = ReplyCards.parse(text, cached: false)
+    XCTAssertEqual(parts.map(\.markdown), [text], "No card is taken out of the list")
+    let blocks = Markdown.parse(text)
+    guard blocks.count == 1, case .list(let list) = blocks[0] else { return XCTFail("One list: \(blocks)") }
+    XCTAssertEqual(list.items.count, 3)
+    XCTAssertEqual(list.items[1].blocks.last, .code(language: "agent-ui", text: card))
+    // The same card at the margin, after the list, is still a card.
+    let after = ReplyCards.parse("1. Water the mare.\n\n```agent-ui\n\(card)\n```", cached: false)
+    XCTAssertEqual(after.compactMap(\.cards).flatMap { $0 }.map(\.id), ["feed"])
+  }
   func testInvalidOrAmbiguousCardDataStaysReadableCode() {
     let payloads = [
       #"{"version":1,"cards":[{"id":"bad id","type":"checklist","title":"List","items":[{"id":"one","text":"A"}]}]}"#,
