@@ -44,6 +44,8 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0[capability: .imageGeneration]?.supported, false); XCTAssertNotNil($0[capability: .imageGeneration]?.reason)
       XCTAssertEqual(Set($0.capabilities.keys), Set(CapabilityKey.allCases.map(\.rawValue)), "CapabilityKey must list exactly the names the server reports")
       XCTAssertEqual($0.connection.code, "ready"); XCTAssertNotNil($0.connection.lastConnectedAt)
+      // A fresh roster says it is known, so the app may act on who it leaves out.
+      XCTAssertEqual($0.rosterUnknown, false); XCTAssertFalse($0.servedFromCache)
       XCTAssertEqual($0.preferences.pinnedAssistants($0.bots).map(\.id), $0.preferences.favorites)
       XCTAssertEqual($0.nativeApp, NativeAppInfo(latestBuild: 12, updateUrl: "https://testflight.apple.com/join/CONTRACT"))
       XCTAssertEqual(AppUpdate.evaluate($0.nativeApp, installedBuild: 11), .available(URL(string: "https://testflight.apple.com/join/CONTRACT")!))
