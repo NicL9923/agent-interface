@@ -171,7 +171,7 @@ Tests changed because the behavior did:
 
 Each line was broken with `~/.agents/tools/mutate.py`, the named tests run, and the source restored.
 The lists and the tool's output from the final pass, after all the review rounds, are in
-[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 135 mutants, 135 caught. The last
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 138 mutants, 138 caught. The last
 five rows were run after the fifth, sixth, eighth and ninth review rounds.
 
 | File                                                | Mutants | Result    |
@@ -187,7 +187,7 @@ five rows were run after the fifth, sixth, eighth and ninth review rounds.
 | `ConnectionAnnouncer`, partial live return          | 5       | 5 caught  |
 | Live-updates scope, `App.tsx` and `stream-health`   | 4       | 4 caught  |
 | `hermes.ts` roster cache order                      | 2       | 2 caught  |
-| `rosterUnknown`, server and web                     | 21      | 21 caught |
+| `rosterUnknown`, server and web                     | 24      | 24 caught |
 
 Mutants that survived on the way, and what was done:
 
@@ -354,6 +354,17 @@ known empty roster taken while Hermes is down, an older server's kept), `saved-r
 home kept), `conversation-events` (a stream opened while unknown). The `roster-unknown` mutant lists now
 break 21 lines; 21 are caught.
 
+### Eleventh round, of the tenth round's fixes: one P2, one P3
+
+| #   | Finding                                                                                                                                                                                                      | Fix                                                                                                                  |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| 1   | P2. A read Hermes answered on one connection, still naming its models when the adapter reconnected, made the new connection's cache current, so a later failed read listed the old Hermes's roster as known. | Each read remembers the connection it began on, and only a read begun on the current one fills the cache.            |
+| 2   | P3. A stream open on the same connection missed the roster becoming known when the rows did not change.                                                                                                      | The read that makes the cache current again tells the roster watchers, so the stream evaluates and sends its notice. |
+
+Tests in `hermes-adapter`: a read held in its model names across a reconnect is answered but not kept, and
+the roster becoming known tells the watchers once. The `roster-unknown` lists now break 24 lines; 24 are
+caught.
+
 ## Checks
 
 On the fingerprint above, `.agents/tools/check-all --keep-going` under `linux-heavy-lock.sh`, and
@@ -389,7 +400,7 @@ run had included:
 - iOS matched these states afterwards; see "iOS" below.
 - Safari, Firefox, a screen reader and a real phone: not run. The live region and tooltips were checked
   in jsdom and by reading the DOM in Chromium.
-- The tenth round's fixes have had no review of their own.
+- The eleventh round's fixes have had no review of their own.
 - With a second runtime, an unknown roster from one of them is not tracked per runtime (tenth round,
   finding 3). Production runs Hermes alone; this belongs to step 2 of `docs/RuntimePlan.md`.
 - The server still answers one timed-out Hermes call with the code `unreachable`. The client no longer

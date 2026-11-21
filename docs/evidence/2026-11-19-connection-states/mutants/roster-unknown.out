@@ -9,7 +9,10 @@ caught   runtime-snapshot.ts: '!value.rosterUnknown &&'
 caught   event-routes.ts: 'rosterUnknown: isUnknownRoster(bots) }'
 caught   event-routes.ts: '(unknown ? "unknown:" : "") +'
 caught   event-routes.ts: 'initial.rosterUnknown,'
-server: 11 of 11 caught
+caught   hermes.ts: 'if (read > cachedRead && on === connection) {'
+caught   hermes.ts: 'connection++;'
+caught   hermes.ts: 'tellRosterWatchers();'
+server: 14 of 14 caught
 caught   use-session.ts: 'const knowsRoster = (next: Bootstrap) => next.connection.connected && next.rosterUnknown !'
 caught   use-session.ts: 'if (next.rosterUnknown ?? (!next.connection.connected && !next.bots.length)) return previo'
 caught   use-session.ts: 'if (next.rosterUnknown ?? (!next.connection.connected && !next.bots.length)) return previo'
