@@ -164,6 +164,7 @@
       "retryAt": "2026-10-01T12:05:00.000Z",
       "lastConnectedAt": "2026-10-01T11:58:00.000Z"
     },
+    "rosterUnknown": false,
     "csrfToken": null,
     "formKey": "normalized-formKey",
     "nativeApp": {

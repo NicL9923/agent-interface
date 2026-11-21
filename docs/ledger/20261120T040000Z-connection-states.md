@@ -171,7 +171,7 @@ Tests changed because the behavior did:
 
 Each line was broken with `~/.agents/tools/mutate.py`, the named tests run, and the source restored.
 The lists and the tool's output from the final pass, after all the review rounds, are in
-[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 135 mutants, 135 caught. The last
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 139 mutants, 139 caught. The last
 five rows were run after the fifth, sixth, eighth and ninth review rounds.
 
 | File                                                | Mutants | Result    |
@@ -187,7 +187,7 @@ five rows were run after the fifth, sixth, eighth and ninth review rounds.
 | `ConnectionAnnouncer`, partial live return          | 5       | 5 caught  |
 | Live-updates scope, `App.tsx` and `stream-health`   | 4       | 4 caught  |
 | `hermes.ts` roster cache order                      | 2       | 2 caught  |
-| `rosterUnknown`, server and web                     | 21      | 21 caught |
+| `rosterUnknown`, server and web                     | 25      | 25 caught |
 
 Mutants that survived on the way, and what was done:
 
@@ -354,6 +354,39 @@ known empty roster taken while Hermes is down, an older server's kept), `saved-r
 home kept), `conversation-events` (a stream opened while unknown). The `roster-unknown` mutant lists now
 break 21 lines; 21 are caught.
 
+### Eleventh round, of the tenth round's fixes: one P2, one P3
+
+| #   | Finding                                                                                                                                                                                                      | Fix                                                                                                                  |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| 1   | P2. A read Hermes answered on one connection, still naming its models when the adapter reconnected, made the new connection's cache current, so a later failed read listed the old Hermes's roster as known. | Each read remembers the connection it began on, and only a read begun on the current one fills the cache.            |
+| 2   | P3. A stream open on the same connection missed the roster becoming known when the rows did not change.                                                                                                      | The read that makes the cache current again tells the roster watchers, so the stream evaluates and sends its notice. |
+
+Tests in `hermes-adapter`: a read held in its model names across a reconnect is answered but not kept, and
+the roster becoming known tells the watchers once. The `roster-unknown` lists now break 24 lines; 24 are
+caught.
+
+The twelfth round's review of these fixes stopped early: the reviewer's provider flagged the run as a
+possible cybersecurity risk and ended it. Its last message named one more path, which held: the read from
+a replaced connection still answered its caller, such as a bootstrap, as a known roster, which the
+snapshot then held. That read now answers as `rosterUnknown`, and the same test asserts it. The lists
+break 25 lines; 25 are caught.
+
+### Twelfth round, of the two fixes above: two P2 left open, one P3
+
+The fixes held: a read from a replaced connection reaches neither `botCache` nor `rosterReuse`, and
+`tellRosterWatchers` from inside a read queues at most one follow-up evaluation. The P3, that the test did
+not check which roster the fallback listed, is fixed: it now asserts the rows.
+
+Two P2s are left open, both needing Hermes to be replaced while a request is in flight:
+
+- Bootstrap assembles its snapshot from a roster read and a later status read. If the roster read ends on
+  one Hermes and another connects before the status read, bootstrap pairs the first's rows with the
+  second's status and calls them known. Closing it needs the runtime to say which connection a roster
+  came from, through the snapshot. On `main` the same pairing happens with no notion of known at all.
+- `Roster.note` in `bot-access.ts` and main-assistant reconciliation in `main-assistant.ts` take any roster
+  `listBots` returns as current, unknown or not. That is unchanged from `main`, where a replaced
+  connection's read was taken the same way; they now could check `isUnknownRoster` and do not yet.
+
 ## Checks
 
 On the fingerprint above, `.agents/tools/check-all --keep-going` under `linux-heavy-lock.sh`, and
@@ -389,7 +422,8 @@ run had included:
 - iOS matched these states afterwards; see "iOS" below.
 - Safari, Firefox, a screen reader and a real phone: not run. The live region and tooltips were checked
   in jsdom and by reading the DOM in Chromium.
-- The tenth round's fixes have had no review of their own.
+- The twelfth round's two open P2s above: a bootstrap racing a Hermes replacement, and two server
+  callers that do not check `isUnknownRoster`.
 - With a second runtime, an unknown roster from one of them is not tracked per runtime (tenth round,
   finding 3). Production runs Hermes alone; this belongs to step 2 of `docs/RuntimePlan.md`.
 - The server still answers one timed-out Hermes call with the code `unreachable`. The client no longer
