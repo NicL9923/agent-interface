@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { patchFor, preferenceQueue } from "../src/app/preference-queue";
+import { moveSection } from "../src/app/preferences-editing";
 import { applyMergePatch } from "../src/shared/merge-patch";
 import type { Preferences, PreferencesPatch } from "../src/shared/types";
 
@@ -21,7 +22,7 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 
-it("sends one save at a time, builds each edit on the last, and shows each saved answer", async () => {
+it("sends one save at a time, builds each edit on the last, and shows each answer with what still waits", async () => {
   const replies = [deferred(), deferred()];
   const sent: PreferencesPatch[] = [],
     applied: Preferences[] = [];
@@ -43,7 +44,11 @@ it("sends one save at a time, builds each edit on the last, and shows each saved
   expect(sent.map((value) => value.favorites)).toEqual([["a"], ["a", "b"]]);
   replies[1].resolve({ ...base, favorites: ["a", "b"] });
   await second;
-  expect(applied.map((value) => value.favorites)).toEqual([["a"], ["a", "b"]]);
+  // The first answer shows with the save still waiting laid over it, so the second pin never leaves the screen.
+  expect(applied.map((value) => value.favorites)).toEqual([
+    ["a", "b"],
+    ["a", "b"],
+  ]);
 });
 
 it("keeps an earlier saved answer on screen when a later save fails, so the next edit keeps it", async () => {
@@ -302,38 +307,45 @@ it("names every clearable key of an object field, whatever an older copy held", 
   });
 });
 
-/** A server whose answers wait for the test, each one the patch merged over what it holds. */
+/**
+ * A server whose answers wait for the test. `answer` lets the oldest save land and answer, `"refuse"`
+ * refuses it, and `"lost"` lands it but loses the answer on the way back.
+ */
 const slowServer = (stored: Preferences) => {
   const held = server(stored);
   const sent: PreferencesPatch[] = [];
-  const answers: (() => void)[] = [];
+  const waiting: {
+    patch: PreferencesPatch;
+    resolve(value: Preferences): void;
+    reject(error: Error): void;
+  }[] = [];
   let screen = stored;
+  const failed = vi.fn();
   const queue = preferenceQueue({
     send: (patch) => {
       sent.push(patch);
-      return new Promise((resolve, reject) =>
-        answers.push(() =>
-          patch.favorites?.includes("refused")
-            ? reject(new Error("Refused"))
-            : resolve(held.save(patch)),
-        ),
-      );
+      return new Promise((resolve, reject) => waiting.push({ patch, resolve, reject }));
     },
     apply: (value) => {
       screen = value;
     },
-    failed: vi.fn(),
+    failed,
     account: () => 1,
   });
   return {
     held,
     sent,
     queue,
+    failed,
     screen: () => screen,
-    /** Lets the oldest save answer once it has been sent. */
-    answer: async () => {
-      await vi.waitFor(() => expect(answers.length).toBeGreaterThan(0));
-      answers.shift()!();
+    answer: async (outcome: "ok" | "refuse" | "lost" = "ok") => {
+      await vi.waitFor(() => expect(waiting.length).toBeGreaterThan(0));
+      const save = waiting.shift()!;
+      if (outcome === "refuse") save.reject(new Error("Refused"));
+      else if (outcome === "lost") {
+        held.save(save.patch);
+        save.reject(new Error("The connection was lost"));
+      } else save.resolve(held.save(save.patch));
       for (let i = 0; i < 5; i++) await Promise.resolve();
     },
   };
@@ -392,9 +404,11 @@ it("builds an edit on the pins an answer put on screen, not on a waiting save's 
   expect(s.held.stored.favorites).toEqual(["creek", "ranch"]);
 });
 
-it("does not carry a refused save's change into the edit queued behind it", async () => {
+// Saves go out as they were built when the person tapped. One refused for a passing reason does not change the
+// patch behind it, which already holds that change because the screen showed it.
+it("sends the save behind a refused one as it was built, so it lands both changes", async () => {
   const s = slowServer(base);
-  void s.queue.edit((value) => ({ ...value, favorites: [...value.favorites, "refused"] }), base, [
+  void s.queue.edit((value) => ({ ...value, favorites: [...value.favorites, "creek"] }), base, [
     "favorites",
   ]);
   const next = s.queue.edit(
@@ -402,9 +416,76 @@ it("does not carry a refused save's change into the edit queued behind it", asyn
     base,
     ["favorites"],
   );
-  await s.answer();
+  await s.answer("refuse");
+  // The refused pin leaves the screen's overlay; the waiting save still shows what it will send.
+  expect(s.screen().favorites).toEqual(["creek", "ranch"]);
   await s.answer();
   await next;
-  expect(s.sent).toEqual([{ favorites: ["refused"] }, { favorites: ["ranch"] }]);
+  expect(s.sent).toEqual([{ favorites: ["creek"] }, { favorites: ["creek", "ranch"] }]);
+  expect(s.held.stored.favorites).toEqual(["creek", "ranch"]);
+  expect(s.failed).toHaveBeenCalledOnce();
+});
+
+// Another client pins Ranch Hand while this tab's theme save waits. The pin was tapped on a screen without it.
+it("sends a pin as the list the person saw, so another client's same pin is not doubled", async () => {
+  const s = slowServer(base);
+  void s.queue.edit((value) => ({ ...value, theme: "dark" }), base, ["theme"]);
+  const pin = s.queue.edit(
+    (value) => ({ ...value, favorites: [...value.favorites, "ranch"] }),
+    base,
+    ["favorites"],
+  );
+  s.held.stored = { ...s.held.stored, favorites: ["ranch"] };
+  await s.answer();
+  await s.answer();
+  await pin;
+  expect(s.sent[1]).toEqual({ favorites: ["ranch"] });
+  expect(s.held.stored.favorites).toEqual(["ranch"]);
+});
+
+// The person moves B up from [A, B, C] while a theme save waits; another client saves [A, C, B] meanwhile.
+it("sends a reorder as the order the person saw", async () => {
+  const section = (id: string) => ({ id, name: id, botIds: [] });
+  const tab = { ...base, sections: ["A", "B", "C"].map(section) } as Preferences;
+  const s = slowServer(tab);
+  void s.queue.edit((value) => ({ ...value, theme: "dark" }), tab, ["theme"]);
+  const move = s.queue.edit((value) => moveSection(value, "B", -1), tab, ["sections"]);
+  s.held.stored = { ...s.held.stored, sections: ["A", "C", "B"].map(section) };
+  await s.answer();
+  await s.answer();
+  await move;
+  const order = (value: Preferences) => value.sections.map((item) => item.id);
+  expect(order(s.held.stored)).toEqual(["B", "A", "C"]);
+  expect(order(s.screen())).toEqual(["B", "A", "C"]);
+});
+
+// Settings can still show the person's own earlier copy while an answer has brought another device's Classic to
+// the session. Picking Classic there changes nothing the queue can see, so only the control's name sends it.
+it("sends a named pick that equals another device's value on screen", async () => {
+  const held = { ...base, chatStyle: "bubbles" } as Preferences;
+  const s = slowServer(held);
+  void s.queue.edit((value) => ({ ...value, theme: "dark" }), held, ["theme"]);
+  s.held.stored = { ...s.held.stored, chatStyle: "classic" };
+  await s.answer();
+  expect(s.screen().chatStyle).toBe("classic");
+  const pick = s.queue.edit((value) => ({ ...value, chatStyle: "classic" }), s.screen(), [
+    "chatStyle",
+  ]);
+  await s.answer();
+  await pick;
+  expect(s.sent[1]).toEqual({ chatStyle: "classic" });
+});
+
+it("sends a retry after a refusal on the confirmed copy", async () => {
+  const s = slowServer(base);
+  const pin = (value: Preferences) => ({ ...value, favorites: [...value.favorites, "ranch"] });
+  const first = s.queue.edit(pin, base, ["favorites"]);
+  await s.answer("refuse");
+  await first;
+  expect(s.screen().favorites).toEqual([]);
+  const retry = s.queue.edit(pin, s.screen(), ["favorites"]);
+  await s.answer();
+  await retry;
+  expect(s.sent).toEqual([{ favorites: ["ranch"] }, { favorites: ["ranch"] }]);
   expect(s.held.stored.favorites).toEqual(["ranch"]);
 });
