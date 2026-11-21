@@ -714,6 +714,7 @@ enum AvatarMotion {
   /// Half the width of each eye style at full size. A style this build does not know draws as the pill.
   static func eyeHalfWidth(_ eyes: AvatarEyes) -> Double {
     switch eyes {
+    case .oval: 5.5
     case .round: 7.5
     case .visor, .spark: 10
     default: 5.5

@@ -3265,6 +3265,50 @@ import CryptoKit
     }
   }
 
+  /// The avatar editor's shape groups and the Debug specimen's groups, for review.
+  func testAvatarShapesReview() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the shapes.")
+    let app = launch()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+    // Drags `scroller` until `element` sits just below `top`, so its group's heading shows above it.
+    func bring(_ element: XCUIElement, in scroller: XCUIElement, below top: () -> CGFloat) {
+      for _ in 0..<40 {
+        let target = top() + 56
+        if element.exists && element.hasFrame && abs(element.frame.minY - target) <= 40 { return }
+        let shift = element.exists && element.hasFrame ? element.frame.minY - target : 260
+        let distance = max(-260, min(260, shift))
+        let start = scroller.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.62))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -distance)),
+          withVelocity: .slow, thenHoldForDuration: 0.3)
+      }
+      XCTAssertTrue(element.exists, "\(element) came into view")
+    }
+    app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Profile")
+    let form = app.collectionViews["settings.profile"]
+    XCTAssertTrue(form.waitForExistence(timeout: 5))
+    let bar = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
+    let belowBar = { bar.exists ? bar.frame.maxY : form.frame.minY }
+    for (tile, name) in [("blob", "classic"), ("cloud", "objects"), ("ghost", "creatures"), ("pumpkin", "seasonal")] {
+      bring(app.buttons["avatarTile.shape.\(tile)"], in: form, below: belowBar)
+      try capture("20-avatar-shapes-\(name)")
+    }
+    app.buttons["Close"].tapWhenReady()
+    if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
+    goToAssistantList(app)
+    openPreferences(app)
+    openPreferencesLink(app, "Avatar specimen")
+    XCTAssertTrue(app.switches["Reduced motion"].waitForExistence(timeout: 5))
+    let scroller = app.scrollViews.firstMatch
+    let belowNav = { app.navigationBars.firstMatch.frame.maxY }
+    bring(app.descendants(matching: .any)["avatarMatrix"], in: scroller, below: belowNav)
+    try capture("21-specimen-matrix")
+    for (group, first) in [("classic", "blob"), ("objects", "cloud"), ("creatures", "ghost")] {
+      bring(app.buttons["specimenShape.\(first)"], in: scroller, below: belowNav)
+      try capture("22-specimen-\(group)")
+    }
+  }
+
   func testScreenshotTour() throws {
     try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the tour.")
     var app = launch()

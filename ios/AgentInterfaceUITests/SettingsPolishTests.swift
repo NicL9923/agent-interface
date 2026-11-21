@@ -151,9 +151,10 @@ import XCTest
     let name = app.textFields["Name"]
     XCTAssertTrue(name.waitForExistence(timeout: 5))
     name.typeWhenFocused("Feed tracker")
-    let cactus = app.buttons["avatarTile.shape.cactus"]
-    reveal(app, cactus)
-    cactus.tap()
+    // Near the top of the picker, so the open keyboard leaves it in reach.
+    let pebble = app.buttons["avatarTile.shape.pebble"]
+    reveal(app, pebble)
+    pebble.tap()
     app.buttons["creationNext"].tapWhenReady()
     app.buttons["creationCreate"].tapWhenReady()
     let failure = app.staticTexts["Feed tracker was created, but its avatar wasn't saved yet."]
@@ -162,8 +163,8 @@ import XCTest
     // The sheet now edits the created assistant on its Profile, its chosen look intact.
     XCTAssertTrue(app.navigationBars["Profile"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.navigationBars["Profile"].buttons["All settings"].exists)
-    reveal(app, cactus)
-    XCTAssertTrue(cactus.isSelected)
+    reveal(app, pebble)
+    XCTAssertTrue(pebble.isSelected)
     try capture("after-create-avatar-failed")
     app.buttons["retryAvatar"].tap()
     let created = app.buttons["bot.created-1"]
@@ -172,8 +173,8 @@ import XCTest
     created.tap()
     app.openAssistantSettings("Feed tracker")
     app.selectSettingsTab("Profile")
-    reveal(app, cactus)
-    XCTAssertTrue(cactus.wait(until: "selected == true"), "The retried avatar was saved")
+    reveal(app, pebble)
+    XCTAssertTrue(pebble.wait(until: "selected == true"), "The retried avatar was saved")
   }
   /// A new assistant that keeps the default look still owes its first avatar save after a failure.
   func testRetryingAFailedDefaultAvatarSendsItAgain() throws {

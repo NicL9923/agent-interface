@@ -134,7 +134,8 @@ import XCTest
       return (!top.exists || button.frame.minY >= top.frame.maxY) && (!bottom.exists || button.frame.maxY <= bottom.frame.minY)
     }
     func scrollTo(_ button: XCUIElement, up: Bool) {
-      for _ in 0..<12 {
+      // The shape picker holds 54 tiles, so a seasonal one is many short drags down.
+      for _ in 0..<40 {
         if clear(button) { return }
         let top = app.descendants(matching: .any)["avatarPreviewBar"]
         let bottom = app.descendants(matching: .any)["saveBar"]
