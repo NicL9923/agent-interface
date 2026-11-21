@@ -212,6 +212,13 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["a line of markers", "Title\n--", "Title\n", "Title\n-- and more"],
     ["a trailing marker run after a space", "Feed the **", "Feed the ", "Feed the ** now"],
     ["a lone pipe at the end", "Pick a |", "Pick a ", "Pick a | b"],
+    // The reviewer's case: GFM keeps a cell that holds only a nonbreaking space, so this header has two cells.
+    [
+      "a table header whose last cell is a nonbreaking space",
+      "Intro\n| A | \u00a0",
+      "Intro\n",
+      "Intro\n| A | \u00a0\n|-|-|\n",
+    ],
     // The reviewer's cases: a pipe on the line above, in code or a heading, does not stop a table there.
     [
       "a table header under a line with a pipe in code",

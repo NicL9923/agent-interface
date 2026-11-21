@@ -280,3 +280,11 @@ The exception asked only that the held last line become a table header under som
 | Break in `streaming-hold-back.ts`                                     | Old exception | New exception |
 | --------------------------------------------------------------------- | ------------- | ------------- |
 | `becomesHeader` no longer requires a leading pipe, so `Title` is held | Green         | Red           |
+
+### Third review 4. A cell holding only a nonbreaking space made the header flash
+
+`cellCount` trimmed the row with `trim()`, which removes a nonbreaking space. GFM trims only spaces and tabs, so `| A |  ` has two cells for GFM and had one for the count. The synthetic delimiter row then had too few cells, the parser found no table, and the header showed as raw text until its real delimiter row arrived. The count now trims spaces and tabs only.
+
+| Break                                          | Guarding test                                                 | Result |
+| ---------------------------------------------- | ------------------------------------------------------------- | ------ |
+| `trim()` back in `cellCount`, as on `e9f17cb2` | `holds a table header whose last cell is a nonbreaking space` | Red    |

@@ -169,7 +169,8 @@ type MdastNode = { type: string; children?: MdastNode[]; position?: { start: { l
  * A miscount only means the parser finds no table, so the line shows as typed.
  */
 function cellCount(row: string) {
-  const trimmed = row.trim();
+  // GFM trims spaces and tabs only, so a cell holding a nonbreaking space stays a cell.
+  const trimmed = row.replace(/^[ \t]+|[ \t]+$/g, "");
   const pipes = [...trimmed.matchAll(/(?<!\\)(?:\\\\)*\|/g)].map(
     (match) => match.index + match[0].length - 1,
   );
