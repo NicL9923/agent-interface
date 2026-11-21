@@ -105,3 +105,11 @@ A resize report skipped the measure when the turn's border box was within 0.5 px
 | Break                              | Guarding test                                                                         | Result                                               |
 | ---------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | The 0.5 px tolerance back in place | `measures again when turns above the reading line each grow by a fraction of a pixel` | Red: Question 30 stayed marked, Question 29 expected |
+
+### Review 2. A finished table row stayed hidden under a delimiter row without a leading pipe
+
+`| Day | Meal |\n--- | ---\n| Mon | Pasta |\n` is a table with one body row. Rule 4 asked only that the line above not start with `|`, so it read `| Mon | Pasta |` as a header. The new hold kept it hidden after its line ended. Main's rule 4 also hid it while it was the last line. Both holds now share `opensTable`: the line above must hold no `|` at all. That rules out a table row or delimiter row in either form. It also rules out prose with a pipe, whose header then shows as typed, as it did on main.
+
+| Break                                                                 | Result                                                                                                                                            |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opensTable` checks only that the line above does not start with `\|` | Red: the row under a delimiter row without a leading pipe, the row under a row without one, and the row still arriving under such a delimiter row |

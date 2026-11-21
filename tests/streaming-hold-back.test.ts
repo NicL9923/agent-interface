@@ -253,6 +253,19 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["a table header longer than the bound, once it ends", `| ${"Day | ".repeat(25)}\n`],
     ["a line starting with a pipe once the next line reads as prose", "| Day |\n- Saturday"],
     ["a table row under another row", "| Day |\n| --- |\n| Sat |\n"],
+    // The reviewer's case: a table whose delimiter row, or a row above, has no leading pipe.
+    [
+      "a table row under a delimiter row without a leading pipe",
+      "| Day | Meal |\n--- | ---\n| Mon | Pasta |\n",
+    ],
+    [
+      "a table row under a row without a leading pipe",
+      "| Day | Meal |\n|---|---|\nMon | Pasta\n| Tue | Soup |\n",
+    ],
+    [
+      "a table row still arriving under a delimiter row without a leading pipe",
+      "| Day | Meal |\n--- | ---\n| Mon | Pas",
+    ],
     ["a line starting with a pipe before a blank line", "| Day |\n\n"],
     [
       "a table header over a delimiter row longer than the bound",

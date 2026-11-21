@@ -27,7 +27,8 @@
  * 3. A link or image whose text or destination is still arriving. Its `[` must follow a space,
  *    the line start, `(`, `*` or a quote, so `arr[0` and a URL holding `[` show at once, unless
  *    `](` or `][` already makes it a link.
- * 4. A table header: a last line starting with `|` under a line that does not. Once it ends, it
+ * 4. A table header: a last line starting with `|` under a line with no `|` at all, so not a row or
+ *    delimiter row of a table above, in either form, and not prose holding a pipe. Once it ends, it
  *    stays held with the next line while that line holds only `|`, `:`, `-`, spaces and tabs, as
  *    a delimiter row does while it arrives. The first other character shows both lines. Only a
  *    header held while it was the last line stays held, so a line already shown never goes away.
@@ -76,8 +77,7 @@ export function streamingHoldBack(text: string): string {
     if (header !== undefined) return text.slice(0, header);
     const earliest = text.length - HOLD_LIMIT - lineStart;
     const cut =
-      markerLine.test(line) ||
-      (tableRow.test(line) && !tableRow.test(previousLine(text, lineStart).line))
+      markerLine.test(line) || opensTable(line, previousLine(text, lineStart).line)
         ? 0
         : inlineCut(line, earliest);
     if (cut === undefined || cut < earliest) return text;
@@ -109,11 +109,15 @@ function heldHeader(text: string, lineStart: number, line: string): number | und
   const header = previousLine(text, lineStart);
   return lineStart > 0 &&
     header.line.length <= HOLD_LIMIT &&
-    tableRow.test(header.line) &&
-    !tableRow.test(previousLine(text, header.start).line) &&
+    opensTable(header.line, previousLine(text, header.start).line) &&
     !sentenceEnd.test(header.line)
     ? header.start
     : undefined;
+}
+
+/** Whether `line` may be a table's header row: rule 4's shape, with no table or pipe on the line above. */
+function opensTable(line: string, above: string) {
+  return tableRow.test(line) && !above.includes("|");
 }
 
 /** Where an unfinished inline construct on the line starts, if one does. One pass over the line. */
