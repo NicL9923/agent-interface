@@ -3306,11 +3306,11 @@ import CryptoKit
     for (group, first) in [("classic", "blob"), ("objects", "cloud"), ("creatures", "ghost")] {
       bring(app.buttons["specimenShape.\(first)"], in: scroller, below: belowNav)
       try capture("22-specimen-\(group)")
+      // Home shows a blocked assistant's state in words, so the white mug's edged exclamation mark
+      // is checked in the specimen's state grid, which shows the tapped shape.
+      if group == "objects" { app.buttons["specimenShape.mug"].tapWhenReady() }
     }
-    // Home shows a blocked assistant's state in words, so the white mug's edged exclamation mark is
-    // checked here, in the specimen's state grid.
-    app.buttons["specimenShape.mug"].tapWhenReady()
-    bring(app.switches["Reduced motion"], in: scroller, below: belowNav)
+    for _ in 0..<12 where !app.switches["Reduced motion"].isHittable { scroller.swipeDown() }
     try capture("23-specimen-white-mug-states")
     app.swipeUp()
     try capture("23b-specimen-white-mug-states")

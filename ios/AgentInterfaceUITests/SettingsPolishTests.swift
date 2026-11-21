@@ -150,8 +150,8 @@ import XCTest
     app.tapNewAssistant()
     let name = app.textFields["Name"]
     XCTAssertTrue(name.waitForExistence(timeout: 5))
-    name.typeWhenFocused("Feed tracker")
-    // Near the top of the picker, so the open keyboard leaves it in reach.
+    // Return closes the keyboard, which would otherwise hide the picker.
+    name.typeWhenFocused("Feed tracker\n")
     let pebble = app.buttons["avatarTile.shape.pebble"]
     reveal(app, pebble)
     pebble.tap()
