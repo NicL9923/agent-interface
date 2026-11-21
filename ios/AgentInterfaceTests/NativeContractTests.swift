@@ -4387,8 +4387,11 @@ extension NativeContractTests {
     /// its conversation read, which waits for a draft with unsaved edits, went out after the network dropped.
     func testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        // Leaving saves the typed draft, so the chat bootstrap reopens has unsaved edits and waits for its draft.
+        // Leaving saves the typed draft. Once that save settles, the chat bootstrap reopens still holds an
+        // unsaved edit, so its conversation read waits for the draft.
         await value.select(nil)
+        try await until { value.draftSavesInFlight.isEmpty }
+        value.save(Draft(text: "Send this", attachments: [], dirty: true), value.key(.draft, "bot"))
         let before = conversationReads(server)
         let draft = "/api/bots/bot/draft"
         server.holdNext(draft)
