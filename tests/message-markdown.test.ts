@@ -23,8 +23,19 @@ import { mountRoot, stubMatchMedia } from "./ui-harness";
 type MdastNode = {
   type: string;
   children?: MdastNode[];
-  position?: { start: { offset?: number }; end: { offset?: number } };
+  position?: { start: { line: number } };
 };
+/** Whether `markdown` holds a table whose header row is the last line of `upTo`, as React Markdown's parser reads it. */
+function headedAt(markdown: string, upTo: string) {
+  const row = upTo.split(/\r\n|\r|\n/).length - 1;
+  const headed = (node: MdastNode): boolean =>
+    node.type === "table"
+      ? node.children?.[0]?.position?.start.line === row
+      : !!node.children?.some(headed);
+  return headed(
+    fromMarkdown(markdown, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }),
+  );
+}
 
 let container: HTMLDivElement;
 let root: Root;
@@ -509,34 +520,15 @@ describe("streaming Markdown", () => {
       const text = `See [docs][a] and [x][a b], note[^a].\n\nIntro.\n\n${body}`;
       const live = await renderAs(StreamingMarkdown, text);
       if (live === (await renderAs(MessageMarkdown, text))) continue;
-      // The one difference allowed: the hold-back held the reply's last line as a table header waiting for its
-      // delimiter row. That line starts with a pipe, ends the reply, sits under a line with no pipe, and the
-      // saved reply reads it as paragraph text, not code or a table.
+      // The one difference allowed: the hold-back held the reply's whole last line, and the parser reads that
+      // line as a table's header row once a delimiter row of some width follows it.
       const last = streamingBlocks(text)?.at(-1) ?? text;
       const held = last.slice(streamingHoldBack(last).length);
       const before = text.slice(0, text.length - held.length);
-      const above = before.slice(before.lastIndexOf("\n", before.length - 2) + 1);
-      // The kinds of node from the document down to the held line's first character.
-      const path: string[] = [];
-      for (
-        let node: MdastNode | undefined = fromMarkdown(text, {
-          extensions: [gfm()],
-          mdastExtensions: [gfmFromMarkdown()],
-        });
-        node;
-        node = node.children?.find(
-          ({ position }) =>
-            (position?.start.offset ?? Infinity) <= before.length &&
-            (position?.end.offset ?? -1) > before.length,
-        )
-      )
-        path.push(node.type);
       const header =
         before.endsWith("\n") &&
-        /^\|[^\n]*\n$/.test(held) &&
-        !above.includes("|") &&
-        path.includes("paragraph") &&
-        !path.some((type) => /^(code|table)/.test(type));
+        /^[^\n]*\n$/.test(held) &&
+        [1, 2, 3, 4, 5, 6].some((cells) => headedAt(`${text}|${"-|".repeat(cells)}`, text));
       if (!header || live !== (await renderAs(MessageMarkdown, before))) diverged.push(text);
     }
     expect(diverged).toEqual([]);

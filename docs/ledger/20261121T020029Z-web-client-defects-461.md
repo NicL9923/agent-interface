@@ -191,3 +191,31 @@ The hook does not count an unknown key while following, so Up at the top of a to
 ### Second review 4. The rail comment claimed more agreement than was measured
 
 My probe ran at a device pixel ratio of 1 with untransformed boxes. At a ratio of 1.25, the reviewer measured a box with `scaleY(1.003)`: it reported 60.375 px through `ResizeObserver` and about 60.556 px through `getBoundingClientRect()`. The comment now says the two agree only for an untransformed turn at a ratio of 1. Under zoom or a transform, every report measures again. This changed a comment only, so no test or red run applies.
+
+### Second review 2 and 3. The parser now decides which lines are table headers
+
+The hand-written rule for which lines a delimiter row would make a header was wrong three times across two reviews. It missed a delimiter row without a leading pipe, then a pipe on the line above, then a lazy line in a list item. The review found it wrong in both directions:
+
+- It hid body rows: `| Meal |\n:---\n| Soup |\n`, and `| Meal |\n|---|\nPasta\n| Soup |\n`.
+- It showed headers as raw text: under ``Use `|` as a separator.``, and under a heading with a pipe.
+- The seeded comparison accepted case 1127, `- item\nText **bold**\n| - | - |\n`. The list item's paragraph takes that line in, and no delimiter row can make it a table.
+
+`becomesHeader` in `streaming-hold-back.ts` now asks the parser. A line starting with `|` is a header when parsing the block with a delimiter row of as many cells appended gives a table whose header row is that line. The parser is `fromMarkdown` with the GFM extensions, imported as `MessageMarkdown.tsx` imports it. Both holds use it. A cell miscount only means no table, so the line shows as typed. A header without a leading pipe still shows as typed, as before.
+
+The seeded comparison's exception is now exact. Live and saved may differ only by a held last line that the parser reads as a table header under a delimiter row of 1 to 6 cells. The test runs the parser itself, apart from the hold-back's code. The exception applied to 9 of the seed's 1,500 replies. Case 1127 now shows its last line live.
+
+Cost, from `.agents/tools/streaming-parse-bench.test.ts` with a new reply ending in a table of about 3,600 characters, paced. The hold-back's share is rendering minus React Markdown's parsing. jsdom times are an upper bound for a browser.
+
+| Run                                      | Hand-written rule | Parser         | React Markdown parsing |
+| ---------------------------------------- | ----------------- | -------------- | ---------------------- |
+| Quiet host, one run each                 | 10 ms/s           | 32 ms/s        | 27 ms/s                |
+| Loaded host, three interleaved runs each | 29 to 33 ms/s     | 85 to 103 ms/s | 80 to 105 ms/s         |
+
+The parser adds about one more parse of the last block per update, only while that block's last line starts with `|`. The prose and code replies never reach it. A cache of the text above a known body row did not help here. Each update in the bench starts a new row, so the cache never hit, and I removed it.
+
+| Break                                                     | Result                                                                                                                                                            |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The previous commit's `streaming-hold-back.ts`            | Red: the header under a pipe in code, the header under a heading with a pipe, both body rows above, the list item's line, and the seeded comparison, on case 1127 |
+| The same, with the previous commit's seeded exception     | Green, so the old exception hid case 1127                                                                                                                         |
+| Any line starting with `\|` counts, without the parser    | Red: 12 hold-back cases and the seeded comparison                                                                                                                 |
+| Any table in the parse counts, not one headed at the line | Red: 11 hold-back cases and `renders a growing reply the same as the saved reply`                                                                                 |
