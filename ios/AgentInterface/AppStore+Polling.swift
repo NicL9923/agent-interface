@@ -223,6 +223,7 @@ extension AppStore {
     let currentGeneration = generation
     bootstrapReads += 1
     let bootstrapRead = bootstrapReads
+    let preferencesMark = preferenceSaves.mark
     do {
       let response: (value: Bootstrap?, etag: String?) = try await api.changed("/bootstrap?roster=lean", since: appliedBootstrapTag)
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
@@ -250,8 +251,12 @@ extension AppStore {
           }
         }
         if let previous = bootstrap, previous.user.id != value.user.id { leaveAccount() }
+        // A preferences save that overlapped this read may be newer than its copy, so the saved one stays.
+        // The read's tag is not kept then, so the next read applies its preferences even when unchanged.
+        let stalePreferences = !preferenceSaves.fresh(preferencesMark)
+        if stalePreferences, let previous = bootstrap { value.preferences = previous.preferences }
         if bootstrap != value { bootstrap = value; applied = true }
-        appliedBootstrapTag = response.etag
+        appliedBootstrapTag = stalePreferences ? nil : response.etag
       }
       // Publishing follows a changed roster; an unchanged one still renews the widgets' freshness.
       if !applied { publishWidgetSnapshot() }

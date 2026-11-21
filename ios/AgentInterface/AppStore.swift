@@ -171,6 +171,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var queuedChoices: Set<PreferenceChoice> = []
   /// Set when the server answered a save without the choice the person made, as one from before it does.
   var preferencesNotice: String?
+  /// Orders preference saves against bootstrap reads; see `PreferenceSaveOrder`.
+  @ObservationIgnored var preferenceSaves = PreferenceSaveOrder()
   /// This device's notification switch and onboarding card for the signed-in account.
   var deviceNotifications = DeviceNotificationState()
   var openedFile: PreviewFile?

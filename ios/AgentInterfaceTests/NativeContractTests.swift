@@ -1448,6 +1448,26 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(value.uploads.items.map(\.name), ["one.txt"])
     }
 
+    /// A bootstrap read that sampled the preferences before a save cannot put the older ones back, as
+    /// on the web (`preferenceQueue`'s `mark` and `fresh`). The rest of that read still applies, and
+    /// the next read brings another device's change, even one that matches the held read's body.
+    func testABootstrapReadThatOverlappedASaveKeepsTheSavedPreferences() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveETags(); server.hold("/api/bootstrap")
+        let read = Task { await value.refreshBootstrap() }
+        try await server.waitForHeld("/api/bootstrap")
+        var dark = try XCTUnwrap(value.bootstrap?.preferences); dark.theme = "dark"
+        let saved = await value.setPreferences(dark)
+        XCTAssertTrue(saved); XCTAssertEqual(value.bootstrap?.preferences.theme, "dark")
+        // The mock never stores a save, so the held read answers with the theme from before it.
+        server.addFamilyBot(); server.release("/api/bootstrap"); await read.value
+        XCTAssertEqual(value.bootstrap?.preferences.theme, "dark", "The read sampled the preferences before the save")
+        XCTAssertEqual(value.bootstrap?.bots.map(\.id), ["bot", "family"], "The rest of the read still applies")
+        // Another device then chooses the system theme again, which gives the held read's exact body.
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.preferences.theme, "system", "A clean read brings in another device's change")
+    }
+
     func testDelayedSendAndReviewedRetryCannotClearAnotherPersonsDraft() async throws {
         for retry in [false, true] {
             let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
