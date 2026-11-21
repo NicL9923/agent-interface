@@ -437,7 +437,12 @@ round's lists are the `ios-review2-*` files, run by
 [`ios-review2-run.sh`](../evidence/2026-11-19-connection-states/mutants/ios-review2-run.sh) with its
 tests added to `ios-tests.sh`; its view lines ran through the UI test in
 [`ios-review2-ui.sh`](../evidence/2026-11-19-connection-states/mutants/ios-review2-ui.sh). All 26 were
-caught.
+caught. The third review round's lists are the `ios-review3-*` files, run by
+[`ios-review3-run.sh`](../evidence/2026-11-19-connection-states/mutants/ios-review3-run.sh) with its
+tests added to `ios-tests.sh` and the tests it replaced taken out; the chat banner's lines ran through
+the unit test that hosts the chat view, and the settings lines through the UI test in
+[`ios-review3-ui.sh`](../evidence/2026-11-19-connection-states/mutants/ios-review3-ui.sh). 25 of 26
+were caught; the survivor is below.
 
 | File                                                              | Mutants | Result    |
 | ----------------------------------------------------------------- | ------- | --------- |
@@ -462,6 +467,14 @@ caught.
 | Review 2: `StoreRequests.swift`                                   | 3       | 3 caught  |
 | Review 2: `WidgetSync.swift`                                      | 4       | 4 caught  |
 | Review 2: `RootView.swift`, `GroupSettingsView.swift`, by UI test | 3       | 3 caught  |
+| Review 3: `AppStore+Polling.swift`                                | 11      | 11 caught |
+| Review 3: `AppStore+Conversation.swift`                           | 3       | 3 caught  |
+| Review 3: `AppStore.swift`                                        | 3       | 3 caught  |
+| Review 3: `WidgetSync.swift`, `BackgroundRefresh.swift`           | 2       | 2 caught  |
+| Review 3: `AgentInterfaceApp.swift`                               | 1       | 1 caught  |
+| Review 3: `CollaborationViews.swift`, `GroupSettingsView.swift`   | 2       | 2 caught  |
+| Review 3: `ConversationView.swift`, by the hosted view            | 2       | 1 caught  |
+| Review 3: `BotSettingsView.swift`, by UI test                     | 2       | 2 caught  |
 
 Survivors on the way, and what was done:
 
@@ -482,6 +495,14 @@ Survivors on the way, and what was done:
 - Review 2: no survivors. The `AppStore.swift` list first stopped before any mutation, because its
   unchanged run failed once; the same tests passed on the lists before and after it and when run alone,
   and the list then ran: 1 of 1.
+- Review 3: the banner's once-per-message guard survived. It matters only when the banner changes in
+  the same update that the chat appears, so `onAppear` reads the new message and `onChange` then
+  delivers it again; XCTest cannot place a change inside that update. It stays as the finding asked,
+  untested. The two group lists first stopped before any mutation, because their unchanged runs failed;
+  the whole `ios-tests.sh` list then passed unchanged, 77 of 77, and the two lists ran: 2 of 2. Not kept:
+  a mutant of `?? rosterFromCache` for an unchanged bootstrap, which is equivalent: a roster with stale
+  rows is always read whole, so never answered unchanged, and the one other cached roster, Hermes down
+  with nobody listed, keeps the rows it had, so the open chat is listed and the widgets see Hermes down.
 
 ### Checks
 
@@ -586,22 +607,59 @@ Also changed while here: `ConnectionStateFlowTests` loses the connection 20 seco
 with two waits widened to match. The first launch on a freshly booted simulator took 11 seconds and failed
 the tests' own guard that the chat opens before the loss, twice before any fix and once after.
 
+### Third review
+
+GPT-6.2 Sol, high effort, reviewed the second round's fixes from source at `2754114b`: seven P2 and two
+P3 findings. Each was reproduced against the real code before it was fixed, and all nine were fixed.
+Every test that compiles against `13e80c63`, the code before the fixes, went red there for the reason
+the finding gave; [`ios-review3-before-fix.out`](../evidence/2026-11-19-connection-states/mutants/ios-review3-before-fix.out)
+is that run: 8 unit tests with 29 failures, and the UI test. The tests for findings 2, 4 and 9 call
+what the fixes added, and the one for finding 8 hears the banner through the store's `announce`, which
+the old view never called; their red runs are the mutants that put the old behavior back.
+
+Findings 1 to 3 follow one decision from the orchestrator. A roster the server returns from its cache,
+while Hermes is down or after its roster read failed, with rows marked `disconnected`, can be stale
+either way (`src/server/hermes.ts`, `listBots`: a read a concurrent change overtook never updates
+`botCache`). So an assistant it leaves out has not been shown to leave. Home lists what the server
+lists, as the web does, but nothing is removed for it. A connected roster's omission is the word.
+
+| Finding                                                                                                                                                                               | Reproduced                                                                                                                                       | On main                                                                                                            | Fix                                                                                                                                                                                                                                                                                                                                                                                                  | Failing-first test                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. P2. A stale cached roster closed a chat the person still had: a fresh `[A, B]`, then a Hermes-down `[A]`, and B's chat closed with its saved copy, uploads and alerts.             | Yes, with exactly that sequence: the chat left, the draft was taken off screen, B's saved chat, recent entry, recording and widget row went.     | Partly. Main kept the roster whole while Hermes was down, but removed on a connected roster whose rows were stale. | `refreshBootstrap` marks a roster `cached` when Hermes is down or any row is `disconnected`. For it, an assistant left out goes into `unconfirmedDepartures` with its last row and nothing is cleared; `bot` falls back to that row, so the open chat stays on screen and is never blank. A connected roster removes what it leaves out, those departures included, through `leave` and the cleanup. | `testACachedRosterThatLeavesOutTheOpenChatKeepsItAndClearsNothing`, `testAStaleConnectedRosterThatLeavesOutTheOpenChatKeepsIt` (red before). `testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps` expected the saved chat cleared; it now expects it kept until Hermes answers, red before. |
+| 2. P2. On a shared iPad, member two's removal cleared member one's delivered alert for the same assistant.                                                                            | Yes, from source: the matcher read only the assistant in the link.                                                                               | No. Main cleared nothing on a removal; the second round brought it.                                                | `removeDeliveredChats` takes the account marker of the roster that removed. `NotificationController.isChat` matches a delivered alert only when its `account` is that marker, so one that names no account, as an oversized payload may not, stays.                                                                                                                                                  | `testARemovalClearsOnlyThisAccountsDeliveredNotificationsAndACachedRosterNone`, through the real matcher over four delivered alerts (mutant).                                                                                                                                                                       |
+| 3. P2. A background widget refresh could undo a removal, since pruning kept `generatedAt`; and a prune after the background one already removed B skipped Spotlight and the pictures. | Yes: the prune kept the snapshot's age, and the background read wrote any connected roster, stale rows included.                                 | The background read of a stale connected roster: yes. Pruning: no, the second round brought it.                    | No prune happens for a cached roster: the widgets, Spotlight, Siri's names and the pictures keep the last good snapshot whole. A connected roster writes a new snapshot dated now and syncs Spotlight and the pictures every time, so its `generatedAt` is the ordering a background read that began earlier already respects. The background read skips a roster with `disconnected` rows.          | `testACachedRosterLeavesTheSystemSurfacesWholeAndAConnectedOnePrunesThem` (replaces the second round's pruning test), `testABackgroundReadOfACachedRosterLeavesTheSnapshotAlone` (red before).                                                                                                                      |
+| 4. P2. With chat A's read failing while B's profile PATCH was on its way, the tools step of B's Save was refused.                                                                     | Yes: the UI test found Save disabled with "Reconnect to save your changes."; the refused tools step from source, `perform` checking `connected`. | No for the refusal. The disabled Save: yes, through `appUnavailable`.                                              | `perform` takes a required `gate`: `.openChat` for Stop, approvals and answers, `.household` for an assistant's settings. The 11 settings controls that read `connected`, Save among them, read `householdReachable`.                                                                                                                                                                                | `testAnAssistantsSettingsWaitForTheHouseholdNotTheOpenChat`, with the profile PATCH held while A's read fails (mutant); `ConnectionStateFlowTests.testOneChatsFailedReadsLeaveItsAssistantsSettingsSavable` (red before).                                                                                           |
+| 5. P2. An old session's refresh swallowed the new session's retry, and nothing read the failed chat again.                                                                            | Yes: a held stream refresh in account one, a switch, a failed first read in account two; its retry never read.                                   | No. Main had no session check, so the old loop read for the new session.                                           | `conversationRefreshAgain` holds the session that asked. The running loop reads next for that session and checks it, not its own.                                                                                                                                                                                                                                                                    | `testARetryTheNewSessionAsksForWhileTheOldSessionsRefreshRunsStillReads` (red before).                                                                                                                                                                                                                              |
+| 6. P3. A bootstrap that answered after the network dropped opened a chat and read it, and an automatic refresh sent its second request after an unchanged answer without checking.    | Yes, both: the offline bootstrap selected the chat and read its draft and conversation, and the second request went out offline.                 | Yes. Main checked no automatic read.                                                                               | `refreshConversation(automatic:)` checks `automaticReadAllowed` before each of its requests; the poll and the queued refresh pass their session. The bootstrap opens a chat nobody tapped only while automatic reads are allowed; the next bootstrap that answers chooses. Opening a chat, pull to refresh and Reconnect now stay immediate.                                                         | `testReadsInsideAnAutomaticRefreshAreCheckedAsEachSetsOut` (red before).                                                                                                                                                                                                                                            |
+| 7. P3. A history page read after a pull displaced the retry counted as a newer read, so a cancelled pull set no retry.                                                                | Yes: with the page failed and the pull cancelled, nothing waited.                                                                                | No. Main had no read retry.                                                                                        | `conversationRefreshes` counts full refreshes apart from the history pages in `conversationReads`; a cancelled refresh sets its retry again when no newer refresh set out.                                                                                                                                                                                                                           | `testAHistoryPageDoesNotKeepACancelledRefreshFromSettingItsRetryAgain` (red before).                                                                                                                                                                                                                                |
+| 8. P3. VoiceOver missed an error already on the banner as the chat appeared, because `onChange` does not fire for the initial value.                                                  | Yes, from source.                                                                                                                                | Yes. Main announced changes of `error` only.                                                                       | The chat announces the banner on appearance and on each change, once per message, through the store's `announce`.                                                                                                                                                                                                                                                                                    | `testAnErrorAlreadyOnTheBannerIsHeardOnceAsTheChatAppears`, which hosts `ConversationView` in a window (mutant).                                                                                                                                                                                                    |
+| 9. P3. Dropping `household: true` from group Send or a room's settings Save left every test green.                                                                                    | Yes: the lines were in private view methods no test reached.                                                                                     | Not applicable: the check is new.                                                                                  | The two writes are store actions, `sendGroupMessage` and `saveGroupContext`, that the views call.                                                                                                                                                                                                                                                                                                    | `testAGroupSendAndARoomsSettingsSaveCheckTheHouseholdBeforeTheyStart`: offline, nothing saved as pending and no POST; one chat's failed read, both post (mutant).                                                                                                                                                   |
+
+Also changed: `testAnOpenAssistantRemovedWhileHermesIsDownLeavesAndAReadOnItsWayCannotBringItBack` is now
+`…RemovedByAConnectedRoster…`, the same leave path through a connected roster. The second round's
+`testAnAssistantThatLeavesTakesItsDeliveredNotificationsWithIt` and `testAHermesDownRosterWithoutTheOpenChatLeavesItAndOpensNoOther`
+were replaced by the finding 1 and 2 tests, since the behavior they pinned is the one this round reverses.
+`ios/Parity.md` drops the difference that native closed such a chat while Hermes was down. One line written
+into the fix, dropping a departure a later cached roster listed again, was removed as equivalent: the roster
+row wins over the held one, and a connected roster's removal subtracts what it lists.
+
 ### Not done
 
-- No independent review of the second review round's fixes has run. The two reviews' findings are in
-  "Review" and "Second review" above.
-- `chatErrorBanner` and `activityRowShown` are tested in the store. The lines in
-  `ConversationView.swift` that read them, the banner's announcement and the activity row, have no UI
-  test: XCTest cannot hear VoiceOver, and the row's moment is a 1-second linger.
-- The household check is tested in `StoreRequestsTests`. The five `CollaborationViews.swift` call sites
-  that pass `household: true`, group create, Send, Stop, approvals and the room's settings, have no test
-  that can fail: the moment between a tap and its write cannot be reached from XCTest, since the button
-  is disabled once the connection is lost.
-- About 50 controls on household screens still read `connected`, which adds the open chat's failed read:
-  assistant settings (11), automations (18), experiences (9), vaults (5) and others. On main they did
-  the same through `appUnavailable`, which a failed chat read set. Each needs its own choice between the
-  chat and the household and its own UI check, a separate change out of proportion with this round.
-  Group creation and a room's settings, which the review named, were changed.
+- No independent review of the third review round's fixes has run. The three reviews' findings are in
+  "Review", "Second review" and "Third review" above.
+- `activityRowShown` is tested in the store; the activity row in `ConversationView.swift` that reads it
+  has no UI test, since the row's moment is a 1-second linger. The banner's announcement is now tested
+  through the hosted chat view and the store's `announce`; real VoiceOver was not run.
+- The household check of group create, Stop and approvals is tested in `StoreRequestsTests`, and their
+  three `CollaborationViews.swift` call sites still pass `household: true` with no test that fails when
+  it is dropped. Send and a room's settings Save, which the review named, are store actions with tests.
+- About 39 controls on household screens still read `connected`, which adds the open chat's failed read:
+  automations (18), experiences (9), vaults (5) and others. On main they did the same through
+  `appUnavailable`. Each needs its own choice and UI check. Assistant settings (11), which the review
+  named, now read `householdReachable`.
+- A delivered notification that names no account, as an oversized payload's fallback may not, is no
+  longer cleared when its assistant leaves, since it could be another member's. Opening a chat still
+  clears its delivered notifications for every account on the device (`viewing`), as on main.
 - A real phone, real VoiceOver and a real network: not run. Announcements were checked through the
   store's injected `announce`, and the network loss through the fixture.
 - iPad was not captured or run through the new UI tests. Its sidebar reads the same `listedActivity`

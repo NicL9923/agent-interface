@@ -1,0 +1,2 @@
+SURVIVED  '    guard visible, shown != announcedBanner else { return }' -> '    guard visible else { return }'
+1 of 2 mutations caught
