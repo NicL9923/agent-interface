@@ -539,7 +539,6 @@
         return ["id": id, "name": name, "model": "configured-model", "shared": true, "activity": activity, "avatar": avatar]
       }
     }
-    }
     nonisolated(unsafe) static let user: [String: Any] = [
       "id": "native-test", "name": "Local test member", "email": "test@localhost.invalid",
     ]
