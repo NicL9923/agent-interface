@@ -445,7 +445,17 @@ for (const view of VIEWS) {
           await step.reach(page);
           // The pointer leaves the control the step pressed last, which would otherwise read hovered at rest.
           await page.mouse.move(0, 0);
-          if (!prepared) await prepare(page);
+          if (!prepared) {
+            // A theme the member saved outranks the emulated scheme, and a light view read dark would pass unseen.
+            expect(
+              await page.evaluate(() => ({
+                theme: document.documentElement.dataset.theme,
+                dark: matchMedia("(prefers-color-scheme: dark)").matches,
+              })),
+              `${view.name} reads the scheme it emulates`,
+            ).toEqual({ theme: "system", dark: view.colorScheme === "dark" });
+            await prepare(page);
+          }
           prepared = true;
           const label = (state: string | null) =>
             [step.name, state ?? "at rest"].filter(Boolean).join(", ");

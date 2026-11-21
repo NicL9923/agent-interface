@@ -1,5 +1,11 @@
 import type { Page } from "@playwright/test";
-import { assistants, enableFullHermes, expect, failUploads } from "./fixtures.js";
+import {
+  assistants,
+  enableFullHermes,
+  expect,
+  failUploads,
+  type AllowedConsoleError,
+} from "./fixtures.js";
 
 /** One state of a screen, reached from the step before it in the same page. */
 export interface Step {
@@ -18,7 +24,7 @@ export interface StatefulScreen {
   before?: (page: Page) => Promise<void>;
   steps: Step[];
   /** Console errors the screen's own failure logs, such as the browser reporting a refused request. */
-  allowConsoleError?: RegExp[];
+  allowConsoleError?: AllowedConsoleError[];
 }
 
 const openChat = async (page: Page) => {
@@ -172,6 +178,12 @@ export const STATEFUL: StatefulScreen[] = [
           );
           await page.getByRole("button", { name: "Mute microphone" }).click();
           await expect(talk(page).getByRole("status")).toHaveText("Listening · muted");
+          await expect(talk(page).locator(".talk-captions")).toContainText(
+            "Is the north gate shut?",
+          );
+          await expect(talk(page).locator(".talk-captions")).toContainText(
+            "It is shut and latched.",
+          );
           await expect(talk(page).getByRole("alert")).toHaveText(
             "The voice service is busy. Talk keeps going.",
           );
@@ -210,14 +222,17 @@ export const STATEFUL: StatefulScreen[] = [
           await expect(page.locator(".talk-panel.talk-message.talk-error")).toHaveText(
             "The voice connection closed. Start Talk again.",
           );
+          await expect(
+            page.getByRole("button", { name: "Talk live with Ranch Hand" }),
+          ).toHaveAttribute("aria-pressed", "false");
         },
       },
     ],
   },
   {
     name: "a failed upload",
-    // Each failed upload's 507 is logged by the browser as a failed resource. Nothing else is excused.
-    allowConsoleError: [/status of 507/],
+    // The browser logs each upload Hermes refuses as a failed resource. Nothing else is excused.
+    allowConsoleError: [{ text: /status of 507/, url: /\/api\/bots\/ranch\/uploads$/ }],
     before: async () => {
       await failUploads();
     },
@@ -378,6 +393,7 @@ export const STATEFUL: StatefulScreen[] = [
         reach: async (page) => {
           await openSettings(page, "Behavior");
           await page.locator(".model-picker > summary").click();
+          await page.locator(".model-picker[open]").waitFor();
           await page.getByRole("button", { name: "Add GPT-5.5 mini to favorites" }).click();
           await page.locator(".model-favorites").waitFor();
           await expect(page.locator('.model-choice[data-unavailable="true"]')).toBeDisabled();
@@ -406,8 +422,12 @@ export const STATEFUL: StatefulScreen[] = [
           await page.locator(".settings-sheet[open]").waitFor({ state: "detached" });
           await openChat(page);
           await page.getByRole("button", { name: /^Model: GPT-5\.5\./ }).click();
-          await page.locator(".model-popover .inference-controls").waitFor();
-          await page.locator(".model-popover .model-choice").first().waitFor();
+          // The inference controls load after the popover opens, and the read must not start before them.
+          const popover = page.locator(".model-popover");
+          for (const control of ["Reasoning", "Speed"])
+            await expect(popover.getByRole("radiogroup", { name: control })).toBeVisible();
+          await expect(popover.getByRole("radio", { checked: true })).toHaveCount(2);
+          await expect(popover.locator('.model-choice[aria-pressed="true"]')).toBeVisible();
         },
       },
     ],
@@ -424,6 +444,7 @@ export const STATEFUL: StatefulScreen[] = [
           await openSettings(page, "Profile");
           const editor = page.locator(".avatar-editor");
           await editor.getByText("Mascot", { exact: true }).click();
+          await editor.getByRole("group", { name: "Character" }).waitFor();
           await editor.locator('input[type="color"]').fill("#3a7d44");
           await editor.getByRole("slider", { name: /Eye width/ }).press("ArrowRight");
           await editor.getByRole("button", { name: "Reset eyes" }).waitFor();
