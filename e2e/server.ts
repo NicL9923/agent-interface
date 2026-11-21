@@ -16,6 +16,7 @@ import {
   routineFixture,
   subscriptionFixture,
 } from "../tests/helpers/runtime-fixtures.js";
+import type { AutomationRequest, AutomationRequester } from "../src/shared/automation.js";
 import type { RoutineResult } from "../src/shared/collaboration.js";
 import type {
   Activity,
@@ -23,11 +24,11 @@ import type {
   LiveTurn,
   Message,
   ModelCatalog,
-  Preferences,
   Routine,
   Runtime,
   ToolCall,
 } from "../src/shared/types.js";
+import { defaultPreferences } from "../src/shared/types.js";
 import { controlPort, port } from "./ports.js";
 
 /**
@@ -244,13 +245,11 @@ const experienceRequest = experienceRequester({
 
 /**
  * After POST /full-hermes on the control port, until the next test starts, the runtime answers as a Hermes with the
- * add-on's settings, routines and live voice: the Ranch Hand has a model, a description, routines
- * that ran, a goal, tasks and a trigger. Off, those reads stay empty and the capabilities stay unsupported, so no
- * other test sees them. The model catalog, inference controls and automation overview answer either way, since only
- * screens these capabilities open read them.
+ * add-on's settings, routines and live voice: the Ranch Hand has a model, a description, routines that ran, a goal,
+ * tasks and a trigger. Off, every route answers as it did before the switch existed: the routines are empty, the
+ * capabilities unsupported, and the members in `fullHermesMembers` absent.
  */
-let fullHermes = false,
-  preferencesBeforeFullHermes: Preferences | undefined;
+let fullHermes = false;
 /** After POST /upload-failure, Hermes refuses every upload, as one that ran out of space would, until the next test starts. */
 let uploadsFail = false;
 const fullBot = (bot: Bot): Bot =>
@@ -360,7 +359,7 @@ const modelCatalog: ModelCatalog = {
     { id: "anthropic", name: "Anthropic", authenticated: false, models: [] },
   ],
 };
-const automationRequest = automationRequester({
+const scriptedAutomation = automationRequester({
   overview: (input) =>
     automationOverviewFixture({
       botId: input.profile,
@@ -476,19 +475,10 @@ const runtime: Runtime = {
     }),
   listBots: async () => (fullHermes ? bots.map(fullBot) : bots),
   experienceRequest,
-  automationRequest,
   botDetail: async (botId) => {
     const bot = bots.find((row) => row.id === botId)!;
     return fullHermes ? fullBot(bot) : bot;
   },
-  modelOptions: async () => modelCatalog,
-  inferenceSettings: async () => ({ reasoning: "medium", speed: "normal" }),
-  realtimeSession: async ({ voice }) => ({
-    clientSecret: "ek_e2e",
-    expiresAt: Math.floor(Date.now() / 1000) + 60,
-    model: "gpt-realtime",
-    voice,
-  }),
   conversation: async (botId) => {
     const turn =
       botId === STREAMING && running?.thread === messages.get(botId) ? running : undefined;
@@ -513,17 +503,6 @@ const runtime: Runtime = {
   },
   routines: async (botId) =>
     fullHermes ? routines.filter((routine) => !botId || routine.botId === botId) : [],
-  routineResults: async (_botId, routineId) => (fullHermes ? (routineRuns[routineId] ?? []) : []),
-  routineOutput: async (_botId, routineId, resultId) => ({
-    previewOnly: false,
-    messages: [
-      {
-        id: `${resultId}-output`,
-        role: "assistant",
-        text: routineRuns[routineId]?.find((run) => run.id === resultId)?.preview ?? "",
-      },
-    ],
-  }),
   discoverEvents: async (cursor) => ({ cursor, events: [] }),
   lookupSubmission: async () => null,
   // The user's message lands at once. The reply lands a beat later, each announced the way Hermes announces it.
@@ -588,8 +567,44 @@ const runtime: Runtime = {
   close: async () => {},
 };
 
+/**
+ * Runtime members only a full Hermes has. The app checks each one's presence, so with the switch off they are absent,
+ * and every route answers as it does on a Hermes without them.
+ */
+const fullHermesMembers = {
+  automationRequest: ((input: AutomationRequest) => {
+    // As an add-on without approval settings refuses them; the server reads this code as unsupported.
+    if (input.operation.startsWith("approval_"))
+      throw httpError(409, "This Hermes add-on can't list always-allowed commands.", {
+        code: "approval_settings_unsupported",
+      });
+    return scriptedAutomation(input);
+  }) as AutomationRequester,
+  modelOptions: async () => modelCatalog,
+  inferenceSettings: async () => ({ reasoning: "medium" as const, speed: "normal" as const }),
+  realtimeSession: async ({ voice }) => ({
+    clientSecret: "ek_e2e",
+    expiresAt: Math.floor(Date.now() / 1000) + 60,
+    model: "gpt-realtime",
+    voice,
+  }),
+  routineResults: async (_botId, routineId) => routineRuns[routineId] ?? [],
+  routineOutput: async (_botId, routineId, resultId) => ({
+    previewOnly: false,
+    messages: [
+      {
+        id: `${resultId}-output`,
+        role: "assistant",
+        text: routineRuns[routineId]?.find((run) => run.id === resultId)?.preview ?? "",
+      },
+    ],
+  }),
+} satisfies Partial<Runtime>;
+for (const [name, member] of Object.entries(fullHermesMembers))
+  Object.defineProperty(runtime, name, { get: () => (fullHermes ? member : undefined) });
+
 const violations: unknown[] = [];
-const { app, store } = await createApp(
+const { app, store, snapshot } = await createApp(
   loadConfig({
     LOCAL_DEV_AUTH: "true",
     APP_DATABASE: ":memory:",
@@ -675,8 +690,10 @@ const control = createServer((req, res) => {
     nextRelease = "none";
     admissionDelay = 0;
     groupCatalog = false;
-    // A full Hermes's screens save this member's choices, such as a pinned or main assistant, which stay in the store.
-    if (fullHermes) store.savePreferences("local-one", preferencesBeforeFullHermes!);
+    // Every member starts from the default preferences, so a theme, a pin or a chat style one test saved never
+    // reaches the next.
+    for (const user of store.users())
+      store.savePreferences(user.id, structuredClone(defaultPreferences));
     fullHermes = false;
     uploadsFail = false;
     bots.splice(0, bots.length, ...initialBots.map((bot) => ({ ...bot })));
@@ -686,10 +703,7 @@ const control = createServer((req, res) => {
         store.saveDraft("local-one", bot.id, { text: "", attachments: [] });
   }
   if (req.method === "POST" && req.url === "/group-catalog") groupCatalog = true;
-  if (req.method === "POST" && req.url === "/full-hermes" && !fullHermes) {
-    preferencesBeforeFullHermes = store.preferences("local-one");
-    fullHermes = true;
-  }
+  if (req.method === "POST" && req.url === "/full-hermes") fullHermes = true;
   if (req.method === "POST" && req.url === "/upload-failure") uploadsFail = true;
   if (req.method === "POST" && req.url === "/release-chat") running?.finish();
   if (req.method === "POST" && req.url?.startsWith("/activity")) {
@@ -701,6 +715,9 @@ const control = createServer((req, res) => {
     admissionDelay = Number(new URL(req.url, "http://localhost").searchParams.get("ms")) || 0;
   if (req.method === "POST" && req.url?.startsWith("/next-release"))
     nextRelease = req.url.endsWith("?install=fail") ? "broken" : "ready";
+  // Bootstrap reuses the runtime's roster and capabilities for 1.5 s. Each switch changes what the runtime answers,
+  // so the next bootstrap reads it again instead of serving what it read before.
+  if (req.method !== "GET") snapshot.invalidate();
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify(req.method === "GET" && req.url === "/uploads" ? uploads : violations));
 });
