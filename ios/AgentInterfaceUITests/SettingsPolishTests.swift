@@ -26,21 +26,30 @@ import XCTest
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
-  /// Scrolls the list until `element` can be tapped, with short drags in the list's leading gutter as
-  /// NativeFlowTests does. A swipe from the middle of Profile can start on an eye slider, which takes
-  /// the drag: the setting changes and the list stays put, so every later swipe lands there too.
+  /// Scrolls the list until all of `element` shows between the navigation bar and the Save changes bar,
+  /// with short drags in the list's leading gutter as NativeFlowTests does. A swipe from the middle of
+  /// Profile can start on an eye slider, which takes the drag: the setting changes and the list stays
+  /// put, so every later swipe lands there too. A row half under the navigation bar still reads as
+  /// hittable, but a tap on it lands on the bar.
   private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
     let save = app.buttons["saveChanges"]
     let unsaved = save.exists && save.isEnabled
+    func band() -> (top: CGFloat, bottom: CGFloat) {
+      let top = app.navigationBars.allElementsBoundByIndex.filter(\.hasFrame).map(\.frame.maxY).max() ?? 0
+      return (top, save.hasFrame ? save.frame.minY : app.frame.maxY)
+    }
     for _ in 0..<15 {
-      if element.exists && element.canTap { break }
+      let (top, bottom) = band()
+      if element.canTap && element.frame.minY >= top && element.frame.maxY <= bottom { break }
+      let upward = element.hasFrame ? element.frame.maxY > bottom : up
       let surface = app.collectionViews.firstMatch
-      let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: up ? 0.7 : 0.3)).withOffset(CGVector(dx: 4, dy: 0))
-      let distance = surface.frame.height * 0.35 * (up ? -1 : 1)
+      let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: upward ? 0.7 : 0.3)).withOffset(CGVector(dx: 4, dy: 0))
+      let distance = surface.frame.height * 0.35 * (upward ? -1 : 1)
       start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)), withVelocity: .slow, thenHoldForDuration: 0.2)
       guard (save.exists && save.isEnabled) == unsaved else { XCTFail("Scrolling to \(element) changed a setting"); return }
     }
-    XCTAssertTrue(element.canTap, "\(element) never became hittable")
+    let (top, bottom) = band()
+    XCTAssertTrue(element.canTap && element.frame.minY >= top && element.frame.maxY <= bottom, "\(element) never showed in full")
   }
   private func waitFor(_ format: String, _ element: XCUIElement, timeout: TimeInterval = 5) {
     expectation(for: NSPredicate(format: format), evaluatedWith: element)
