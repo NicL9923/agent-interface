@@ -1910,6 +1910,189 @@ describe("scroll intent", () => {
   });
 });
 
+// A key counts as the reader scrolling only when it scrolls the transcript. What Chromium and WebKit do with
+// each key here was checked in both browsers: see docs/ledger/20261121T020029Z-web-client-defects-461.md.
+describe("keys pressed inside the transcript", () => {
+  // The transcript grows 500 px with each message, in a 300 px view.
+  const height = () => 500 * container.querySelectorAll(".transcript [data-message-id]").length;
+  // The approval's command box, when a test gives it more lines than it shows.
+  let command = { scrollTop: 0, scrollHeight: 0 };
+  beforeEach(() => {
+    command = { scrollTop: 0, scrollHeight: 0 };
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+      return this.classList.contains("transcript")
+        ? height()
+        : this.classList.contains("approval-command")
+          ? command.scrollHeight
+          : 0;
+    });
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+      return this.classList.contains("transcript")
+        ? 300
+        : this.classList.contains("approval-command")
+          ? 120
+          : 0;
+    });
+  });
+  const press = (target: Element, key: string, init: KeyboardEventInit = {}) =>
+    act(async () =>
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
+      ),
+    );
+  let added = 0;
+  /** Whether the transcript is still at the end once another message arrives. */
+  async function follows() {
+    conversation = {
+      ...conversation,
+      messages: [...conversation.messages, answer(`more-${++added}`, "More")],
+    };
+    await changed();
+    return container.querySelector<HTMLElement>(".transcript")!.scrollTop === height();
+  }
+  /** Opens the chat at the latest message, then an approval arrives, and its menu takes focus. */
+  async function openMenu() {
+    conversation = {
+      ...conversation,
+      messages: [prompt("q", "Clean the build"), answer("a", "Asking first.")],
+    };
+    await render();
+    conversation = {
+      ...conversation,
+      approvals: [
+        {
+          id: "wipe",
+          title: "Action approval",
+          detail: "recursive delete",
+          command: "rm -rf ./build",
+          status: "pending",
+          choices: ["once", "session", "always", "deny"],
+          patterns: ["recursive delete"],
+        },
+      ],
+    };
+    await changed();
+    await act(async () => labelled("More choices").click());
+    const item = container.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+    await act(async () => item.focus());
+    return item;
+  }
+
+  // The reported case. The menu leaves Up, Down, Home, End and the page keys to the browser, which scrolls
+  // the transcript with them, so they still count.
+  it("hears Up in the approval card's menu as the reader scrolling", async () => {
+    await press(await openMenu(), "ArrowUp");
+    expect(await follows()).toBe(false);
+  });
+
+  it("does not hear Space or Shift Space on a button as scrolling, since it presses the button", async () => {
+    await press(await openMenu(), " ", { shiftKey: true });
+    expect(await follows()).toBe(true);
+    // A summary opens with Space too.
+    const summary = document.createElement("summary");
+    summary.tabIndex = 0;
+    container.querySelector(".approval-card")!.append(summary);
+    await press(summary, " ", { shiftKey: true });
+    expect(await follows()).toBe(true);
+  });
+
+  it("does not hear a key the command box scrolls with, until the box is at that end", async () => {
+    await openMenu();
+    const box = container.querySelector<HTMLElement>(".approval-command")!;
+    // The stylesheet's max-height and overflow, which jsdom does not load.
+    box.style.overflowY = "auto";
+    command.scrollHeight = 400;
+    command.scrollTop = 80;
+    vi.spyOn(box, "scrollTop", "get").mockImplementation(() => command.scrollTop);
+    await press(box, "ArrowUp");
+    expect(await follows()).toBe(true);
+    // At its top, the browser passes Up on to the transcript.
+    command.scrollTop = 0;
+    await press(box, "ArrowUp");
+    expect(await follows()).toBe(false);
+  });
+});
+
+describe("a key a control inside the transcript handles", () => {
+  let hook!: ReturnType<typeof useConversation>;
+  let handled: string[] = [];
+  const Harness = () => {
+    hook = useConversation("shared", "one");
+    return createElement(
+      "div",
+      { className: "transcript", ref: hook.scroll },
+      createElement(
+        "div",
+        { ref: hook.content },
+        hook.conversation?.messages.map((message) =>
+          createElement(
+            "article",
+            { key: message.id, "data-message-id": message.id },
+            message.text,
+          ),
+        ),
+        // A list that moves its selection with Up and Down, as a listbox does.
+        createElement("div", {
+          role: "listbox",
+          tabIndex: 0,
+          onKeyDown: (event: KeyboardEvent) => {
+            if (!handled.includes(event.key)) return;
+            event.preventDefault();
+          },
+        }),
+        createElement("input", { "aria-label": "Note" }),
+      ),
+    );
+  };
+  beforeEach(() => {
+    handled = [];
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+      return this.classList.contains("transcript")
+        ? 500 * container.querySelectorAll("[data-message-id]").length
+        : 0;
+    });
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(300);
+  });
+  const show = (messages: Message[]) =>
+    act(async () =>
+      hook.setConversation({ ...conversation, messages, draft: null, readPosition: null }),
+    );
+  const atEnd = () => {
+    const transcript = container.querySelector<HTMLElement>(".transcript")!;
+    return transcript.scrollTop === transcript.scrollHeight;
+  };
+
+  it("hears it as scrolling only when the control left it to the browser", async () => {
+    await act(async () => root.render(createElement(Harness)));
+    await show([prompt("q", "Hello"), answer("a", "Hi")]);
+    const list = container.querySelector('[role="listbox"]')!;
+    handled = ["ArrowUp"];
+    list.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }),
+    );
+    await show([...hook.conversation!.messages, answer("b", "More")]);
+    expect(atEnd()).toBe(true);
+    // Home it leaves alone, so the browser scrolls the transcript to its top.
+    list.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }),
+    );
+    await show([...hook.conversation!.messages, answer("c", "Even more")]);
+    expect(atEnd()).toBe(false);
+  });
+
+  it("does not hear Up in a field as scrolling, since the field moves its caret", async () => {
+    await act(async () => root.render(createElement(Harness)));
+    await show([prompt("q", "Hello"), answer("a", "Hi")]);
+    container
+      .querySelector("input")!
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }),
+      );
+    await show([...hook.conversation!.messages, answer("b", "More")]);
+    expect(atEnd()).toBe(true);
+  });
+});
+
 describe("send anchor", () => {
   // Rows sit at fixed offsets in the transcript; the view's scrollTop moves them.
   const layout = (positions: Record<string, number>) => {
