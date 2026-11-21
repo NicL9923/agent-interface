@@ -327,7 +327,7 @@ struct ApprovalDecisionView: View {
 /// tap is lost, so this view compares equal and keeps the menu it first built.
 private struct ApprovalMoreChoices: View, Equatable {
   var alwaysAllow: () -> Void
-  static func == (_: Self, _: Self) -> Bool { true }
+  nonisolated static func == (_: Self, _: Self) -> Bool { true }
   var body: some View {
     Menu {
       Button("Always allow…", action: alwaysAllow)
