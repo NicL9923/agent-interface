@@ -576,6 +576,46 @@ describe("Hermes adapter trust and recovery boundary", () => {
     deferredMethods.delete("profiles.list");
     expect((await runtime.listBots())[0].id).toBe("new");
   });
+  // A native change arrives while a roster read is out. That read is not reused, but it is the latest
+  // roster Hermes gave, so an outage lists it rather than the one before it.
+  it("lists the latest roster during an outage, though a change arrived while it was read", async () => {
+    deferredMethods.add("profiles.list");
+    const read = () =>
+      calls.filter((call) => call.method === "profiles.list") as Record<string, any>[];
+    const settled = runtime.listBots();
+    await vi.waitFor(() => expect(read()).toHaveLength(1));
+    sockets[0].receive({ id: read()[0].id, result: { profiles: [{ name: "old" }] } });
+    await settled;
+    const change = () =>
+      sockets[0].receive({
+        method: "event",
+        params: { session_id: "", type: "sessions.changed", payload: {} },
+      });
+    change();
+    const pending = runtime.listBots();
+    await vi.waitFor(() => expect(read()).toHaveLength(2));
+    change();
+    sockets[0].receive({
+      id: read()[1].id,
+      result: { profiles: [{ name: "old" }, { name: "new" }] },
+    });
+    await pending;
+    // Two reads, each cut short by a change, answer out of order: the one that began last still wins.
+    change();
+    const earlier = runtime.listBots();
+    await vi.waitFor(() => expect(read()).toHaveLength(3));
+    change();
+    const later = runtime.listBots();
+    await vi.waitFor(() => expect(read()).toHaveLength(4));
+    change();
+    sockets[0].receive({ id: read()[3].id, result: { profiles: [{ name: "latest" }] } });
+    await later;
+    sockets[0].receive({ id: read()[2].id, result: { profiles: [{ name: "stale" }] } });
+    await earlier;
+    rpcErrors.set("profiles.list", { code: -1, message: "Offline" });
+    deferredMethods.delete("profiles.list");
+    expect((await runtime.listBots()).map((bot) => bot.id)).toEqual(["latest"]);
+  });
   it("reuses a settled roster read briefly, until Hermes reports a change", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const reads = () => calls.filter((call) => call.method === "profiles.list").length;
