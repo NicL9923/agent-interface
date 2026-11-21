@@ -29,7 +29,8 @@
  *    the line start, `(`, `*` or a quote, so `arr[0` and a URL holding `[` show at once, unless
  *    `](` or `][` already makes it a link.
  * 4. A table header: a last line starting with `|` that React Markdown's parser would read as a table's
- *    header row once a delimiter row followed it. So a row of a table above is not one, nor a line a list
+ *    header row once a delimiter row followed it, and that never read as a finished sentence on the way,
+ *    so `| Name | No. |` shows as typed. So a row of a table above is not one, nor a line a list
  *    item's paragraph takes in. Once it ends, it stays held with the next line while that line holds only
  *    `|`, `:`, `-`, spaces and tabs, as a delimiter row does while it arrives. The first other character
  *    shows both lines. Only a header held while it was the last line stays held, so a line already
@@ -67,6 +68,8 @@ const opensAfter = {
 };
 // A line that ends a sentence, with any closing quote or bracket after its full stop.
 const sentenceEnd = /[.!?\u3002\uff01\uff1f]["')\]\u2019\u201d]*[ \t]*$/;
+// Some prefix of a line that holds one of these read as a finished sentence, and showed.
+const endedSentence = /[.!?\u3002\uff01\uff1f]/;
 // Without a segmenter a cut cannot be proved to fall between characters, so nothing is held.
 const graphemes =
   typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
@@ -83,7 +86,7 @@ export function streamingHoldBack(text: string): string {
     if (header !== undefined) return cutAt(text, header);
     const earliest = text.length - HOLD_LIMIT - lineStart;
     const cut =
-      markerLine.test(line) || becomesHeader(text, lineStart) ? 0 : inlineCut(line, earliest);
+      markerLine.test(line) || heldAsHeader(text, lineStart) ? 0 : inlineCut(line, earliest);
     if (cut === undefined || cut < earliest) return text;
     // Only quote and list markers stay before the cut, so the hold hides everything the line says.
     if (containerPrefix.exec(line)![0].length >= cut && sentenceEnd.test(line)) return text;
@@ -117,10 +120,17 @@ function heldHeader(text: string, lineStart: number, line: string): number | und
   const header = previousLine(text, lineStart);
   return lineStart > 0 &&
     header.line.length <= HOLD_LIMIT &&
-    !sentenceEnd.test(header.line) &&
-    becomesHeader(text.slice(0, header.start + header.line.length), header.start)
+    heldAsHeader(text.slice(0, header.start + header.line.length), header.start)
     ? header.start
     : undefined;
+}
+
+/**
+ * Whether rule 4 holds the last line of `text`, which starts at `start`, as a table header. It holds a line
+ * only if no prefix of it ended a sentence, since the hold drops such a line and it would then show and go.
+ */
+function heldAsHeader(text: string, start: number) {
+  return !endedSentence.test(text.slice(start)) && becomesHeader(text, start);
 }
 
 /**

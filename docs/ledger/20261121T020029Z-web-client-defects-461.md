@@ -230,3 +230,22 @@ On `9f6f7d9b`:
 | `npx vitest run`, under `linux-heavy-lock.sh`                                                 | 229 files, 4,224 tests passed |
 | `npm run build`, then `e2e/contained-scroll.spec.ts` and `e2e/live-reply.spec.ts` in Chromium | 11 passed                     |
 | The same two specs in WebKit, in `mcr.microsoft.com/playwright:v1.65.0-noble`                 | 11 passed                     |
+
+## Third review fixes
+
+A third review of `b9d6d0a0..fc002507` found five things. One was declined. Each of the other four is its own commit on top of `fc002507`.
+
+### Left as a follow-up: a key that ends the anchor in Chromium, where nothing scrolled
+
+In the gate-log fixture, Page Down from the end of the tool output scrolls nothing in Chromium, yet it ends the send's anchor, because the hook counts that unknown key while an anchor is on. If the viewport then grows and shrinks while the reply streams, from 1280 × 720 to 1280 × 1150 to 1280 × 650, the transcript jumps from 51 px to 403 px and hides the sent message. The client at `b9d6d0a0`, or the same steps without the key, returns to 51 px. Main counts every key, so main ends the anchor on that key too and makes the same jump. Telling a key that scrolled from one that did not, in a box the two engines treat differently, needs the hook to confirm the key against the transcript's own movement. That is a larger change to the follow logic than this task carries, so it is left for a follow-up.
+
+### Third review 1. A header showed, went away, then came back as a table
+
+After ``Use `|` as a separator.``, the line `| Name | No.` read as a finished sentence at `No.`, so the hold dropped and the line showed. The closing ` |` made it a header candidate again, and the hold hid the whole line until the delimiter row made it a table. A line now counts as a header only if no prefix of it ended a sentence: it holds none of `.`, `!`, `?`, `。`, `！` or `？`. Such a header shows as typed until its delimiter row arrives.
+
+The prefix property test did not catch this. It checked that a shown line never goes away only for a header held over its delimiter row, two lines, and not for a header held alone as the last line. It now checks every hold that hides a whole line starting with `|`: none of that line may have shown, apart from spaces, one character earlier. That check is limited to header holds. The same check over every rule finds 171 cases on `fc002507` where an opener at a line's start showed as a finished sentence and was then held again. That behavior predates this work and is outside it. The reviewer's reply is now one of the test's fixed replies.
+
+| Break                                                        | Result                                                                                                                                                        |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fc002507`'s `streaming-hold-back.ts`                        | Red: the prefix property test ("hid a shown line", the reviewer's reply first) and `keeps showing a header that read as a finished sentence while it arrived` |
+| The header check tests only the last line's own sentence end | Red: the same two                                                                                                                                             |
