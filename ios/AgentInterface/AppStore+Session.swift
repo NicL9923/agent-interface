@@ -109,13 +109,22 @@ extension AppStore {
       let (code, pkce) = try await authorize(api: api)
       let result: TokenExchange = try await api.publicWrite(
         "/auth/native/exchange", ["code": code, "state": pkce.state, "codeVerifier": pkce.verifier])
-      guard generation == authGeneration else { return }
-      try SecureToken.save(result.token, host: api.baseURL.absoluteString)
-      // Another member: the last one's account goes before the new token is in place, so nothing of
-      // theirs, such as a failed settings save or an unsaved draft, can be sent under it. The same
-      // member keeps their draft and failed save, as after any expired sign-in.
-      if let previous = bootstrap?.user.id, previous != result.user.id { leaveAccount() }
-      api.token = result.token
+      guard generation == authGeneration, self.api === api else { return }
+      // Each sign-in gets its own client, and the last one is retired: work started under it can no
+      // longer send, and its late answers cannot touch this session. Another member also takes over
+      // an account the last one leaves, so nothing of theirs, such as a failed settings save or an
+      // unsaved draft, stays to be sent. The same member keeps their draft and failed save.
+      if let previous = bootstrap?.user.id, previous != result.user.id {
+        // While the last member's token still works, as in the minute before it expires, it ends their
+        // session here, which also releases this device's push registration for them.
+        await revokeSession(api)
+        guard generation == authGeneration, self.api === api else { return }
+        try SecureToken.save(result.token, host: api.baseURL.absoluteString)
+        leaveAccount(nextToken: result.token)
+      } else {
+        try SecureToken.save(result.token, host: api.baseURL.absoluteString)
+        replaceClient(token: result.token)
+      }
       sessionExpired = false
       renewalAttemptedAt = nil
       UserDefaults.standard.set(
@@ -199,10 +208,16 @@ extension AppStore {
   /// server-side session stays valid until it expires.
   @discardableResult func signOut(localOnly: Bool = false) async -> Bool {
     persistDraft()
+    // A sign-out ends the session it started on. If another sign-in replaced it meanwhile, this one
+    // has nothing left to end and must not clear the new one.
+    let started = api
     await awaitDesktopCleanup()
+    guard api === started else { return false }
+    var replaced = false
     if let api, api.token != nil {
       var revoked = true
       do { let _: EmptyResponse = try await api.write("/auth/logout", [String: String]()) } catch {
+        if error is CancellationError || self.api !== api { return false }
         // A session the server already rejected has nothing left to revoke.
         if !((error as? APIError)?.isSessionExpired ?? false) { revoked = false }
         if !revoked && !localOnly {
@@ -211,30 +226,66 @@ extension AppStore {
           return false
         }
       }
+      guard self.api === api else { return false }
       clearOfflineLibrary()
       try? SecureToken.save(nil, host: api.baseURL.absoluteString)
       UserDefaults.standard.removeObject(forKey: DeviceDefaults.signedInScope)
-      api.token = nil
-      api.csrf = nil
+      replaceClient(token: nil)
+      replaced = true
       if !revoked {
         self.error =
           "Signed out on this device only. The server could not be reached, so this device's session stays valid there until it expires, and notifications may still be delivered. Sign in on that server again to revoke it."
       }
     }
+    // Work the signed-out session started holds its client; retired, it can send nothing more.
+    if !replaced { replaceClient(token: nil) }
     stopPolling()
     resetAccountContent()
     return true
   }
   /// Leaves the signed-in account for another member's: drops its offline copy, keeps the open draft on
-  /// this device under that account's name, then clears what it owns.
-  func leaveAccount() {
+  /// this device under that account's name, hands the server a new client signed in with `nextToken`,
+  /// then clears what the account owns.
+  func leaveAccount(nextToken: String?) {
     clearOfflineLibrary()
     persistDraft()
+    replaceClient(token: nextToken)
     resetAccountContent()
+  }
+  /// The one way a sign-in changes on a client: the store gets a new client for `token`, and the old one
+  /// is retired with every request still waiting on it. The change streams it held close, and the poll
+  /// loop opens them again on the new client.
+  func replaceClient(token: String?) {
+    guard let previous = api else { return }
+    stopStream()
+    api = previous.successor(token: token)
+    previous.retire()
+  }
+  /// Ends `client`'s server session, if it still has a token, waiting at most `revokeWait`. Unreachable
+  /// or already expired, it leaves the server to end the session when it expires.
+  func revokeSession(_ client: APIClient) async {
+    guard client.token != nil else { return }
+    let wait = revokeWait
+    await withTaskGroup(of: Void.self) { group in
+      group.addTask { @MainActor in let _: EmptyResponse? = try? await client.write("/auth/logout", [String: String]()) }
+      group.addTask { try? await Task.sleep(for: wait) }
+      _ = await group.next()
+      group.cancelAll()
+    }
   }
   /// Every account boundary clears the same account-owned content and async request identities.
   func resetAccountContent() {
     cachedChats.removeAll()
+    declinedApprovals = [:]
+    leftBotId = nil
+    deletedBotId = nil
+    openedFile = nil
+    retryAttempt = nil
+    focusedMessage = nil
+    conversationRefreshedAt = nil
+    earlierFilesFailure = nil
+    endPresence()
+    preferenceSaves = PreferenceSaveOrder()
     interruptionReviewed = false
     NotificationController.shared.clearPendingNavigation()
     draftTask?.cancel()
@@ -271,6 +322,9 @@ extension AppStore {
     resetPreferenceSaves()
     listenRequest = nil
     routineResult = nil
+    replyWatch = nil
+    failures = 0
+    forgetSentEchoes()
   }
   /// Returns false when the server could not be reached to revoke the session. The caller
   /// then asks before repeating with `localOnly`, which still lets the person leave.

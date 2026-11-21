@@ -50,7 +50,7 @@ extension AppStore {
     pollTask = nil
     stopStream()
   }
-  private func stopStream() {
+  func stopStream() {
     rosterTask?.cancel()
     rosterTask = nil
     latestInflight = nil
@@ -223,7 +223,7 @@ extension AppStore {
     let currentGeneration = generation
     bootstrapReads += 1
     let bootstrapRead = bootstrapReads
-    let preferencesMark = preferenceSaves.mark
+    let preferenceOrder = preferenceSaves, preferencesMark = preferenceOrder.mark
     do {
       let response: (value: Bootstrap?, etag: String?) = try await api.changed("/bootstrap?roster=lean", since: appliedBootstrapTag)
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
@@ -250,10 +250,10 @@ extension AppStore {
             conversationRefreshedAt = nil
           }
         }
-        if let previous = bootstrap, previous.user.id != value.user.id { leaveAccount() }
+        if let previous = bootstrap, previous.user.id != value.user.id { leaveAccount(nextToken: api.token) }
         // A preferences save that overlapped this read may be newer than its copy, so the saved one stays.
         // The read's tag is not kept then, so the next read applies its preferences even when unchanged.
-        let stalePreferences = !preferenceSaves.fresh(preferencesMark)
+        let stalePreferences = preferenceOrder === preferenceSaves && !preferenceOrder.fresh(preferencesMark)
         if stalePreferences, let previous = bootstrap { value.preferences = previous.preferences }
         if bootstrap != value { bootstrap = value; applied = true }
         appliedBootstrapTag = stalePreferences ? nil : response.etag
@@ -262,7 +262,7 @@ extension AppStore {
       if !applied { publishWidgetSnapshot() }
       restoredRosterAt = nil
       if offlineSavedAt != nil, !cachedChats.contains(selectedBotId ?? "") { offlineSavedAt = nil }
-      api.csrf = value.csrfToken
+      self.api?.csrf = value.csrfToken
       Task { await self.uploads.drain() }
       if appUnavailable { appUnavailable = false }
       failures = 0

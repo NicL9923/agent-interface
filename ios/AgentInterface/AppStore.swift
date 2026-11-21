@@ -376,6 +376,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// quiet about it and marks it read there, as the web does.
   @ObservationIgnored var viewingBotId: String?
   @ObservationIgnored var presenceBeat: Task<Void, Never>?
+  /// The account scope the chat on screen was opened under; presence goes out only while it is current.
+  @ObservationIgnored var presenceScope: String?
   @ObservationIgnored var presenceReports: Task<Void, Never>?
   /// Sheets over the chat, such as settings or files. A covered chat is not being read, as on the web.
   var chatCovers = 0
@@ -384,6 +386,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// `desktopCleanupWait`, before revoking the session the cleanup's release needs.
   @ObservationIgnored var desktopCleanup: Task<Void, Never>?
   @ObservationIgnored var desktopCleanupWait: Duration = .seconds(5)
+  /// How long another member's sign-in waits for the last member's session to end on the server.
+  @ObservationIgnored var revokeWait: Duration = .seconds(5)
   /// Set while sign-out waits for that cleanup.
   @ObservationIgnored var awaitingDesktopCleanup = false
   @ObservationIgnored var computerWrites = 0
@@ -497,4 +501,18 @@ struct ReplyAnnouncement: Equatable {
   var id: Int
   var botId: String
   var text: String
+}
+extension AppStore {
+  /// The account changed: its messages on their way, their records and the reply last announced for it go,
+  /// so none of them shows or is read out in the next account's chats.
+  func forgetSentEchoes() {
+    echoTimer?.cancel()
+    echoTimer = nil
+    echoDeadline = nil
+    echoes = []
+    ownSends = []
+    ownRows = []
+    replyAnnouncement = nil
+    updateEcho(conversationChanged: true)
+  }
 }

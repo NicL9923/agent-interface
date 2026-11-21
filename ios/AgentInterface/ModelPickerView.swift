@@ -137,10 +137,7 @@ struct ModelCatalogSections: View {
     guard !savingFavorite else { return }
     let next = favorites.contains(choice) ? favorites.filter { $0 != choice } : favorites + [choice]
     favoriteError = nil
-    let saved: ModelFavorites? = await store.run(busy: $savingFavorite, error: $favoriteError) {
-      try await $0.api.write("/preferences/models", ModelFavorites(modelFavorites: next), method: "PUT")
-    }
-    if let saved { store.bootstrap?.preferences.modelFavorites = saved.modelFavorites }
+    await store.saveModelFavorites(next, busy: $savingFavorite, error: $favoriteError)
   }
 }
 

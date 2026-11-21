@@ -12,6 +12,8 @@ private struct ReadingChat: ViewModifier {
       .onAppear { visible = true; update(scenePhase, store.chatCovers) }
       .onChange(of: scenePhase, initial: true) { _, phase in update(phase, store.chatCovers) }
       .onChange(of: store.chatCovers) { _, covers in update(scenePhase, covers) }
+      // An account change ends presence; the next account reports this chat once its account loads.
+      .onChange(of: store.scope) { _, _ in update(scenePhase, store.chatCovers) }
       .onDisappear { visible = false; store.leave(botId) }
   }
   private func update(_ phase: ScenePhase, _ covers: Int) {
@@ -147,6 +149,8 @@ struct ConversationView: View {
     .environment(speech)
     .onAppear { configureSpeech() }
     .onChange(of: store.scope) { _, _ in speech.reset(); configureSpeech() }
+    // Each sign-in has its own client; the one this chat was given ends with the last sign-in.
+    .onChange(of: store.api.map(ObjectIdentifier.init)) { _, _ in configureSpeech() }
     // Audio belongs to a reachable chat on screen, so it stops when the connection drops or the chat closes.
     .onChange(of: store.connected) { _, connected in if !connected { speech.cancel() } }
     .sheet(isPresented: $modelOpen) { ChatModelSheet(botId: bot.id).appStore(store) }

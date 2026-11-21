@@ -29,10 +29,12 @@ extension AppStore {
   }
   func cover(_ shown: Bool) { chatCovers = max(0, chatCovers + (shown ? 1 : -1)) }
   func viewing(_ botId: String?) {
-    guard botId != viewingBotId else { return }
+    // The same chat starts again under an account that loaded since it opened.
+    guard botId != viewingBotId || botId != nil && presenceScope != scope else { return }
     if let previous = viewingBotId { reportPresence(previous, "left") }
     viewingBotId = botId
     presenceBeat?.cancel()
+    presenceScope = scope
     guard let botId else { return }
     Task { await NotificationController.shared.removeDelivered(bots: [botId]) }
     // The server forgets a device 45 seconds after its last beat.
@@ -47,8 +49,19 @@ extension AppStore {
   func leave(_ botId: String) {
     if viewingBotId == botId { viewing(nil) }
   }
+  /// The account changed: presence started for the last one ends without another word. The server records
+  /// a presence report as a read for whoever sends it, so none goes out for the next account until its
+  /// own chat appears.
+  func endPresence() {
+    presenceBeat?.cancel()
+    presenceBeat = nil
+    viewingBotId = nil
+    presenceScope = nil
+  }
+  /// Reports for the account the chat was opened under only. A report already queued holds the client it
+  /// was queued with, which a later sign-in retires.
   private func reportPresence(_ botId: String, _ state: String) {
-    guard let api, !sessionExpired else { return }
+    guard let api, !sessionExpired, let presenceScope, presenceScope == scope else { return }
     let report = ChatPresenceReport(client: NotificationController.shared.deviceId, state: state)
     // Presence is a hint, so a failed report stays quiet, as on the web. One goes at a time, so
     // leaving one chat can never land after arriving in the next.
