@@ -2,42 +2,49 @@ import XCTest
 
 @testable import AgentInterface
 
-/// Checks the avatar catalog and art repeated in Models.swift, AvatarVocabulary.swift,
-/// AvatarView.swift, CharacterAvatarArt.swift and AvatarPathData.swift against the web's. The
-/// answer key in Avatar/avatar-art.json comes from src/components/Avatar.tsx and
-/// character-avatars.tsx, written by tests/avatar-art-parity.test.ts. After an intended web
-/// change, run `UPDATE_AVATAR_ART=1 npx vitest run tests/avatar-art-parity.test.ts`, commit the
-/// catalog, and match the Swift side until this passes. The app itself reads only its Swift copies.
+/// Checks the avatar catalog the app draws, AvatarCatalog.swift, and the fixed paths in
+/// AvatarPathData.swift against the web's. tests/avatar-art-parity.test.ts writes both the catalog
+/// and the answer key in Avatar/avatar-art.json from src/components/avatar-shapes.ts and Avatar.tsx.
+/// After an intended web change, run `UPDATE_AVATAR_ART=1 npx vitest run tests/avatar-art-parity.test.ts`,
+/// commit both files, and match AvatarPathData.swift until this passes.
 final class AvatarArtParityTests: XCTestCase {
   private struct Entry: Decodable, Equatable {
     var id: String
     var label: String
   }
-  private struct Anchor: Decodable, Equatable {
+  private struct Group: Decodable, Equatable {
+    var id: String
+    var label: String
+    var shapes: [Entry]
+  }
+  private struct Legacy: Decodable, Equatable {
+    var shape: String
+    var was: String?
+    var now: String?
+  }
+  /// A face as the web writes it: `cx`, `spacing` and `radius` may be absent.
+  private struct Face: Decodable {
+    var cx: Double?
     var cy: Double
     var scale: Double
+    var spacing: Double?
+    var radius: Double?
     var top: Double
     var hat: Double
   }
-  private struct HatAnchor: Decodable, Equatable {
-    var top: Double
-    var hat: Double
+  private struct Shape: Decodable {
+    var path: String
+    var face: Face
   }
   private struct Art: Decodable {
     var modes: [String]
-    var shapes: [String]
-    var everydayFamilies: [Entry]
-    var seasonalFamilies: [Entry]
+    var groups: [Group]
     var seasonalColors: [String: String]
+    var legacyMascots: [String: Legacy]
     var colors: [String]
     var eyes: [String]
     var accessories: [String]
-    var silhouettes: [String: String]
-    var faces: [String: Anchor]
-    var characterHeads: [String: String]
-    var characterAnchors: [String: Anchor]
-    var characterHatAnchors: [String: HatAnchor]
-    var cheekless: [String]
+    var shapes: [String: Shape]
     var paths: [String]
   }
 
@@ -47,101 +54,53 @@ final class AvatarArtParityTests: XCTestCase {
       .appendingPathComponent("avatar-art.json")
     return try JSONDecoder().decode(Art.self, from: Data(contentsOf: url))
   }
-  private func anchor(_ value: AvatarGeometry.Anchor) -> Anchor {
-    Anchor(cy: value.cy, scale: value.scale, top: value.top, hat: value.hat)
-  }
 
   func testCatalogListsMatchTheWeb() throws {
     let web = try art()
-    XCTAssertEqual([AvatarMode.geometric, .mascot, .portrait].map(\.rawValue), web.modes)
-    XCTAssertEqual(AvatarConfig.shapes.map(\.rawValue), web.shapes)
-    XCTAssertEqual(AvatarConfig.everydayFamilies.map { Entry(id: $0.id.rawValue, label: $0.label) }, web.everydayFamilies)
-    XCTAssertEqual(AvatarConfig.seasonalFamilies.map { Entry(id: $0.id.rawValue, label: $0.label) }, web.seasonalFamilies)
+    XCTAssertEqual([AvatarMode.geometric, .portrait].map(\.rawValue), web.modes)
     XCTAssertEqual(
-      Dictionary(uniqueKeysWithValues: AvatarConfig.seasonalColors.map { ($0.key.rawValue, $0.value) }),
+      AvatarCatalog.groups.map { group in
+        Group(id: group.id, label: group.label, shapes: group.shapes.map { Entry(id: $0.rawValue, label: $0.label) })
+      }, web.groups)
+    XCTAssertEqual(AvatarConfig.shapes.map(\.rawValue), web.groups.flatMap { $0.shapes.map(\.id) })
+    XCTAssertEqual(
+      Dictionary(uniqueKeysWithValues: AvatarCatalog.seasonalColors.map { ($0.key.rawValue, $0.value) }),
       web.seasonalColors)
+    XCTAssertEqual(
+      AvatarCatalog.legacyMascots.mapValues { Legacy(shape: $0.shape.rawValue, was: $0.was, now: $0.now) },
+      web.legacyMascots)
     XCTAssertEqual(AvatarConfig.colors, web.colors)
     XCTAssertEqual(AvatarEyes.all.map(\.rawValue), web.eyes)
     XCTAssertEqual(AvatarAccessory.all.map(\.rawValue), web.accessories)
   }
-  func testSeasonalCharactersAreSeparateFromTheEverydayOnes() {
-    XCTAssertTrue(AvatarConfig.seasonalFamilies.allSatisfy { AvatarConfig.seasonalColors[$0.id] != nil })
-    XCTAssertTrue(AvatarConfig.everydayFamilies.allSatisfy { AvatarConfig.seasonalColors[$0.id] == nil })
-    XCTAssertEqual(
-      AvatarConfig.families.map(\.id),
-      AvatarConfig.everydayFamilies.map(\.id) + AvatarConfig.seasonalFamilies.map(\.id))
-  }
-  func testSilhouettesAndFacesMatchTheWeb() throws {
+  func testEveryShapesOutlineAndFaceMatchTheWeb() throws {
     let web = try art()
-    XCTAssertEqual(Set(web.silhouettes.keys), Set(web.shapes + ["mascot"]))
-    for shape in AvatarConfig.shapes {
-      let expected = try XCTUnwrap(web.silhouettes[shape.rawValue], shape.rawValue)
-      // The web draws the circle as an arc; native uses the same circle as four cubic quarters.
+    XCTAssertEqual(Set(AvatarCatalog.art.keys.map(\.rawValue)), Set(web.shapes.keys))
+    for (id, expected) in web.shapes {
+      let art = try XCTUnwrap(AvatarCatalog.art[AvatarShape(rawValue: id)], id)
+      XCTAssertEqual(art.path, expected.path, id)
+      // The web leaves out a default; the catalog writes it in, as the web rig applies it.
+      let face = expected.face
       XCTAssertEqual(
-        AvatarGeometry.svg(shape),
-        shape == .circle
-          ? "M50 3 C75.96 3 97 24.04 97 50 C97 75.96 75.96 97 50 97 C24.04 97 3 75.96 3 50 C3 24.04 24.04 3 50 3Z"
-          : expected, shape.rawValue)
-      XCTAssertEqual(AvatarGeometry.faces[shape].map(anchor), web.faces[shape.rawValue], shape.rawValue)
+        art.face,
+        AvatarCatalog.Face(
+          cx: face.cx ?? 50, cy: face.cy, scale: face.scale, spacing: face.spacing ?? 30 * face.scale,
+          radius: face.radius ?? AvatarMotion.faceRadius, top: face.top, hat: face.hat), id)
     }
-    XCTAssertEqual(AvatarGeometry.mascotHead, web.silhouettes["mascot"])
-    XCTAssertEqual(anchor(AvatarGeometry.mascotFace), web.faces["mascot"])
-    XCTAssertEqual(AvatarGeometry.faces.count, web.shapes.count)
   }
-  func testCharacterHeadsFacesHatsAndCheeksMatchTheWeb() throws {
-    let web = try art()
-    XCTAssertEqual(
-      Dictionary(uniqueKeysWithValues: CharacterAvatarArt.heads.map { ($0.key.rawValue, $0.value) }),
-      web.characterHeads)
-    XCTAssertEqual(
-      Dictionary(uniqueKeysWithValues: AvatarGeometry.characterFaces.map { ($0.key.rawValue, anchor($0.value)) }),
-      web.characterAnchors)
-    XCTAssertEqual(
-      Dictionary(uniqueKeysWithValues: CharacterAvatarArt.hatAnchors.map {
-        ($0.key.rawValue, HatAnchor(top: $0.value.top, hat: $0.value.hat))
-      }), web.characterHatAnchors)
-    XCTAssertEqual(CharacterAvatarArt.cheekless.map(\.rawValue).sorted(), web.cheekless)
-  }
-  func testEveryFixedPathIsOneTheWebDraws() throws {
-    // Native parses only absolute commands, so a web path that moves relative with `l` is
-    // compared after the same rewrite.
-    let web = Set(try art().paths.flatMap { [$0, Self.absolute($0)] })
-    let missing = AvatarPathData.allCases.filter { !web.contains($0.rawValue) }
-    XCTAssertTrue(missing.isEmpty, "Not in the web's avatar art: \(missing.map { "\($0)" })")
-  }
-  func testRelativeLinesBecomeAbsoluteOnes() {
-    XCTAssertEqual(Self.absolute("M27 28 l-3 -2 M73 28 l3 -2 M43.5 86 l-1 3"), "M27 28 L24 26 M73 28 L76 26 M43.5 86 L42.5 89")
-    XCTAssertEqual(Self.absolute("M1 2 L3 4 V5Z"), "M1 2 L3 4 V5Z")
-  }
-  /// Rewrites each relative `l dx dy` as the absolute `L x y`, leaving every other command as written.
-  private static func absolute(_ d: String) -> String {
-    guard d.contains("l") else { return d }
-    let tokens = d.matches(of: /[A-Za-z]|-?\d+(?:\.\d+)?/).map { String($0.output) }
-    var groups: [(command: String, args: [String])] = []
-    for token in tokens {
-      if token.first!.isLetter { groups.append((token, [])) } else { groups[groups.count - 1].args.append(token) }
-    }
-    var current = (x: 0.0, y: 0.0)
-    func format(_ value: Double) -> String {
-      var text = String(format: "%.4f", value)
-      while text.hasSuffix("0") { text.removeLast() }
-      if text.hasSuffix(".") { text.removeLast() }
-      return text
-    }
-    return groups.map { command, args in
-      let numbers = args.compactMap(Double.init)
-      if command == "l" {
-        var points: [String] = []
-        for pair in stride(from: 0, to: numbers.count - 1, by: 2) {
-          current = (current.x + numbers[pair], current.y + numbers[pair + 1])
-          points.append("\(format(current.x)) \(format(current.y))")
-        }
-        return "L" + points.joined(separator: " ")
-      }
-      if numbers.count >= 2, ["M", "L", "Q", "C"].contains(command) {
-        current = (numbers[numbers.count - 2], numbers[numbers.count - 1])
-      }
-      return command + args.joined(separator: " ")
-    }.joined(separator: " ")
+  /// Web paths the app draws another way. The scan in tests/avatar-art-parity.test.ts picks up the
+  /// "M" that starts the web's morph polygon, and the four state-badge glyphs are SF Symbols in
+  /// AvatarView's badge.
+  private static let drawnOtherwise: Set<String> = [
+    "M",
+    "M4 8.4 L6.9 11.2 L12.2 5.2",
+    "M5.8 6.1 Q5.9 3.6 8.1 3.6 Q10.4 3.7 10.4 5.8 Q10.4 7.4 8.1 8.3 V9.3",
+    "M6 4.5 V11.5 M10 4.5 V11.5",
+    "M8 3.8 V8.8",
+  ]
+  func testFixedPathsAreExactlyTheOnesTheWebDraws() throws {
+    let web = Set(try art().paths)
+    XCTAssertTrue(Self.drawnOtherwise.isSubset(of: web), "Stale exclusions: \(Self.drawnOtherwise.subtracting(web))")
+    XCTAssertEqual(Set(AvatarPathData.allCases.map(\.rawValue)), web.subtracting(Self.drawnOtherwise))
   }
 }

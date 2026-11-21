@@ -123,8 +123,7 @@ import XCTest
     XCTAssertFalse(app.buttons["creationNext"].isEnabled)
     let name = app.textFields["Name"]
     name.typeWhenFocused("Barn cat\n")
-    app.buttons["Mascot"].tapWhenReady()
-    let fox = app.buttons["avatarTile.family.fox"]
+    let fox = app.buttons["avatarTile.shape.fox"]
     reveal(app, fox)
     fox.tap()
     for _ in 0..<3 { app.collectionViews.firstMatch.swipeDown() }
@@ -141,7 +140,7 @@ import XCTest
     created.tap()
     app.openAssistantSettings("Barn cat")
     app.selectSettingsTab("Profile")
-    let savedFox = app.buttons["avatarTile.family.fox"]
+    let savedFox = app.buttons["avatarTile.shape.fox"]
     reveal(app, savedFox)
     XCTAssertTrue(savedFox.wait(until: "selected == true"), "The look chosen while creating is the saved avatar")
   }
@@ -152,7 +151,9 @@ import XCTest
     let name = app.textFields["Name"]
     XCTAssertTrue(name.waitForExistence(timeout: 5))
     name.typeWhenFocused("Feed tracker")
-    app.buttons["Mascot"].tapWhenReady()
+    let cactus = app.buttons["avatarTile.shape.cactus"]
+    reveal(app, cactus)
+    cactus.tap()
     app.buttons["creationNext"].tapWhenReady()
     app.buttons["creationCreate"].tapWhenReady()
     let failure = app.staticTexts["Feed tracker was created, but its avatar wasn't saved yet."]
@@ -161,7 +162,8 @@ import XCTest
     // The sheet now edits the created assistant on its Profile, its chosen look intact.
     XCTAssertTrue(app.navigationBars["Profile"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.navigationBars["Profile"].buttons["All settings"].exists)
-    XCTAssertTrue(app.buttons["Mascot"].isSelected)
+    reveal(app, cactus)
+    XCTAssertTrue(cactus.isSelected)
     try capture("after-create-avatar-failed")
     app.buttons["retryAvatar"].tap()
     let created = app.buttons["bot.created-1"]
@@ -170,7 +172,8 @@ import XCTest
     created.tap()
     app.openAssistantSettings("Feed tracker")
     app.selectSettingsTab("Profile")
-    XCTAssertTrue(app.buttons["Mascot"].wait(until: "selected == true"), "The retried avatar was saved")
+    reveal(app, cactus)
+    XCTAssertTrue(cactus.wait(until: "selected == true"), "The retried avatar was saved")
   }
   /// A new assistant that keeps the default look still owes its first avatar save after a failure.
   func testRetryingAFailedDefaultAvatarSendsItAgain() throws {
@@ -236,8 +239,9 @@ import XCTest
     let name = app.textFields["Name"]
     XCTAssertTrue(name.wait(until: "enabled == true"))
     name.typeWhenFocused(" two\n")
-    let style = app.buttons["Mascot"].isSelected ? app.buttons["Geometric"] : app.buttons["Mascot"]
-    style.tapWhenReady()
+    let pebble = app.buttons["avatarTile.shape.pebble"]
+    reveal(app, pebble)
+    pebble.tap()
     XCTAssertTrue(save.wait(until: "enabled == true"))
     save.tap()
     XCTAssertTrue(app.staticTexts["Fixture avatar save failed"].waitForExistence(timeout: 10), app.debugDescription)

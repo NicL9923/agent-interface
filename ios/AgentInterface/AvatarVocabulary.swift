@@ -17,68 +17,26 @@ extension OpenVocabulary {
   }
 }
 
-/// How an avatar is drawn: a geometric shape, a mascot character, or an uploaded portrait.
+/// How an avatar is drawn: a character (a flat silhouette with eyes) or an uploaded portrait.
+/// Retired mascots decode as characters; see `AvatarConfig.init(from:)`.
 struct AvatarMode: OpenVocabulary {
   let rawValue: String
   init(rawValue: String) { self.rawValue = rawValue }
   static let geometric = Self(rawValue: "geometric")
-  static let mascot = Self(rawValue: "mascot")
   static let portrait = Self(rawValue: "portrait")
 }
 
-/// Geometric silhouettes in picker order, like `avatarShapes` in src/shared/types.ts.
+/// An avatar silhouette, like `avatarShapes` in src/shared/types.ts. The named shapes and their
+/// art are generated into AvatarCatalog.swift.
 struct AvatarShape: OpenVocabulary {
   let rawValue: String
   init(rawValue: String) { self.rawValue = rawValue }
-  static let blob = Self(rawValue: "blob")
-  static let pebble = Self(rawValue: "pebble")
-  static let squircle = Self(rawValue: "squircle")
-  static let capsule = Self(rawValue: "capsule")
-  static let triangle = Self(rawValue: "triangle")
-  static let hex = Self(rawValue: "hex")
-  static let cloud = Self(rawValue: "cloud")
-  static let drop = Self(rawValue: "drop")
-  static let circle = Self(rawValue: "circle")
-  static let diamond = Self(rawValue: "diamond")
-  static let sparkle = Self(rawValue: "sparkle")
-  static let clover = Self(rawValue: "clover")
-  static let heart = Self(rawValue: "heart")
-  static let cookie = Self(rawValue: "cookie")
-  static let pentagon = Self(rawValue: "pentagon")
-  static let burst = Self(rawValue: "burst")
-  static let alien = Self(rawValue: "alien")
-  static let ghost = Self(rawValue: "ghost")
-  static let flower = Self(rawValue: "flower")
-  static let sun = Self(rawValue: "sun")
-  static let all: [AvatarShape] = [
-    .blob, .pebble, .squircle, .capsule, .triangle, .hex, .cloud, .drop, .circle, .diamond,
-    .sparkle, .clover, .heart, .cookie, .pentagon, .burst, .alien, .ghost, .flower, .sun,
-  ]
-}
-
-/// Mascot characters, like `mascotFamilies` in src/shared/types.ts. The ghost is both a shape
-/// and a character; the two types keep them apart.
-struct AvatarFamily: OpenVocabulary {
-  let rawValue: String
-  init(rawValue: String) { self.rawValue = rawValue }
-  static let bear = Self(rawValue: "bear")
-  static let fox = Self(rawValue: "fox")
-  static let sprout = Self(rawValue: "sprout")
-  static let panda = Self(rawValue: "panda")
-  static let raccoon = Self(rawValue: "raccoon")
-  static let owl = Self(rawValue: "owl")
-  static let cactus = Self(rawValue: "cactus")
-  static let dinosaur = Self(rawValue: "dinosaur")
-  static let leprechaun = Self(rawValue: "leprechaun")
-  static let bunny = Self(rawValue: "bunny")
-  static let eagle = Self(rawValue: "eagle")
-  static let pumpkin = Self(rawValue: "pumpkin")
-  static let bat = Self(rawValue: "bat")
-  static let ghost = Self(rawValue: "ghost")
-  static let turkey = Self(rawValue: "turkey")
-  static let santa = Self(rawValue: "santa")
-  static let rudolph = Self(rawValue: "rudolph")
-  static let snowman = Self(rawValue: "snowman")
+  /// Every shape in picker order, group by group.
+  static let all: [AvatarShape] = AvatarCatalog.groups.flatMap(\.shapes)
+  /// The outline and face this shape draws with. One from newer data than this build draws as the blob.
+  var art: AvatarCatalog.Art { AvatarCatalog.art[self] ?? AvatarCatalog.art[.blob]! }
+  /// The name under its picker tile, and what VoiceOver calls it.
+  var label: String { AvatarCatalog.labels[self] ?? rawValue.capitalized }
 }
 
 struct AvatarEyes: OpenVocabulary {
@@ -100,12 +58,4 @@ struct AvatarAccessory: OpenVocabulary {
   static let hat = Self(rawValue: "hat")
   static let glasses = Self(rawValue: "glasses")
   static let all: [AvatarAccessory] = [.plain, .hat, .glasses]
-}
-
-/// The outline an avatar morphs between. A character that shares a name with a shape, the ghost,
-/// still gets its own silhouette.
-enum AvatarBody: Hashable {
-  case shape(AvatarShape)
-  case mascot
-  case character(AvatarFamily)
 }

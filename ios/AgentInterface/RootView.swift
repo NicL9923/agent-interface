@@ -439,7 +439,7 @@ struct AvatarTrio: View {
         avatar: AvatarConfig(shape: .blob, color: "#1084FE", eyes: .oval), size: 64, name: "Welcome 1"
       ).rotationEffect(.degrees(-6))
       AvatarView(
-        avatar: AvatarConfig(mode: .mascot, shape: nil, family: .bear, color: "#FF9800", eyes: .round),
+        avatar: AvatarConfig(shape: .bear, color: "#FF9800", eyes: .round),
         size: 84, name: "Welcome 2")
       AvatarView(
         avatar: AvatarConfig(shape: .triangle, color: "#FF309B", eyes: .oval), size: 64, name: "Welcome 3"

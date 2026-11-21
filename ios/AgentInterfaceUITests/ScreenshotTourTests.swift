@@ -2949,7 +2949,7 @@ import CryptoKit
         mode("Portrait"); reveal(app.buttons["Generate portrait"])
         XCTAssertFalse(app.buttons["Upload portrait"].isEnabled)
         XCTAssertFalse(app.buttons["Generate portrait"].isEnabled)
-        if stage == "after" { XCTAssertTrue(app.staticTexts["Portraits are unavailable. Choose Geometric or Mascot."].exists) }
+        if stage == "after" { XCTAssertTrue(app.staticTexts["Portraits are unavailable. Choose Character."].exists) }
         try capture("avatar-portrait-unavailable"); app.terminate(); continue
       }
       top(); try capture(name + "-geo-top")
@@ -2973,10 +2973,9 @@ import CryptoKit
         }
         app.terminate(); continue
       }
-      mode("Mascot")
-      let pumpkin = app.buttons["avatarTile.family.pumpkin"]; reveal(pumpkin); pumpkin.tapWhenReady()
+      let pumpkin = app.buttons["avatarTile.shape.pumpkin"]; reveal(pumpkin); pumpkin.tapWhenReady()
       XCTAssertTrue(pumpkin.wait(until: "selected == true"))
-      top(); preview("blocked"); try capture("avatar-mascot-seasonal")
+      top(); preview("blocked"); try capture("avatar-seasonal")
       if stage == "after" { preview("idle") }
       let swatch = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Color #")).firstMatch
       reveal(swatch); print("DESIGN_AVATAR_SWATCH \(swatch.frame.width) \(swatch.frame.height)")
@@ -3252,6 +3251,20 @@ import CryptoKit
     }
   }
 
+  /// Home with an assistant of each kind of shape, including a white mug that needs help, whose
+  /// exclamation mark keeps the light body's soft edge.
+  func testVariedRosterHome() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the roster.")
+    for theme in ["light", "dark"] {
+      let app = launch(environment: ["AGENT_INTERFACE_UI_ROSTER": "varied", "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      goToAssistantList(app)
+      XCTAssertTrue(app.buttons["bot.coffee"].waitForExistence(timeout: 5))
+      try capture("01b-home-roster-\(theme)")
+      app.terminate()
+    }
+  }
+
   func testScreenshotTour() throws {
     try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the tour.")
     var app = launch()
@@ -3312,10 +3325,11 @@ import CryptoKit
     try capture("04b-avatar-editor-tiles")
     scrollUntilHittable(app, app.buttons["Save avatar"])
     try capture("05-avatar-editor-controls")
-    scrollUntilHittable(app, app.buttons["Mascot"], up: false)
-    app.buttons["Mascot"].tap()
-    XCTAssertTrue(app.buttons["avatarTile.family.bear"].waitForExistence(timeout: 5))
-    try capture("05b-avatar-editor-mascot")
+    // The shape picker's later groups, under their headings.
+    scrollUntilHittable(app, app.buttons["avatarTile.shape.cloud"], up: false)
+    try capture("05b-avatar-editor-objects")
+    scrollUntilHittable(app, app.buttons["avatarTile.shape.snowman"])
+    try capture("05c-avatar-editor-creatures-seasonal")
     app.buttons["Close"].tap()
     if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
 
@@ -3337,12 +3351,12 @@ import CryptoKit
     try capture("09-specimen-geometric")
     app.swipeUp()
     try capture("10-specimen-shapes")
-    app.swipeDown()
-    app.buttons["Mascot"].tap()
-    try capture("11-specimen-mascot")
+    scrollUntilHittable(app, app.buttons["specimenShape.snowman"])
+    try capture("11-specimen-groups")
+    for _ in 0..<6 where !app.buttons["Portrait"].canTap { app.swipeDown() }
     app.buttons["Portrait"].tap()
     try capture("12-specimen-portrait")
-    app.buttons["Geometric"].tap()
+    app.buttons["Character"].tap()
     app.switches["Reduced motion"].tap()
     try capture("13-specimen-reduced-motion")
     let matrix = app.descendants(matching: .any)["avatarMatrix"]

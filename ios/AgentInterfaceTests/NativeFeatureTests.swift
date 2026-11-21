@@ -64,8 +64,8 @@ import XCTest
     XCTAssertEqual(image.size.width * image.scale, 288)
     // For visual review: TEST_RUNNER_AGENT_INTERFACE_SCREENSHOT_DIR writes sample pictures there.
     if let directory = ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] {
-      for (index, family) in [nil, AvatarFamily.fox, .owl].enumerated() {
-        var value = avatar; value.mode = family == nil ? .geometric : .mascot; value.family = family
+      for (index, shape) in [AvatarShape.blob, .fox, .mug].enumerated() {
+        var value = avatar; value.shape = shape
         try SenderAvatars.png(value, name: "Kitchen")?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("sender-\(index).png"))
       }
     }

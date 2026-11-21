@@ -573,8 +573,6 @@ enum AvatarMotion {
     var tilt: Double
     /// 0 = normal eyes, 1 = closed happy arcs.
     var happy: Double
-    /// Mascot mouth curve: -1 frown, 0 flat, 1 smile.
-    var mouth: Double
     /// 0 = the style's own eyes, 1 = small round dots, as when concentrating.
     var dot: Double
   }
@@ -591,20 +589,20 @@ enum AvatarMotion {
       // Dots while pondering; the idea beat opens them wide again.
       let idea = ideaBeat(plan.gesture, at: t) || ideaBeat(plan.previous, at: t)
       return Expression(
-        open: idea ? 1.1 : 1, tilt: 0, happy: 0, mouth: idea ? 0.9 : 0.1, dot: idea ? 0 : 1)
-    case .working: return Expression(open: 0.82, tilt: 0, happy: 0, mouth: 0.3, dot: 0)
-    case .waiting: return Expression(open: 0.36, tilt: 0, happy: 0, mouth: 0, dot: 0)
-    case .blocked: return Expression(open: 1.1, tilt: 0, happy: 0, mouth: -0.2, dot: 0)
+        open: idea ? 1.1 : 1, tilt: 0, happy: 0, dot: idea ? 0 : 1)
+    case .working: return Expression(open: 0.82, tilt: 0, happy: 0, dot: 0)
+    case .waiting: return Expression(open: 0.36, tilt: 0, happy: 0, dot: 0)
+    case .blocked: return Expression(open: 1.1, tilt: 0, happy: 0, dot: 0)
     case .done:
       // Excited until most of the way through a celebration, which may have waited its turn.
       return t < (plan.gesture?.start ?? 0) + celebration * 0.75
-        ? Expression(open: 1.1, tilt: 0, happy: 0, mouth: 1, dot: 0)
-        : Expression(open: 1, tilt: 0, happy: 1, mouth: 1, dot: 0)
-    case .failed: return Expression(open: 0.62, tilt: 14, happy: 0, mouth: -1, dot: 0)
-    case .disconnected: return Expression(open: 0.7, tilt: 0, happy: 0, mouth: 0, dot: 0)
-    case .interrupted: return Expression(open: 0.5, tilt: 0, happy: 0, mouth: 0, dot: 0)
-    case .unknown: return Expression(open: 1, tilt: 0, happy: 0, mouth: 0, dot: 0)
-    case .idle: return Expression(open: 1, tilt: 0, happy: 0, mouth: 0.6, dot: 0)
+        ? Expression(open: 1.1, tilt: 0, happy: 0, dot: 0)
+        : Expression(open: 1, tilt: 0, happy: 1, dot: 0)
+    case .failed: return Expression(open: 0.62, tilt: 14, happy: 0, dot: 0)
+    case .disconnected: return Expression(open: 0.7, tilt: 0, happy: 0, dot: 0)
+    case .interrupted: return Expression(open: 0.5, tilt: 0, happy: 0, dot: 0)
+    case .unknown: return Expression(open: 1, tilt: 0, happy: 0, dot: 0)
+    case .idle: return Expression(open: 1, tilt: 0, happy: 0, dot: 0)
     }
   }
   /// Frame-rate independent approach toward a target expression.
@@ -614,7 +612,6 @@ enum AvatarMotion {
       open: current.open + (target.open - current.open) * k,
       tilt: current.tilt + (target.tilt - current.tilt) * k,
       happy: current.happy + (target.happy - current.happy) * k,
-      mouth: current.mouth + (target.mouth - current.mouth) * k,
       dot: current.dot + (target.dot - current.dot) * k)
   }
   /// Moments in (from, to) when a state's target expression changes: the done state's switch
@@ -689,6 +686,60 @@ enum AvatarMotion {
     let depth = cos(pitch)
     return PitchProjection(y: -radius * sin(pitch), scale: max(depth, 0.02), visible: depth > 0.02)
   }
+  /// Where a face's parts sit in one pose, by the rig formulas in src/components/Avatar.tsx. The
+  /// eyes sit around the anchor's `cx`, and a glance or turn is scaled to the anchor's `radius`, the
+  /// half-width of the part the face sits on, so a narrow rocket's eyes stay on its hull.
+  struct FaceRig: Equatable {
+    struct Eye: Equatable {
+      /// -1 for the eye on the left, 1 for the one on the right.
+      var direction: Double
+      /// The eye's center in the 0-100 box.
+      var x: Double
+      var projection: Projection
+    }
+    var eyeY: Double
+    var eyes: [Eye]
+    /// The middle of the face as it turns, where the glasses bridge sits.
+    var center: Projection
+    var centerX: Double
+    var roll: PitchProjection
+    /// Where the cowboy hat's origin sits, and its size.
+    var hatX: Double
+    var hatY: Double
+    var hatScale: Double
+    /// How much tuned eyes shrink, and draw closer, to stay on the part the face sits on. 1 for
+    /// every shape at default tuning.
+    var fit: Double
+  }
+  /// Half the width of each eye style at full size. A style this build does not know draws as the pill.
+  static func eyeHalfWidth(_ eyes: AvatarEyes) -> Double {
+    switch eyes {
+    case .round: 7.5
+    case .visor, .spark: 10
+    default: 5.5
+    }
+  }
+  static func faceRig(
+    _ face: AvatarCatalog.Face, pose: Pose, state: ActivityState, eyes: AvatarEyes = .oval,
+    eyeWidth: Double = 1, eyeSpacing: Double = 1
+  ) -> FaceRig {
+    let reach = face.radius / faceRadius
+    // Tuned eyes stop growing at the edge of the part the face sits on. A visor at full width and
+    // spacing fits the blob, but on a paint brush it would run past the bristles and be cut off.
+    let widest = eyeHalfWidth(eyes) * face.scale * eyeWidth
+    let spread = face.spacing / 2 * eyeSpacing
+    let fit = min(1, (face.radius - 1) / (spread + widest))
+    let eyeOffset = spread * fit
+    let center = project(pose.gazeX * 2 * reach, yaw: pose.yaw, radius: face.radius)
+    let eyes = [-1.0, 1.0].map { direction in
+      let p = project(direction * eyeOffset + pose.gazeX * 4 * reach, yaw: pose.yaw, radius: face.radius)
+      return FaceRig.Eye(direction: direction, x: face.cx + p.x, projection: p)
+    }
+    return FaceRig(
+      eyeY: face.cy + pose.gazeY * 3 * reach + (state == .waiting ? 2 * reach : 0), eyes: eyes,
+      center: center, centerX: face.cx + center.x, roll: pitchEyes(pose.pitch, radius: face.radius),
+      hatX: face.cx, hatY: face.top + 15 * face.hat, hatScale: face.hat, fit: fit)
+  }
   /// Near features look a little larger than far ones as the face turns.
   static func perspective(_ depth: Double) -> Double { 0.86 + 0.14 * depth }
   /// Emphasis marks: three short strokes fanning out from beside the top of the head on `side`,
@@ -761,17 +812,15 @@ enum AvatarMotion {
     return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
   }
   static func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) / (min(a, b) + 0.05) }
-  /// Readable eye color for any body color, including custom picks. Each style keeps its
-  /// signature ink (cream cutouts, dark mascot eyes) while it holds at least 2:1; otherwise
-  /// the stronger ink wins. Every palette color keeps its signature ink.
-  static func faceInk(_ color: String, mascot: Bool = false) -> String {
-    let light = mascot ? "#fff3db" : "#fff9ee"
+  /// Readable eye color for any body color, including custom picks. Eyes are cream cutouts while
+  /// cream holds at least 2:1 against the body, which every palette color does; otherwise the
+  /// stronger of cream and dark ink wins.
+  static func faceInk(_ color: String) -> String {
+    let light = "#fff9ee"
     let dark = "#2b201b"
-    let preferred = mascot ? dark : light
-    let other = mascot ? light : dark
-    guard let body = luminance(color) else { return preferred }
+    guard let body = luminance(color) else { return light }
     func score(_ ink: String) -> Double { contrast(body, luminance(ink) ?? 0) }
-    return score(preferred) >= 2 || score(preferred) >= score(other) ? preferred : other
+    return score(light) >= 2 || score(light) >= score(dark) ? light : dark
   }
   /// Very light bodies get a soft edge so they keep their shape on the light theme's cream surface.
   static func bodyEdge(_ color: String) -> String? {
@@ -953,71 +1002,29 @@ struct PointVector: Equatable {
   }
 }
 
-/// The web avatar's original silhouettes, sampled into 72 equal perimeter positions so every
-/// shape can morph into any other without a discontinuous path replacement.
+/// Every avatar outline, with its outside sampled into 72 equal perimeter positions so any shape
+/// can morph into any other without a discontinuous path replacement.
 enum AvatarGeometry {
-  static let mascotHead =
-    "M50 14 C77 14 95 32 95 56 C95 81 76 95 50 95 C24 95 5 81 5 56 C5 32 23 14 50 14Z"
-  /// Everything a body outline can be keyed by.
-  static let keys: [AvatarBody] =
-    AvatarConfig.shapes.map(AvatarBody.shape) + [.mascot]
-    + AvatarConfig.characterFamilies.map(AvatarBody.character)
-  static func svg(_ body: AvatarBody) -> String {
-    switch body {
-    case .mascot: return mascotHead
-    case .character(let family): return CharacterAvatarArt.heads[family] ?? mascotHead
-    case .shape(let shape): return svg(shape)
-    }
+  static func svg(_ shape: AvatarShape) -> String { shape.art.path }
+  /// An outline without its holes, such as a mug's handle. A shape morphs along its outside only:
+  /// walking a hole after the outside would draw a line between the two.
+  static func outside(_ d: String) -> String {
+    guard let end = d.firstIndex(of: "Z") else { return d }
+    return String(d[...end])
   }
-  static func svg(_ shape: AvatarShape) -> String {
-    switch shape {
-    case .drop: "M50 7 C42 16 13 42 13 64 C13 87 29 95 50 95 C71 95 87 82 87 62 C87 39 61 17 50 7Z"
-    case .triangle: "M43 12 Q50 0 57 12 L95 78 Q103 94 85 94 H15 Q-3 94 5 78Z"
-    case .cloud:
-      "M20 40 C15 15 46 7 58 25 C78 9 104 29 91 50 C109 71 90 99 68 89 C48 108 19 95 23 79 C-1 72 0 46 20 40Z"
-    case .capsule:
-      "M48 5 H52 C75 5 84 18 84 40 V61 C84 83 73 96 52 96 H48 C26 96 16 84 16 61 V40 C16 18 26 5 48 5Z"
-    case .pebble: "M22 9 C48 -4 86 7 94 32 C105 60 90 90 69 96 C36 105 2 88 4 63 C1 38 7 21 22 9Z"
-    case .squircle: "M25 5 H75 Q95 5 95 25 V75 Q95 95 75 95 H25 Q5 95 5 75 V25 Q5 5 25 5Z"
-    case .hex:
-      "M28 8 Q32 5 37 5 H64 Q70 5 73 10 L95 43 Q99 50 95 57 L73 90 Q70 95 64 95 H36 Q30 95 27 90 L5 57 Q1 50 5 43Z"
-    case .diamond:
-      "M50 5.1 C56.3 5.1 60 9.6 64.1 13.7 C71.8 21.4 79.5 29.1 87.1 36.7 C91 40.6 95 44.1 95 50 C95 56.3 90.4 60 86.3 64.1 C78.5 71.8 70.8 79.6 63.1 87.3 C59.3 91.1 55.8 94.9 50 94.9 C43.7 94.9 40 90.3 35.9 86.2 C28.2 78.5 20.4 70.8 12.7 63.1 C8.9 59.3 5 55.8 5 50 C5 43.7 9.6 40 13.7 35.8 C21.4 28.1 29.2 20.4 36.9 12.7 C40.7 8.9 44.2 5.1 50 5.1Z"
-    case .sparkle:
-      "M50 4.1 C58.3 4.1 61.2 11.9 65.5 17.6 C72.2 26.5 80.6 33.7 90 39.6 C93.6 41.9 95.9 45.6 95.9 50 C95.9 54.3 93.7 58 90.1 60.3 C80.7 66.3 72.4 73.3 65.6 82.2 C61.2 88 58.4 96 49.9 95.9 C45.7 95.9 41.9 93.7 39.7 90.1 C33.7 80.6 26.5 72.3 17.5 65.5 C11.9 61.2 4.1 58.4 4.1 50.1 C4 41.7 11.9 38.9 17.6 34.5 C26.6 27.7 33.7 19.4 39.7 9.9 C42 6.3 45.7 4.1 50 4.1Z"
-    case .clover:
-      "M50 4 C58.7 4 66.8 9.1 70.6 16.9 C71.8 19.3 72.4 24.5 73.9 26 C75.5 27.6 80.6 28.1 83 29.3 C90.9 33.1 96 41.2 96 49.9 C96 58.4 91.2 66.5 83.6 70.4 C81.2 71.7 75.2 72.6 73.9 74 C72.6 75.4 71.6 81.2 70.4 83.6 C66.6 91.1 58.6 96 50.2 96 C41.4 96 33.3 91 29.4 83.2 C28.2 80.8 27.6 75.5 26 73.9 C24.4 72.4 19.4 71.9 17.1 70.7 C9.1 66.9 4 58.7 4 50 C4 41.5 8.9 33.4 16.5 29.5 C18.9 28.3 24.7 27.4 26.1 26 C27.4 24.7 28.3 18.9 29.5 16.5 C33.4 8.9 41.5 4 50 4Z"
-    case .heart:
-      "M50 17.2 C53.1 17.2 57.3 13.3 60.6 12 C69.7 8.5 80.4 10.8 87.4 17.7 C89.5 19.7 91.2 22.2 92.5 24.8 C96.4 32.8 95.7 42.6 90.7 50 C88.4 53.4 85.4 56.2 82.6 59.2 C78.3 63.9 74 68.6 69.7 73.3 C66.4 76.8 59.3 85.7 55.8 87.9 C54.1 89 52.1 89.6 50 89.6 C47.9 89.6 45.8 89 44 87.8 C40.6 85.5 33.6 76.9 30.4 73.4 C26 68.7 21.7 63.9 17.4 59.2 C14.7 56.3 11.6 53.4 9.4 50.1 C4.3 42.7 3.7 32.9 7.5 24.9 C8.7 22.2 10.5 19.8 12.6 17.7 C19.5 10.9 30 8.6 39.2 11.9 C42.4 13.1 47.1 17.2 50 17.2Z"
-    case .cookie:
-      "M50 5.5 C53.6 5.4 57.2 7 59.8 9.6 C61 10.8 61.8 13.2 63.4 13.8 C65.2 14.5 67.4 13.1 69.2 13 C72.8 12.6 76.5 13.8 79.3 16.1 C82.1 18.5 83.8 22 84.1 25.6 C84.2 27.3 83.3 29.7 84.2 31.3 C85.1 32.8 87.5 33.1 89 34.1 C92 36.1 94.1 39.4 94.8 43 C95.5 46.6 94.6 50.5 92.4 53.5 C91.3 54.9 89.2 56 88.9 57.8 C88.6 59.6 90.3 61.6 90.8 63.4 C91.7 66.9 91.2 70.6 89.4 73.7 C87.6 76.8 84.6 79.1 81.1 80.1 C79.4 80.5 76.8 80 75.4 81.2 C74 82.3 74 85 73.3 86.6 C71.8 89.9 68.9 92.5 65.5 93.7 C62 95 58.2 94.7 54.9 93.1 C53.3 92.4 51.8 90.5 50 90.4 C48.2 90.4 46.7 92.4 45.1 93.1 C41.9 94.7 38 95 34.6 93.8 C31 92.5 28.1 89.8 26.6 86.4 C25.9 84.8 26 82.4 24.7 81.2 C23.3 80 20.6 80.5 18.9 80.1 C15.4 79.2 12.4 76.8 10.6 73.8 C8.8 70.6 8.3 66.8 9.3 63.2 C9.7 61.5 11.4 59.6 11.1 57.8 C10.8 56.1 8.7 54.9 7.7 53.6 C5.4 50.6 4.5 46.7 5.2 43 C5.9 39.4 8 36.2 11 34.1 C12.5 33.1 15.1 32.7 15.9 31.1 C16.7 29.6 15.8 27.3 15.9 25.7 C16.2 22 17.9 18.5 20.7 16.2 C23.5 13.8 27.1 12.6 30.8 13 C32.6 13.1 34.8 14.5 36.5 13.9 C38.2 13.2 39 10.8 40.2 9.6 C42.7 7 46.3 5.5 50 5.5Z"
-    case .pentagon:
-      "M50 7.6 C54.9 7.6 58.4 11 62.2 13.7 C69.6 19 76.9 24.4 84.3 29.8 C87.9 32.4 91.9 34.7 93.4 39.1 C94.9 43.6 92.9 47.9 91.5 52.1 C88.8 60.5 86.1 69 83.3 77.4 C81.9 81.7 81.1 86.5 77.6 89.5 C73.9 92.8 69.2 92.4 64.5 92.4 C55.1 92.4 45.7 92.4 36.3 92.4 C31.4 92.4 26.4 93 22.4 89.6 C19 86.6 18.1 81.8 16.8 77.7 C14 69.2 11.3 60.7 8.5 52.1 C7.1 47.9 5.1 43.6 6.6 39.1 C8.1 34.6 12.2 32.3 15.8 29.7 C23.3 24.3 30.7 18.8 38.1 13.5 C41.8 10.8 45.2 7.6 50 7.6Z"
-    case .burst:
-      "M50 5.1 C53.8 5 63 14.3 67.1 16.3 C71.4 18.6 83.7 19.5 86.5 22.5 C88.7 24.8 88 29.4 88.1 32.3 C88.2 35.5 87.9 41 88.8 43.8 C90.1 47.8 96.6 59.1 95.9 62.5 C95.2 65.6 91 68 88.8 69.9 C81.2 76.5 81.8 75.1 77 84 C75.6 86.8 73.2 93.2 70.4 94.5 C66.7 96.2 54.7 91.6 49.9 91.7 C45.3 91.8 33.2 96.1 29.7 94.5 C26.9 93.2 24.4 86.8 23 84 C18.1 74.9 18.8 76.5 11.1 69.8 C8.9 67.9 4.8 65.6 4.2 62.6 C3.3 59 9.8 47.9 11.2 43.9 C12.1 41.1 11.8 35.5 11.9 32.4 C12 29.4 11.3 24.9 13.5 22.5 C16.2 19.5 28.6 18.5 32.9 16.4 C37.1 14.3 46 5.1 50 5.1Z"
-    case .alien:
-      "M50 6 C66.4 6 85.1 13.5 91.8 29.5 C94.1 34.8 94.6 40.7 93.2 46.3 C90.7 56.9 80.7 65.3 73.5 73.1 C69.1 78 64.7 82.8 60.2 87.6 C57.3 90.8 54.7 94 50 94 C45.3 94 42.6 90.7 39.6 87.5 C35.2 82.7 30.8 77.8 26.3 73 C19.1 65.1 9.1 56.6 6.7 45.9 C5.4 40.5 6 34.9 8.1 29.7 C14.6 13.6 33.6 6 50 6Z"
-    case .ghost:
-      "M50 5 C67.9 5 84.2 17.1 89.2 34.3 C91.5 42 90.9 50.2 90.9 58.1 C90.9 65.6 90.9 73.1 90.9 80.6 C90.9 85.4 90.9 90 86.7 93 C83.4 95.4 78.8 95.6 75.4 93.5 C73.9 92.6 72.9 90.9 71.1 90.6 C68.1 90 65.6 95 60.3 95 C55 95 52.8 90.4 49.9 90.5 C47.1 90.6 45 95 39.8 95 C34.6 95 31.9 90.1 29 90.5 C27.1 90.8 26 92.7 24.5 93.6 C20.9 95.7 16.2 95.4 13 92.8 C9 89.6 9.1 85.1 9.1 80.4 C9.1 73 9.1 65.6 9.1 58.2 C9.1 50.2 8.5 42.1 10.8 34.4 C15.8 17.2 32.1 5 50 5Z"
-    case .flower:
-      "M50 5.4 C57.2 5.4 63.9 9.6 66.9 16.1 C68.1 18.5 68.2 23.4 70.3 24.9 C72.4 26.4 76.6 25 79.2 25.2 C86.5 26 92.8 31.1 95 38 C97.3 44.9 95.3 52.7 90 57.6 C88 59.5 83.6 61 82.8 63.4 C82 66.2 84.6 69.4 85.2 72 C86.7 79.1 83.8 86.8 77.9 91 C72 95.3 64 95.8 57.7 92.3 C55.3 90.9 52.6 87.3 50 87.3 C47.4 87.3 44.5 91.1 42.1 92.4 C35.8 95.8 27.8 95.2 22 91 C16.2 86.7 13.4 79.3 14.8 72.2 C15.3 69.6 18 65.9 17.2 63.4 C16.4 60.9 12.1 59.6 10.2 57.8 C4.7 52.8 2.6 45 5 38 C7.3 31.1 13.4 26.1 20.6 25.3 C23.2 24.9 27.6 26.4 29.7 24.8 C31.8 23.3 31.9 18.5 33.1 16 C36.2 9.6 42.9 5.4 50 5.4Z"
-    case .sun:
-      "M50 4.1 C52.7 4 55.1 14.4 58.1 15.5 C58.9 15.9 60.3 16.3 61.2 16.2 C64 15.6 70.1 9.8 72.4 10 C74.1 10.2 73.8 12.3 73.8 13.6 C73.7 15.8 73 22.7 74.3 24.2 C74.8 24.9 75.7 25.9 76.4 26.2 C77.8 26.9 83.7 26.3 85.6 26.3 C86.9 26.3 89.6 25.7 90 27.5 C90.5 29.6 84.3 36.2 83.9 38.9 C83.7 39.8 84.2 41 84.5 41.8 C85.6 45 95.8 47.1 95.9 49.9 C96.1 52.7 85.7 55.1 84.5 58 C84.2 58.9 83.7 60.3 83.9 61.2 C84.4 63.8 90.5 70.5 90 72.6 C89.5 74.4 86.8 73.8 85.5 73.8 C83.5 73.8 78.2 73.2 76.6 73.8 C75.8 74.1 75 75 74.4 75.7 C72.9 77.3 73.7 83.9 73.8 86.3 C73.8 87.5 74.2 89.6 72.6 90 C70.5 90.5 63.8 84.3 61.2 83.9 C60.3 83.7 59 84.2 58.2 84.5 C55 85.6 52.9 95.8 50.1 95.9 C47.4 96.1 44.9 85.7 42 84.5 C41.2 84.2 39.8 83.7 38.9 83.9 C36.3 84.3 29.5 90.5 27.5 90 C25.8 89.6 26.3 87.5 26.3 86.3 C26.3 83.9 27.1 77.3 25.6 75.7 C25.1 75.1 24.4 74.2 23.6 73.8 C22.3 73.2 16.4 73.8 14.5 73.8 C13.2 73.8 10.5 74.4 10.1 72.6 C9.6 70.5 15.7 63.8 16.2 61.2 C16.3 60.3 15.9 58.8 15.5 58 C14.4 55.2 3.9 52.6 4.1 50 C4.2 47.2 14.4 45 15.6 41.9 C15.9 41.1 16.3 39.8 16.2 38.9 C15.8 36.2 9.6 29.8 10 27.5 C10.4 25.7 13.1 26.3 14.4 26.3 C16.4 26.3 22.1 26.9 23.6 26.2 C24.3 25.9 25.2 24.9 25.7 24.3 C27.1 22.7 26.3 15.9 26.3 13.6 C26.2 12.4 25.9 10.3 27.6 10 C30 9.7 36.2 15.9 39 16.2 C39.9 16.3 41.2 15.9 42 15.5 C44.9 14.4 47.3 4.1 50 4.1Z"
-    // The web draws an SVG arc from the top, clockwise; four cubic quarters match it.
-    case .circle:
-      "M50 3 C75.96 3 97 24.04 97 50 C97 75.96 75.96 97 50 97 C24.04 97 3 75.96 3 50 C3 24.04 24.04 3 50 3Z"
-    default: "M50 3 C77 1 99 24 98 51 C100 77 79 99 51 98 C23 99 2 80 2 51 C2 25 21 3 50 3Z"
-    }
-  }
-  static let paths = Dictionary(uniqueKeysWithValues: keys.map { ($0, SVGPath.parse(svg($0))) })
-  static let cached = Dictionary(uniqueKeysWithValues: keys.map { ($0, points($0)) })
-  static func path(_ body: AvatarBody) -> Path { paths[body] ?? SVGPath.parse(svg(body)) }
-  static func sampled(_ body: AvatarBody) -> PointVector { cached[body] ?? points(body) }
-  static func points(_ body: AvatarBody) -> PointVector {
+  /// Where an avatar's face sits: its shape's anchor, or the blob's for a shape this build does not know.
+  static func face(for avatar: AvatarConfig) -> AvatarCatalog.Face { avatar.drawnShape.art.face }
+  static let paths = Dictionary(uniqueKeysWithValues: AvatarConfig.shapes.map { ($0, SVGPath.parse(svg($0))) })
+  static let cached = Dictionary(uniqueKeysWithValues: AvatarConfig.shapes.map { ($0, points($0)) })
+  /// The exact outline, holes and all, drawn whenever no morph is under way.
+  static func path(_ shape: AvatarShape) -> Path { paths[shape] ?? paths[.blob]! }
+  static func sampled(_ shape: AvatarShape) -> PointVector { cached[shape] ?? cached[.blob]! }
+  static func points(_ shape: AvatarShape) -> PointVector { points(of: outside(svg(shape))) }
+  static func points(of d: String) -> PointVector {
     var all: [CGPoint] = []
     var current = CGPoint.zero
     var start = CGPoint.zero
-    SVGPath.parse(svg(body)).cgPath.applyWithBlock { elementPointer in
+    SVGPath.parse(d).cgPath.applyWithBlock { elementPointer in
       let element = elementPointer.pointee
       switch element.type {
       case .moveToPoint:
@@ -1064,105 +1071,51 @@ enum AvatarGeometry {
     }
     let lengths = zip(all, all.dropFirst()).map { hypot($1.x - $0.x, $1.y - $0.y) }
     let total = lengths.reduce(0, +)
-    var values: [Double] = []
+    var samples: [CGPoint] = []
+    // Positions only move forward along the outline, so one walk over its segments places them all.
+    var segment = 0
+    var sum = 0.0
     for index in 0..<72 {
       let position = total * Double(index) / 72
-      var sum = 0.0
-      for segment in lengths.indices {
-        if sum + lengths[segment] >= position || segment == lengths.count - 1 {
-          let t = lengths[segment] == 0 ? 0 : (position - sum) / lengths[segment]
-          let a = all[segment]
-          let b = all[segment + 1]
-          values.append(a.x + (b.x - a.x) * t)
-          values.append(a.y + (b.y - a.y) * t)
-          break
-        }
+      while sum + lengths[segment] < position && segment < lengths.count - 1 {
         sum += lengths[segment]
+        segment += 1
       }
+      let t = lengths[segment] == 0 ? 0 : (position - sum) / lengths[segment]
+      let a = all[segment]
+      let b = all[segment + 1]
+      samples.append(CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
     }
-    return PointVector(values: values)
+    return PointVector(values: aligned(samples).flatMap { [$0.x, $0.y] })
   }
-  /// Where each silhouette's face sits. Eyes follow the visual center of mass, so a triangle
-  /// or drop looks out from its wide base instead of its point.
-  struct Anchor {
-    var cy: Double
-    var scale: Double
-    var top: Double
-    var hat: Double
+  /// Twice the area the points enclose: positive when they run clockwise on screen, where y grows down.
+  static func signedArea(_ points: [CGPoint]) -> Double {
+    zip(points, points.dropFirst() + points.prefix(1)).reduce(0) { $0 + $1.0.x * $1.1.y - $1.1.x * $1.0.y }
   }
-  /// Where a character's face sits, by family. Characters without one use the shared mascot anchor.
-  /// Listed before `faces` because the ghost is both a character and a shape.
-  static let characterFaces: [AvatarFamily: Anchor] = [
-    .cactus: Anchor(cy: 50, scale: 0.88, top: 10, hat: 0.7),
-    .pumpkin: Anchor(cy: 53, scale: 0.95, top: 18, hat: 0.75),
-    .ghost: Anchor(cy: 47, scale: 0.95, top: 12, hat: 0.8),
-    .leprechaun: Anchor(cy: 54, scale: 0.9, top: 22, hat: 0.75),
-    .santa: Anchor(cy: 51, scale: 0.9, top: 22, hat: 0.75),
-    .rudolph: Anchor(cy: 54, scale: 0.9, top: 25, hat: 0.7),
-    .turkey: Anchor(cy: 54, scale: 0.85, top: 30, hat: 0.65),
-    .bunny: Anchor(cy: 57, scale: 0.9, top: 31, hat: 0.65),
-    .snowman: Anchor(cy: 52, scale: 0.95, top: 13, hat: 0.8),
-  ]
-  static func anchor(for avatar: AvatarConfig) -> Anchor {
-    switch avatar.body {
-    case .character(let family): return characterFaces[family] ?? mascotFace
-    case .mascot: return mascotFace
-    case .shape(let shape): return faces[shape] ?? faces[.blob]!
+  /// The same samples, clockwise, starting at the top: the sample nearest the vertical through the
+  /// middle of the shape, among those above the middle. Like `alignSamples` in
+  /// src/components/avatar-outline.ts. Sample `i` of one shape moves to sample `i` of the next, so
+  /// two outlines that start on different sides or run opposite ways would cross over each other
+  /// mid-morph and the body would collapse to a sliver.
+  static func aligned(_ points: [CGPoint]) -> [CGPoint] {
+    let ordered = signedArea(points) < 0 ? Array(points.reversed()) : points
+    guard !ordered.isEmpty else { return ordered }
+    let cx = ordered.reduce(0) { $0 + $1.x } / Double(ordered.count)
+    let cy = ordered.reduce(0) { $0 + $1.y } / Double(ordered.count)
+    var start: Int?
+    for (i, point) in ordered.enumerated() where point.y < cy {
+      guard let best = start.map({ ordered[$0] }) else { start = i; continue }
+      let closer = abs(point.x - cx) - abs(best.x - cx)
+      // Within a millionth of a unit two samples are equally central, and the higher one starts.
+      if closer < -1e-6 || (closer <= 1e-6 && point.y < best.y) { start = i }
     }
+    guard let start, start > 0 else { return ordered }
+    return Array(ordered[start...] + ordered[..<start])
   }
-  static let mascotFace = Anchor(cy: 55, scale: 1, top: 15, hat: 0.82)
-  static let faces: [AvatarShape: Anchor] = [
-    .blob: Anchor(cy: 50, scale: 1, top: 3, hat: 1),
-    .pebble: Anchor(cy: 50, scale: 1, top: 2, hat: 1),
-    .squircle: Anchor(cy: 50, scale: 1, top: 5, hat: 1),
-    .capsule: Anchor(cy: 47, scale: 0.9, top: 5, hat: 0.85),
-    .triangle: Anchor(cy: 65, scale: 0.82, top: 3, hat: 0.6),
-    .hex: Anchor(cy: 50, scale: 0.95, top: 5, hat: 0.95),
-    .cloud: Anchor(cy: 55, scale: 0.95, top: 12, hat: 0.9),
-    .drop: Anchor(cy: 63, scale: 0.9, top: 8, hat: 0.62),
-    .circle: Anchor(cy: 50, scale: 1, top: 3, hat: 1),
-    .diamond: Anchor(cy: 50, scale: 0.88, top: 7, hat: 0.7),
-    .sparkle: Anchor(cy: 50, scale: 0.8, top: 6, hat: 0.6),
-    .clover: Anchor(cy: 50, scale: 0.95, top: 5, hat: 0.75),
-    .heart: Anchor(cy: 48, scale: 0.95, top: 12, hat: 0.75),
-    .cookie: Anchor(cy: 50, scale: 0.95, top: 6, hat: 0.95),
-    .pentagon: Anchor(cy: 54, scale: 0.92, top: 7, hat: 0.7),
-    .burst: Anchor(cy: 51, scale: 0.9, top: 6, hat: 0.75),
-    .alien: Anchor(cy: 42, scale: 1, top: 6, hat: 1),
-    .ghost: Anchor(cy: 45, scale: 0.95, top: 5, hat: 0.95),
-    .flower: Anchor(cy: 51, scale: 0.85, top: 8, hat: 0.75),
-    .sun: Anchor(cy: 50, scale: 0.85, top: 15, hat: 0.8),
-  ]
 }
 
 /// Static artwork from src/components/Avatar.tsx, parsed once.
 private enum AvatarArt {
-  /// Mouths change every frame, so they are built directly instead of parsed.
-  static func sproutMouth(_ curve: Double) -> Path {
-    var p = Path()
-    p.move(to: CGPoint(x: 45, y: 70))
-    p.addQuadCurve(to: CGPoint(x: 55, y: 70), control: CGPoint(x: 50, y: 70 + 6 * curve))
-    return p
-  }
-  static func muzzleMouth(_ y: Double) -> Path {
-    var p = Path()
-    p.move(to: CGPoint(x: 50, y: 70.5))
-    p.addLine(to: CGPoint(x: 50, y: 73))
-    p.move(to: CGPoint(x: 43.5, y: 73))
-    p.addQuadCurve(to: CGPoint(x: 50, y: 73), control: CGPoint(x: 46.75, y: y))
-    p.addQuadCurve(to: CGPoint(x: 56.5, y: 73), control: CGPoint(x: 53.25, y: y))
-    return p
-  }
-  static let foxEar = AvatarPathData.foxEar.path
-  static let foxEarInner = AvatarPathData.foxEarInner.path
-  static let foxMuzzle = AvatarPathData.foxMuzzle.path
-  static let nose = AvatarPathData.nose.path
-  static let happyMouth = AvatarPathData.happyMouth.path
-  static let happySproutMouth = AvatarPathData.happySproutMouth.path
-  static let stem = AvatarPathData.stem.path
-  static let leafLeft = AvatarPathData.leafLeft.path
-  static let leafRight = AvatarPathData.leafRight.path
-  static let veins = AvatarPathData.veins.path
   static let hatCrown = AvatarPathData.hatCrown.path
   static let hatBand = AvatarPathData.hatBand.path
   static let hatBrim = AvatarPathData.hatBrim.path
@@ -1261,7 +1214,7 @@ private enum AvatarPropArt {
   }
 }
 
-/// Draws one frame of a drawn (geometric or mascot) avatar in the web's 116-unit viewBox.
+/// Draws one frame of a drawn avatar, a silhouette with eyes, in the web's 116-unit viewBox.
 struct AvatarArtwork {
   var avatar: AvatarConfig
   var state: ActivityState
@@ -1277,44 +1230,28 @@ struct AvatarArtwork {
     let face = frame.expression
     let bang = frame.morph.bang
     let symbolic = bang
-    let mascot = avatar.mode == .mascot
-    let family = avatar.family ?? .sprout
     let colorHex = avatar.color ?? "#1084FE"
     let color = Color(hex: colorHex)
     let eyes = avatar.eyes ?? .oval
     let accessory = avatar.accessory ?? .plain
-    let character = avatar.character
-    let anchor = AvatarGeometry.anchor(for: avatar)
-    let inkHex = AvatarMotion.faceInk(
-      character.map { CharacterAvatarArt.eyeSurroundColor($0, colorHex) } ?? colorHex, mascot: mascot)
-    // A panda's head is cream while its ears and eye patches take the chosen color.
-    let headHex = character.map { CharacterAvatarArt.headColor($0, colorHex) } ?? colorHex
-    let headFill = headHex == colorHex ? bodyColor : Color(hex: headHex)
-    let edge = AvatarMotion.bodyEdge(headHex)
-    let ink = Color(hex: inkHex)
-    // Glasses sit mostly on the head, so they contrast with it rather than with an eye patch.
-    let frameInk = headHex == colorHex ? ink : Color(hex: AvatarMotion.faceInk(headHex, mascot: mascot))
+    let anchor = AvatarGeometry.face(for: avatar)
+    let edge = AvatarMotion.bodyEdge(colorHex)
+    let ink = Color(hex: AvatarMotion.faceInk(colorHex))
     let eyeScale = anchor.scale
     let eyeWidth = avatar.eyeWidth ?? 1
     let eyeHeight = avatar.eyeHeight ?? 1
-    let eyeSpacing = avatar.eyeSpacing ?? 1
-    let eyeY = anchor.cy + pose.gazeY * 3 + (state == .waiting ? 2 : 0)
-    let eyeOffset = (mascot ? 17 : 15) * eyeSpacing * eyeScale
-    let center = AvatarMotion.project(pose.gazeX * 2, yaw: pose.yaw)
+    let rig = AvatarMotion.faceRig(
+      anchor, pose: pose, state: state, eyes: eyes, eyeWidth: eyeWidth, eyeSpacing: avatar.eyeSpacing ?? 1)
+    let fit = rig.fit
+    let eyeY = rig.eyeY
+    let center = rig.center
     let open = max(face.open * pose.blink * eyeHeight * eyeScale, 0.04)
-    // A pitched face rolls everything painted on it, eyes and muzzle alike, around the sphere.
-    let roll = AvatarMotion.pitchEyes(pose.pitch)
+    // A pitched face rolls everything painted on it around the sphere.
+    let roll = rig.roll
     // Dots replace pills outright; other eye styles shrink toward a dot instead.
-    let drawsPill = !(mascot && (eyes == .oval || eyes == .round)) && ![.spark, .visor, .round].contains(eyes)
+    let drawsPill = ![.spark, .visor, .round].contains(eyes)
     let dotShrink = drawsPill ? 1 + 0.12 * face.dot : 1 - 0.3 * face.dot
     let pillHeight = 25 - 14 * face.dot
-    // A smaller extra hat leaves a character's own cap, ears and antlers visible.
-    let hatAnchor: AvatarGeometry.Anchor
-    if let character, let hat = CharacterAvatarArt.hatAnchors[character] {
-      hatAnchor = .init(cy: anchor.cy, scale: anchor.scale, top: hat.top, hat: hat.hat)
-    } else {
-      hatAnchor = anchor
-    }
     let round = StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
     func stroke(_ width: Double) -> StrokeStyle {
       var style = round
@@ -1360,33 +1297,8 @@ struct AvatarArtwork {
           }
         }
         trails(front: false)
-        if let character { CharacterAvatarArt.back(layer, family: character, color: colorHex, yaw: pose.yaw) }
-        if mascot && (family == .bear || family == .fox) {
-          let inner = Color(
-            hex: AvatarMotion.tint(colorHex, family == .fox ? -0.35 : 0.45))
-          for direction in [-1.0, 1.0] {
-            let p = AvatarMotion.project(direction * 31, yaw: pose.yaw, radius: 44)
-            var ear = layer
-            ear.translateBy(x: 50 + p.x, y: 0)
-            ear.scaleBy(x: max(abs(cos(pose.yaw)), 0.35) * (direction < 0 ? 1 : -1), y: 1)
-            if family == .bear {
-              ear.fill(AvatarArt.circle(0, 24, 15), with: .color(color))
-              ear.fill(AvatarArt.circle(0, 25, 8), with: .color(inner))
-            } else {
-              ear.fill(AvatarArt.foxEar, with: .color(color))
-              ear.fill(AvatarArt.foxEarInner, with: .color(inner))
-            }
-          }
-        }
-        if mascot && family == .sprout {
-          var sprout = layer
-          sprout.translateBy(x: AvatarMotion.project(0, yaw: pose.yaw).x * 0.3, y: 0)
-          sprout.stroke(AvatarArt.stem, with: .color(Color(hex: "#3f7f55")), style: stroke(3))
-          sprout.fill(AvatarArt.leafLeft, with: .color(Color(hex: "#4f9d69")))
-          sprout.fill(AvatarArt.leafRight, with: .color(Color(hex: "#62b07a")))
-          sprout.stroke(AvatarArt.veins, with: .color(Color(hex: "#a9d9b3")), style: stroke(1.2))
-        }
-        layer.fill(body, with: .color(headFill))
+        // Nonzero filling leaves a hole, such as a mug's handle, wound against the outside open.
+        layer.fill(body, with: .color(bodyColor))
 
         var faceLayer = layer
         faceLayer.clip(to: body)
@@ -1394,77 +1306,21 @@ struct AvatarArtwork {
         faceLayer.translateBy(x: 0, y: anchor.cy + roll.y)
         faceLayer.scaleBy(x: 1, y: roll.scale)
         faceLayer.translateBy(x: 0, y: -anchor.cy)
-        let dark = Color(hex: "#2b201b")
-        if mascot && center.visible && roll.visible {
-          var muzzle = faceLayer
-          muzzle.translateBy(x: 50 + center.x, y: 0)
-          muzzle.scaleBy(x: center.scale, y: 1)
-          muzzle.translateBy(x: -50, y: 0)
-          let cream = Color(hex: "#fff3db")
-          if let character {
-            CharacterAvatarArt.face(muzzle, family: character, color: colorHex, ink: ink, mouth: face.mouth, happy: face.happy)
-          } else {
-            if family == .bear { muzzle.fill(AvatarArt.ellipse(50, 71, 18, 13), with: .color(cream)) }
-            if family == .fox { muzzle.fill(AvatarArt.foxMuzzle, with: .color(cream)) }
-            if family != .sprout { muzzle.fill(AvatarArt.nose, with: .color(dark)) }
-            var mouth = muzzle
-            mouth.opacity = 1 - face.happy
-            if family == .sprout {
-              mouth.stroke(AvatarArt.sproutMouth(face.mouth), with: .color(ink), style: stroke(2.4))
-            } else {
-              let curve = 73 + 4 * face.mouth
-              mouth.stroke(AvatarArt.muzzleMouth(curve), with: .color(dark), style: stroke(2))
-            }
-            if face.happy > 0.01 {
-              var smile = muzzle
-              smile.opacity = face.happy
-              smile.fill(
-                family == .sprout ? AvatarArt.happySproutMouth : AvatarArt.happyMouth,
-                with: .color(dark))
-            }
-          }
-        }
-        if mascot && roll.visible && !(character.map(CharacterAvatarArt.cheekless.contains) ?? false) {
-          for direction in [-1.0, 1.0] {
-            let p = AvatarMotion.project(direction * 27, yaw: pose.yaw)
-            guard p.visible else { continue }
-            var cheek = faceLayer
-            cheek.opacity = 0.42
-            cheek.fill(
-              AvatarArt.ellipse(50 + p.x, anchor.cy + 12, 6 * p.scale, 3.8),
-              with: .color(Color(hex: "#ff7a8a")))
-          }
-        }
-        for direction in roll.visible ? [-1.0, 1.0] : [] {
-          let p = AvatarMotion.project(direction * eyeOffset + pose.gazeX * 4, yaw: pose.yaw)
+        for placed in roll.visible ? rig.eyes : [] {
+          let p = placed.projection
           guard p.visible else { continue }
-          let side = -direction
+          let side = -placed.direction
           // Near eyes read a little larger as the face turns, and a pop of surprise grows both.
-          let grow = AvatarMotion.perspective(p.scale) * pose.eyeScale * dotShrink
+          let grow = AvatarMotion.perspective(p.scale) * pose.eyeScale * dotShrink * fit
           var eye = faceLayer
-          eye.translateBy(x: 50 + p.x, y: eyeY)
-          if let character {
-            CharacterAvatarArt.eyeSurround(
-              eye, family: character, side: side, color: colorHex, scaleX: p.scale * eyeScale,
-              scale: eyeScale)
-          }
+          eye.translateBy(x: placed.x, y: eyeY)
           if face.happy < 0.999 {
             var shape = eye
             shape.opacity = 1 - face.happy
             let squint = 1 + (1 - min(face.open, 1)) * 0.4
             let widthScale = p.scale * eyeWidth * eyeScale * grow * squint
             shape.scaleBy(x: widthScale, y: open * grow)
-            if mascot && (eyes == .oval || eyes == .round) {
-              shape.fill(
-                AvatarArt.ellipse(0, 0, eyes == .oval ? 6.5 : 7.5, eyes == .oval ? 8.5 : 7.5),
-                with: .color(ink))
-              if inkHex != "#fff3db" {
-                shape.fill(AvatarArt.circle(-2 * side, -3.6, 2.5), with: .color(.white))
-                var glint = shape
-                glint.opacity *= 0.8
-                glint.fill(AvatarArt.circle(2.4 * side, 2.8, 1.1), with: .color(.white))
-              }
-            } else if eyes == .spark {
+            if eyes == .spark {
               shape.fill(AvatarArt.spark, with: .color(ink))
             } else if eyes == .visor {
               shape.fill(
@@ -1485,31 +1341,30 @@ struct AvatarArtwork {
           if face.happy > 0.01 {
             var arc = eye
             arc.opacity = face.happy
-            arc.scaleBy(x: p.scale * eyeWidth * eyeScale, y: eyeScale)
+            arc.scaleBy(x: p.scale * eyeWidth * eyeScale * fit, y: eyeScale * fit)
             arc.stroke(AvatarArt.happyEye, with: .color(ink), style: stroke(4.5))
           }
           if accessory == .glasses {
             eye.stroke(
-              AvatarArt.ellipse(0, 0, 12.5 * eyeScale * p.scale, 12.5 * eyeScale),
-              with: .color(frameInk), lineWidth: 2.5)
+              AvatarArt.ellipse(0, 0, 12.5 * eyeScale * p.scale * fit, 12.5 * eyeScale * fit),
+              with: .color(ink), lineWidth: 2.5)
           }
         }
         if accessory == .glasses && center.visible && roll.visible {
           var bridge = Path()
-          bridge.move(to: CGPoint(x: 50 + center.x - 4 * center.scale, y: eyeY - 2))
+          bridge.move(to: CGPoint(x: rig.centerX - 4 * center.scale, y: eyeY - 2))
           bridge.addQuadCurve(
-            to: CGPoint(x: 50 + center.x + 4 * center.scale, y: eyeY - 2),
-            control: CGPoint(x: 50 + center.x, y: eyeY - 5))
-          faceLayer.stroke(bridge, with: .color(frameInk), style: stroke(2.5))
+            to: CGPoint(x: rig.centerX + 4 * center.scale, y: eyeY - 2),
+            control: CGPoint(x: rig.centerX, y: eyeY - 5))
+          faceLayer.stroke(bridge, with: .color(ink), style: stroke(2.5))
         }
         if let edge {
           layer.stroke(body, with: .color(Color(hex: edge)), style: StrokeStyle(lineWidth: 2.2))
         }
-        if let character { CharacterAvatarArt.front(layer, family: character, yaw: pose.yaw) }
         if accessory == .hat {
           var hat = layer
-          hat.translateBy(x: 50, y: hatAnchor.top + 15 * hatAnchor.hat)
-          hat.scaleBy(x: hatAnchor.hat, y: hatAnchor.hat)
+          hat.translateBy(x: rig.hatX, y: rig.hatY)
+          hat.scaleBy(x: rig.hatScale, y: rig.hatScale)
           hat.fill(AvatarArt.hatCrown, with: .color(Color(hex: "#3a2f28")))
           hat.fill(AvatarArt.hatBand, with: .color(Color(hex: "#b48156")))
           hat.fill(AvatarArt.hatBrim, with: .color(Color(hex: "#302925")))
@@ -1517,7 +1372,7 @@ struct AvatarArtwork {
         if size >= 40 && pose.ticks > 0.01 {
           var marks = layer
           marks.opacity = min(pose.ticks, 1)
-          for d in AvatarMotion.tickMarks(level: pose.ticks, side: pose.tickSide, top: hatAnchor.top) {
+          for d in AvatarMotion.tickMarks(level: pose.ticks, side: pose.tickSide, top: anchor.top) {
             marks.stroke(SVGPath.parse(d), with: .color(bodyColor), style: stroke(4.2))
           }
         }
@@ -1544,9 +1399,12 @@ struct AvatarArtwork {
       symbol.translateBy(x: 0, y: -30)
       symbol.scaleBy(x: 0.4 + 0.6 * bang, y: 0.4 + 0.6 * bang)
       symbol.translateBy(x: -50, y: -50)
+      // The symbol stands in for the body, so a very light one keeps the body's soft edge.
       symbol.drawLayer { context in
-        context.fill(AvatarArt.bang, with: .color(color))
-        context.fill(AvatarArt.circle(50, 79, 7.5), with: .color(color))
+        for mark in [AvatarArt.bang, AvatarArt.circle(50, 79, 7.5)] {
+          context.fill(mark, with: .color(color))
+          if let edge { context.stroke(mark, with: .color(Color(hex: edge)), style: StrokeStyle(lineWidth: 2.2)) }
+        }
       }
     }
   }
@@ -1635,7 +1493,7 @@ struct AvatarView: View {
         entered: snapshot.entered, held: heldProp != nil,
         now: date.timeIntervalSinceReferenceDate)
   }
-  private var geometry: AvatarBody { avatar.body }
+  private var geometry: AvatarShape { avatar.drawnShape }
   private var colorHex: String { avatar.color ?? "#1084FE" }
   private var frozen: Bool { AvatarMotion.frozenStates.contains(state) }
   private func still(_ state: ActivityState) -> Bool {
@@ -1727,7 +1585,7 @@ struct AvatarView: View {
   private func morphProgress(_ date: Date) -> Double {
     AvatarMotion.smoothstep(date.timeIntervalSince(morphAt) / AvatarMotion.shapeDuration)
   }
-  private func bodyPoints(at date: Date, previous: AvatarBody) -> PointVector {
+  private func bodyPoints(at date: Date, previous: AvatarShape) -> PointVector {
     let target = AvatarGeometry.sampled(previous)
     guard let morphFrom, morphProgress(date) < 1 else { return target }
     return morphFrom.mixed(with: target, morphProgress(date))

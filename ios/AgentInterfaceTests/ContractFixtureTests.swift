@@ -35,9 +35,9 @@ private typealias Check = @MainActor (Data) throws -> Void
     },
     "bootstrap": check(Bootstrap.self) {
       XCTAssertEqual($0.bots.map(\.activity), [.working, .waiting, .done])
-      XCTAssertEqual($0.bots.map(\.avatar?.mode), [.geometric, .mascot, .portrait])
-      XCTAssertEqual($0.bots[0].avatar?.body, .shape(.pebble))
-      XCTAssertEqual($0.bots[1].avatar?.family, .fox); XCTAssertEqual($0.bots[2].avatar?.origin, "generated")
+      XCTAssertEqual($0.bots.map(\.avatar?.mode), [.geometric, .geometric, .portrait])
+      XCTAssertEqual($0.bots[0].avatar?.drawnShape, .pebble)
+      XCTAssertEqual($0.bots[1].avatar?.drawnShape, .fox); XCTAssertEqual($0.bots[2].avatar?.origin, "generated")
       XCTAssertEqual($0.bots[0].avatar?.eyeSpacing, 1.2); XCTAssertEqual($0.bots[1].ownerId, "local-one")
       XCTAssertEqual($0.household.count, 2); XCTAssertNotNil($0.user.picture); XCTAssertNil($0.csrfToken)
       XCTAssertEqual($0.preferences.notifications?.batchMinutes, 15); XCTAssertEqual($0.preferences.sections.first?.botIds, ["household", "garden"])
