@@ -2263,6 +2263,23 @@ describe("send anchor", () => {
     expect(top("mine")).toBe(24);
   });
 
+  // Space presses a button and scrolls nothing, so the anchor a send set stays.
+  it("keeps this person's sent message near the top after Space presses a button in the transcript", async () => {
+    layout({ q: 400, a: 600, mine: 1800 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    const button = document.createElement("button");
+    container.querySelector(".transcript")!.append(button);
+    await act(async () =>
+      button.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
+      ),
+    );
+    await show([...conversation.messages, prompt("mine", "My new question")]);
+    expect(top("mine")).toBe(24);
+  });
+
   it("keeps this person's sent message near the top when another member posts after it", async () => {
     layout({ q: 400, a: 600, mine: 1800, theirs: 2200 });
     conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };

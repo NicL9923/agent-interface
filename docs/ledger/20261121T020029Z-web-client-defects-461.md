@@ -154,3 +154,11 @@ The classifier now stops at a fixed box, which covers a modal dialog, because su
 | The previous commit's `scroll-follow.ts` | Red: `does not hear Up at the top of a box that contains overscroll` and `does not hear keys pressed in the Always allow dialog as scrolling` |
 | No check for a fixed box                 | Red: the dialog test                                                                                                                          |
 | `overscroll-behavior-y` ignored          | Red: the contained box test                                                                                                                   |
+
+### Review 6. No test sent plain Space
+
+The Space test sent only Shift Space, which ends following. Plain Space on a button ends a send's anchor, and nothing tested it. `keeps this person's sent message near the top after Space presses a button in the transcript` anchors a send, presses Space on a button in the transcript, and checks that the sent message still lands 24 px from the top.
+
+| Break                                        | Result                                               |
+| -------------------------------------------- | ---------------------------------------------------- |
+| The Space check applies only with Shift held | Red: the new test. The Shift Space test stayed green |
