@@ -94,6 +94,10 @@ const prefixes = (text: string) =>
 describe("holding back a streaming reply's unfinished tail", () => {
   // The contract is mechanical, so it is checked on every prefix rather than by sampling formatting.
   it("returns a prefix, holds at most the bound on the last line, and never cuts code", () => {
+    // Rule 4's one exception: a table header held with its delimiter row, each within the bound.
+    const headerOverDelimiter = (held: string) =>
+      /^ {0,3}\|[^\r\n]*(?:\r\n|\r|\n)[-|: \t]*$/.test(held) &&
+      held.split(/\r\n|\r|\n/).every((line) => line.length <= HOLD_LIMIT);
     const faults: string[] = [];
     let cuts = 0;
     for (const text of [...replies, ...samples(fragments, 400, 40)])
@@ -102,10 +106,17 @@ describe("holding back a streaming reply's unfinished tail", () => {
           held = prefix.slice(shown.length);
         if (!prefix.startsWith(shown))
           faults.push(`not a prefix: ${JSON.stringify([prefix, shown])}`);
-        else if (held.length > HOLD_LIMIT) faults.push(`over the bound: ${JSON.stringify(prefix)}`);
+        else if (headerOverDelimiter(held)) {
+          // It starts at a line start, and was already held one character earlier: a shown line never goes away.
+          if (shown && !/[\r\n]$/.test(shown))
+            faults.push(`header cut mid-line: ${JSON.stringify([prefix, shown])}`);
+          else if (streamingHoldBack(prefix.slice(0, -1)).length > shown.length)
+            faults.push(`hid a shown header: ${JSON.stringify([prefix, shown])}`);
+        } else if (held.length > HOLD_LIMIT)
+          faults.push(`over the bound: ${JSON.stringify(prefix)}`);
         else if (/[\r\n]/.test(held))
           faults.push(`crossed a line break: ${JSON.stringify([prefix, shown])}`);
-        else if (
+        if (
           held &&
           codeRanges(parse(prefix)).some(
             ([start, end]) => start < prefix.length && end > shown.length,
@@ -173,7 +184,25 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ],
     ["a reference link's label", "See [the docs][r", "See ", "See [the docs][r] now"],
     ["link text that may still gain a destination", "See [the docs]", "See ", "See [the docs] now"],
-    ["a table header", "Intro\n\n| Day | Me", "Intro\n\n", "Intro\n\n| Day | Meal |\n"],
+    [
+      "a table header",
+      "Intro\n\n| Day | Me",
+      "Intro\n\n",
+      "Intro\n\n| Day | Meal |\n| --- | --- |\n",
+    ],
+    // The reported case: the header showed as raw pipes in a bubble until its delimiter row ended.
+    [
+      "a table header over its delimiter row",
+      "Intro\n\n| Day | Meal |\n| --- | :-",
+      "Intro\n\n",
+      "Intro\n\n| Day | Meal |\n| --- | :---: |\n",
+    ],
+    [
+      "a table header before its delimiter row starts",
+      "Intro\n| Day |\r\n",
+      "Intro\n",
+      "Intro\n| Day |\r\n|-|\n",
+    ],
     ["a line of markers", "Title\n--", "Title\n", "Title\n-- and more"],
     ["a trailing marker run after a space", "Feed the **", "Feed the ", "Feed the ** now"],
     ["a lone pipe at the end", "Pick a |", "Pick a ", "Pick a | b"],
@@ -221,6 +250,16 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["an escaped backtick", "Type \\`x"],
     ["a link title holding a backtick", 'See [docs](https://example.test "Run `x") now'],
     ["a table header longer than the bound", `| ${"Day | ".repeat(25)}`],
+    ["a table header longer than the bound, once it ends", `| ${"Day | ".repeat(25)}\n`],
+    ["a line starting with a pipe once the next line reads as prose", "| Day |\n- Saturday"],
+    ["a table row under another row", "| Day |\n| --- |\n| Sat |\n"],
+    ["a line starting with a pipe before a blank line", "| Day |\n\n"],
+    [
+      "a table header over a delimiter row longer than the bound",
+      `| Day |\n|${"-".repeat(HOLD_LIMIT)}`,
+    ],
+    ["pipes inside inline code", "Run `ls | wc -l`\n"],
+    ["pipes inside a code fence", `${fence}\n| Day |\n`],
     ["a line of markers longer than the bound", "-".repeat(HOLD_LIMIT + 1)],
     ["a fenced code line", `${fence}py\nx = **kw`],
     ["a code line in a list item's fence", `- Code:\n\n    ${fence}\n\n  **literal`],
@@ -242,6 +281,7 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["an underscore name", "_private is the field name used throughout this example."],
     ["a starred name", "*args are passed through unchanged to the wrapped function."],
     ["a line starting with a pipe", "| this is a paragraph of ordinary prose, not a table."],
+    ["a pipe, on the line above", "| this is a paragraph of ordinary prose, not a table.\n"],
     ["a bracket", "[ a bracket followed by plain prose."],
     ["a question in a list item", "- *args or **kwargs?"],
     ["a quoted sentence", '> _private is "the field."'],

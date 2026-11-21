@@ -7,7 +7,8 @@
  * - The result is a prefix of the input. No character is added, removed or reordered, so the live
  *   view only ever shows a state the reply actually passed through.
  * - At most HOLD_LIMIT characters are held, all on the last line: the cut never crosses a line
- *   break. A construct that started further back is shown as typed.
+ *   break. A construct that started further back is shown as typed. The one exception is rule 4's
+ *   header over its delimiter row, which holds two lines of at most HOLD_LIMIT each.
  * - A block longer than BLOCK_LIMIT comes back whole without being read. Otherwise each step is
  *   one pass over at most BLOCK_LIMIT characters, so the cost does not grow with the reply.
  * - Code is never cut. A block with any fence-shaped line, or whose last line is indented as
@@ -26,7 +27,10 @@
  * 3. A link or image whose text or destination is still arriving. Its `[` must follow a space,
  *    the line start, `(`, `*` or a quote, so `arr[0` and a URL holding `[` show at once, unless
  *    `](` or `][` already makes it a link.
- * 4. A table header: a last line starting with `|` under a line that does not.
+ * 4. A table header: a last line starting with `|` under a line that does not. Once it ends, it
+ *    stays held with the next line while that line holds only `|`, `:`, `-`, spaces and tabs, as
+ *    a delimiter row does while it arrives. The first other character shows both lines. Only a
+ *    header held while it was the last line stays held, so a line already shown never goes away.
  * 5. A run that cannot be classified yet: a last line of only `-`, `=`, `*`, `_`, `+`, `#`, `|`,
  *    `:`, `~` and `>`, which may become a rule, heading underline, list item, heading or delimiter
  *    row; or a trailing `*`, `_`, `~` or `|` run after a space.
@@ -43,6 +47,10 @@ const container = String.raw`(?:[ \t>]|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))*`;
 const fenceLine = new RegExp(String.raw`^${container}(?:\`{3,}|~{3,})`, "m");
 const containerPrefix = new RegExp(`^${container}`);
 const markerLine = /^[ \t]*[-=*_+#|:~>][-=*_+#|:~> \t]*$/;
+// A line that may start a table row, as React Markdown's GFM tables read one.
+const tableRow = /^ {0,3}\|/;
+// What a delimiter row holds while it arrives, before any cell's dashes end: `| --- | :-`.
+const delimiterSoFar = /^[-|: \t]*$/;
 const spaceOrOpening = /[\s([{"'\u2018\u201c]/;
 const letterOrDigit = /[\p{L}\p{N}]/u;
 const opensAfter = {
@@ -64,10 +72,12 @@ export function streamingHoldBack(text: string): string {
     const lineStart = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1;
     const line = text.slice(lineStart);
     if (/[\t]| {4}/.test(containerPrefix.exec(line)![0])) return text;
+    const header = heldHeader(text, lineStart, line);
+    if (header !== undefined) return text.slice(0, header);
     const earliest = text.length - HOLD_LIMIT - lineStart;
     const cut =
       markerLine.test(line) ||
-      (/^ {0,3}\|/.test(line) && !/^ {0,3}\|/.test(previousLine(text, lineStart)))
+      (tableRow.test(line) && !tableRow.test(previousLine(text, lineStart).line))
         ? 0
         : inlineCut(line, earliest);
     if (cut === undefined || cut < earliest) return text;
@@ -81,14 +91,29 @@ export function streamingHoldBack(text: string): string {
   }
 }
 
-function previousLine(text: string, lineStart: number): string {
-  if (lineStart === 0) return "";
+/** The line that ends just before `lineStart`, and where it starts. */
+function previousLine(text: string, lineStart: number): { line: string; start: number } {
+  if (lineStart === 0) return { line: "", start: 0 };
   let end = lineStart - 1;
   if (text[end] === "\n" && text[end - 1] === "\r") end--;
-  return text.slice(
-    Math.max(text.lastIndexOf("\n", end - 1), text.lastIndexOf("\r", end - 1)) + 1,
-    end,
-  );
+  const start = Math.max(text.lastIndexOf("\n", end - 1), text.lastIndexOf("\r", end - 1)) + 1;
+  return { line: text.slice(start, end), start };
+}
+
+/**
+ * Where rule 4's table header starts when its delimiter row is still the last line: the line above
+ * is a header that rule 4 held while it was last, and this one could still become its delimiter row.
+ */
+function heldHeader(text: string, lineStart: number, line: string): number | undefined {
+  if (line.length > HOLD_LIMIT || !delimiterSoFar.test(line)) return undefined;
+  const header = previousLine(text, lineStart);
+  return lineStart > 0 &&
+    header.line.length <= HOLD_LIMIT &&
+    tableRow.test(header.line) &&
+    !tableRow.test(previousLine(text, header.start).line) &&
+    !sentenceEnd.test(header.line)
+    ? header.start
+    : undefined;
 }
 
 /** Where an unfinished inline construct on the line starts, if one does. One pass over the line. */

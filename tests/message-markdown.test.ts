@@ -498,7 +498,12 @@ describe("streaming Markdown", () => {
         () => lines[pick(lines.length)] + (pick(3) ? "\n" : "\n\n"),
       ).join("");
       const text = `See [docs][a] and [x][a b], note[^a].\n\nIntro.\n\n${body}`;
-      if ((await renderAs(StreamingMarkdown, text)) !== (await renderAs(MessageMarkdown, text)))
+      const live = await renderAs(StreamingMarkdown, text);
+      if (live === (await renderAs(MessageMarkdown, text))) continue;
+      // A last line that may be a table header waits live for its delimiter row; the rest shows as saved.
+      const header = /(?<=^|\n)\|[^\n]*\n$/.exec(text);
+      const before = header && text.slice(0, header.index);
+      if (before === null || live !== (await renderAs(MessageMarkdown, before)))
         diverged.push(text);
     }
     expect(diverged).toEqual([]);
@@ -728,6 +733,13 @@ describe("a streamed reply once saved", () => {
   ];
   it.each(reported)("shows a reported input as it shows opened fresh: %#", async (text) => {
     expect(await streamedThenSaved(text)).toBe(await openedFresh(text));
+  });
+
+  it("shows a table header whose delimiter row never came once the reply is saved", async () => {
+    const text = "The schedule:\n\n| Day | Meal |\n";
+    // While it streams, the header waits for a delimiter row.
+    expect(await renderAs(createElement(StreamingMarkdown, { text }))).not.toContain("Day");
+    expect(await streamedThenSaved(text)).toContain("| Day | Meal |");
   });
 
   it("shows the two inputs this round found in blocks as the whole parse does", async () => {
