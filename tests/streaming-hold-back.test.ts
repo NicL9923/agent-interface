@@ -206,6 +206,19 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["a line of markers", "Title\n--", "Title\n", "Title\n-- and more"],
     ["a trailing marker run after a space", "Feed the **", "Feed the ", "Feed the ** now"],
     ["a lone pipe at the end", "Pick a |", "Pick a ", "Pick a | b"],
+    // The reviewer's cases: a pipe on the line above, in code or a heading, does not stop a table there.
+    [
+      "a table header under a line with a pipe in code",
+      "Use `|` as a separator.\n| Day | Meal |\n",
+      "Use `|` as a separator.\n",
+      "Use `|` as a separator.\n| Day | Meal |\n| --- | --- |\n",
+    ],
+    [
+      "a table header under a heading with a pipe",
+      "# A | B\n| Day | Meal |\n| --",
+      "# A | B\n",
+      "# A | B\n| Day | Meal |\n| --- | --- |\n",
+    ],
     // A word's inner underscore cannot close emphasis, so the opener before it stays open.
     [
       "an emphasis opener past a word with an underscore",
@@ -253,6 +266,11 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["a table header longer than the bound, once it ends", `| ${"Day | ".repeat(25)}\n`],
     ["a line starting with a pipe once the next line reads as prose", "| Day |\n- Saturday"],
     ["a table row under another row", "| Day |\n| --- |\n| Sat |\n"],
+    // The reviewer's cases: rows of a table whose delimiter row or an earlier row has no pipe at the start.
+    ["a table row under a one-column delimiter row without pipes", "| Meal |\n:---\n| Soup |\n"],
+    ["a table row under a row without pipes", "| Meal |\n|---|\nPasta\n| Soup |\n"],
+    // A list item's paragraph takes this line in, and no delimiter row can make it a table.
+    ["a line a list item's paragraph takes in", "- item\nText **bold**\n| - | - |\n"],
     // The reviewer's case: a table whose delimiter row, or a row above, has no leading pipe.
     [
       "a table row under a delimiter row without a leading pipe",

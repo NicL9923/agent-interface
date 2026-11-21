@@ -24,7 +24,7 @@ import {
   atTrueEnd,
   distanceToEnd,
   endReserve,
-  keyScrollsTranscript,
+  keyScroll,
   scrollIntent,
 } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
@@ -865,7 +865,14 @@ export function useConversation(
     const key = (event: KeyboardEvent) => {
       if (!(event.target instanceof Node) || !element.contains(event.target)) return;
       const intent = scrollIntent(event);
-      if (intent && keyScrollsTranscript(event, element, intent)) intend(intent);
+      if (!intent) return;
+      const scrolls = keyScroll(event, element, intent);
+      // Where the engines differ, the answer that never moves the reader back wins. A send's anchor would
+      // pull a reader WebKit scrolled back to the sent message, and nothing else would notice the move, so
+      // the key ends it. Following goes on: Chromium scrolled nothing, and measurePosition hears WebKit's
+      // move up within a frame.
+      if (scrolls === "scrolls" || (scrolls === "unknown" && mode.current === "anchored"))
+        intend(intent);
     };
     // A press on the scroll bar lands on the container itself, beyond its content box.
     const press = (event: PointerEvent) => {

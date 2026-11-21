@@ -148,7 +148,22 @@ function streamReply(thread: Message[], runId: string, prompt: string) {
   // "Echo: …" streams the rest back and leaves the turn running, so a test can measure the live row as it stands.
   const echo = /^Echo: ([\s\S]*)$/.exec(prompt)?.[1];
   if (echo !== undefined) words(echo);
-  else {
+  // A tool's output longer than its box shows, then a slow reply that keeps the transcript laying out, and a turn
+  // left running, so a test can scroll out of that box while the reply grows.
+  else if (prompt === "Read the gate log") {
+    steps.push(() => {
+      thread.push({
+        id: randomUUID(),
+        runId,
+        role: "tool",
+        toolName: "terminal",
+        text: Array.from({ length: 80 }, (_, line) => `gate ${line + 1}: latched`).join("\n"),
+        createdAt: new Date().toISOString(),
+      });
+      structural(STREAMING);
+    });
+    words("The log shows every gate latched overnight, ".repeat(40));
+  } else {
     words("Looking at the north fence.");
     // The tool starts and ends within a second, so the change notice for its end waits out the stream's
     // one-a-second throttle, and the chat reads again only after several more words. Only a turn read brings

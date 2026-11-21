@@ -10,7 +10,8 @@
  *   break. A construct that started further back is shown as typed. The one exception is rule 4's
  *   header over its delimiter row, which holds two lines of at most HOLD_LIMIT each.
  * - A block longer than BLOCK_LIMIT comes back whole without being read. Otherwise each step is
- *   one pass over at most BLOCK_LIMIT characters, so the cost does not grow with the reply.
+ *   one pass over at most BLOCK_LIMIT characters, so the cost does not grow with the reply. A line
+ *   that may be a table header adds one Markdown parse of the block, which is no longer.
  * - Code is never cut. A block with any fence-shaped line, or whose last line is indented as
  *   code, comes back whole.
  * - Only a construct recognized as unfinished is held; anything else comes back whole.
@@ -27,15 +28,20 @@
  * 3. A link or image whose text or destination is still arriving. Its `[` must follow a space,
  *    the line start, `(`, `*` or a quote, so `arr[0` and a URL holding `[` show at once, unless
  *    `](` or `][` already makes it a link.
- * 4. A table header: a last line starting with `|` under a line with no `|` at all, so not a row or
- *    delimiter row of a table above, in either form, and not prose holding a pipe. Once it ends, it
- *    stays held with the next line while that line holds only `|`, `:`, `-`, spaces and tabs, as
- *    a delimiter row does while it arrives. The first other character shows both lines. Only a
- *    header held while it was the last line stays held, so a line already shown never goes away.
+ * 4. A table header: a last line starting with `|` that React Markdown's parser would read as a table's
+ *    header row once a delimiter row followed it. So a row of a table above is not one, nor a line a list
+ *    item's paragraph takes in. Once it ends, it stays held with the next line while that line holds only
+ *    `|`, `:`, `-`, spaces and tabs, as a delimiter row does while it arrives. The first other character
+ *    shows both lines. Only a header held while it was the last line stays held, so a line already
+ *    shown never goes away.
  * 5. A run that cannot be classified yet: a last line of only `-`, `=`, `*`, `_`, `+`, `#`, `|`,
  *    `:`, `~` and `>`, which may become a rule, heading underline, list item, heading or delimiter
  *    row; or a trailing `*`, `_`, `~` or `|` run after a space.
  */
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
+
 /** The most characters held back: about one short phrase, a bold term or a link to a docs page. */
 export const HOLD_LIMIT = 120;
 /** The longest block read, so every pass is bounded; a longer block shows as typed. */
@@ -77,9 +83,7 @@ export function streamingHoldBack(text: string): string {
     if (header !== undefined) return cutAt(text, header);
     const earliest = text.length - HOLD_LIMIT - lineStart;
     const cut =
-      markerLine.test(line) || opensTable(line, previousLine(text, lineStart).line)
-        ? 0
-        : inlineCut(line, earliest);
+      markerLine.test(line) || becomesHeader(text, lineStart) ? 0 : inlineCut(line, earliest);
     if (cut === undefined || cut < earliest) return text;
     // Only quote and list markers stay before the cut, so the hold hides everything the line says.
     if (containerPrefix.exec(line)![0].length >= cut && sentenceEnd.test(line)) return text;
@@ -113,15 +117,49 @@ function heldHeader(text: string, lineStart: number, line: string): number | und
   const header = previousLine(text, lineStart);
   return lineStart > 0 &&
     header.line.length <= HOLD_LIMIT &&
-    opensTable(header.line, previousLine(text, header.start).line) &&
-    !sentenceEnd.test(header.line)
+    !sentenceEnd.test(header.line) &&
+    becomesHeader(text.slice(0, header.start + header.line.length), header.start)
     ? header.start
     : undefined;
 }
 
-/** Whether `line` may be a table's header row: rule 4's shape, with no table or pipe on the line above. */
-function opensTable(line: string, above: string) {
-  return tableRow.test(line) && !above.includes("|");
+/**
+ * Whether the last line of `text`, which starts at `start`, would be a table's header row once a delimiter
+ * row with as many cells followed it. The parser answers, as React Markdown parses the block, so a row of a
+ * table above, a line in a list item's paragraph, or a line in code is not one. Only a line starting with
+ * `|` is asked, which keeps the parse rare.
+ */
+function becomesHeader(text: string, start: number) {
+  const line = text.slice(start);
+  if (!tableRow.test(line)) return false;
+  const delimiter = `${/^ */.exec(line)![0]}|${"-|".repeat(cellCount(line))}`;
+  const row = (text.slice(0, start).match(/\r\n|\r|\n/g)?.length ?? 0) + 1;
+  const headed = (node: MdastNode): boolean =>
+    node.type === "table"
+      ? node.children?.[0]?.position?.start.line === row
+      : !!node.children?.some(headed);
+  return headed(
+    fromMarkdown(`${text}\n${delimiter}`, {
+      extensions: [gfm()],
+      mdastExtensions: [gfmFromMarkdown()],
+    }),
+  );
+}
+type MdastNode = { type: string; children?: MdastNode[]; position?: { start: { line: number } } };
+
+/**
+ * How many cells GFM splits a row into: at each `|` no backslash escapes, less a leading and a trailing one.
+ * A miscount only means the parser finds no table, so the line shows as typed.
+ */
+function cellCount(row: string) {
+  const trimmed = row.trim();
+  const pipes = [...trimmed.matchAll(/(?<!\\)(?:\\\\)*\|/g)].map(
+    (match) => match.index + match[0].length - 1,
+  );
+  const edges =
+    (trimmed.startsWith("|") ? 1 : 0) +
+    (trimmed.length > 1 && pipes.at(-1) === trimmed.length - 1 ? 1 : 0);
+  return Math.max(1, pipes.length + 1 - edges);
 }
 
 /** Where an unfinished inline construct on the line starts, if one does. One pass over the line. */

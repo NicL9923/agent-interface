@@ -2280,6 +2280,30 @@ describe("send anchor", () => {
     expect(top("mine")).toBe(24);
   });
 
+  // The reviewer's case: WebKit scrolls the transcript with Down from a tool's output box at its end, though the
+  // box contains overscroll, and Chromium does not. Ending the anchor leaves the reader where WebKit put them.
+  it("ends a send's anchor on Down from the end of a box that contains overscroll", async () => {
+    layout({ q: 400, a: 600, mine: 1800 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    const output = document.createElement("pre");
+    output.tabIndex = 0;
+    // As transcript.css styles a tool's output.
+    output.style.overflowY = "auto";
+    output.style.overscrollBehaviorY = "contain";
+    container.querySelector(".transcript")!.append(output);
+    // At the end of its 2600 px, in its 400 px.
+    output.scrollTop = 2200;
+    await act(async () =>
+      output.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+      ),
+    );
+    await show([...conversation.messages, prompt("mine", "My new question")]);
+    expect(top("mine")).not.toBe(24);
+  });
+
   it("keeps this person's sent message near the top when another member posts after it", async () => {
     layout({ q: 400, a: 600, mine: 1800, theirs: 2200 });
     conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };

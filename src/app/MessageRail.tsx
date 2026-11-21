@@ -117,8 +117,10 @@ export const MessageRail = memo(function MessageRail({
   };
   /**
    * Whether a turn's reported size is exactly the one it had when the positions were measured. Any
-   * difference measures again: shifts too small to matter alone add up across turns. Chromium and
-   * WebKit report the same number as getBoundingClientRect, except under CSS zoom, which measures again.
+   * difference measures again: shifts too small to matter alone add up across turns. The report's border
+   * box and getBoundingClientRect agree for an untransformed turn at a device pixel ratio of 1, as measured in
+   * Chromium and WebKit. Under CSS zoom, or a transform on the turn, they can differ, and then every report
+   * measures again. Today's turns have neither.
    */
   const unchanged = ({ target, borderBoxSize }: ResizeObserverEntry) => {
     const known = heights.current.get(target);
