@@ -33,6 +33,13 @@ contrast captures. None of them overflowed horizontally.
 | The same, WebKit in the Playwright 1.65.0 container, each test three times                                                         | Runtime-exercised: 42 passed    |
 | `e2e/accessibility.spec.ts` and `e2e/cascade-layers.spec.ts` in full, WebKit, before the fixture fix below                         | 69 passed, 3 failed             |
 
+At `487e6722`, `.agents/tools/check-all --keep-going` under `linux-heavy-lock.sh` passed typecheck,
+lint, ruff, the unit suite (231 files, 4,212 tests) and the build. Its e2e step failed as expected on
+this host: all 158 Chromium tests passed, and all 158 WebKit tests failed with "Host system is
+missing dependencies to run browsers". The Python tests were skipped, with no Python change. In the
+Playwright 1.65.0 container, the WebKit half of `e2e/accessibility.spec.ts` and
+`e2e/cascade-layers.spec.ts` passed in full: 72 tests.
+
 The three WebKit failures came from the first version of the fixture. It opened the group with
 `page.goto`, which cancelled the open chat's reads, and WebKit reported that as an uncaught error. And
 with the group in the catalog from the start, home named its list "Your chats" while sign-in waited
