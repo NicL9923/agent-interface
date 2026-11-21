@@ -31,7 +31,10 @@ test("a reader who scrolls on from the end of a tool's output stays where they s
   const before = await top();
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("PageDown");
-  await page.waitForTimeout(400);
+  // WebKit's move is waited for, since a loaded machine can take longer than a fixed pause. Chromium has no
+  // move to wait for, only time in which one could wrongly happen.
+  if (browserName === "webkit") await expect.poll(top).toBeGreaterThan(before);
+  else await page.waitForTimeout(400);
   const scrolled = await top();
   // The reply keeps growing for several seconds, and each update lays the transcript out again.
   await page.waitForTimeout(2000);
