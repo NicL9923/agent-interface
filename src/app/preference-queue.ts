@@ -10,11 +10,15 @@ import type { Preferences, PreferencesPatch } from "../shared/types";
  * finished value of each field it set, and the save sends that patch as built. Running an edit later,
  * on a base the person never saw, would move, append or swap against a different list.
  *
- * Each answer becomes the confirmed copy, and the screen shows it with the patches still waiting laid
- * over it. A refused save's patch leaves that overlay and the person is told; the patches behind it
- * still go out as built, and they already hold its change, because they were built on a screen that
- * showed it. A bootstrap read never changes the confirmed copy while saves wait: `fresh` tells the
- * session to hold such a read's preferences back, and the next answer replaces the copy anyway.
+ * The screen always shows that same overlay, so every screen offers what the queue builds on: each tap
+ * puts its patch on screen at once, each answer becomes the confirmed copy and goes on screen with the
+ * patches still waiting laid over it, and a refused save's patch leaves the overlay while the person is
+ * told. The patches behind a refused one still go out as built. Each carries the refused change only in
+ * the fields it names, because it was built on a screen that showed it.
+ *
+ * A bootstrap read never changes the confirmed copy while saves wait: `fresh` tells the session to drop
+ * the preferences of any read that overlapped a save, even one that lands after the queue empties, and
+ * the next clean read brings them. An answer from another preferences route goes through `confirm`.
  *
  * A save carries only the fields the edit behind it set. The server keeps a field a save leaves out,
  * and this tab's copy may be older than a change made since on another device, which sending the
@@ -79,6 +83,9 @@ export function patchFor(value: Preferences, fields: readonly PreferenceField[])
   return patch as PreferencesPatch;
 }
 
+/** How an edit ended: see `edit`. */
+export type SaveResult = "saved" | "refused" | "unchanged" | "dropped";
+
 export function preferenceQueue(options: {
   send(patch: PreferencesPatch): Promise<Preferences>;
   apply(saved: Preferences): void;
@@ -86,7 +93,7 @@ export function preferenceQueue(options: {
   /** Changes when the signed-in account changes; nothing queued for another account survives it. */
   account(): number;
 }) {
-  let tail: Promise<void> = Promise.resolve();
+  let tail: Promise<unknown> = Promise.resolve();
   // What the server last answered for the account whose saves wait, or the screen's copy when the first
   // of them was queued.
   let confirmed: { value: Preferences; account: number } | null = null;
@@ -107,6 +114,10 @@ export function preferenceQueue(options: {
    * `chosen` names the fields the person set with this edit, which a control knows and the values cannot
    * always show: a pick can equal what a waiting save holds while the screen shows another device's value.
    * A field the edit changes without naming it is sent too.
+   *
+   * An edit that returns the value it was given changes nothing, queues nothing and answers `"unchanged"`,
+   * as when a move names a section that is no longer there. Otherwise it answers `"saved"` or `"refused"`
+   * once its save settles, or `"dropped"` when the account changed first.
    */
   const edit = (
     change: (value: Preferences) => Preferences,
@@ -118,9 +129,10 @@ export function preferenceQueue(options: {
     waiting = waiting.filter((entry) => entry.account === account);
     if (!waiting.length || confirmed?.account !== account)
       confirmed = saved ? { value: saved, account } : null;
-    if (!confirmed) return Promise.resolve();
+    if (!confirmed) return Promise.resolve<SaveResult>("dropped");
     const base = seen(account, confirmed.value);
     const next = change(base);
+    if (next === base) return Promise.resolve<SaveResult>("unchanged");
     const entry = {
       patch: patchFor(
         next,
@@ -133,23 +145,26 @@ export function preferenceQueue(options: {
     waiting.push(entry);
     generation++;
     saving++;
+    options.apply(seen(account, confirmed.value));
     const settle = () => {
       waiting = waiting.filter((other) => other !== entry);
     };
     const run = tail
-      .then(async () => {
-        if (!current()) return;
+      .then(async (): Promise<SaveResult> => {
+        if (!current()) return "dropped";
         try {
           const answer = await options.send(entry.patch);
-          if (!current()) return;
+          if (!current()) return "dropped";
           confirmed = { value: answer, account };
           settle();
           options.apply(seen(account, answer));
+          return "saved";
         } catch (error) {
-          if (!current()) return;
+          if (!current()) return "dropped";
           settle();
           if (confirmed?.account === account) options.apply(seen(account, confirmed.value));
           options.failed(error as Error);
+          return "refused";
         }
       })
       .finally(() => {
@@ -160,8 +175,17 @@ export function preferenceQueue(options: {
     tail = run;
     return run;
   };
+  /**
+   * Takes preferences another route answered with, such as a new main assistant, as the confirmed copy,
+   * and puts them on screen with the patches still waiting laid over them.
+   */
+  const confirm = (value: Preferences) => {
+    const account = options.account();
+    if (waiting.some((entry) => entry.account === account)) confirmed = { value, account };
+    options.apply(seen(account, value));
+  };
   /** Taken when a read starts; `fresh` is true only if no save was running or ran since. */
   const mark = () => (saving ? -1 : generation);
   const fresh = (marked: number) => marked === generation && !saving;
-  return { edit, mark, fresh };
+  return { edit, confirm, mark, fresh };
 }

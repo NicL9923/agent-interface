@@ -39,7 +39,8 @@ async function savePreferencePatch(patch: PreferencesPatch): Promise<Preferences
 }
 type SessionEvents = {
   onFirstBootstrap(next: Bootstrap): void;
-  onError(message: string): void;
+  /** A preferences save was refused or lost; its change has left the screen. */
+  onPreferencesRefused(message: string): void;
   /** The open assistant left this person's roster, as when another member made it personal. */
   onBotGone(botId: string): void;
 };
@@ -280,13 +281,18 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     send: savePreferencePatch,
     apply: (saved) =>
       setBoot((previous) => (previous ? { ...previous, preferences: saved } : previous)),
-    failed: (error) => handlers.current.onError(error.message),
+    failed: (error) => handlers.current.onPreferencesRefused(error.message),
     account: () => accountEpoch.current,
   });
-  /** Puts preferences a server route answered with on screen, such as a new main assistant. */
-  const applyPreferences = (value: Preferences) =>
-    setBoot((previous) => (previous ? { ...previous, preferences: value } : previous));
-  /** Queues an edit; it runs on the newest preferences the server answered once the saves before it settle. */
+  /**
+   * Takes preferences a server route answered with, such as a new main assistant, as the confirmed copy.
+   * Any saves still waiting stay laid over them on screen.
+   */
+  const applyPreferences = (value: Preferences) => preferences.current!.confirm(value);
+  /**
+   * Runs an edit now on the preferences on screen, which are the server's last answer with the saves still
+   * waiting laid over them, puts it on screen, and queues its patch. Answers how the save ended.
+   */
   const editPreferences = (
     edit: (value: Preferences) => Preferences,
     chosen: readonly PreferenceField[],

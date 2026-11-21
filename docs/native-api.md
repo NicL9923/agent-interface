@@ -987,28 +987,43 @@ A partial save follows these rules:
 
 The client sends only the fields the person changed, one save at a time:
 
-- **Build each patch once, when the person taps.** Run the edit on what the person
-  sees: the preferences the server last answered, with the patches still waiting or in
-  flight laid over them in order. Do not run the edit again later. "Move this assistant
-  to that section", "append this pin" and "swap these two rows" give a different result
-  on a different list.
+- **Every screen shows one copy:** the preferences the server last answered, with the
+  patches still waiting or in flight laid over them in order. Home, Settings, an
+  assistant's details and every other screen read that copy, so a tap always lands on
+  what the queue builds on. Do not keep a screen's own draft beside it.
+- **Build each patch once, when the person taps,** on that copy, and put the result on
+  screen at once. Do not run the edit again later. "Move this assistant to that
+  section", "append this pin" and "swap these two rows" give a different result on a
+  different list. An edit that finds nothing to change, such as a move into a section
+  that is no longer there, sends nothing and tells the person.
 - **Send the patch as it was built.** Never recompute it when its turn comes.
 - **Put each answer on screen** with the patches still waiting laid over it. It is the
   new copy the next edit builds on.
-- **When a save is refused,** take its patch out of that overlay, tell the person, and
-  still send the patches behind it as built. They were built on a screen that showed
-  the refused change, so they carry it. A change refused for a passing reason then lands
-  with the next save. One refused because its value is invalid is refused again, so
-  nothing half-applied is stored.
-- **A lost answer** is a refusal to the client. The server may have stored that change.
-  The patches behind it carry it, so the next save keeps it.
-- **While saves wait,** keep the copy they build on. A bootstrap read that overlapped a
-  save may be older than its answer, so do not take its preferences until the queue
-  is empty.
+- **When a save is refused,** take its patch out of that overlay and tell the person
+  wherever they are, in place of any "done" notice it contradicts. Still send the
+  patches behind it as built. Each carries the refused change only in the fields it
+  names. A later patch that names the same field was built on a screen that showed the
+  change, so it saves the change again; one refused because its value is invalid is
+  refused again. A later patch that names other fields leaves the refused field as the
+  server has it. For example, a refused Dark theme followed by a chat style save ends
+  at the server's Light theme with the new chat style.
+- **A lost answer** looks like a refusal to the client, but the server may have stored
+  the change. A later patch that names the same field saves it again. One that names
+  other fields leaves it alone, and its answer brings the stored value back on screen.
+- **Drop the preferences of any bootstrap read that overlapped a save,** even one that
+  arrives after the queue has emptied. It may have been read before a save that has
+  since answered. Take the next read that started and finished with no save running.
+- **When the account changes or the person signs out,** drop the patches still waiting
+  without sending them, and ignore the answer to one in flight. That one may still be
+  stored for the account that sent it.
 - **The patch names a field** when the control the person used set it, and when its
   value differs from the value the edit ran on. A pick can equal what the screen shows
   while the control still showed the person's earlier copy, so the control's name is
   what sends it.
+- **Retry is a new tap.** Run the same edit again on the copy the screen shows now and
+  queue its patch; do not resend the refused patch, which was built on an older copy.
+  The web client has no Retry button for these saves: the change leaves the screen, a
+  notice says why, and the person makes it again.
 
 A field the save names says everything about that field, whatever an older copy held.
 A named field the new value lacks goes as `null`. A named `notifications` goes with

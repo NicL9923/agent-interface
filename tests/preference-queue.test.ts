@@ -44,8 +44,11 @@ it("sends one save at a time, builds each edit on the last, and shows each answe
   expect(sent.map((value) => value.favorites)).toEqual([["a"], ["a", "b"]]);
   replies[1].resolve({ ...base, favorites: ["a", "b"] });
   await second;
-  // The first answer shows with the save still waiting laid over it, so the second pin never leaves the screen.
+  // Each tap shows at once, and the first answer shows with the save still waiting laid over it, so the second
+  // pin never leaves the screen.
   expect(applied.map((value) => value.favorites)).toEqual([
+    ["a"],
+    ["a", "b"],
     ["a", "b"],
     ["a", "b"],
   ]);
@@ -124,8 +127,12 @@ it("never carries one account's queued preferences into another account's edit",
   reply.resolve(theirs.save(sent[0]));
   await edit;
   expect(sent).toEqual([{ favorites: ["second account pin"] }]);
+  // The first account's pin showed while it was signed in. Nothing shown since holds it.
+  const theirsPinned = { ...base, followBots: ["their follow"], favorites: ["second account pin"] };
   expect(applied).toEqual([
-    { ...base, followBots: ["their follow"], favorites: ["second account pin"] },
+    { ...base, favorites: ["first account pin"] },
+    theirsPinned,
+    theirsPinned,
   ]);
 });
 
@@ -488,4 +495,22 @@ it("sends a retry after a refusal on the confirmed copy", async () => {
   await retry;
   expect(s.sent).toEqual([{ favorites: ["ranch"] }, { favorites: ["ranch"] }]);
   expect(s.held.stored.favorites).toEqual(["ranch"]);
+});
+
+it("queues nothing for an edit that returns the value it was given", async () => {
+  const s = slowServer(base);
+  const result = s.queue.edit((value) => value, base, ["favorites"]);
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  expect(s.sent).toEqual([]);
+  await expect(result).resolves.toBe("unchanged");
+});
+
+// A new main assistant comes back from its own route while a pin still waits. Both stay on screen.
+it("keeps the saves still waiting on screen over an answer from another route", async () => {
+  const s = slowServer(base);
+  const pin = s.queue.edit((value) => ({ ...value, favorites: ["ranch"] }), base, ["favorites"]);
+  s.queue.confirm({ ...base, mainBotId: "sage" });
+  expect(s.screen()).toMatchObject({ mainBotId: "sage", favorites: ["ranch"] });
+  await s.answer();
+  await expect(pin).resolves.toBe("saved");
 });

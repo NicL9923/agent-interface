@@ -47,12 +47,16 @@ beforeEach(() => {
     } as Bootstrap,
     connectionLost: false,
     offline: false,
-    // Saves resolve only when the test says so, like a slow network.
-    // Like the session's queue, each edit applies to the newest value; saves resolve only
-    // when the test says so, like a slow network.
+    // Like the session: each edit runs on the preferences on screen and its result goes on screen at
+    // once, while its save stays on its way, like a slow network.
     editPreferences: vi.fn((edit: (value: Preferences) => Preferences) => {
-      saved.push(edit(saved.at(-1) ?? props.boot.preferences));
-      return new Promise<void>(() => {});
+      const before = props.boot.preferences;
+      const next = edit(before);
+      if (next === before) return Promise.resolve("unchanged" as const);
+      saved.push(next);
+      props = { ...props, boot: { ...props.boot, preferences: next } };
+      root.render(createElement(PreferencesDialog, props));
+      return new Promise<never>(() => {});
     }),
     notifications: { busy: false } as ComponentProps<typeof PreferencesDialog>["notifications"],
     installEvent: null,

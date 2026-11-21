@@ -10,8 +10,11 @@ import {
   sectionOf,
   setFollowedBots,
   setFollowing,
+  setPinned,
   setSectionBots,
 } from "../src/app/preferences-editing";
+import { moveSectionEdit, togglePinEdit } from "../src/app/home-undo";
+import { withRunsShown } from "../src/shared/routine-runs";
 import { defaultPreferences, type Preferences } from "../src/shared/types";
 
 const prefs = (sections: Preferences["sections"], followBots: string[] = []): Preferences => ({
@@ -107,5 +110,43 @@ describe("sections", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// A screen and the queue can disagree for one render, so an edit may run on a value that already has its change.
+// Each returns the value it was given then, which the queue reads as "nothing to save".
+describe("edits that run on a value already in their state", () => {
+  const home = {
+    ...prefs([{ id: "a", name: "A", botIds: ["ranch"] }], ["ranch"]),
+    favorites: ["ranch"],
+  };
+  it("leave pins, follows and hidden runs alone", () => {
+    expect(setPinned(home, "ranch", true)).toBe(home);
+    expect(setPinned(home, "creek", false)).toBe(home);
+    expect(setPinned(home, "creek", true).favorites).toEqual(["ranch", "creek"]);
+    expect(setFollowing(home, "ranch", true)).toBe(home);
+    expect(setFollowing(home, "creek", false)).toBe(home);
+    const pin = togglePinEdit({ ...home, favorites: [] }, "ranch", "Ranch Hand");
+    expect(pin.apply(home)).toBe(home);
+    const unpin = togglePinEdit(home, "ranch", "Ranch Hand");
+    const unpinned = unpin.apply(home);
+    expect(unpin.apply(unpinned)).toBe(unpinned);
+    const hidden = withRunsShown(home, "ranch", "morning", false);
+    expect(withRunsShown(hidden, "ranch", "morning", false)).toBe(hidden);
+    expect(withRunsShown(home, "ranch", "morning", true)).toBe(home);
+  });
+  it("never take an assistant out of its section for one that is gone, and say so from Home", () => {
+    expect(moveBotToSection(home, "ranch", "b")).toBe(home);
+    expect(setSectionBots(home, "b", ["ranch"])).toBe(home);
+    const move = moveSectionEdit(
+      { ...home, sections: [...home.sections, { id: "b", name: "Barn", botIds: [] }] },
+      "ranch",
+      "Ranch Hand",
+      "b",
+    );
+    expect(move.apply(home)).toBe(home);
+    expect(move.unchanged).toBe("Barn is no longer a section, so Ranch Hand stayed where it was");
+    // A move to no section still takes it out of the one it is in.
+    expect(sectionOf(moveBotToSection(home, "ranch", null), "ranch")).toBeUndefined();
   });
 });

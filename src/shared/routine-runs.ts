@@ -96,6 +96,9 @@ export function withRunsShown<T extends Pick<Preferences, "hiddenRoutineRuns">>(
   const rest = (preferences.hiddenRoutineRuns ?? []).filter(
     (entry) => entry.botId !== botId || entry.routineId !== routineId,
   );
+  // Already in the asked-for state: the same value, so running this twice changes nothing.
+  const hidden = rest.length !== (preferences.hiddenRoutineRuns ?? []).length;
+  if (hidden === !shown) return preferences;
   return { ...preferences, hiddenRoutineRuns: shown ? rest : [...rest, { botId, routineId }] };
 }
 

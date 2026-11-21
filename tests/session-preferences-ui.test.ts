@@ -20,7 +20,7 @@ vi.mock("../src/client-api", async (original) =>
 let root: Root, session: ReturnType<typeof useSession>;
 const onError = vi.fn();
 function Harness() {
-  session = useSession({ onFirstBootstrap() {}, onError, onBotGone() {} });
+  session = useSession({ onFirstBootstrap() {}, onPreferencesRefused: onError, onBotGone() {} });
   return null;
 }
 const preferences = (favorites: string[]) =>
@@ -51,19 +51,21 @@ it("holds back preferences from a read that overlapped a save, then takes them f
         finish = resolve as never;
       }),
   );
-  let saving!: Promise<void>;
+  let saving!: Promise<unknown>;
   await act(async () => {
     saving = session.editPreferences(
       (value) => ({ ...value, favorites: ["ranch"] }),
       ["favorites"],
     );
   });
-  // Another device starred something; this read overlaps the save, so its preferences wait.
+  // The edit shows at once. Another device starred something; this read overlaps the save, so its
+  // preferences wait and the screen keeps the waiting edit.
+  expect(session.boot?.preferences.favorites).toEqual(["ranch"]);
   served = bootstrap(["ranch", "from phone"]);
   await act(async () => {
     await session.refresh();
   });
-  expect(session.boot?.preferences.favorites).toEqual([]);
+  expect(session.boot?.preferences.favorites).toEqual(["ranch"]);
   await act(async () => {
     finish(preferences(["ranch"]));
     await saving;
