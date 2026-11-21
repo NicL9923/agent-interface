@@ -30,7 +30,9 @@ import XCTest
     screenshot(app, "Fixture iPad landscape split view")
     app.buttons["bot.kitchen"].tap()
     XCTAssertTrue(app.chatHeader("Kitchen companion").waitForExistence(timeout: 5))
+    // Settings opens on its list of sections on iPad too; the name is in Profile.
     app.openAssistantSettings("Kitchen companion")
+    app.selectSettingsTab("Profile")
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture iPad native assistant settings")
     app.buttons["Close"].tap()
