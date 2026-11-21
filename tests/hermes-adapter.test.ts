@@ -3361,6 +3361,14 @@ describe("Hermes transport liveness and diagnostics", () => {
       fresh.map((bot) => [bot.id, "disconnected"]),
     );
     expect(isUnknownRoster(cached)).toBe(false);
+    // A new connection may reach another Hermes: until a read on it succeeds, the cache is unknown.
+    sockets.at(-1)!.close();
+    await runtime.reconnect!();
+    const unsure = await runtime.listBots();
+    expect(unsure.map((bot) => bot.id)).toEqual(fresh.map((bot) => bot.id));
+    expect(isUnknownRoster(unsure)).toBe(true);
+    rpcErrors.delete("profiles.list");
+    expect(isUnknownRoster(await runtime.listBots())).toBe(false);
   });
 
   it("keeps the successful bot roster visible and disconnected during an outage", async () => {

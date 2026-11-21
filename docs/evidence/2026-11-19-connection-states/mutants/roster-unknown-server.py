@@ -1,18 +1,22 @@
 MUTANTS = [
     # unknown-roster.ts: nothing is ever marked.
     ("unknown-roster.ts", "  unknown.add(bots);\n", ""),
-    # hermes.ts: every cached roster is unknown, as with rosterCached.
+    # hermes.ts: every cached roster is unknown.
     (
         "hermes.ts",
-        "        return cachedRead ? rows : unknownRoster(rows);",
+        "        return cacheCurrent ? rows : unknownRoster(rows);",
         "        return unknownRoster(rows);",
     ),
     # hermes.ts: no cached roster is unknown.
     (
         "hermes.ts",
-        "        return cachedRead ? rows : unknownRoster(rows);",
+        "        return cacheCurrent ? rows : unknownRoster(rows);",
         "        return rows;",
     ),
+    # hermes.ts: a new connection keeps trusting the last one's roster.
+    ("hermes.ts", "      cacheCurrent = false;\n", ""),
+    # hermes.ts: a successful read never makes the cache current.
+    ("hermes.ts", "            cacheCurrent = true;\n", ""),
     # runtime-router.ts: the router drops the mark.
     (
         "runtime-router.ts",
@@ -34,5 +38,7 @@ MUTANTS = [
         "rosterUnknown: false }",
     ),
     # event-routes.ts: learning the roster sends no notice.
-    ("event-routes.ts", '(isUnknownRoster(bots) ? "unknown:" : "") +', '("") +'),
+    ("event-routes.ts", '(unknown ? "unknown:" : "") +', '("") +'),
+    # event-routes.ts: a stream opened while the roster is unknown starts from a known one.
+    ("event-routes.ts", "      initial.rosterUnknown,\n", "      false,\n"),
 ]

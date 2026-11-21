@@ -8,8 +8,20 @@ MUTANTS = [
     # use-session.ts: an unknown roster replaces the rows.
     (
         "use-session.ts",
-        "  if (next.rosterUnknown === true || (!next.connection.connected && !next.bots.length))",
-        "  if (!next.connection.connected && !next.bots.length)",
+        "  if (next.rosterUnknown ?? (!next.connection.connected && !next.bots.length)) return previous.bots;",
+        "  if (!next.connection.connected && !next.bots.length) return previous.bots;",
+    ),
+    # use-session.ts: a known empty roster while Hermes is down keeps the rows, as before.
+    (
+        "use-session.ts",
+        "  if (next.rosterUnknown ?? (!next.connection.connected && !next.bots.length)) return previous.bots;",
+        "  if (next.rosterUnknown === true || (!next.connection.connected && !next.bots.length)) return previous.bots;",
+    ),
+    # use-session.ts: an older server's empty roster while Hermes is down replaces the rows.
+    (
+        "use-session.ts",
+        "  if (next.rosterUnknown ?? (!next.connection.connected && !next.bots.length)) return previous.bots;",
+        "  if (next.rosterUnknown === true) return previous.bots;",
     ),
     # use-session.ts: a first unknown bootstrap ignores the saved home.
     (
@@ -34,6 +46,12 @@ MUTANTS = [
         "use-session.ts",
         "          if (!knowsRoster(next)) return previous;",
         "          if (!next.connection.connected) return previous;",
+    ),
+    # App.tsx: the saved home is written from an unknown roster.
+    (
+        "App.tsx",
+        "  const connected = !!boot?.connection.connected && boot.rosterUnknown !== true;",
+        "  const connected = !!boot?.connection.connected;",
     ),
     # App.tsx: no saved roster is offered.
     (

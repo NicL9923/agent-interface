@@ -163,6 +163,9 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
   // Which roster read, by the order reads began, last filled `botCache`.
   let rosterReads = 0,
     cachedRead = 0;
+  // Whether `botCache` came from this connection to Hermes. A new connection may reach another Hermes,
+  // so until a read on it succeeds the cache says nothing about who is on the roster.
+  let cacheCurrent = false;
   const live = new Map<string, string>();
   const owners = new Map<string, string>();
   // Assistants with an open in flight, counted, for frames that arrive before its session is known.
@@ -312,7 +315,10 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
       turnSnapshots.clear();
       if (verified) changed();
     },
-    connected: () => changed(),
+    connected: () => {
+      cacheCurrent = false;
+      changed();
+    },
     watching: () => watchers.size > 0 || rosterWatchers.size > 0,
   });
   const { contract, connect, http } = transport;
@@ -1297,11 +1303,11 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
       return contract.canonicalSubmit;
     },
     async listBots() {
-      // What Hermes last listed, each row marked as not current. Before any read succeeded that is
-      // nothing, which says nothing about who is on the roster.
+      // What Hermes last listed, each row marked as not current. Before a read on this connection
+      // succeeded, it says nothing about who is on the roster.
       const fromCache = () => {
         const rows = botCache.map((row) => ({ ...row, activity: "disconnected" as const }));
-        return cachedRead ? rows : unknownRoster(rows);
+        return cacheCurrent ? rows : unknownRoster(rows);
       };
       try {
         await connect();
@@ -1325,6 +1331,7 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
           if (read > cachedRead) {
             botCache = bots;
             cachedRead = read;
+            cacheCurrent = true;
           }
           if (rosterRequest === request) rosterReuse = { at: Date.now(), bots };
           return bots;

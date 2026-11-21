@@ -894,8 +894,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   });
   useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0, boot?.user.id);
   // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live
-  // roster. One whose server has had no roster yet shows the rows it kept, so saving them changes nothing.
-  const connected = !!boot?.connection.connected;
+  // roster, and one whose server knows none shows rows another tab may have saved over since.
+  const connected = !!boot?.connection.connected && boot.rosterUnknown !== true;
   useEffect(() => {
     if (boot && connected) rememberRoster(boot, catalog ? rooms : null);
   }, [boot, connected, catalog, rooms]);

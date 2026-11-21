@@ -71,8 +71,8 @@ function rosterFrom(
 ) {
   if (previous?.user.id !== next.user.id)
     return next.rosterUnknown === true && saved ? saved : next.bots;
-  if (next.rosterUnknown === true || (!next.connection.connected && !next.bots.length))
-    return previous.bots;
+  // An older server does not say; an empty roster while Hermes is down is its sign.
+  if (next.rosterUnknown ?? (!next.connection.connected && !next.bots.length)) return previous.bots;
   if (!carry) return next.bots;
   const before = new Map(previous.bots.map((bot) => [bot.id, bot.activity]));
   return next.bots.map((bot) =>

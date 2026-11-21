@@ -171,7 +171,7 @@ Tests changed because the behavior did:
 
 Each line was broken with `~/.agents/tools/mutate.py`, the named tests run, and the source restored.
 The lists and the tool's output from the final pass, after all the review rounds, are in
-[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 129 mutants, 129 caught. The last
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 135 mutants, 135 caught. The last
 five rows were run after the fifth, sixth, eighth and ninth review rounds.
 
 | File                                                | Mutants | Result    |
@@ -187,7 +187,7 @@ five rows were run after the fifth, sixth, eighth and ninth review rounds.
 | `ConnectionAnnouncer`, partial live return          | 5       | 5 caught  |
 | Live-updates scope, `App.tsx` and `stream-health`   | 4       | 4 caught  |
 | `hermes.ts` roster cache order                      | 2       | 2 caught  |
-| `rosterUnknown`, server and web                     | 15      | 15 caught |
+| `rosterUnknown`, server and web                     | 21      | 21 caught |
 
 Mutants that survived on the way, and what was done:
 
@@ -336,6 +336,24 @@ home, the saved copy and the hint kept through a first unknown bootstrap). `muta
 breaks 15 lines; 15 are caught. One more, the saved home's write guard, survived as equivalent and the
 guard was removed. The native findings and their fixes are in the iOS section.
 
+### Tenth round, of `rosterUnknown`: four P2, one P3
+
+`rosterUnknown` itself held: the router keeps it, and the open chat, the selection and the saved home
+survive it. The round found four P2s and a P3, each reproduced.
+
+| #   | Finding                                                                                                                                                                                                       | Fix                                                                                                                                                                                                                                                                                                              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | P2. The cache outlived a reconnect. A server restart read `[A]` from one Hermes, then reconnected to another holding A and B whose `profiles.list` failed; bootstrap called `[A]` known and the web closed B. | The adapter trusts its cache only after a read on the current connection (`cacheCurrent`, reset by the transport's `connected`). Until then a cached roster is unknown, rows or not.                                                                                                                             |
+| 2   | P2. A known empty roster while Hermes is down still kept the last visible assistant after it was made private, through the older empty-while-down rule.                                                       | When bootstrap says whether it knows the roster, the web takes its word; the empty-while-down rule is kept only for an older server that omits the field.                                                                                                                                                        |
+| 3   | P2. With a second runtime whose roster is unknown, the merged list hides only that runtime's assistants, and `Roster.note` and the web treat the rest as complete.                                            | Not fixed. Production runs Hermes alone (`src/server/index.ts`), and roster availability across runtimes was moved to step 2 of `docs/RuntimePlan.md` with the router's own review (`docs/ledger/20261115T011305Z-runtime-router.md`). The router only keeps the mark so one runtime's answer reaches bootstrap. |
+| 4   | P2. A tab whose first bootstrap knew no roster wrote its mounted copy of the saved home back over a newer one another tab had saved.                                                                          | The saved home is not written from an unknown roster. The guard that the ninth round removed as equivalent is back; this two-tab case is what it is for.                                                                                                                                                         |
+| 5   | P3. A stream opened while the roster was unknown missed the roster becoming known with no one on it.                                                                                                          | The stream's first projection includes whether the roster is known, as later ones do.                                                                                                                                                                                                                            |
+
+Tests: `hermes-adapter` (unknown again after a reconnect until a read succeeds), `connection-grace-ui` (a
+known empty roster taken while Hermes is down, an older server's kept), `saved-roster-ui` (a newer saved
+home kept), `conversation-events` (a stream opened while unknown). The `roster-unknown` mutant lists now
+break 21 lines; 21 are caught.
+
 ## Checks
 
 On the fingerprint above, `.agents/tools/check-all --keep-going` under `linux-heavy-lock.sh`, and
@@ -371,7 +389,9 @@ run had included:
 - iOS matched these states afterwards; see "iOS" below.
 - Safari, Firefox, a screen reader and a real phone: not run. The live region and tooltips were checked
   in jsdom and by reading the DOM in Chromium.
-- The ninth round's `rosterUnknown` change has had no review of its own.
+- The tenth round's fixes have had no review of their own.
+- With a second runtime, an unknown roster from one of them is not tracked per runtime (tenth round,
+  finding 3). Production runs Hermes alone; this belongs to step 2 of `docs/RuntimePlan.md`.
 - The server still answers one timed-out Hermes call with the code `unreachable`. The client no longer
   treats it as proof, so nothing depends on it, but the code says more than the server knows.
 - The live-updates notice still clears about 10 seconds after a stream reconnects, because a stream

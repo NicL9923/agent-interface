@@ -498,6 +498,27 @@ describe("a failed conversation read", () => {
       expect(chatOpen()).toBe(false);
     });
 
+    // Hermes went down after another member made this member's last assistant private. The server knows
+    // the roster and lists no one, which is that member's roster now. An older server, which does not
+    // say whether it knows, sends the same empty list with no roster at all, which keeps the rows.
+    it("takes a known empty roster while Hermes is down, and keeps the rows when the server does not say", async () => {
+      await opened();
+      const names = boot.bots.map((bot) => bot.name);
+      const listed = () =>
+        names.filter((name) =>
+          [...container.querySelectorAll('[aria-label="Assistants"] button')].some((row) =>
+            row.textContent?.includes(name),
+          ),
+        );
+      const { rosterUnknown: _, ...older } = boot;
+      boot = { ...older, bots: [], connection: { connected: false, code: "unreachable" } };
+      await rosterChanged();
+      expect(listed()).toEqual(names);
+      boot = { ...boot, rosterUnknown: false };
+      await rosterChanged();
+      expect(listed()).toEqual([]);
+    });
+
     // The connection coming back is said when it comes back. The notice staying out its second, and
     // whatever the person opens during it, change nothing about that.
     it("says the connection is back when it is, even if another chat is opened while the notice lingers", async () => {

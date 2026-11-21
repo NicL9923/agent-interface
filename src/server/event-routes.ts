@@ -61,6 +61,10 @@ export function installEventRoutes(
         )
         .sort((a, b) => a.id.localeCompare(b.id)),
     );
+  // A roster the server could not know reads differently from a known one with the same rows, so
+  // learning it, even with no one on it, still sends a notice.
+  const projectionOf = (bots: Bot[], userId: string, nativeAvatar: boolean, unknown: boolean) =>
+    (unknown ? "unknown:" : "") + rosterProjection(bots, userId, nativeAvatar);
   const evaluateRoster = () => {
     if (!rosterListeners.size) return;
     if (rosterEvaluating) {
@@ -126,10 +130,11 @@ export function installEventRoutes(
     if (connection.closed) return connection.abandon();
     const initial = await snapshot.read();
     if (connection.closed) return connection.abandon();
-    let projection = rosterProjection(
+    let projection = projectionOf(
       initial.bots,
       signedIn(req).id,
       initial.capabilities.avatarMetadata.supported,
+      initial.rosterUnknown,
     );
     let stream: EventStream | undefined;
     // Admitted before the stream opens, so a refused watch answers 429 instead of a silent stream.
@@ -154,11 +159,7 @@ export function installEventRoutes(
       const viewerId = signedIn(req).id;
       let next = projected.get(viewerId);
       if (next === undefined) {
-        // A roster the server could not know reads differently from a known one with the same rows,
-        // so learning it, even with no one on it, still sends a notice.
-        next =
-          (isUnknownRoster(bots) ? "unknown:" : "") +
-          rosterProjection(bots, viewerId, nativeAvatar);
+        next = projectionOf(bots, viewerId, nativeAvatar, isUnknownRoster(bots));
         projected.set(viewerId, next);
       }
       if (next === projection) return;

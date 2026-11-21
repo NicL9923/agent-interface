@@ -385,6 +385,18 @@ describe("the home this device saved", () => {
     ]);
   });
 
+  // Another tab saved a newer home after this one drew its copy, as when an assistant was made private.
+  // A bootstrap that knows no roster has nothing to say about that, so the newer copy stays.
+  it("is not written back over a newer copy by a bootstrap whose server knows no roster", async () => {
+    store(signInHintKey, hintFor("one"));
+    store(savedRosterKey, savedOne);
+    await open();
+    const newer = { ...savedOne, bots: savedOne.bots.filter((bot) => bot.id !== "trail") };
+    store(savedRosterKey, newer);
+    await answer("GET /bootstrap?roster=lean", 200, { ...one, bots: [], rosterUnknown: true });
+    expect(savedRoster()).toEqual(newer);
+  });
+
   it("draws none of what a copy should not hold, even when one holds it", async () => {
     store(signInHintKey, hintFor("one"));
     store(savedRosterKey, {

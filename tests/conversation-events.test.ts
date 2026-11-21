@@ -1152,6 +1152,20 @@ describe("roster compatibility and household events", () => {
     await events.close();
   });
 
+  // A stream opened while the server knows no roster starts from that, so the roster becoming known,
+  // with no one on it, is still news to it.
+  it("notices learning the roster on a stream opened while it was unknown", async () => {
+    const s = await setup();
+    s.runtime.listBots = vi.fn(async () => unknownRoster([]));
+    const events = await stream(`${s.base}/api/events`, s.cookie);
+    await events.until(() => events.text.includes("retry"));
+    s.runtime.listBots = vi.fn(async () => []);
+    await pass(1_500);
+    s.rosterChanged();
+    await events.until(() => events.text.includes("event: roster"));
+    await events.close();
+  });
+
   it("keeps the newer roster evaluation when an older bootstrap read finishes after it", async () => {
     const s = await setup();
     const events = await stream(`${s.base}/api/events`, s.cookie);
