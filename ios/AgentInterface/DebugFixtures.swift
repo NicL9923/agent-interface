@@ -199,6 +199,24 @@
               "actor": ["kind": "user", "id": "cron:fixture-job", "display_name": "[bot:ranch] Morning brief"],
               "payload": ["text": "Fixture routine post: the smoker is free Sunday.", "thread_id": "cron-1"]])
           }
+          if environment["AGENT_INTERFACE_UI_GROUP_BUBBLES"] == "1" {
+            // Every kind of speaker for the chat styles: a routine's post, the person's reply in a thread, an assistant's
+            // reply holding a table, and the person's quote holding nested lists.
+            let own: [String: Any] = ["id": "native-test", "name": "Local test member"]
+            for (id, kind, extra, payload) in [
+              ("cron-post:2", "message.user", ["actor": ["kind": "user", "id": "cron:fixture-job", "display_name": "[bot:ranch] Morning brief"]],
+               ["text": "Fixture routine post: the smoker is free Sunday.", "thread_id": "cron-2"]),
+              ("group-own-1", "message.user", ["sender": own], ["text": "I can light the smoker at six. Who brings the **rub**?", "thread_id": "thread-1"]),
+              ("group-ranch-1", "message.member", ["actor": ["kind": "member", "id": "ranch"]],
+               ["text": "Here is the plan so far:\n\n| Dish | Who |\n| --- | --- |\n| Brisket | Kitchen companion |\n| Beans | Ranch hand |\n\nI'll post a reminder Saturday.",
+                "thread_id": "thread-1", "member_id": "ranch"]),
+              ("group-own-2", "message.user", ["sender": own], ["text": "> - Gates\n>   - North\n>     - Width is fine.\n\nThen the trailer fits through.", "thread_id": "thread-2"]),
+            ] as [(String, String, [String: Any], [String: Any])] {
+              let seq = FixtureProtocol.groupEvents.count + 1
+              FixtureProtocol.groupEvents.append(["event_id": id, "seq": seq, "kind": kind, "created_at": 1_790_000_000 + seq * 60, "payload": payload]
+                .merging(extra) { current, _ in current })
+            }
+          }
         }
         if environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
           // Enough turns for three history pages, with replies tall enough to scroll.

@@ -220,6 +220,10 @@ final class ChatBubblesTests: XCTestCase {
         ("a task's empty box", Palette.bubbleSecondary, reply, 3),
         ("the person's text and a file's name", Color(uiColor: .label), person, 4.5),
         ("a file's size under the person's message", Palette.bubbleSecondary, person, 4.5),
+        // A group message in the person's bubble is Markdown.
+        ("a link in the person's group message", Palette.accent, person, 4.5),
+        ("a quote in the person's group message", Palette.quote, person, 4.5),
+        ("a checked box in the person's group message", Palette.accent, person, 3),
       ]
       for (name, text, fill, minimum) in pairs {
         let value = Contrast.ratio(Contrast.over(Contrast.resolved(text, dark: isDark), fill), fill)
@@ -260,6 +264,101 @@ final class ChatBubblesTests: XCTestCase {
   func testThePersonsBubbleStopsAt560Points() {
     XCTAssertEqual(PersonBubbles.layout.width(for: 390), 335.4, accuracy: 0.01, "A phone column")
     XCTAssertEqual(PersonBubbles.layout.width(for: 900), 560, "An iPad column")
+  }
+
+  // MARK: Group chats
+
+  private func groupEvent(_ id: String, _ kind: String, _ text: String, who: String) throws -> GroupEvent {
+    let json = #"{"event_id":"\#(id)","seq":1,"kind":"\#(kind)","created_at":1,"payload":{"text":\#(String(decoding: try JSONEncoder().encode(text), as: UTF8.self))},\#(who)}"#
+    return try JSONDecoder().decode(GroupEvent.self, from: Data(json.utf8))
+  }
+  private func kinds(_ segments: [ReplySegment]) -> [String] {
+    segments.map { segment -> String in
+      switch segment.kind {
+      case .bubble(let blocks, _): return "bubble(\(blocks.count))"
+      case .block(.code, _): return "code"
+      case .block(.table, _): return "table"
+      case .block: return "block"
+      case .inline: return "inline"
+      case .cards: return "cards"
+      }
+    }
+  }
+  /// Classic keeps every group message flat. Bubbles lays out everyone's message as a reply, the person's included:
+  /// prose in bubbles, a table at the column's width. Only the person's own sit at the trailing edge.
+  func testGroupRowsFollowTheChatStyle() throws {
+    let me = #""sender":{"id":"me","name":"Local test member"}"#
+    let mixed = "Here is the plan:\n\n| Dish | Who |\n| --- | --- |\n| Brisket | Kitchen |\n\nI'll post a reminder."
+    let rows = [
+      (try groupEvent("own", "message.user", mixed, who: me), true),
+      (try groupEvent("member", "message.user", mixed, who: #""sender":{"id":"two","name":"Second test member"}"#), false),
+      (try groupEvent("bot", "message.member", mixed, who: #""actor":{"kind":"member","id":"kitchen"}"#), false),
+      (try groupEvent("routine", "message.user", mixed, who: #""actor":{"kind":"user","id":"cron:job","display_name":"[bot:ranch] Morning brief"}"#), false),
+      // A message a native Hermes client wrote names its author only as the actor.
+      (try groupEvent("native", "message.user", mixed, who: #""actor":{"kind":"user","id":"me"}"#), true),
+    ]
+    for (event, own) in rows {
+      guard case .classic(let classicOwn) = GroupBubbles.row(event, userId: "me", style: .classic) else { return XCTFail("\(event.id) in Classic") }
+      XCTAssertEqual(classicOwn, own, "\(event.id): Classic washes only the person's own row")
+      guard case .bubbles(let bubbleOwn, let segments) = GroupBubbles.row(event, userId: "me", style: .bubbles) else { return XCTFail("\(event.id) in Bubbles") }
+      XCTAssertEqual(bubbleOwn, own, "\(event.id): only the person's own sit at the trailing edge")
+      XCTAssertEqual(kinds(segments), ["bubble(1)", "table", "bubble(1)"], event.id)
+    }
+    let signedOut = try groupEvent("own", "message.user", "Hi", who: me)
+    guard case .bubbles(let own, _) = GroupBubbles.row(signedOut, userId: nil, style: .bubbles) else { return XCTFail("Bubbles") }
+    XCTAssertFalse(own, "Before the account loads no message is the person's")
+  }
+  /// A group message's Markdown groups as a reply's does: a quote holding nested lists is prose, and a card fence stays
+  /// code, as Classic shows it, since a group message is never parsed for cards.
+  func testGroupMessagesGroupTheirMarkdownAsAReplyDoes() {
+    XCTAssertEqual(kinds(GroupBubbles.segments("> - Gates\n>   - North\n>     - Width is fine.\n\nThen the trailer fits through.")), ["bubble(2)"])
+    XCTAssertEqual(kinds(GroupBubbles.segments("First\n\n```wildbots-cards\n{\"version\":1,\"cards\":[]}\n```\n\nLast")), ["bubble(1)", "code", "bubble(1)"])
+    XCTAssertEqual(kinds(GroupBubbles.segments("")), [])
+  }
+  /// The person's solid bubbles in a group take the app's green, which keeps white text, white links and inline code,
+  /// a white quote and its bar, and a checked box readable; Increase Contrast gives it an edge against the transcript.
+  @MainActor func testAGroupsSolidBubbleKeepsEverythingInItReadable() throws {
+    let fill = try XCTUnwrap(SolidBubble.fill(GroupBubbles.solidColor))
+    XCTAssertEqual(fill, GroupBubbles.solidColor, "The green is dark enough already, so the fill keeps it")
+    for isDark in [false, true] {
+      let green = Contrast.resolved(Color(hex: fill), dark: isDark), white = Contrast.resolved(Color.white, dark: isDark)
+      XCTAssertGreaterThanOrEqual(Contrast.ratio(white, green), 4.5, "Text, links, inline code, quotes and checked boxes are white")
+      let bar = Contrast.over(white, green, opacity: MarkdownBlockView.solidQuoteBar)
+      XCTAssertGreaterThanOrEqual(Contrast.ratio(bar, green), 3, "A quote's bar at \(MarkdownBlockView.solidQuoteBar)")
+      let surface = Contrast.resolved(Palette.surface(isDark ? .dark : .light), dark: isDark)
+      let edge = try XCTUnwrap(PersonBubbles.border(solid: true, increasedContrast: true))
+      XCTAssertGreaterThanOrEqual(Contrast.ratio(Contrast.resolved(edge, dark: isDark), surface), 3, "Increase Contrast's edge")
+    }
+  }
+  /// In a group the person's bubble holds Markdown, so on a narrow row at a large text size it takes the whole row,
+  /// as the web's min(100%, max(86%, 16em), 560px), and otherwise follows the 86% and 560-point rules.
+  func testThePersonsGroupBubbleUsesTheRowWhenTheTextIsLarge() {
+    XCTAssertEqual(PersonBubbles.groupLayout(em: 17).width(for: 319), 274.34, accuracy: 0.01, "A small phone at the default size")
+    XCTAssertEqual(PersonBubbles.groupLayout(em: 28).width(for: 319), 319, "A small phone at an accessibility size")
+    XCTAssertEqual(PersonBubbles.groupLayout(em: 53).width(for: 900), 560, "The cap still holds")
+    XCTAssertEqual(PersonBubbles.groupLayout(em: 17.5).width(for: 300), 280, accuracy: 0.01, "16em wins over 86% while the row has room")
+  }
+
+  /// Records every size its parent proposes to it.
+  private struct ProposalProbe: Layout {
+    final class Log: @unchecked Sendable { var heights: [CGFloat?] = [] }
+    let log: Log
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+      log.heights.append(proposal.height)
+      return CGSize(width: 100, height: 40)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) { log.heights.append(proposal.height) }
+  }
+  /// A bubble's height follows its content. A list row offers a height, and passing it on held a nested list item in
+  /// the person's group bubble to one truncated line at the largest text sizes.
+  @MainActor func testABubbleNeverOffersItsContentTheRowsHeight() {
+    let log = ProposalProbe.Log()
+    let bubble = PersonBubbles.groupLayout(em: 44), probe = ProposalProbe(log: log)
+    let renderer = ImageRenderer(content: bubble { probe { Color.clear } }.frame(width: 320, height: 90))
+    renderer.proposedSize = ProposedViewSize(width: 320, height: 90)
+    _ = renderer.uiImage
+    XCTAssertFalse(log.heights.isEmpty, "The bubble laid out its content")
+    XCTAssertEqual(log.heights.compactMap { $0 }, [], "Every offer leaves the height open: \(log.heights)")
   }
 
   private static func hex(hue: Double) -> String {

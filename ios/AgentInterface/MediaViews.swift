@@ -242,6 +242,7 @@ struct MarkdownBlockView: View {
   var block: MarkdownBlock
   var listDepth: Int
   @Environment(\.markdownSettled) private var settled
+  @Environment(\.markdownOnSolid) private var onSolid
   var body: some View {
     switch block {
     case .paragraph(let text):
@@ -252,9 +253,10 @@ struct MarkdownBlockView: View {
     case .code(let language, let text):
       MarkdownCodeBlock(code: text, language: language)
     case .quote(let blocks):
-      AnyView(MarkdownBlocksView(blocks: blocks, listDepth: listDepth)).foregroundStyle(Palette.quote)
+      // On a solid fill the quote keeps the bubble's white text, beside a bar of white at 75%, 4.17:1 on the group's green.
+      AnyView(MarkdownBlocksView(blocks: blocks, listDepth: listDepth)).foregroundStyle(onSolid ? Color.white : Palette.quote)
         .padding(.leading, 14)
-        .overlay(alignment: .leading) { Rectangle().fill(Palette.line).frame(width: 3) }
+        .overlay(alignment: .leading) { Rectangle().fill(onSolid ? Color.white.opacity(Self.solidQuoteBar) : Palette.line).frame(width: 3) }
     case .list(let list):
       MarkdownListView(list: list, depth: listDepth)
     case .rule:
@@ -263,6 +265,8 @@ struct MarkdownBlockView: View {
       MarkdownTableView(table: table)
     }
   }
+  /// The opacity of a quote's bar on a solid fill: half white reached only 2.74:1 on the group's green.
+  static let solidQuoteBar = 0.75
   /// The web's sizes: h1 1.4em, h2 1.2em, and h3 to h6 1.05em, all semibold.
   static func headingFont(_ level: Int) -> Font {
     switch level {
@@ -275,6 +279,7 @@ struct MarkdownBlockView: View {
 struct MarkdownListView: View {
   var list: MarkdownList
   var depth: Int
+  @Environment(\.markdownOnSolid) private var onSolid
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
@@ -290,7 +295,7 @@ struct MarkdownListView: View {
   @ViewBuilder private func marker(_ index: Int, _ item: MarkdownListItem) -> some View {
     if let done = item.task {
       Image(systemName: done ? "checkmark.square.fill" : "square")
-        .foregroundStyle(done ? Palette.accent : .secondary).accessibilityHidden(true)
+        .foregroundStyle(done ? (onSolid ? Color.white : Palette.accent) : .secondary).accessibilityHidden(true)
     } else {
       Text(Self.marker(list, index: index, depth: depth)).monospacedDigit().accessibilityHidden(true)
     }
