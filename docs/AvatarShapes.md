@@ -52,7 +52,9 @@ hull. `top` and `hat` place the cowboy hat on that part.
 
 The eye sliders reach 150%. Eyes stop growing where the widest style at the chosen width and
 spacing would pass the edge of that sphere, so a visor tuned to the limit fills the blob and
-shrinks to fit a paint brush.
+shrinks to fit a paint brush. The classic shapes have no `radius` of their own and keep the
+blob's 42-unit sphere, as they always have, so on a narrow one such as the capsule an eye tuned
+to the limit still slides past the body's edge mid-spin.
 
 The tool measures all of these. Three kinds of shape fool it, and `manifest.json` overrides the
 value: a part beside the face at eye level (a bat's wings, a bull's ears, a barbell's plates)
@@ -67,6 +69,10 @@ drawn from wherever their author began and either way round, and without that st
 way to a reindeer crossed over itself and shrank to a quarter of the reindeer's size. A hole, such
 as a mug's handle, is not sampled; the exact outline takes over when the morph ends. The iOS app
 samples and orders the same way in `AvatarGeometry.points`.
+
+Samples are matched by how far round the outline they are, not by where they are, so two very
+different shapes can still cross over a little on the way: Rocky to Sprout folds a loop about 2%
+of the body's area at the midpoint.
 
 ## Adding a shape
 
@@ -100,8 +106,11 @@ a family the app never had is drawn as the blob.
 
 Clients that have not updated draw a shape they do not have as the blob, so an older iOS build or
 a page still running an older web bundle shows new and converted shapes that way until it updates.
-Release the iOS build before deploying the server: the new build reads mascots from an older
-server, and the older build cannot draw the new shapes.
+That older web bundle also refuses to keep a home with a shape it does not know, so it discards
+its saved copy and its next launch waits for the server instead of drawing home at once. The copy
+is saved again once the page has the new bundle, which keeps shapes it does not know. Release the
+iOS build before deploying the server: the new build reads mascots from an older server, and the
+older build cannot draw the new shapes.
 
 | Mascot     | Shape     | Color                                            |
 | ---------- | --------- | ------------------------------------------------ |

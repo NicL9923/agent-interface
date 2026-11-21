@@ -84,3 +84,16 @@ test was rewritten with one above the other and the same break then failed it.
 | a saved copy takes any text as a shape         | `src/app/saved-roster.ts`          | is not drawn with a geometric avatar's shape that is not a name                           |
 | a saved copy takes a shape of any length       | `src/app/saved-roster.ts`          | is not drawn with a geometric avatar's shape past any name's length                       |
 | equally central samples keep the first met     | `src/components/avatar-outline.ts` | starts between two equally central samples at the higher one                              |
+
+## Re-review fixes
+
+The re-review of `313acec4..d27f38c7` found that the eye fit drew no eyes for an eye style this
+release does not have, where it had drawn oval ones. Fixed, and the eye-fit test now also requires
+both eyes to be drawn for most of the working run. `npx vitest run tests/avatar-component.test.ts`:
+23 tests passed.
+
+| Break                                    | File                        | Test that failed                                                  |
+| ---------------------------------------- | --------------------------- | ----------------------------------------------------------------- |
+| an unknown eye style has no width        | `src/components/Avatar.tsx` | draws an eye style it does not have as oval eyes instead of none  |
+| an inherited name counts as an eye style | `src/components/Avatar.tsx` | draws an eye style it does not have as oval eyes instead of none  |
+| a fitted avatar draws no eyes at all     | `src/components/Avatar.tsx` | stops tuned eyes growing at the edge of the part the face sits on |

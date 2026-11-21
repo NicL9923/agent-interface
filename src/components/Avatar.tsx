@@ -346,7 +346,9 @@ export function Avatar({
   const eyeY = anchor.cy + pose.gazeY * 3 * reach + (state === "waiting" ? 2 * reach : 0);
   // Tuned eyes stop growing at the edge of the part the face sits on. A visor at full width and
   // spacing fits the blob, but on a paint brush it would run past the bristles and be cut off.
-  const widest = eyeHalfWidths[eyes] * eyeScale * eyeWidth;
+  // An eye style this release does not have is drawn as the oval, so it is as wide as one.
+  const style = Object.hasOwn(eyeHalfWidths, eyes) ? eyes : "oval";
+  const widest = eyeHalfWidths[style] * eyeScale * eyeWidth;
   const spread = ((anchor.spacing ?? 30 * eyeScale) / 2) * eyeSpacing;
   const fit = Math.min(1, (faceRadius - 1) / (spread + widest));
   const eyeOffset = spread * fit;

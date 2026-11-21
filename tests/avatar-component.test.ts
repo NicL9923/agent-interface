@@ -309,11 +309,15 @@ describe("avatar shapes", () => {
     // A visor at full width and spacing is 47 units across on a paint brush whose bristles are 43.
     await render("working", shaped("paint-brush", widest));
     const cut: number[] = [];
+    let facing = 0;
     for (let frame = 0; frame < 5 * 60; frame++) {
       await advance(1 / 60);
+      if (drawnEyes().length === 2) facing++;
       if (eyesOffBody("paint-brush", 10, 4.5).length) cut.push(frame);
     }
     expect(cut).toEqual([]);
+    // Both eyes were there to be checked for most of it; they are out of sight only mid-spin.
+    expect(facing).toBeGreaterThan(200);
     // The blob has room for them, so there they are as large and as far apart as chosen.
     reduceMotion = true;
     await render("idle", shaped("blob", widest));
@@ -332,6 +336,19 @@ describe("avatar shapes", () => {
     // The mug's second contour is its handle's hole, which the samples never carried.
     expect(shapes.mug.path.match(/M/g)).toHaveLength(2);
     expect(body()).toBe(shapes.mug.path);
+  });
+
+  it("draws an eye style it does not have as oval eyes instead of none", async () => {
+    reduceMotion = true;
+    await render("idle", shaped("blob"));
+    const oval = svg();
+    // Hermes metadata is not checked on the way in: a style from a newer release, the name of a
+    // property every object inherits, and no style at all.
+    for (const eyes of ["laser", "constructor", undefined]) {
+      await render("idle", shaped("blob", { eyes } as Partial<AvatarConfig>));
+      expect(drawnEyes()).toHaveLength(2);
+      expect(svg()).toBe(oval);
+    }
   });
 
   it("draws a shape it does not have as the blob instead of failing", async () => {
