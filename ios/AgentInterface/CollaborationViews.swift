@@ -256,19 +256,34 @@ struct GroupCreateView: View {
           }
         }
       }
-      Button(pending == nil ? "Create group" : "Retry saved group request") { Task { await create() } }.accessibilityIdentifier(pending == nil ? "createGroup" : "retryGroupRequest").disabled(busy || !store.connected || pending == nil && (botIds.count < 2 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+      Button(pending == nil ? "Create group" : "Retry saved group request") { Task { await create() } }.accessibilityIdentifier(pending == nil ? "createGroup" : "retryGroupRequest").disabled(busy || !store.householdReachable || pending == nil && (botIds.count < 2 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
     }.navigationTitle(pending == nil ? "New group" : "Finish creating group").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
       .task { pending = GroupCreation.pending(scope: store.scope) }
   }
   private func create() async {
     let input = pending ?? GroupCreate(requestId: UUID().uuidString.lowercased(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), botIds: botIds)
     error = nil
-    pending = input
-    let room = await store.run(busy: $busy, error: $error, failure: GroupCreation.failure) {
-      try await GroupCreation.submit(input, api: $0.api, scope: $0.scope)
+    let room = await store.run(busy: $busy, error: $error, household: true, failure: GroupCreation.failure) {
+      pending = input
+      return try await GroupCreation.submit(input, api: $0.api, scope: $0.scope)
     }
     guard let room else { return }
     pending = nil; onCreated(room); dismiss()
+  }
+}
+extension AppStore {
+  /// A group room's Send. The message is saved as pending under `key` before it posts, so Retry sends the
+  /// same request again without a duplicate. It needs the household, checked before anything is saved.
+  func sendGroupMessage(
+    _ input: GroupSend, room path: String, savedAs key: String, busy: Binding<Bool>?, error: Binding<String?>,
+    saved: (GroupSend) -> Void
+  ) async -> GroupAccepted? {
+    await run(busy: busy, error: error, household: true, failure: { $0.localizedDescription + " The message may have arrived. Retry the same saved message to check, without sending a duplicate." }) {
+      UserDefaults.standard.set(try JSONEncoder().encode(input), forKey: key); saved(input)
+      let receipt: GroupAccepted = try await $0.api.write(path + "/messages", input)
+      guard receipt.accepted else { throw NSError(domain: "Group chat", code: 1, userInfo: [NSLocalizedDescriptionKey: "Hermes did not confirm this message."]) }
+      return receipt
+    }
   }
 }
 struct GroupConversationView: View {
@@ -346,12 +361,12 @@ struct GroupConversationView: View {
       }
       if state?.driver_status?.working == true || !(state?.driver_status?.pending_actions.isEmpty ?? true) {
         Section {
-          if state?.driver_status?.working == true { Button("Stop discussion", role: .destructive) { Task { await stop() } }.disabled(busy || !canSend || !store.connected) }
+          if state?.driver_status?.working == true { Button("Stop discussion", role: .destructive) { Task { await stop() } }.disabled(busy || !canSend || !store.householdReachable) }
           ForEach(state?.driver_status?.pending_actions ?? []) { action in
             if action.kind == "approval" {
               HStack(spacing: 8) { assistantAvatar(action.member_id); Text("\(requester(action)) requests approval").font(.subheadline.bold()) }
               Text(action.approval?.description ?? action.approval?.command ?? "An assistant needs approval")
-              HStack { Button("Allow once") { Task { await decide(action, "once") } }; Button("Deny") { Task { await decide(action, "deny") } } }.buttonStyle(.bordered).disabled(busy || !canSend || !store.connected)
+              HStack { Button("Allow once") { Task { await decide(action, "once") } }; Button("Deny") { Task { await decide(action, "deny") } } }.buttonStyle(.bordered).disabled(busy || !canSend || !store.householdReachable)
             } else { Text("The last turn from \(requester(action)) is unconfirmed. Open this group in Hermes to review it before retrying.").font(.footnote) }
           }
         }
@@ -424,7 +439,7 @@ struct GroupConversationView: View {
       if let pending {
         Text(pending.text).font(.footnote).textSelection(.enabled)
         Text("This message may have arrived. Retry the same saved message to check without sending a duplicate.").font(.caption).foregroundStyle(.secondary)
-        Button("Retry same saved message") { Task { await send() } }.buttonStyle(.accentProminent).disabled(busy || !canSend || !store.connected)
+        Button("Retry same saved message") { Task { await send() } }.buttonStyle(.accentProminent).disabled(busy || !canSend || !store.householdReachable)
       } else {
         if let query = GroupMentions.query(in: draft), canSend {
           let members = GroupMentions.suggestions(for: query, members: room.members)
@@ -440,7 +455,7 @@ struct GroupConversationView: View {
             .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
             .accessibilityLabel("Message the group").focused($composerFocused).accessibilityIdentifier("groupComposer").onChange(of: draft) { _, value in UserDefaults.standard.set(value, forKey: key + ":draft") }
           // A draft saved before the input limit existed can be longer; it stays editable but cannot send.
-          let ready = !busy && canSend && store.connected && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && GroupLimits.fits(draft, GroupLimits.message)
+          let ready = !busy && canSend && store.householdReachable && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && GroupLimits.fits(draft, GroupLimits.message)
           Button { Task { await send() } } label: {
             Image(systemName: busy ? "hourglass" : "arrow.up").font(.headline).frame(width: 44, height: 44)
               .foregroundStyle(ready ? Palette.surface(scheme) : Palette.muted)
@@ -578,23 +593,18 @@ struct GroupConversationView: View {
   private func send() async {
     let input = pending ?? GroupSend(requestId: UUID().uuidString.lowercased(), threadId: threadId.isEmpty ? UUID().uuidString.lowercased() : threadId, text: draft.trimmingCharacters(in: .whitespacesAndNewlines))
     error = nil
-    let receipt: GroupAccepted? = await store.run(busy: $busy, error: $error, failure: { $0.localizedDescription + " The message may have arrived. Retry the same saved message to check, without sending a duplicate." }) {
-      UserDefaults.standard.set(try JSONEncoder().encode(input), forKey: key); pending = input
-      let receipt: GroupAccepted = try await $0.api.write(path + "/messages", input)
-      guard receipt.accepted else { throw NSError(domain: "Group chat", code: 1, userInfo: [NSLocalizedDescriptionKey: "Hermes did not confirm this message."]) }
-      return receipt
-    }
+    let receipt = await store.sendGroupMessage(input, room: path, savedAs: key, busy: $busy, error: $error) { pending = $0 }
     guard receipt != nil else { return }
     UserDefaults.standard.removeObject(forKey: key); UserDefaults.standard.removeObject(forKey: key + ":draft"); pending = nil; draft = ""; threadId = ""; replyToId = ""; await load(); sentScrollRequest = UUID()
   }
   private func stop() async {
-    let stopped: [String: Int]? = await store.run(busy: $busy, error: $error) { try await $0.api.write(path + "/stop", ["requestId": UUID().uuidString.lowercased()]) }
+    let stopped: [String: Int]? = await store.run(busy: $busy, error: $error, household: true) { try await $0.api.write(path + "/stop", ["requestId": UUID().uuidString.lowercased()]) }
     if stopped != nil { await load() }
   }
   private func decide(_ action: GroupAction, _ choice: String) async {
     guard let member = action.member_id, let generation = action.execution_generation, let request = action.request_id ?? action.approval?.request_id else { return }
     let decision = GroupDecision(taskId: action.task_id, memberId: member, generation: generation, choice: choice, requestId: request)
-    switch await store.attempt(busy: $busy, { (context) -> GroupApproved in try await context.api.write(path + "/approve", decision) }) {
+    switch await store.attempt(busy: $busy, household: true, { (context) -> GroupApproved in try await context.api.write(path + "/approve", decision) }) {
     case .success?: store.buzz(.decided); await load()
     case .failure(let failure)?: store.buzz(.failed); error = failure.localizedDescription
     case nil: break

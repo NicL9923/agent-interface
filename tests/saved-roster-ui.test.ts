@@ -367,6 +367,36 @@ describe("the home this device saved", () => {
     expect(savedRoster()).toBeNull();
   });
 
+  // Hermes connected, but the server has had no roster from it yet. Its empty list is no word that every
+  // assistant is gone, so the saved home stays on the page and on the device, and the hint keeps its chats.
+  it("stays, on the page and the device, through a first bootstrap whose server knows no roster", async () => {
+    store(signInHintKey, hintFor("one"));
+    store(savedRosterKey, savedOne);
+    await open();
+    expect(showsSavedHome()).toBe(true);
+    await answer("GET /bootstrap?roster=lean", 200, { ...one, bots: [], rosterUnknown: true });
+    expect(showsSavedHome()).toBe(true);
+    expect(order()).toEqual(["Home", "Ranch Hand", "Trail Cook", "Supper plans"]);
+    expect(savedRoster()).toEqual(savedOne);
+    expect(JSON.parse(localStorage.getItem(signInHintKey)!).bots).toEqual([
+      "home",
+      "ranch",
+      "trail",
+    ]);
+  });
+
+  // Another tab saved a newer home after this one drew its copy, as when an assistant was made private.
+  // A bootstrap that knows no roster has nothing to say about that, so the newer copy stays.
+  it("is not written back over a newer copy by a bootstrap whose server knows no roster", async () => {
+    store(signInHintKey, hintFor("one"));
+    store(savedRosterKey, savedOne);
+    await open();
+    const newer = { ...savedOne, bots: savedOne.bots.filter((bot) => bot.id !== "trail") };
+    store(savedRosterKey, newer);
+    await answer("GET /bootstrap?roster=lean", 200, { ...one, bots: [], rosterUnknown: true });
+    expect(savedRoster()).toEqual(newer);
+  });
+
   it("draws none of what a copy should not hold, even when one holds it", async () => {
     store(signInHintKey, hintFor("one"));
     store(savedRosterKey, {
@@ -637,7 +667,7 @@ describe("using the saved home before bootstrap answers", () => {
     await open();
     await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
     expect(railText()).toContain("Can't connect");
-    expect(announced()).toContain("Reconnecting to the app");
+    expect(announced()).toContain("Can't reach the app");
     expect(mainLandmark()?.textContent).toContain("Can't reach the app right now");
     await act(async () => button("Try again").click());
     await answer("GET /bootstrap?roster=lean", 200, one);

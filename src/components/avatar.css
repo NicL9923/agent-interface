@@ -9,6 +9,10 @@
     flex-shrink: 0;
     vertical-align: middle;
     isolation: isolate;
+    /* Losing and regaining the connection eases in and out. */
+    transition:
+      filter 400ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 400ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .avatar-svg {
     width: 100%;
@@ -23,10 +27,14 @@
     object-fit: cover;
     background: var(--rail, #eeeee6);
   }
-  .avatar-wrap[data-state="disconnected"],
   .avatar-wrap[data-state="interrupted"] {
     filter: saturate(0.25);
     opacity: 0.88;
+  }
+  /* A lost connection only quiets the assistants; the connection notice says what happened. */
+  .avatar-wrap[data-state="disconnected"] {
+    filter: saturate(0.45);
+    opacity: 0.9;
   }
   .avatar-badge {
     position: absolute;
@@ -53,7 +61,6 @@
   .avatar-wrap[data-state="blocked"] .avatar-badge {
     background: var(--attention, #b5813a);
   }
-  .avatar-wrap[data-state="disconnected"] .avatar-badge,
   .avatar-wrap[data-state="interrupted"] .avatar-badge,
   .avatar-wrap[data-state="waiting"] .avatar-badge {
     background: var(--muted, #697268);
@@ -142,7 +149,6 @@
       animation: none !important;
     }
   }
-  .avatar-wrap[data-state="disconnected"] .avatar-badge,
   .avatar-wrap[data-state="interrupted"] .avatar-badge,
   .avatar-wrap[data-reduced-motion="true"] .avatar-badge,
   .avatar-wrap[data-reduced-motion="true"] .avatar-ring {

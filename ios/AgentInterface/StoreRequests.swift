@@ -25,14 +25,17 @@ extension AppStore {
   /// current when the scope and task still match, even if the client was replaced.
   /// Multi-step work calls `context.checkCurrent()` between steps to stop once it is stale.
   /// Also nil, without running, when no client is connected. `busy` is on from the call until it
-  /// returns, so a caller may set it earlier to close the gap before a `Task` starts.
+  /// returns, so a caller may set it earlier to close the gap before a `Task` starts. A `household`
+  /// write, such as a group's, checks `householdReachable` as it starts, before its first step saves
+  /// anything, and fails with `ConnectionRefused` without running.
   func attempt<T>(
-    busy: Binding<Bool>? = nil, current: @escaping @MainActor () -> Bool = { true },
+    busy: Binding<Bool>? = nil, household: Bool = false, current: @escaping @MainActor () -> Bool = { true },
     _ work: @MainActor (RequestContext) async throws -> T
   ) async -> Result<T, Error>? {
     busy?.wrappedValue = true
     defer { busy?.wrappedValue = false }
     guard let api else { return nil }
+    if household, !householdReachable { return .failure(ConnectionRefused(errorDescription: Self.waitingForConnection)) }
     let started = scope
     let context = RequestContext(api: api, scope: started) { [weak self] in
       !Task.isCancelled && self?.scope == started && self?.api === api && current()
@@ -54,14 +57,14 @@ extension AppStore {
   /// starts does so itself, since only it knows whether a refresh should hide the last failure.
   @discardableResult
   func run<T>(
-    busy: Binding<Bool>? = nil, error message: Binding<String?>,
+    busy: Binding<Bool>? = nil, error message: Binding<String?>, household: Bool = false,
     failure: (Error) -> String = { $0.localizedDescription },
     current: @escaping @MainActor () -> Bool = { true },
     _ work: @MainActor (RequestContext) async throws -> T
   ) async -> T? {
-    switch await attempt(busy: busy, current: current, work) {
+    switch await attempt(busy: busy, household: household, current: current, work) {
     case .success(let value)?: return value
-    case .failure(let error)?: message.wrappedValue = failure(error); return nil
+    case .failure(let error)?: message.wrappedValue = error is ConnectionRefused ? error.localizedDescription : failure(error); return nil
     case nil: return nil
     }
   }

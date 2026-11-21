@@ -65,6 +65,8 @@ struct ConversationView: View {
   @State private var composerFocused = false
   @State private var peekDismissedTurn: String?
   @State private var visible = false
+  /// The banner message VoiceOver last heard here, so it hears each one once.
+  @State private var announcedBanner: String?
   @State private var findOpen = false
   @State private var findQuery = ""
   @State private var findTarget: String?
@@ -163,18 +165,28 @@ struct ConversationView: View {
     }
     .sheet(isPresented: $profileOpen, onDismiss: profileClosed) { profileSheet }
     // On screen, even under a sheet, the conversation is polled and streamed; elsewhere it is not.
-    .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
-    .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false; speech.reset() }
-    .onChange(of: findQuery) { _, _ in findTarget = nil }
-    .onChange(of: store.error) { _, error in
-      if visible, let error { AccessibilityNotification.Announcement(error).post() }
+    .onAppear {
+      if !visible { store.conversationShown(bot.id, true) }
+      visible = true
+      // A banner already showing as the chat opens is heard too; `onChange` sees only later changes.
+      announceBanner(store.chatErrorBanner)
     }
+    .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false; announcedBanner = nil; speech.reset() }
+    .onChange(of: findQuery) { _, _ in findTarget = nil }
+    .onChange(of: store.chatErrorBanner) { _, shown in announceBanner(shown) }
     .task(id: "\(findOpen):\(findQuery)") { await searchHistory() }
     // Handoff to another device, and the assistant on screen for Siri.
     .userActivity(ChatHandoff.activityType, isActive: store.api != nil && !store.sessionExpired) { activity in
       ChatHandoff.describe(activity, bot: bot, server: store.api?.baseURL)
     }
     .findShortcut(botId: bot.id, open: openFind)
+  }
+  /// Only an error the banner shows, as it comes into view, and each once: a failed poll is the connection's
+  /// news, said once by the store.
+  private func announceBanner(_ shown: String?) {
+    guard visible, shown != announcedBanner else { return }
+    announcedBanner = shown
+    if let shown { store.announce(shown) }
   }
   private func configureSpeech() {
     speech.api = store.api
@@ -190,10 +202,6 @@ struct ConversationView: View {
   private func modelButton(iconOnly: Bool) -> some View {
     ModelChipButton(bot: bot, disabled: !store.supports(.botConfiguration) || !store.connected || store.sending, iconOnly: iconOnly) { modelOpen = true }
   }
-  private var cardShown: Bool {
-    !(store.offlineSavedAt != nil && store.householdConnected && !reachability.offline)
-      && store.connectionLost(offline: reachability.offline) && store.bootstrap != nil
-  }
   @ViewBuilder private var banners: some View {
     // Home is live but this chat is still the copy saved on the device: say so, with its age,
     // until it reloads; Hermes itself is reachable, so the reconnect card would mislead.
@@ -201,8 +209,8 @@ struct ConversationView: View {
       Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reloading this chat…")
         .font(.caption).foregroundStyle(.secondary).padding(8).accessibilityIdentifier("chatSavedCopy")
     }
-    // The connection card in the status dock already says a poll failed; its error would only repeat it.
-    if let error = store.error, store.connectionError == nil || !cardShown {
+    // A failed poll waits with the connection notice and gives way to it; see `chatErrorShown`.
+    if let error = store.chatErrorBanner {
       ErrorBanner(message: error, dismiss: { store.dismissError() }).padding(.horizontal).padding(.bottom, 8)
     }
     if store.sessionExpired {
@@ -240,7 +248,7 @@ struct ConversationView: View {
   }
   /// The assistant's live state, as home shows it: a finished turn rests.
   private var headerState: ActivityState {
-    !store.connected ? .disconnected : store.activity == .done ? .idle : store.activity
+    store.activity == .disconnected || store.connectionShown ? .disconnected : store.activity == .done ? .idle : store.activity
   }
   private var profileSheet: some View {
     BotProfileView(bot: bot, state: headerState) { action in
@@ -473,7 +481,8 @@ struct ConversationView: View {
           store.setRunsShown(botId: bot.id, routineId: run.routineId, shown: false)
           runUndo.show(UndoToast(message: "Hid \(run.routineName) runs from this chat", change: .routineRuns(botId: bot.id, routineId: run.routineId)))
         })
-      if ![.idle, .done].contains(store.activity) { liveActivity }
+      // The row says what the assistant is doing. A lost connection is the notice's news, not the assistant's.
+      if store.activityRowShown { liveActivity }
       // A request this device just settled keeps its line a moment after Hermes stops listing it.
       ForEach(SettledRequests.shared.lingering(botId: bot.id, listed: Set((store.conversation?.attention ?? []).map(\.id)))) { SettledReceiptRow(text: $0.text) }
       // Questions and secure requests come before approvals, as on the web.
@@ -527,6 +536,14 @@ struct ConversationView: View {
       if store.offlineSavedAt != nil {
         ContentUnavailableView("No saved messages", systemImage: "wifi.slash",
           description: Text(store.draftReady ? "Reconnect to load this assistant's conversation. You can keep writing a draft." : "Reconnect to load this assistant's conversation and saved draft."))
+      } else if store.connectionShown {
+        // Never read, so not known to be empty: the notice above the composer says why and retries.
+        VStack(spacing: 14) {
+          AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: .disconnected, size: 112, name: bot.name, forceReducedMotion: true)
+          Text("This conversation hasn't loaded yet").font(.title2.bold())
+          Text("It will show here as soon as the connection is back.").foregroundStyle(.secondary)
+        }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36)
+          .accessibilityElement(children: .combine).accessibilityIdentifier("conversationNotLoaded")
       } else { ProgressView("Opening your conversation…").frame(maxWidth: .infinity).padding(40) }
     } else if store.transcript?.messages.isEmpty == true && [.idle, .done].contains(store.activity) {
       VStack(spacing: 14) {
@@ -677,11 +694,11 @@ struct ConversationView: View {
   /// presentation, the latest line of reasoning. A failed turn offers Retry here.
   private var liveActivity: some View {
     let live = LiveWork(turn: store.turns.last, toolCalls: store.conversation?.toolCalls)
-    let working = store.connected && [.thinking, .working].contains(store.activity)
+    let working = [.thinking, .working].contains(store.activity)
     let recovering = store.activity == .failed || store.activity == .interrupted
     return HStack(alignment: recovering ? .top : .center, spacing: 12) {
       AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity == .blocked ? .idle : store.activity, size: 52, name: bot.name, botId: bot.id,
-        prop: store.connected ? AvatarProp.from(toolCalls: store.conversation?.toolCalls) : nil)
+        prop: store.activity != .disconnected ? AvatarProp.from(toolCalls: store.conversation?.toolCalls) : nil)
       VStack(alignment: .leading, spacing: 4) {
         if recovering {
           Text(store.activity == .failed ? "\(bot.name) couldn't finish." : "\(bot.name)'s task was interrupted.")
@@ -694,7 +711,7 @@ struct ConversationView: View {
           }
         } else {
           ShimmerText(
-            text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected, offline: reachability.offline),
+            text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail),
             moving: [.thinking, .working, .waiting].contains(store.activity))
         }
         if working, let receipt = live.receipt {
@@ -1234,7 +1251,7 @@ struct AttentionView: View {
       do {
         try await store.perform(
           "/bots/\(APIClient.component(botId))/requests/\(APIClient.component(request.id))",
-          QuestionAnswers.Submission(answers: answers.payload(questions)))
+          QuestionAnswers.Submission(answers: answers.payload(questions)), gate: .openChat)
         guard scope == store.scope else { return }
         settled = true
         AccessibilityNotification.Announcement("Answers sent.").post()
@@ -1342,18 +1359,18 @@ struct QuestionAnswers: Equatable {
 }
 
 /// The working line's sentence, ported from the web conversation: one sentence that names the
-/// current step while working and a plain verb for every other state.
+/// current step while working and a plain verb for every other state. The line is hidden while
+/// the chat shows a lost connection, which is the connection notice's news, not the assistant's.
 enum ActivitySentence {
   static let actions: [ActivityState: String] = [
     .idle: "ready", .thinking: "thinking", .working: "working", .waiting: "waiting for approval",
-    .blocked: "waiting for your input", .done: "done", .failed: "having trouble", .interrupted: "stopped", .disconnected: "reconnecting",
+    .blocked: "waiting for your input", .done: "done", .failed: "having trouble", .interrupted: "stopped",
   ]
-  static func text(name: String, state: ActivityState, detail: String?, connectionLost: Bool, offline: Bool = false) -> String {
-    if offline { return "\(name) is offline." }
+  static func text(name: String, state: ActivityState, detail: String?) -> String {
     let step = (detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"[.…]+$"#, with: "", options: .regularExpression)
-    if !connectionLost && state == .working && !step.isEmpty { return "\(name) is \(step.prefix(1).lowercased() + step.dropFirst())..." }
+    if state == .working && !step.isEmpty { return "\(name) is \(step.prefix(1).lowercased() + step.dropFirst())..." }
     // A state from a newer server has no web verb yet.
-    guard let action = actions[connectionLost ? .disconnected : state] else { return "\(name)'s status is unknown" }
+    guard let action = actions[state] else { return "\(name)'s status is unknown" }
     return "\(name) is \(action)..."
   }
 }
@@ -1460,25 +1477,50 @@ struct AgentHandoff {
   }
 }
 
-/// The compact connection card's copy, from the web's ConnectionPanel.
+/// What the connection notice says, and what VoiceOver hears, from the web's `connectionCopy` in
+/// `ConnectionPanel.tsx`. The rules a person would notice broken: it never mentions a draft that
+/// does not exist, it says one line until a loss lasts, and the most certain fact wins.
 struct ConnectionCopy: Equatable {
   var title: String
-  var detail: String
+  /// Nil for the one-line form, which has nothing to explain while the app retries.
+  var detail: String?
   var setup = false
-  static func compact(code: String?, appUnavailable: Bool, offline: Bool = false) -> ConnectionCopy {
-    if offline { return ConnectionCopy(title: "You're offline", detail: "Your draft is kept on this device. We'll reconnect when you're back online.") }
-    if appUnavailable { return ConnectionCopy(title: "Reconnecting to the app", detail: "Your conversation stays here and your draft is kept. We'll check again automatically.") }
-    switch code ?? "unreachable" {
-    case "not_configured": return ConnectionCopy(title: "Connect your household to Hermes", detail: "Set up the connection once on the computer running this app. Your existing assistants will appear here automatically.", setup: true)
-    case "invalid_config": return ConnectionCopy(title: "The connection needs a small correction", detail: "The saved Hermes address or token is incomplete. Run setup on the computer hosting this app to correct it.", setup: true)
-    case "unauthorized": return ConnectionCopy(title: "Hermes didn't accept the connection", detail: "The saved connection token needs to be updated. Your conversations are still with Hermes.", setup: true)
-    case "addon_missing": return ConnectionCopy(title: "Hermes is reachable. One step remains.", detail: "This installation needs the compatible connection add-on before it can safely send messages or recover work.", setup: true)
-    case "incompatible": return ConnectionCopy(title: "Hermes and this app need matching versions", detail: "Run the connection check on the app's computer for the required version and update instructions.", setup: true)
-    case "connecting": return ConnectionCopy(title: "Connecting to Hermes", detail: "Checking the connection and restoring your assistants.")
-    case "reconnecting": return ConnectionCopy(title: "Reconnecting to Hermes", detail: "Your draft is kept. Existing work stays with Hermes, and messages won't be resent automatically.")
-    case "closed": return ConnectionCopy(title: "The connection is restarting", detail: "Your draft is kept. We'll reconnect automatically.")
-    default: return ConnectionCopy(title: "Hermes is temporarily unavailable", detail: "Your draft is kept. We'll reconnect automatically when Hermes is reachable again.")
+  /// What waiting cannot fix: someone has to set the installation up or repair it.
+  private static let setups: [String: ConnectionCopy] = [
+    "not_configured": ConnectionCopy(title: "Connect your household to Hermes", detail: "Set up the connection once on the computer running this app. Your existing assistants will appear here automatically.", setup: true),
+    "invalid_config": ConnectionCopy(title: "The connection needs a small correction", detail: "The saved Hermes address or token is incomplete. Run setup on the computer hosting this app to correct it.", setup: true),
+    "unauthorized": ConnectionCopy(title: "Hermes didn't accept the connection", detail: "The saved connection token needs to be updated. Your conversations are still with Hermes.", setup: true),
+    "addon_missing": ConnectionCopy(title: "Hermes is reachable. One step remains.", detail: "This installation needs the compatible connection add-on before it can safely send messages or recover work.", setup: true),
+    "incompatible": ConnectionCopy(title: "Hermes and this app need matching versions", detail: "Run the connection check on the app's computer for the required version and update instructions.", setup: true),
+  ]
+  /// Whether Hermes is down in a way that needs a person, so no retry of the app's own brings it back.
+  static func needsSetup(_ connection: RuntimeStatus?) -> Bool {
+    guard let connection, !connection.connected, let code = connection.code else { return false }
+    return setups[code] != nil
+  }
+  /// `appUnavailable`: the app server cannot be reached. `chatOnly`: the app and Hermes answer and
+  /// only the open chat's reads fail. `lasting`: the loss has lasted, or is certain; until then the
+  /// notice is one plain line. `hasDraft`: words or files wait in the message box.
+  static func of(connection: RuntimeStatus?, offline: Bool = false, appUnavailable: Bool = false,
+    chatOnly: Bool = false, lasting: Bool = false, hasDraft: Bool = false) -> ConnectionCopy {
+    let kept = hasDraft ? "Your draft is kept. " : ""
+    if offline {
+      return ConnectionCopy(title: "You're offline", detail: "\(hasDraft ? "Your draft is kept on this device. " : "")We'll reconnect when you're back online.")
     }
+    let hermes = !appUnavailable && !chatOnly
+    if hermes, needsSetup(connection), let code = connection?.code, let setup = setups[code] { return setup }
+    // A server that just started is connecting for the first time; to the person every other loss is a reconnect.
+    let connecting = hermes && connection?.code == "connecting"
+    if !lasting { return ConnectionCopy(title: connecting ? "Connecting…" : "Reconnecting…") }
+    if appUnavailable { return ConnectionCopy(title: "Can't reach the app", detail: "\(kept)We'll keep trying.") }
+    if chatOnly { return ConnectionCopy(title: "Can't refresh this chat", detail: "New messages may not show yet. \(kept)We'll keep trying.") }
+    if connecting { return ConnectionCopy(title: "Connecting to Hermes", detail: "Checking the connection and restoring your assistants.") }
+    return ConnectionCopy(title: "Hermes isn't answering", detail: "Messages can't be sent until it's back. \(kept)We'll keep trying.")
+  }
+  /// The copy as one announcement. A title that already ends its sentence, as "Reconnecting…" does, gets no period.
+  var spoken: String {
+    let first = title.hasSuffix(".") || title.hasSuffix("…") ? title : title + "."
+    return [first, detail].compactMap { $0 }.joined(separator: " ")
   }
 }
 

@@ -64,7 +64,7 @@ enum GroupActivity {
       switch current.status {
       case "queued": sentence = "\(name) is waiting to start..."
       case "stopping": sentence = "\(name) is stopping..."
-      default: sentence = ActivitySentence.text(name: name, state: .working, detail: advanced && current.status == "running" && !tool.isEmpty ? "Using \(tool)" : nil, connectionLost: false)
+      default: sentence = ActivitySentence.text(name: name, state: .working, detail: advanced && current.status == "running" && !tool.isEmpty ? "Using \(tool)" : nil)
       }
       var round: String?
       if advanced, let index = current.round_index, index >= 0 {
