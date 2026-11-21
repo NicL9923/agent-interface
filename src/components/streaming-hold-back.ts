@@ -74,7 +74,7 @@ export function streamingHoldBack(text: string): string {
     const line = text.slice(lineStart);
     if (/[\t]| {4}/.test(containerPrefix.exec(line)![0])) return text;
     const header = heldHeader(text, lineStart, line);
-    if (header !== undefined) return text.slice(0, header);
+    if (header !== undefined) return cutAt(text, header);
     const earliest = text.length - HOLD_LIMIT - lineStart;
     const cut =
       markerLine.test(line) || opensTable(line, previousLine(text, lineStart).line)
@@ -83,12 +83,16 @@ export function streamingHoldBack(text: string): string {
     if (cut === undefined || cut < earliest) return text;
     // Only quote and list markers stay before the cut, so the hold hides everything the line says.
     if (containerPrefix.exec(line)![0].length >= cut && sentenceEnd.test(line)) return text;
-    const at = lineStart + cut;
-    if (at > 0 && graphemes?.segment(text).containing(at)?.index !== at) return text;
-    return text.slice(0, at);
+    return cutAt(text, lineStart + cut);
   } catch {
     return text;
   }
+}
+
+/** `text` up to `at`, or all of it when `at` may not fall between characters. */
+function cutAt(text: string, at: number) {
+  if (at > 0 && graphemes?.segment(text).containing(at)?.index !== at) return text;
+  return text.slice(0, at);
 }
 
 /** The line that ends just before `lineStart`, and where it starts. */

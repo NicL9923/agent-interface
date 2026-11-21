@@ -113,3 +113,11 @@ A resize report skipped the measure when the turn's border box was within 0.5 px
 | Break                                                                 | Result                                                                                                                                            |
 | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `opensTable` checks only that the line above does not start with `\|` | Red: the row under a delimiter row without a leading pipe, the row under a row without one, and the row still arriving under such a delimiter row |
+
+### Review 5. Without a grapheme segmenter, a shown header went away
+
+Without `Intl.Segmenter` the hold-back holds nothing after the first character, because it cannot prove a cut falls between characters. The header hold returned before that check, so `Intro\n| Day |` showed whole and then hid `| Day |` once the newline arrived. Both holds now cut through `cutAt`, which keeps that check.
+
+| Break                                             | Guarding test                                                        | Result                                              |
+| ------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------- |
+| The header hold slices without the boundary check | `holds nothing it showed when the runtime has no grapheme segmenter` | Red: `Intro\n` shown, `Intro\n\| Day \|\n` expected |
