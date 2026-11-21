@@ -1,6 +1,7 @@
 import { Dialog } from "../components/ui/dialog";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { FormMessage } from "../components/ui/form-message";
 import { NativeSelect } from "../components/ui/native-select";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
@@ -27,7 +28,7 @@ import {
 } from "./preferences-editing";
 import type { Section } from "./preferences-editing";
 import { PREFERENCE_FIELDS, type PreferenceField } from "./preference-queue";
-import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
+import type { EditPreferences } from "./use-preference-edits";
 import "./home.css";
 import { SettingsConfirmation } from "../components/SettingsConfirmation";
 import { MacSettings } from "./MacSettings";
@@ -46,6 +47,7 @@ export function PreferencesDialog({
   connectionLost,
   offline,
   editPreferences,
+  saveRefusal,
   notifications,
   installEvent,
   notice,
@@ -63,7 +65,9 @@ export function PreferencesDialog({
   destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" };
   connectionLost: boolean;
   offline: boolean;
-  editPreferences: (edit: PreferenceEdit, chosen: readonly PreferenceField[]) => Promise<void>;
+  editPreferences: EditPreferences;
+  /** Why the last preferences save was refused; its change has already left the screen. */
+  saveRefusal?: string;
   notifications: ReturnType<typeof useDeviceNotifications>;
   installEvent: InstallEvent | null;
   notice: string;
@@ -77,7 +81,9 @@ export function PreferencesDialog({
   /** Where this sheet offers its own close to the app. See close-request.ts. */
   closer?: RefObject<SheetClose | null>;
 }) {
-  const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
+  const prefs = boot.preferences;
+  // The edit shows at once; a refusal reaches the person through `saveRefusal`.
+  const commit = (...args: Parameters<EditPreferences>) => void editPreferences(...args);
   const finePointer = useFinePointer();
   const bots = boot.bots;
   // A control's update names the fields it set, so its save carries them whatever the queue holds.
@@ -196,6 +202,11 @@ export function PreferencesDialog({
         </h2>
       </header>
       <div className="sheet-body" ref={body}>
+        {saveRefusal && (
+          <FormMessage tone="error" className="settings-footnote">
+            Your change didn't save. {saveRefusal}
+          </FormMessage>
+        )}
         {shown.kind === "following" ? (
           <FollowingPage preferences={prefs} bots={bots} commit={commit} />
         ) : shown.kind === "section" ? (

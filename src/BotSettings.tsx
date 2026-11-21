@@ -24,8 +24,7 @@ import { AutomationPanel, LearningPanel, SkillLocks } from "./components/Automat
 import { ApprovalSettingsPanel } from "./components/ApprovalSettingsPanel";
 import { VaultPanel } from "./components/VaultPanel";
 import { VoicePicker } from "./components/VoicePicker";
-import type { PreferenceEdit } from "./app/use-preference-edits";
-import type { PreferenceField } from "./app/preference-queue";
+import type { EditPreferences } from "./app/use-preference-edits";
 import "./app/home.css";
 import {
   BehaviorFields,
@@ -100,7 +99,7 @@ function LoadedBotSettings({
   onDeleted?: (botId: string) => void;
   onOpenRoutine?: (botId: string, routineId: string) => void;
   /** Saves this person's preferences, for "Show runs in chat". */
-  editPreferences?: (edit: PreferenceEdit, chosen: readonly PreferenceField[]) => Promise<void>;
+  editPreferences?: EditPreferences;
 }) {
   // Creating saves the assistant and then its avatar. Once it exists, this same sheet edits it,
   // so an avatar that failed to save is still here to retry.

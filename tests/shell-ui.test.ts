@@ -5,13 +5,15 @@ import { preferenceServer } from "./helpers/preference-server";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
 import { ShortcutsDialog } from "../src/app/ShortcutsDialog";
-import { api, uploadFile, write } from "../src/client-api";
+import { api, ApiError, uploadFile, write } from "../src/client-api";
+import { applyMergePatch } from "../src/shared/merge-patch";
 import { defaultPreferences } from "../src/shared/types";
 import { submissionKey } from "../src/app/storage";
-import type { Bootstrap, Conversation } from "../src/shared/types";
+import type { Bootstrap, Conversation, Preferences, PreferencesPatch } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import {
   advance,
+  click,
   mountRoot,
   renderedProps,
   reducedMotionOnly,
@@ -990,5 +992,190 @@ describe("composer", () => {
       mount.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.disabled,
     ).toBe(false);
     expect(localStorage.getItem(submissionKey("one", "shared"))).toBeNull();
+  });
+});
+
+// Every screen shows the preferences the queue builds on: the server's last answer with the saves still waiting
+// laid over it. Home, Settings and assistant details disagreeing is what let a person tap on something gone.
+describe("preferences while saves wait", () => {
+  /** Saves wait until the test lands or refuses them; a landed one merges as the server does. */
+  const holdSaves = () => {
+    let stored = boot.preferences;
+    const saves: { body: PreferencesPatch; land(): Promise<void>; refuse(): Promise<void> }[] = [];
+    vi.mocked(write).mockImplementation(<T>(path: string, value?: unknown) => {
+      if (path !== "/preferences") return Promise.resolve({} as T);
+      return new Promise<T>((resolve, reject) =>
+        saves.push({
+          body: value as PreferencesPatch,
+          land: () =>
+            act(async () => {
+              stored = applyMergePatch(stored, value) as Preferences;
+              resolve(stored as T);
+            }),
+          refuse: () =>
+            act(async () => {
+              reject(new ApiError("The server refused that change.", 400));
+            }),
+        }),
+      );
+    });
+    return { saves, stored: () => stored };
+  };
+  const tap = (target: Element) => act(async () => (target as HTMLElement).click());
+  const openSettings = async () => {
+    await tap(mount.container.querySelector(".home-account")!);
+    await tap(
+      [...document.body.querySelectorAll('[role="menuitem"]')].find(
+        (item) => item.textContent === "Settings",
+      )!,
+    );
+    await loaded();
+  };
+  const closeSettings = () => tap(document.body.querySelector('[aria-label="Close settings"]')!);
+  const settingsOrder = () =>
+    [...document.body.querySelectorAll(".section-row .row-label")].map((item) => item.textContent);
+  const menuFor = async (name: string) => {
+    await act(async () => {
+      await preloadBotMenu();
+    });
+    const row = [...mount.container.querySelectorAll<HTMLElement>(".bot-item")].find((item) =>
+      item.textContent?.includes(name),
+    )!;
+    await act(async () =>
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          clientX: 20,
+          clientY: 20,
+        }),
+      ),
+    );
+  };
+  const menuItem = (text: string) =>
+    [...document.body.querySelectorAll<HTMLElement>('.bot-menu [role="menuitem"]')].find(
+      (entry) => entry.textContent === text,
+    )!;
+  const toastText = () => document.body.querySelector(".toast")?.textContent ?? "";
+
+  it("stops offering a section whose deletion waits, and tells the person when the deletion is refused", async () => {
+    boot.preferences = {
+      ...boot.preferences,
+      sections: [
+        { id: "a", name: "Around the house", botIds: ["shared"] },
+        { id: "b", name: "Barn", botIds: [] },
+      ],
+    };
+    const held = holdSaves();
+    await render();
+    await openSettings();
+    await tap(document.body.querySelector('[data-opens="section:b"]')!);
+    await click("Delete section", document.body);
+    await click("Delete section", document.querySelector('[role="alertdialog"]')!);
+    await closeSettings();
+    await menuFor("Shared");
+    await tap(menuItem("Move to section"));
+    const offered = () =>
+      [...document.body.querySelectorAll('[role="menuitemradio"]')].map((item) =>
+        item.textContent?.replace("✓", ""),
+      );
+    expect(offered()).toEqual(["None", "Around the house"]);
+    await key({ key: "Escape" });
+    await held.saves[0].refuse();
+    expect(toastText()).toContain("The server refused that change.");
+    expect(held.stored().sections.map((section) => section.name)).toEqual([
+      "Around the house",
+      "Barn",
+    ]);
+  });
+
+  it("opens Settings on the order a waiting reorder will save, and saves what it previews", async () => {
+    boot.preferences = {
+      ...boot.preferences,
+      sections: ["A", "B", "C"].map((id) => ({ id, name: id, botIds: [] })),
+    };
+    const held = holdSaves();
+    await render();
+    await openSettings();
+    await tap(document.body.querySelector('[aria-label="Move B up"]')!);
+    await closeSettings();
+    await openSettings();
+    expect(settingsOrder()).toEqual(["B", "A", "C"]);
+    await tap(document.body.querySelector('[aria-label="Move C up"]')!);
+    expect(settingsOrder()).toEqual(["B", "C", "A"]);
+    await held.saves[0].land();
+    await held.saves[1].land();
+    expect(held.stored().sections.map((section) => section.id)).toEqual(["B", "C", "A"]);
+    expect(settingsOrder()).toEqual(["B", "C", "A"]);
+  });
+
+  it("shows a pin from Home in the assistant's details while it saves, so it is never pinned twice", async () => {
+    const held = holdSaves();
+    await render();
+    await menuFor("Shared");
+    await tap(menuItem("Pin to top"));
+    await tap(mount.container.querySelector(".chat-identity")!);
+    await loaded();
+    const pin = document.body.querySelector<HTMLButtonElement>(
+      ".bot-details-action[aria-pressed]",
+    )!;
+    expect([pin.textContent, pin.getAttribute("aria-pressed")]).toEqual(["Unpin", "true"]);
+    await held.saves[0].land();
+    expect(held.stored().favorites).toEqual(["kitchen", "shared"]);
+  });
+
+  it("takes back a refused pin queued behind another save, and says so instead of claiming it", async () => {
+    const held = holdSaves();
+    await render();
+    await key({ key: "k", ctrlKey: true });
+    await typeInto(paletteInput(), "dark");
+    await key({ key: "Enter" }, paletteInput());
+    await menuFor("Shared");
+    await tap(menuItem("Pin to top"));
+    await held.saves[0].land();
+    await held.saves[1].refuse();
+    expect(toastText()).toContain("The server refused that change.");
+    expect(toastText()).not.toContain("Pinned Shared");
+    const pinned = [...mount.container.querySelectorAll(".pinned-bot")].map(
+      (item) => item.textContent,
+    );
+    expect(pinned.some((text) => text?.includes("Shared"))).toBe(false);
+    expect(held.stored().favorites).toEqual(["kitchen"]);
+  });
+
+  it("says inside Settings and inside an assistant's details when a change made there is refused", async () => {
+    boot.preferences = {
+      ...boot.preferences,
+      sections: ["A", "B"].map((id) => ({ id, name: id, botIds: [] })),
+    };
+    const held = holdSaves();
+    await render();
+    await openSettings();
+    await tap(document.body.querySelector('[aria-label="Move B up"]')!);
+    await held.saves[0].refuse();
+    const alert = (sheet: string) =>
+      document.body.querySelector(`${sheet} [role="alert"]`)?.textContent ?? "";
+    expect(alert(".settings-sheet")).toBe(
+      "Your change didn't save. The server refused that change.",
+    );
+    expect(settingsOrder()).toEqual(["A", "B"]);
+    await closeSettings();
+    await tap(mount.container.querySelector(".chat-identity")!);
+    await loaded();
+    await tap(document.body.querySelector(".bot-details-action[aria-pressed]")!);
+    await held.saves[1].refuse();
+    expect(alert(".bot-details")).toBe("Your change didn't save. The server refused that change.");
+  });
+
+  it("says when a theme change from the palette is refused", async () => {
+    const held = holdSaves();
+    await render();
+    await key({ key: "k", ctrlKey: true });
+    await typeInto(paletteInput(), "dark");
+    await key({ key: "Enter" }, paletteInput());
+    await held.saves[0].refuse();
+    expect(toastText()).toContain("The server refused that change.");
+    expect(held.stored().theme).toBe("system");
   });
 });

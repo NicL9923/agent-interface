@@ -1606,11 +1606,16 @@ describe("routines in Automation", () => {
       },
     ]);
     const edits: ((value: typeof bootstrap.preferences) => typeof bootstrap.preferences)[] = [];
-    // Saves stay on their way, so the switch shows the edit as it would until the server answers.
+    // Like the session: the edit's result goes on screen at once while its save stays on its way.
+    let shown = bootstrap;
     const editPreferences = vi.fn(
       (edit: (value: typeof bootstrap.preferences) => typeof bootstrap.preferences) => {
         edits.push(edit);
-        return new Promise<void>(() => {});
+        shown = { ...shown, preferences: edit(shown.preferences) };
+        root.render(
+          createElement(BotSettings, { bot, bootstrap: shown, onClose, onSaved, editPreferences }),
+        );
+        return new Promise<never>(() => {});
       },
     );
     await render({ editPreferences });

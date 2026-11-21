@@ -56,6 +56,7 @@ import { OPEN_CHAT_EVENT } from "./components/AgentExchange";
 import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
+import type { EditPreferences } from "./app/use-preference-edits";
 import { useShortcuts } from "./app/shortcuts";
 import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph";
 import { tintProps } from "./app/bot-tint";
@@ -227,7 +228,12 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       onFirstBootstrap: (next) => {
         if (!chosenEarly.current && startsOnToday(next.preferences)) setView("today");
       },
-      onError: setError,
+      // A refused or lost preferences save has already left the screen; say so wherever the person is,
+      // in place of any "done" notice it would contradict.
+      onPreferencesRefused: (message) => {
+        setSaveRefusal(message);
+        toast.show(`Your change didn't save. ${message}`);
+      },
       onBotGone: gone,
     },
     start,
@@ -235,6 +241,14 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
   const toast = useToast(session.auth ? undefined : userId);
+  /** Why the last preferences save was refused, for the open sheet; a new edit or closing it clears it. */
+  const [saveRefusal, setSaveRefusal] = useState("");
+  const editPreferences: EditPreferences = useStableCallback(
+    (...[edit, chosen]: Parameters<EditPreferences>) => {
+      setSaveRefusal("");
+      return session.editPreferences(edit, chosen);
+    },
+  );
   const syncUrl = useUrlSync(view, panel, botId, userId, roomId);
   // Home lists the household's group chats beside its assistants. The catalog carries each room's
   // newest message, so one read serves every row; no room's log is read from here. The household
@@ -525,9 +539,12 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   );
   // Home menu changes can be taken back for a few seconds, by the toast's Undo or Cmd+Z. The
   // toast belongs to whoever made the change; useToast drops it for anyone else.
+  // The change shows at once, so the toast says it at once; a refusal replaces the toast with its reason.
   const undoable = (change: UndoableEdit) => {
-    void session.editPreferences(change.apply, change.fields);
-    toast.show(change.message, () => void session.editPreferences(change.undo, change.fields));
+    toast.show(change.message, () => void editPreferences(change.undo, change.fields));
+    void editPreferences(change.apply, change.fields).then((result) => {
+      if (result === "unchanged" && change.unchanged) toast.show(change.unchanged);
+    });
   };
   const togglePin = useStableCallback((bot: Bot) => {
     if (boot) undoable(togglePinEdit(boot.preferences, bot.id, bot.name));
@@ -548,7 +565,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const chooseMainFromHome = useStableCallback(() => setChoosingMain(true));
   const dismissMainSuggestion = useStableCallback(
     () =>
-      void session.editPreferences(
+      void editPreferences(
         (value) => ({ ...value, mainSuggestionDismissed: true }),
         ["mainSuggestionDismissed"],
       ),
@@ -634,7 +651,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   });
   const setTheme = useStableCallback(
     (theme: Preferences["theme"]) =>
-      void session.editPreferences((preferences) => ({ ...preferences, theme }), ["theme"]),
+      void editPreferences((preferences) => ({ ...preferences, theme }), ["theme"]),
   );
   const showShortcuts = useStableCallback(() => setOverlay("shortcuts"));
   // Find in chat belongs to the transcript, which listens for this once the chat is on screen.
@@ -663,6 +680,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const [leaving] = useState(waitingOnClose<Destination>);
   /** A sheet with its own close closed; a notification waiting on that sheet opens now. */
   const sheetClosed = (kind: Panel["kind"]) => {
+    setSaveRefusal("");
     const next = leaving.take(panelClose.current?.sheet, userId);
     closePanels(kind);
     if (next) goTo(next);
@@ -1195,7 +1213,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
               selectBot(botId);
               setPanel({ kind: "routine", botId, routineId });
             }}
-            editPreferences={session.editPreferences}
+            editPreferences={editPreferences}
             onSaved={() => void session.refresh()}
             onCreated={(id) =>
               void session.refresh().then((next) => {
@@ -1221,12 +1239,16 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             conversation={conversation}
             connectionLost={connectionLost}
             startNewSection={panel.newSection}
-            editPreferences={session.editPreferences}
+            editPreferences={editPreferences}
+            saveRefusal={saveRefusal}
             onFind={findInChat}
             onMain={setMain}
             onCheckIns={setCheckIns}
             onSettings={(bot) => open({ kind: "settings", bot })}
-            onClose={() => closePanels("details")}
+            onClose={() => {
+              setSaveRefusal("");
+              closePanels("details");
+            }}
           />
         </Loading>
       )}
@@ -1291,7 +1313,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             boot={boot}
             connectionLost={connectionShown}
             offline={offline}
-            editPreferences={session.editPreferences}
+            editPreferences={editPreferences}
+            saveRefusal={saveRefusal}
             notifications={notifications}
             installEvent={installEvent}
             notice={notice}
