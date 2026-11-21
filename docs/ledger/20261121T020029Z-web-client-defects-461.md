@@ -82,3 +82,14 @@ The tests are in `tests/transcript-ui.test.ts`. On main, three of the five faile
 | Space checked on buttons only, not summaries        | Red: the same                                                                    |
 | No check for a scrolling box inside                 | Red: `does not hear a key the command box scrolls with`                          |
 | A scrolling box takes the key even at its end       | Red: the same                                                                    |
+
+## Validation
+
+Both runs below used `4ac636d0`, the item 3 commit, under `~/.agents/tools/linux-heavy-lock.sh`.
+
+| Check                                                                             | Result                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.agents/tools/check-all --keep-going`                                            | Typecheck, lint, ruff, unit tests (229 files, 4,210 tests) and build passed. Chromium e2e: 142 passed. WebKit e2e: all 142 failed with "Host system is missing dependencies", as WebKit does on this host |
+| WebKit e2e in `mcr.microsoft.com/playwright:v1.65.0-noble`, after `npm run build` | 138 passed, 3 skipped by their own conditions, 1 failed: `e2e/smoke.spec.ts:811`, which fails in WebKit on main too                                                                                       |
+
+No e2e spec changed. No Playwright spec exercises the three fixes directly. The key behavior in item 3 was checked with the probe page in both browsers, and the app's handling of it with the jsdom tests.
