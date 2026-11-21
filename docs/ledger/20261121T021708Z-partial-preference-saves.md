@@ -73,8 +73,10 @@ The first run, on `6aad2931`, passed typecheck, lint, ruff, build and the Python
 missing from the qualification inputs, and `tests/worker-opens-ui.test.ts` answered a save with the
 body it was sent. The fallback now goes through `request()` with `plainJson`, the module is a
 qualification input, and that mock merges. The e2e step ran 286 tests: all 143 Chromium tests
-passed, and all 143 WebKit tests failed because the host lacks WebKit's system libraries. The
-second run's results are in the commit that adds them below.
+passed, and all 143 WebKit tests failed because the host lacks WebKit's system libraries. The second run, on `4dd964e1`, passed typecheck, lint, ruff, build, the Python tests (52 files)
+and Vitest (4,209 tests in 230 files). The e2e step again passed all 143 Chromium tests and failed
+all 143 WebKit tests for the missing host libraries. The WebKit run of the new spec in the Playwright
+container passed.
 
 ## Not exercised
 
