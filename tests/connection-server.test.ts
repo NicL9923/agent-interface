@@ -2,10 +2,12 @@ import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
+import { cachedRoster } from "../src/server/cached-roster.js";
 import { loadConfig } from "../src/server/config.js";
 import {
   defaultPreferences,
   type Avatar,
+  type Bot,
   type FileRef,
   type Runtime,
 } from "../src/shared/types.js";
@@ -225,6 +227,24 @@ describe("connection recovery API", () => {
       expect((await first).statusCode).toBe(200);
       expect((await bootstrap(app, headers)).statusCode).toBe(200);
       expect(status).toHaveBeenCalledTimes(2);
+    });
+    // An empty roster with Hermes connected can be a fresh answer or the server having no roster yet.
+    // Bootstrap says which, so a client never takes a failed read for every assistant being gone.
+    it("says when the roster is the runtime's cached copy, empty or not", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      let answer: () => Bot[] = () => cachedRoster([]);
+      const { app } = await installation({ listBots: vi.fn(async () => answer()) });
+      const headers = await identity(app);
+      const first = (await bootstrap(app, headers)).json();
+      expect(first).toMatchObject({ bots: [], rosterCached: true });
+      expect(first.connection.connected).toBe(true);
+      // A cached roster is never held, so the next bootstrap asks again.
+      answer = () => rows();
+      expect((await bootstrap(app, headers)).json()).toMatchObject({ rosterCached: false });
+      // A runtime that only marks its rows is cached too.
+      vi.setSystemTime(Date.now() + 2_000);
+      answer = () => rows("disconnected");
+      expect((await bootstrap(app, headers)).json()).toMatchObject({ rosterCached: true });
     });
     it("never holds a disconnected runtime", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });

@@ -474,6 +474,26 @@ describe("a failed conversation read", () => {
       expect(shown()).toBe(false);
     });
 
+    // Hermes connected, but the server has had no roster from it yet: it lists none, and says the list is
+    // its cache. That is no reason to drop every assistant. A fresh empty roster is.
+    it("keeps the assistants through an empty cached roster, and drops them for an empty fresh one", async () => {
+      await opened();
+      const names = boot.bots.map((bot) => bot.name);
+      const listed = () =>
+        names.filter((name) =>
+          [...container.querySelectorAll('[aria-label="Assistants"] button')].some((row) =>
+            row.textContent?.includes(name),
+          ),
+        );
+      expect(listed()).toEqual(names);
+      boot = { ...boot, bots: [], rosterCached: true };
+      await rosterChanged();
+      expect(listed()).toEqual(names);
+      boot = { ...boot, rosterCached: false };
+      await rosterChanged();
+      expect(listed()).toEqual([]);
+    });
+
     // The connection coming back is said when it comes back. The notice staying out its second, and
     // whatever the person opens during it, change nothing about that.
     it("says the connection is back when it is, even if another chat is opened while the notice lingers", async () => {

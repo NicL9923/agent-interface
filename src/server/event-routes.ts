@@ -11,6 +11,7 @@ import { eventStreamConnection, type EventStream } from "./event-stream.js";
 import type { GroupCatalogWatch } from "./group-catalog-watch.js";
 import type { GroupWatch } from "./group-watch.js";
 import { routePattern } from "./route-path.js";
+import { isCachedRoster } from "./cached-roster.js";
 import { changesRoster, type RuntimeSnapshots } from "./runtime-snapshot.js";
 import { id } from "./schemas.js";
 import type { Store } from "./store.js";
@@ -80,7 +81,11 @@ export function installEventRoutes(
           .then(([bots, capabilities, status]) => {
             roster.note(bots);
             // The bootstrap each client sends on the notice below reuses this read.
-            if (status) snapshot.keep({ bots, capabilities, connection: status }, began);
+            if (status)
+              snapshot.keep(
+                { bots, capabilities, connection: status, rosterCached: isCachedRoster(bots) },
+                began,
+              );
             // Memoize per userId so multiple tabs for one household member serialize the roster once.
             const projected = new Map<string, string>();
             for (const changed of rosterListeners)

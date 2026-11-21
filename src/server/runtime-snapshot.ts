@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { Bootstrap, Runtime } from "../shared/types.js";
+import { isCachedRoster } from "./cached-roster.js";
 import { routePattern } from "./route-path.js";
 
 /**
@@ -10,7 +11,9 @@ import { routePattern } from "./route-path.js";
  * fresh bootstrap.
  */
 export const SNAPSHOT_TTL_MS = 1500;
-export type RuntimeSnapshot = Pick<Bootstrap, "bots" | "capabilities" | "connection">;
+export type RuntimeSnapshot = Pick<Bootstrap, "bots" | "capabilities" | "connection"> & {
+  rosterCached: boolean;
+};
 /** A read's start, from `begin`, which decides whether it may still publish. */
 export type SnapshotRead = { startedAt: number; order: number };
 
@@ -33,9 +36,7 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
     if (order < readPublished) return;
     readPublished = order;
     snapshotKept =
-      value.connection.connected && !value.bots.some((bot) => bot.activity === "disconnected")
-        ? { value, at: startedAt }
-        : undefined;
+      value.connection.connected && !value.rosterCached ? { value, at: startedAt } : undefined;
     // Callers that arrive now take this read, not an older one still in flight.
     snapshotRead = undefined;
   };
@@ -53,7 +54,12 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
     // Share only runtime reads, undecorated: presentation, identity, preferences and CSRF stay request-scoped.
     const reading: Promise<RuntimeSnapshot> = (async () => {
       const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
-      return { bots, capabilities, connection: await runtime.status() };
+      return {
+        bots,
+        capabilities,
+        connection: await runtime.status(),
+        rosterCached: isCachedRoster(bots),
+      };
     })();
     snapshotRead = reading;
     // A rejected read is never kept: the next caller reads again.

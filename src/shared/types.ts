@@ -518,6 +518,13 @@ export interface Bootstrap {
   bots: Bot[];
   capabilities: Capabilities;
   connection: RuntimeStatus;
+  /**
+   * True when `bots` is the server's last good roster because Hermes could not be asked. Who is on it
+   * may be out of date, and an empty one may only mean the server has no roster yet, so a client acts on
+   * an omission only when this is false. Absent from an older server, which marks such rows
+   * `disconnected` instead.
+   */
+  rosterCached?: boolean;
   csrfToken: string | null;
   /** This person's private key for deriving form request IDs; see formRequestId. Absent from an older server. */
   formKey?: string;

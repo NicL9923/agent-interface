@@ -1,3 +1,4 @@
+import { isCachedRoster } from "../src/server/cached-roster.js";
 import {
   automationOverviewFixture,
   automationTaskFixture,
@@ -3333,6 +3334,25 @@ describe("Hermes transport liveness and diagnostics", () => {
       at: new Date(1791400000500).toISOString(),
     });
   });
+  // A failed roster read with Hermes connected, before any read succeeded, has no rows to mark
+  // disconnected. The roster itself still says it is the cache, so bootstrap can say so.
+  it("marks every roster it lists from cache, an empty one included, and no fresh one", async () => {
+    rpcErrors.set("profiles.list", { code: -1, message: "Busy" });
+    const empty = await runtime.listBots();
+    expect(empty).toEqual([]);
+    expect(isCachedRoster(empty)).toBe(true);
+    // Hermes gone before any roster was read: still nothing, and still the cache.
+    sockets[0].close();
+    const gone = await runtime.listBots();
+    expect(gone).toEqual([]);
+    expect(isCachedRoster(gone)).toBe(true);
+    rpcErrors.delete("profiles.list");
+    await runtime.reconnect!();
+    const fresh = await runtime.listBots();
+    expect(fresh.length).toBeGreaterThan(0);
+    expect(isCachedRoster(fresh)).toBe(false);
+  });
+
   it("keeps the successful bot roster visible and disconnected during an outage", async () => {
     const before = await runtime.listBots();
     sockets[0].close();

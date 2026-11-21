@@ -171,8 +171,8 @@ Tests changed because the behavior did:
 
 Each line was broken with `~/.agents/tools/mutate.py`, the named tests run, and the source restored.
 The lists and the tool's output from the final pass, after all the review rounds, are in
-[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 112 mutants, 112 caught. The last
-three rows were run after the fifth and sixth review rounds.
+[`mutants/`](../evidence/2026-11-19-connection-states/mutants/): 125 mutants, 125 caught. The last
+five rows were run after the fifth, sixth, eighth and ninth review rounds.
 
 | File                                                | Mutants | Result    |
 | --------------------------------------------------- | ------- | --------- |
@@ -186,6 +186,8 @@ three rows were run after the fifth and sixth review rounds.
 | `src/app/stream-health.ts`                          | 3       | 3 caught  |
 | `ConnectionAnnouncer`, partial live return          | 5       | 5 caught  |
 | Live-updates scope, `App.tsx` and `stream-health`   | 4       | 4 caught  |
+| `hermes.ts` roster cache order                      | 2       | 2 caught  |
+| `rosterCached`, server and web                      | 11      | 11 caught |
 
 Mutants that survived on the way, and what was done:
 
@@ -301,6 +303,24 @@ change made it unfit for reuse. `tests/hermes-adapter.test.ts` replays one such 
 out of order; both mutants in `mutants/roster-cache.py` are caught. The native side of that finding,
 and the rest of the round, are in the iOS section.
 
+### Ninth round, of the native fixes and the eighth round's server fix: one shared cause
+
+The server fix passed. The ninth round found that an empty roster with Hermes connected, which the
+server answers when its first `profiles.list` fails, has no rows to mark `disconnected`, so a client
+took it for a fresh roster with no one on it: the native app closed the open chat and cleared its saved
+data, and the web dropped every assistant from the list. The cause is that bootstrap had no way to say
+the roster was its cache, the same gap that left the third round's first finding open.
+
+Bootstrap now carries `rosterCached`. The Hermes adapter marks every roster it answers from cache
+(`src/server/cached-roster.ts`), the runtime snapshot and the roster stream's evaluation both set the
+field from that mark or from rows marked by an older runtime, and a cached roster is never held for
+reuse. The web reads it in `staleRoster` and keeps its rows through an empty cached roster, while an
+empty fresh one empties the list. Tests: `hermes-adapter` (an empty cache from a failed read and from a
+lost socket, and a fresh read unmarked), `connection-server` (bootstrap's field, empty or not, never
+held), `conversation-events` (the evaluation's cached read), `connection-grace-ui` (an empty cached
+roster kept, an empty fresh one taken). The mutants are `mutants/roster-cached-*.py`, 11 of 11 caught.
+The native findings and their fixes are in the iOS section.
+
 ## Checks
 
 On the fingerprint above, `.agents/tools/check-all --keep-going` under `linux-heavy-lock.sh`, and
@@ -336,12 +356,12 @@ run had included:
 - iOS matched these states afterwards; see "iOS" below.
 - Safari, Firefox, a screen reader and a real phone: not run. The live region and tooltips were checked
   in jsdom and by reading the DOM in Chromium.
-- The fourth review round's fixes were not reviewed again.
+- The ninth round's server and web fix has had no review of its own.
 - A member's last visible assistant made private during a Hermes outage stays listed until Hermes is
-  back (third round, finding 1). On `main` too. The server answers no rows then, which the client cannot
-  tell from a server with no roster to list, and that case keeps the rows on purpose. The fix is a
-  field in bootstrap that says whether the server had a roster. The native app keeps every row through
-  an outage, so it has the wider form of this.
+  back (third round, finding 1). On `main` too. Bootstrap now says the roster is cached, but a cached
+  roster that the member's visibility filters down to no one still looks like a cache with nothing in
+  it, and is kept on purpose. Telling the two apart needs the server to say whether the filter removed
+  rows.
 - The server still answers one timed-out Hermes call with the code `unreachable`. The client no longer
   treats it as proof, so nothing depends on it, but the code says more than the server knows.
 - The live-updates notice still clears about 10 seconds after a stream reconnects, because a stream

@@ -44,22 +44,23 @@ const groupsChanged = () => window.dispatchEvent(new Event(GROUPS_EVENT));
  */
 export const ROSTER_CARRY_MS = 30_000;
 /**
- * Whether the server could list only its last roster, not a fresh one. It says so by marking rows
- * `disconnected`, which it does while Hermes is down and after a roster read that failed with Hermes
- * connected.
+ * Whether the server could list only its last roster, not a fresh one: while Hermes is down, and after a
+ * roster read that failed with Hermes connected. It says so with `rosterCached`; an older server only
+ * marks the rows `disconnected`.
  */
-const staleRoster = (next: Bootstrap) => next.bots.some((bot) => bot.activity === "disconnected");
+const staleRoster = (next: Bootstrap) =>
+  next.rosterCached === true || next.bots.some((bot) => bot.activity === "disconnected");
 /**
  * The roster a bootstrap brings, for the member the page already shows. Who is on it is always the
  * server's word: it filters even its last roster for each member, so an assistant made private goes at
  * once. What each assistant is doing is the server's word only when it knows. A stale row says nothing
  * changed, so while `carry` holds the row keeps the activity it had here; whether the app shows a loss,
- * and when, is `useOutage`'s business. A bootstrap that missed Hermes and lists no roster at all keeps
- * the rows as they were.
+ * and when, is `useOutage`'s business. A stale roster that lists no one keeps the rows as they were: it
+ * may only mean the server has had no roster from Hermes yet.
  */
 function rosterFrom(next: Bootstrap, previous: Bootstrap | null, carry: boolean) {
   if (previous?.user.id !== next.user.id) return next.bots;
-  if (!next.connection.connected && !next.bots.length) return previous.bots;
+  if (!next.bots.length && (staleRoster(next) || !next.connection.connected)) return previous.bots;
   if (!carry) return next.bots;
   const before = new Map(previous.bots.map((bot) => [bot.id, bot.activity]));
   return next.bots.map((bot) =>

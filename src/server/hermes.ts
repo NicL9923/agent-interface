@@ -48,6 +48,7 @@ import {
   nothingToStopMessage,
   runChangedMessage,
 } from "../shared/errors.js";
+import { cachedRoster } from "./cached-roster.js";
 import { httpError } from "./http-error.js";
 import {
   BEFORE_ADMISSION,
@@ -1299,7 +1300,7 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
       try {
         await connect();
       } catch {
-        return botCache.map((row) => ({ ...row, activity: "disconnected" as const }));
+        return cachedRoster(botCache.map((row) => ({ ...row, activity: "disconnected" as const })));
       }
       if (rosterReuse && Date.now() - rosterReuse.at < ROSTER_REUSE_MS)
         return rosterReuse.bots.slice();
@@ -1322,7 +1323,9 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
           if (rosterRequest === request) rosterReuse = { at: Date.now(), bots };
           return bots;
         } catch {
-          return botCache.map((row) => ({ ...row, activity: "disconnected" as const }));
+          return cachedRoster(
+            botCache.map((row) => ({ ...row, activity: "disconnected" as const })),
+          );
         }
       })();
       rosterRequest = request;
