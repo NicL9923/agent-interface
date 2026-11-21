@@ -371,6 +371,22 @@ a replaced connection still answered its caller, such as a bootstrap, as a known
 snapshot then held. That read now answers as `rosterUnknown`, and the same test asserts it. The lists
 break 25 lines; 25 are caught.
 
+### Twelfth round, of the two fixes above: two P2 left open, one P3
+
+The fixes held: a read from a replaced connection reaches neither `botCache` nor `rosterReuse`, and
+`tellRosterWatchers` from inside a read queues at most one follow-up evaluation. The P3, that the test did
+not check which roster the fallback listed, is fixed: it now asserts the rows.
+
+Two P2s are left open, both needing Hermes to be replaced while a request is in flight:
+
+- Bootstrap assembles its snapshot from a roster read and a later status read. If the roster read ends on
+  one Hermes and another connects before the status read, bootstrap pairs the first's rows with the
+  second's status and calls them known. Closing it needs the runtime to say which connection a roster
+  came from, through the snapshot. On `main` the same pairing happens with no notion of known at all.
+- `Roster.note` in `bot-access.ts` and main-assistant reconciliation in `main-assistant.ts` take any roster
+  `listBots` returns as current, unknown or not. That is unchanged from `main`, where a replaced
+  connection's read was taken the same way; they now could check `isUnknownRoster` and do not yet.
+
 ## Checks
 
 On the fingerprint above, `.agents/tools/check-all --keep-going` under `linux-heavy-lock.sh`, and
@@ -406,7 +422,8 @@ run had included:
 - iOS matched these states afterwards; see "iOS" below.
 - Safari, Firefox, a screen reader and a real phone: not run. The live region and tooltips were checked
   in jsdom and by reading the DOM in Chromium.
-- The eleventh round's fixes have had no review of their own.
+- The twelfth round's two open P2s above: a bootstrap racing a Hermes replacement, and two server
+  callers that do not check `isUnknownRoster`.
 - With a second runtime, an unknown roster from one of them is not tracked per runtime (tenth round,
   finding 3). Production runs Hermes alone; this belongs to step 2 of `docs/RuntimePlan.md`.
 - The server still answers one timed-out Hermes call with the code `unreachable`. The client no longer

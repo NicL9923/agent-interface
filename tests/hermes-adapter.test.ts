@@ -3407,7 +3407,10 @@ describe("Hermes transport liveness and diagnostics", () => {
     const answered = await old;
     expect(answered.map((bot) => bot.id)).toEqual(["only-here"]);
     expect(isUnknownRoster(answered)).toBe(true);
-    expect(isUnknownRoster(await runtime.listBots())).toBe(true);
+    // The fallback is still the last current connection's roster, not the replaced one's.
+    const fallback = await runtime.listBots();
+    expect(fallback.map((bot) => bot.id)).toEqual(["shared"]);
+    expect(isUnknownRoster(fallback)).toBe(true);
   });
 
   // A stream heard that the roster was unknown. The first read that makes it known again tells the
