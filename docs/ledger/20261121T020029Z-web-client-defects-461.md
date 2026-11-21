@@ -230,3 +230,72 @@ On `9f6f7d9b`:
 | `npx vitest run`, under `linux-heavy-lock.sh`                                                 | 229 files, 4,224 tests passed |
 | `npm run build`, then `e2e/contained-scroll.spec.ts` and `e2e/live-reply.spec.ts` in Chromium | 11 passed                     |
 | The same two specs in WebKit, in `mcr.microsoft.com/playwright:v1.65.0-noble`                 | 11 passed                     |
+
+## Third review fixes
+
+A third review of `b9d6d0a0..fc002507` found five things. One was declined. Each of the other four is its own commit on top of `fc002507`.
+
+### Left as a follow-up: a key that ends the anchor in Chromium, where nothing scrolled
+
+In the gate-log fixture, Page Down from the end of the tool output scrolls nothing in Chromium, yet it ends the send's anchor, because the hook counts that unknown key while an anchor is on. If the viewport then grows and shrinks while the reply streams, from 1280 × 720 to 1280 × 1150 to 1280 × 650, the transcript jumps from 51 px to 403 px and hides the sent message. The client at `b9d6d0a0`, or the same steps without the key, returns to 51 px. Main counts every key, so main ends the anchor on that key too and makes the same jump. Telling a key that scrolled from one that did not, in a box the two engines treat differently, needs the hook to confirm the key against the transcript's own movement. That is a larger change to the follow logic than this task carries, so it is left for a follow-up.
+
+### Third review 1. A header showed, went away, then came back as a table
+
+After ``Use `|` as a separator.``, the line `| Name | No.` read as a finished sentence at `No.`, so the hold dropped and the line showed. The closing ` |` made it a header candidate again, and the hold hid the whole line until the delimiter row made it a table. A line now counts as a header only if no prefix of it ended a sentence: it holds none of `.`, `!`, `?`, `。`, `！` or `？`. Such a header shows as typed until its delimiter row arrives.
+
+The prefix property test did not catch this. It checked that a shown line never goes away only for a header held over its delimiter row, two lines, and not for a header held alone as the last line. It now checks every hold that hides a whole line starting with `|`: none of that line may have shown, apart from spaces, one character earlier. That check is limited to header holds. The same check over every rule finds 171 cases on `fc002507` where an opener at a line's start showed as a finished sentence and was then held again. That behavior predates this work and is outside it. The reviewer's reply is now one of the test's fixed replies.
+
+| Break                                                        | Result                                                                                                                                                        |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fc002507`'s `streaming-hold-back.ts`                        | Red: the prefix property test ("hid a shown line", the reviewer's reply first) and `keeps showing a header that read as a finished sentence while it arrived` |
+| The header check tests only the last line's own sentence end | Red: the same two                                                                                                                                             |
+
+### Third review 2. The extra parse ran for every row of a long table
+
+`becomesHeader` parsed the block for every pipe-led last line, body rows included. The reviewer replayed a 3,600-character, three-column table in Chromium at 390 px with 4× CPU throttling, 59 updates over its last 1,000 characters:
+
+- Median render and layout time per update rose from 45 to 53 ms before the parser to 71 to 76 ms with it.
+- The median gap between updates rose from 67 to 83 ms.
+
+A line under one shaped like a delimiter row is now a body row: it is not held, and the parser is not asked. The shape is `| --- | :-: |`, `:---` or `---`. Where that line is a heading's underline or a rule instead, the parser might have read the line under it as a header, and it now shows as typed.
+
+Cost, from the parse benchmark's table reply, paced, with three interleaved runs of each version. The hold-back's share is rendering minus React Markdown's parsing.
+
+| Run | Hand-written rule (`b9d6d0a0`) | Parser on every row (`6d0388c5`) | Parser after the delimiter check |
+| --- | ------------------------------ | -------------------------------- | -------------------------------- |
+| 1   | 12 ms/s                        | 37 ms/s                          | 13 ms/s                          |
+| 2   | 17 ms/s                        | 62 ms/s                          | 25 ms/s                          |
+| 3   | 13 ms/s                        | 41 ms/s                          | 13 ms/s                          |
+
+Run 2 ran under more load: React Markdown's own parsing took 47 to 60 ms/s against 33 to 37 in the others.
+
+| Break                              | Guarding test                                       | Result |
+| ---------------------------------- | --------------------------------------------------- | ------ |
+| No check for a delimiter row above | `shows a line under a heading's underline as typed` | Red    |
+
+### Third review 3. The seeded exception could waive a dropped line of prose
+
+The exception asked only that the held last line become a table header under some delimiter row. GFM reads `Title` as a one-cell header under `|-|`, so if the hold-back ever dropped the last line of zero-based case 107, which ends in `Title\n`, the test would have accepted it. The exception still takes what the hold-back held of the last block. It now also requires that line to start with `|` after at most three spaces, as every header the hold-back holds does.
+
+| Break in `streaming-hold-back.ts`                                     | Old exception | New exception |
+| --------------------------------------------------------------------- | ------------- | ------------- |
+| `becomesHeader` no longer requires a leading pipe, so `Title` is held | Green         | Red           |
+
+### Third review 4. A cell holding only a nonbreaking space made the header flash
+
+`cellCount` trimmed the row with `trim()`, which removes a nonbreaking space. GFM trims only spaces and tabs, so `| A |  ` has two cells for GFM and had one for the count. The synthetic delimiter row then had too few cells, the parser found no table, and the header showed as raw text until its real delimiter row arrived. The count now trims spaces and tabs only.
+
+| Break                                          | Guarding test                                                 | Result |
+| ---------------------------------------------- | ------------------------------------------------------------- | ------ |
+| `trim()` back in `cellCount`, as on `e9f17cb2` | `holds a table header whose last cell is a nonbreaking space` | Red    |
+
+### Third review validation
+
+On `a5e9df23`:
+
+| Check                                                                                         | Result                                                                                                                                                                                                                   |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run typecheck`, `npm run lint`                                                           | Passed                                                                                                                                                                                                                   |
+| `npx vitest run`, under `linux-heavy-lock.sh`                                                 | 229 files, 4,227 tests passed                                                                                                                                                                                            |
+| `npm run build`, then `e2e/contained-scroll.spec.ts` and `e2e/live-reply.spec.ts` in Chromium | 11 passed                                                                                                                                                                                                                |
+| The same two specs in WebKit, in the container                                                | Flaky. The first run failed `contained-scroll.spec.ts` after 30.3 s, the test's timeout, with the host's load average between 17 and 34. Its error text was not kept. Four more runs with no change passed 11 of 11 each |

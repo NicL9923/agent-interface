@@ -38,6 +38,8 @@ const replies = [
   '**[Docs](https://example.test/docs)** and **more `npm ci` here**. ![Logo](https://example.test/logo.png "Logo")',
   "## **Plan** for today\n\n- **Soak** the beans\n- Rinse them *well*\n  - [ ] Check the pot\n\n> **Note:** keep the ~~lid~~ pot covered.",
   "| Day | Meal |\n| --- | :---: |\n| **Sat** | `chili` |\n| Sun | ~~beans~~ stew |\n\nEnjoy.",
+  // The reviewer's case: a header that reads as a finished sentence partway through.
+  "Use `|` as a separator.\n| Name | No. |\n| --- | --- |\n| Sam | 4 |",
   `Run this:\n\n${fence}py\nx = a**b\nprint(*args, **kwargs)\n[r]: not a link\n${fence}\n\nThen **check** it.`,
   "See [the docs][r] and **this**.\n\n[r]: https://example.test/_private",
   `Set up\n=====\n\nInstall:\n\n${fence}bash\nnpm install bullmq\n${fence}\n\n1. Create the key:\n\n   ${fence}sh\n   az keyvault key create --name \`app\`\n   ${fence}\n\n2. Restart the app.\n\n---\n\nDone.`,
@@ -100,18 +102,21 @@ describe("holding back a streaming reply's unfinished tail", () => {
       held.split(/\r\n|\r|\n/).every((line) => line.length <= HOLD_LIMIT);
     const faults: string[] = [];
     let cuts = 0;
-    for (const text of [...replies, ...samples(fragments, 400, 40)])
+    for (const text of [...replies, ...samples(fragments, 400, 40)]) {
+      let before = "";
       for (const prefix of prefixes(text)) {
         const shown = streamingHoldBack(prefix),
           held = prefix.slice(shown.length);
+        // A header hold hides a whole line that starts with a pipe. None of it may have shown one character earlier,
+        // or the reader would see the line and then lose it.
+        const lineStart = !shown || /[\r\n]$/.test(shown);
+        if (lineStart && /^ {0,3}\|/.test(held) && /\S/.test(before.slice(shown.length)))
+          faults.push(`hid a shown line: ${JSON.stringify([before, prefix])}`);
+        before = shown;
         if (!prefix.startsWith(shown))
           faults.push(`not a prefix: ${JSON.stringify([prefix, shown])}`);
         else if (headerOverDelimiter(held)) {
-          // It starts at a line start, and was already held one character earlier: a shown line never goes away.
-          if (shown && !/[\r\n]$/.test(shown))
-            faults.push(`header cut mid-line: ${JSON.stringify([prefix, shown])}`);
-          else if (streamingHoldBack(prefix.slice(0, -1)).length > shown.length)
-            faults.push(`hid a shown header: ${JSON.stringify([prefix, shown])}`);
+          if (!lineStart) faults.push(`header cut mid-line: ${JSON.stringify([prefix, shown])}`);
         } else if (held.length > HOLD_LIMIT)
           faults.push(`over the bound: ${JSON.stringify(prefix)}`);
         else if (/[\r\n]/.test(held))
@@ -126,6 +131,7 @@ describe("holding back a streaming reply's unfinished tail", () => {
         if (held) cuts++;
         if (faults.length > 4) break;
       }
+    }
     expect(faults).toEqual([]);
     // An identity function passes everything above; this is what the hold-back is for.
     expect(cuts).toBeGreaterThan(1000);
@@ -206,6 +212,13 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["a line of markers", "Title\n--", "Title\n", "Title\n-- and more"],
     ["a trailing marker run after a space", "Feed the **", "Feed the ", "Feed the ** now"],
     ["a lone pipe at the end", "Pick a |", "Pick a ", "Pick a | b"],
+    // The reviewer's case: GFM keeps a cell that holds only a nonbreaking space, so this header has two cells.
+    [
+      "a table header whose last cell is a nonbreaking space",
+      "Intro\n| A | \u00a0",
+      "Intro\n",
+      "Intro\n| A | \u00a0\n|-|-|\n",
+    ],
     // The reviewer's cases: a pipe on the line above, in code or a heading, does not stop a table there.
     [
       "a table header under a line with a pipe in code",
@@ -269,6 +282,9 @@ describe("holding back a streaming reply's unfinished tail", () => {
     // The reviewer's cases: rows of a table whose delimiter row or an earlier row has no pipe at the start.
     ["a table row under a one-column delimiter row without pipes", "| Meal |\n:---\n| Soup |\n"],
     ["a table row under a row without pipes", "| Meal |\n|---|\nPasta\n| Soup |\n"],
+    // A line shaped like a delimiter row above means a table's rows, which the parser is never asked about.
+    // Where that line is a heading's underline instead, the line under it shows too.
+    ["a line under a heading's underline", "Title\n---\n| Day |\n"],
     // A list item's paragraph takes this line in, and no delimiter row can make it a table.
     ["a line a list item's paragraph takes in", "- item\nText **bold**\n| - | - |\n"],
     // The reviewer's case: a table whose delimiter row, or a row above, has no leading pipe.
@@ -343,6 +359,15 @@ describe("holding back a streaming reply's unfinished tail", () => {
       vi.unstubAllGlobals();
       vi.resetModules();
     }
+  });
+
+  // The reviewer's case: the header read as a finished sentence at `No.` and showed. It stays on screen from
+  // then on, though only the closing pipe's own marker, and then the delimiter row's line, wait.
+  it("keeps showing a header that read as a finished sentence while it arrived", () => {
+    const intro = "Use `|` as a separator.\n";
+    expect(streamingHoldBack(`${intro}| Name | No.`)).toBe(`${intro}| Name | No.`);
+    expect(streamingHoldBack(`${intro}| Name | No. |`)).toBe(`${intro}| Name | No. `);
+    expect(streamingHoldBack(`${intro}| Name | No. |\n| --- | -`)).toBe(`${intro}| Name | No. |\n`);
   });
 
   it("never cuts inside a grapheme", () => {
