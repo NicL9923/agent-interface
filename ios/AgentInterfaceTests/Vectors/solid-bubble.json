@@ -1,0 +1,54 @@
+{
+  "comment": "Shared by tests/solid-bubble.test.ts (solidFill in src/app/bot-tint.ts) and the iOS SolidBubble.fill test. Each case is an assistant color and the fill a person's solid bubble takes from it, as uppercase #RRGGBB, or null when the color is not a hex value. White text keeps at least 4.5:1 on every fill. The closest any channel comes to a rounding tie is 0.012 of a byte (#FF6700's red), far above the last-digit differences between JavaScript's and Swift's math.",
+  "cases": [
+    { "name": "avatar palette blue", "color": "#1084FE", "fill": "#0066CA" },
+    { "name": "avatar palette orange", "color": "#FF6700", "fill": "#AC4300" },
+    { "name": "avatar palette teal", "color": "#00BCA6", "fill": "#007A6B" },
+    { "name": "avatar palette red", "color": "#FF263C", "fill": "#C50025" },
+    { "name": "avatar palette pink", "color": "#FF309B", "fill": "#BD006E" },
+    { "name": "avatar palette purple", "color": "#9159FE", "fill": "#7738DD" },
+    { "name": "avatar palette amber", "color": "#FF9800", "fill": "#975800" },
+    {
+      "name": "avatar palette brown, whose capped lightness needs no chroma cut",
+      "color": "#97683D",
+      "fill": "#8B5D32"
+    },
+    {
+      "name": "avatar palette charcoal, already dark, keeps its color",
+      "color": "#292929",
+      "fill": "#292929"
+    },
+    {
+      "name": "three-digit hex expands each digit",
+      "color": "#f80",
+      "fill": "#9E5200"
+    },
+    {
+      "name": "an already dark color keeps its color",
+      "color": "#1a237e",
+      "fill": "#1A237E"
+    },
+    { "name": "a gray stays gray", "color": "#808080", "fill": "#696969" },
+    {
+      "name": "pure blue sits under the cap and keeps its color",
+      "color": "#0000FF",
+      "fill": "#0000FF"
+    },
+    {
+      "name": "white darkens to the cap's gray",
+      "color": "#FFFFFF",
+      "fill": "#696969"
+    },
+    { "name": "black stays black", "color": "#000000", "fill": "#000000" },
+    {
+      "name": "the app's green, which a group chat's solid bubble takes, keeps its color",
+      "color": "#246F59",
+      "fill": "#246F59"
+    },
+    {
+      "name": "a value that is not a hex color has no fill",
+      "color": "not-a-color",
+      "fill": null
+    }
+  ]
+}

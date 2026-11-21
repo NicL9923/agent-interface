@@ -1,6 +1,7 @@
 import type { CDPSession, Page, Route } from "@playwright/test";
 import { assistants, expect, signIn, test } from "./fixtures.js";
 import { SCREENS, type Screen } from "./screens.js";
+import { groupFixture, openGroup } from "./group-fixture.js";
 
 // The app's own stylesheets sit in the base, components and motion cascade layers, and the layers rank by name
 // before specificity. The rules were written to meet by specificity and position, as they did before #457 added the
@@ -198,6 +199,27 @@ const EXTRA: GuardScreen[] = [
         .locator(".settings-dialog[open] .settings-content:not(.settings-load-state)")
         .waitFor();
     },
+  ],
+  // Every kind of group row in Bubbles, with the person's solid bubble, whose rules meet the reply bubble's.
+  [
+    "a group chat in bubbles with a solid bubble and a selected reply",
+    async (page) => {
+      await openGroup(page);
+      await page
+        .locator(".group-message")
+        .nth(1)
+        .getByRole("button", { name: /Reply in thread/ })
+        .click();
+      await page.locator(".group-message.selected").waitFor();
+    },
+    (page) => groupFixture(page, { ownBubble: "solid", chatStyle: "bubbles" }),
+  ],
+  [
+    "a group chat in Classic",
+    async (page) => {
+      await openGroup(page);
+    },
+    (page) => groupFixture(page, { ownBubble: "solid", chatStyle: "classic" }),
   ],
 ];
 
