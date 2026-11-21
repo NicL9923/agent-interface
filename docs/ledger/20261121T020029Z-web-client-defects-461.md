@@ -121,3 +121,12 @@ Without `Intl.Segmenter` the hold-back holds nothing after the first character, 
 | Break                                             | Guarding test                                                        | Result                                              |
 | ------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------- |
 | The header hold slices without the boundary check | `holds nothing it showed when the runtime has no grapheme segmenter` | Red: `Intro\n` shown, `Intro\n\| Day \|\n` expected |
+
+### Review 4. The seeded live and saved comparison accepted a dropped delimiter row or code line
+
+The exception accepted any live render that matched the saved render without the reply's last line, when that line started with `|`. That would pass a live render missing a valid delimiter row, as in zero-based case 301, or missing a fenced code line, as in case 8. The exception now asks the hold-back what it held in the last block, as `StreamingMarkdown` does. It applies only when that is the reply's whole last line, starting with `|`, under a line with no pipe, and the saved parse puts it in paragraph text, not in code or a table. A lazy line in a list item stays accepted. The seed holds one, and it is paragraph text inside a list.
+
+| Break in `streaming-hold-back.ts`                                                  | Old exception | New exception |
+| ---------------------------------------------------------------------------------- | ------------- | ------------- |
+| `opensTable` ignores the line above, so a delimiter row under a header row is held | Green         | Red           |
+| No fence check, so a code line starting with `\|` is held                          | Green         | Red           |
