@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { assistants, conversation, expect, signIn, test } from "./fixtures.js";
+import { groupFixture, openGroup } from "./group-fixture.js";
 
 async function useTheme(page: Page, theme: string) {
   const saved = await page.evaluate(async (selectedTheme) => {
@@ -381,3 +382,109 @@ for (const [mode, media] of [
     }
   });
 }
+
+// A group lays out its messages in bubbles. Its solid bubble takes the app's green, since a group has no one
+// assistant's color, and only prose sits in it, so its links, inline code and quotes have to keep 4.5:1 on the fill.
+test.describe("group chat bubbles", () => {
+  // WebKit cannot route a request the service worker makes.
+  test.use({ serviceWorkers: "block" });
+  for (const theme of ["light", "dark"] as const) {
+    for (const ownBubble of ["tint", "solid"]) {
+      test(`a group's bubbles keep WCAG contrast with ${ownBubble} bubbles in ${theme}`, async ({
+        page,
+      }) => {
+        await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+        await groupFixture(page, { ownBubble, chatStyle: "bubbles" });
+        await signIn(page);
+        await openGroup(page);
+        await page.addStyleTag({
+          content:
+            "*, *::before, *::after { transition: none !important; animation: none !important; }",
+        });
+        const own = page.locator(".group-bubbles .group-message.own .reply-bubble");
+        await expect(own).toHaveCount(1);
+        const result = await new AxeBuilder({ page })
+          .include(".group-panel")
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+          .analyze();
+        expect(
+          result.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
+        ).toEqual([]);
+        if (ownBubble === "tint") return;
+        // Axe skips text over a fill it cannot be sure of, so the solid bubble's pieces are measured here.
+        const read = await own.evaluate((bubble) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = 1;
+          const context = canvas.getContext("2d", { willReadFrequently: true })!;
+          const bytes = (color: string) => {
+            context.clearRect(0, 0, 1, 1);
+            context.fillStyle = color;
+            context.fillRect(0, 0, 1, 1);
+            return [...context.getImageData(0, 0, 1, 1).data];
+          };
+          const over = (top: number[], under: number[]) =>
+            [0, 1, 2]
+              .map((at) => (top[at] * top[3] + under[at] * (255 - top[3])) / 255)
+              .concat(255);
+          const channel = (value: number) =>
+            value / 255 <= 0.04045 ? value / 255 / 12.92 : ((value / 255 + 0.055) / 1.055) ** 2.4;
+          const light = (color: number[]) =>
+            0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2]);
+          const fill = bytes(getComputedStyle(bubble).backgroundColor);
+          const contrast = (element: Element) => {
+            let behind = fill;
+            for (
+              let node: Element | null = element;
+              node && node !== bubble;
+              node = node.parentElement
+            )
+              behind = over(bytes(getComputedStyle(node).backgroundColor), behind);
+            const ink = over(bytes(getComputedStyle(element).color), behind);
+            const [upper, lower] = [light(ink), light(behind)].sort((a, b) => b - a);
+            return Math.round(((upper + 0.05) / (lower + 0.05)) * 100) / 100;
+          };
+          const hex = fill
+            .slice(0, 3)
+            .map((value) => value.toString(16).padStart(2, "0").toUpperCase())
+            .join("");
+          return {
+            fill: `#${hex}`,
+            text: contrast(bubble.querySelector("li")!),
+            link: contrast(bubble.querySelector("a")!),
+            code: contrast(bubble.querySelector(":not(pre) > code")!),
+            quote: contrast(bubble.querySelector("blockquote p")!),
+          };
+        });
+        // GROUP_SOLID_FILL, the app's green, which solid-bubble.json holds to itself on both clients.
+        expect(read.fill).toBe("#246F59");
+        for (const piece of ["text", "link", "code", "quote"] as const)
+          expect(read[piece], piece).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+  }
+
+  // The bubbles' edge in a group comes from the same transparent borders as in a chat with one assistant.
+  for (const [mode, media] of [
+    ["increased contrast", { contrast: "more" }],
+    ["forced colors", { forcedColors: "active" }],
+  ] as const) {
+    test(`a group's bubbles draw an edge under ${mode}`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce", ...media });
+      await groupFixture(page, { ownBubble: "solid", chatStyle: "bubbles" });
+      await signIn(page);
+      await openGroup(page);
+      const edges = await page.evaluate(() =>
+        [".group-message.own .reply-bubble", ".group-message:not(.own) .reply-bubble"].map(
+          (selector) => {
+            const style = getComputedStyle(document.querySelector(selector)!);
+            return { selector, width: style.borderTopWidth, color: style.borderTopColor };
+          },
+        ),
+      );
+      for (const edge of edges) {
+        expect(edge.width, edge.selector).toBe("1px");
+        expect(edge.color, edge.selector).not.toMatch(/^rgba\(\d+, \d+, \d+, 0\)$|transparent/);
+      }
+    });
+  }
+});

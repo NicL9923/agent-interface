@@ -263,6 +263,84 @@
   .group-panel .group-more {
     margin-top: 12px;
   }
+  /* The Bubbles chat style in a group. MessageMarkdown lays out each message's prose in reply bubbles and keeps
+     tables, code and cards at the column's width, as in a chat with one assistant. Each message keeps its speaker's
+     line above it. The bubbles separate the rows, so the row divider and the own row's wash go. Everyone else
+     speaks from the leading edge; the person's own bubbles sit at the trailing edge in their own fill. */
+  .group-bubbles .group-message {
+    padding: 10px 12px;
+    border-bottom: 0;
+  }
+  .group-bubbles .group-message.own:not(.selected) {
+    background: none;
+  }
+  .group-bubbles .group-message .message-attribution {
+    justify-content: flex-start;
+    margin-bottom: 6px;
+  }
+  .group-bubbles .group-message.own .message-attribution {
+    justify-content: flex-end;
+  }
+  .group-bubbles .group-message.own > .group-thread-context,
+  .group-bubbles .group-message.own > .group-reply {
+    display: block;
+    width: fit-content;
+    margin-inline-start: auto;
+  }
+  .group-bubbles .group-message > .group-reply {
+    margin-top: 4px;
+  }
+  .group-bubbles .group-message.own .reply-bubbles {
+    align-items: flex-end;
+  }
+  /* The person's bubble mirrors a reply's: the same fill, cap and tail as theirs in a chat with one assistant. */
+  .group-bubbles .group-message.own .reply-bubbles > .reply-bubble {
+    max-width: min(86%, 560px);
+    border-radius: 18px;
+    background: var(--user);
+  }
+  .group-bubbles
+    .group-message.own
+    .reply-bubbles
+    > .reply-bubble:not(:first-child) {
+    border-start-end-radius: 8px;
+  }
+  .group-bubbles
+    .group-message.own
+    .reply-bubbles
+    > .reply-bubble:not(:last-child) {
+    border-end-end-radius: 8px;
+  }
+  .group-bubbles .group-message.own .reply-bubbles > .reply-bubble:last-child {
+    border-end-end-radius: 4px;
+  }
+  /* A group has no one assistant's color, so a solid bubble takes the app's green, GROUP_SOLID_FILL in
+     src/app/bot-tint.ts, under white text at 6:1. Only prose sits in it, and the pieces of prose with their own
+     colors, links, inline code and quotes, change to keep 4.5:1 on the fill. */
+  .conversation-panel[data-own-bubble="solid"]
+    .group-bubbles
+    .group-message.own
+    .reply-bubble {
+    --accent: #fff;
+    background: var(--solid-fill);
+    color: #fff;
+  }
+  .conversation-panel[data-own-bubble="solid"]
+    .group-bubbles
+    .group-message.own
+    .reply-bubble
+    :not(pre)
+    > code {
+    background: rgb(0 0 0 / 0.22);
+  }
+  .conversation-panel[data-own-bubble="solid"]
+    .group-bubbles
+    .group-message.own
+    .reply-bubble
+    blockquote {
+    border-left-color: color-mix(in srgb, #fff 50%, transparent);
+    color: inherit;
+  }
   /* Two classes, so `.composer`'s `position: relative` in styles.css cannot undo the sticking. */
   .composer.group-composer {
     margin-top: 20px;

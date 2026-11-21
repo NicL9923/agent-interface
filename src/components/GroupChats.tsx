@@ -17,6 +17,7 @@ import {
 import { GroupSettings } from "./GroupSettings";
 import { Shimmer } from "./Shimmer";
 import { MessageMarkdown } from "./MessageMarkdown";
+import { GROUP_SOLID_FILL } from "../app/bot-tint";
 import { Icon } from "./Icon";
 import { Avatar } from "./Avatar";
 import { When } from "./When";
@@ -52,6 +53,7 @@ export function GroupRoomView({
   onChanged: () => void;
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const bubbles = bootstrap.preferences.chatStyle !== "classic";
   const [events, setEvents] = useState<GroupEvent[]>([]);
   const [more, setMore] = useState(false);
   const [draft, setDraft] = useState("");
@@ -401,7 +403,11 @@ export function GroupRoomView({
     </div>
   );
   return (
-    <div className="group-panel" ref={panel}>
+    <div
+      className={bubbles ? "group-panel group-bubbles" : "group-panel"}
+      ref={panel}
+      style={bubbles ? { ["--solid-fill" as string]: GROUP_SOLID_FILL } : undefined}
+    >
       {gone && notes}
       {!gone && (
         <section aria-label="Group conversation">
@@ -457,9 +463,13 @@ export function GroupRoomView({
                 const inThread = root && root.event_id !== event.event_id;
                 const member = memberFor(event.actor.id) || memberFor(event.payload.member_id);
                 const routine = scheduledPost(event);
+                const own =
+                  event.kind === "message.user" &&
+                  (event.sender?.id || event.actor.id) === bootstrap.user.id;
+                const text = typeof event.payload.text === "string" ? event.payload.text : "";
                 return (
                   <article
-                    className={`group-message${replyToId === event.event_id ? " selected" : ""}${event.kind === "message.user" && (event.sender?.id || event.actor.id) === bootstrap.user.id ? " own" : ""}`}
+                    className={`group-message${replyToId === event.event_id ? " selected" : ""}${own ? " own" : ""}`}
                     key={event.event_id}
                   >
                     <div className="message-attribution">
@@ -477,9 +487,9 @@ export function GroupRoomView({
                     {inThread && previous?.payload.thread_id !== event.payload.thread_id && (
                       <p className="group-thread-context">In thread with {describe(root)}</p>
                     )}
-                    <MessageMarkdown
-                      text={typeof event.payload.text === "string" ? event.payload.text : ""}
-                    />
+                    {/* In Bubbles each run of prose sits in a bubble and every other block keeps the column's
+                        width, as in a chat with one assistant. The person's own bubbles sit at the trailing edge. */}
+                    <MessageMarkdown text={text} bubbles={bubbles} />
                     {typeof event.payload.thread_id === "string" && (
                       <button
                         className="group-reply"

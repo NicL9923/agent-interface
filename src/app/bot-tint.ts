@@ -104,3 +104,10 @@ export function solidFill(color: string): string | undefined {
     lightness = Math.max(0, lightness - 0.005);
   }
 }
+
+/**
+ * A group has no one assistant whose color a person's solid bubble could take, and any member's color would read as
+ * that member speaking. The bubble takes the app's own green instead, the accent of the light theme, through the
+ * same steps, so white text keeps 4.5:1. iOS matches it with `SolidBubble.fill("#246F59")`.
+ */
+export const GROUP_SOLID_FILL = solidFill("#246F59")!;

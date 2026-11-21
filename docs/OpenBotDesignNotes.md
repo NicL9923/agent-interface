@@ -16,7 +16,9 @@ Chat bubbles. OpenBot puts both sides of a chat in bubbles and fills a person's 
 
 Message rail. OpenBot 0.64.0 shows one tick per message a person wrote beside a long chat. The web client has the same for the messages people sent among those loaded, never for a scheduled prompt, with a 24 px pitch for target size, a window of ticks that follows the reader, and a single tab stop.
 
-Table edge fades come from 0.72.0. Group chats keep their log layout.
+Table edge fades come from 0.72.0.
+
+Group chats. Bubbles came to group chats in a follow-up (issue #461), with the same grouping: prose runs in bubbles, other blocks at the column's width. The person's own bubbles sit at the trailing edge and everyone else, people and assistants, speaks from the leading edge, as group chats in messaging apps do. Putting every person at the trailing edge, as a chat with one assistant does, was rejected: another person's words would sit on the reader's side, and only the name would say they were not the reader's. Each message keeps the speaker line it had in Classic, so a run from one speaker repeats no more than before; folding that run under one line was left out because each message's time and routine tag sit on that line. A person's message is Markdown in a group, so it follows the prose rule too, and a table they send keeps the column's width rather than squeezing into their bubble. A group has no one assistant's color, so the solid bubble takes the app's green rather than the lead's or the first member's color, which would read as that assistant speaking. Classic groups keep the log layout exactly; a computed-style comparison of the group panel before and after found no difference at 1440, 390 and 320 px in both themes.
 
 Left out, with the reason:
 

@@ -41,6 +41,11 @@
     },
     { "name": "black stays black", "color": "#000000", "fill": "#000000" },
     {
+      "name": "the app's green, which a group chat's solid bubble takes, keeps its color",
+      "color": "#246F59",
+      "fill": "#246F59"
+    },
+    {
       "name": "a value that is not a hex color has no fill",
       "color": "not-a-color",
       "fill": null
