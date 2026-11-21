@@ -1087,15 +1087,15 @@ def plan_e2e(root, env, check_timeout, log):
     runtime = container_runtime(env)
     if not runtime:
         raise Refusal(
-            f"WebKit cannot start on this host ({failure}), and neither podman nor docker is on PATH to run it in"
-            " Playwright's container. check-all does not skip WebKit. Fix: install podman (on Fedora, sudo dnf"
+            f"WebKit cannot start on this host: {failure.rstrip('.')}. Neither podman nor docker is on PATH to run it"
+            " in Playwright's container, and check-all does not skip WebKit. Fix: install podman (on Fedora, sudo dnf"
             " install podman), or give the host what WebKit needs (npx playwright install webkit, and on Debian or"
             " Ubuntu sudo npx playwright install-deps webkit)."
         )
     image, kind = playwright_image(root), Path(runtime).name
     container = f"check-all-webkit-{os.getpid()}"
     log(
-        f"e2e: WebKit cannot start on this host ({failure}). Chromium runs here and WebKit in {image} under {kind}."
+        f"e2e: WebKit cannot start on this host: {failure.rstrip('.')}. Chromium runs here and WebKit in {image} under {kind}."
     )
     return [
         Step("e2e:chromium", ["npm", "run", "test:e2e", "--", "--project=chromium"]),
@@ -1187,6 +1187,27 @@ def run_battery(root, args, cache, log=None, env=None):
     prune_logs(cache / "logs", keep=30, current=logs)
 
     results, failed = [], {}
+
+    def report(result):
+        """Record a step's result and say how it went, as soon as it is known."""
+        results.append(result)
+        log(
+            f"{result.name}: {result.status} in {format_seconds(result.seconds)}"
+            + (
+                f" after {format_seconds(result.queued)} queued"
+                if result.queued >= 0.05
+                else ""
+            )
+        )
+        if result.status != "pass":
+            failed[result.check] = result
+            if result.detail:
+                print(
+                    f"\n--- {result.name}: last lines (full output: {result.log}) ---\n{result.detail}\n",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
     for index, name in enumerate(names, 1):
         if name == "py" and not run_py:
             results.append(Result(name, "skip", note=py_reason))
@@ -1199,7 +1220,7 @@ def run_battery(root, args, cache, log=None, env=None):
                 f"[{index}/{len(names)}] {name}"
                 + (f" ({py_reason})" if name == "py" else "")
             )
-            for result in run_one(
+            run_one(
                 root,
                 name,
                 steps[name],
@@ -1210,24 +1231,8 @@ def run_battery(root, args, cache, log=None, env=None):
                 args,
                 requested,
                 log,
-            ):
-                results.append(result)
-                log(
-                    f"{result.name}: {result.status} in {format_seconds(result.seconds)}"
-                    + (
-                        f" after {format_seconds(result.queued)} queued"
-                        if result.queued >= 0.05
-                        else ""
-                    )
-                )
-                if result.status != "pass":
-                    failed[name] = result
-                    if result.detail:
-                        print(
-                            f"\n--- {result.name}: last lines (full output: {result.log}) ---\n{result.detail}\n",
-                            file=sys.stderr,
-                            flush=True,
-                        )
+                report,
+            )
     return results, warnings
 
 
@@ -1241,11 +1246,38 @@ class Step:
     container: tuple | None = None
 
 
-def run_one(root, name, steps, env, logs, cache, slots, args, requested, log):
-    """Run a check's steps in order, under one heavy slot and, for e2e, one port lease. Returns a Result per step."""
+def step_result(name, step, code, output, seconds, log_path, queued, timeout):
+    counts = parse_counts(name, output)
+    if code is None:
+        return Result(
+            step.label,
+            "timeout",
+            queued,
+            seconds,
+            counts,
+            f"killed after {int(timeout)}s",
+            f"killed after {int(timeout)}s\n{tail(output)}",
+            log_path,
+            name,
+        )
+    return Result(
+        step.label,
+        "pass" if code == 0 else "fail",
+        queued,
+        seconds,
+        counts,
+        "",
+        tail(output) if code else "",
+        log_path,
+        name,
+    )
+
+
+def run_one(root, name, steps, env, logs, cache, slots, args, requested, log, report):
+    """Run a check's steps in order, under one heavy slot and, for e2e, one port lease, and `report(Result)` for
+    each step as it ends. The queue time goes on the first step's row."""
     held = port_lease = None
     queued = 0.0
-    runs = []
     try:
         if name in HEAVY:
             try:
@@ -1257,7 +1289,7 @@ def run_one(root, name, steps, env, logs, cache, slots, args, requested, log):
                     note=lambda message: log(f"{name}: {message}"),
                 )
             except LockTimeout as error:
-                return [
+                report(
                     Result(
                         name,
                         "locked",
@@ -1266,7 +1298,8 @@ def run_one(root, name, steps, env, logs, cache, slots, args, requested, log):
                         note="gave up queueing for a heavy slot",
                         detail=str(error),
                     )
-                ]
+                )
+                return
         if name == "e2e":
             port_lease, port = pick_e2e_port(cache / "locks", root, requested)
             env = {**env, "E2E_PORT": str(port)}
@@ -1280,7 +1313,7 @@ def run_one(root, name, steps, env, logs, cache, slots, args, requested, log):
 
         for step in steps:
             if len(steps) > 1:
-                log(f"{step.label}: running")
+                log(f"{step.label}: started")
             started = time.monotonic()
             log_path = logs / f"{step.label.split(' ')[0].replace(':', '-')}.log"
             try:
@@ -1302,46 +1335,24 @@ def run_one(root, name, steps, env, logs, cache, slots, args, requested, log):
             finally:
                 if step.container:
                     remove_container(*step.container)
-            runs.append((step, code, output, time.monotonic() - started, log_path))
+            report(
+                step_result(
+                    name,
+                    step,
+                    code,
+                    output,
+                    time.monotonic() - started,
+                    log_path,
+                    queued if step is steps[0] else 0.0,
+                    args.check_timeout,
+                )
+            )
     except Refusal as error:
-        return [Result(name, "fail", queued, 0.0, note="refused", detail=str(error))]
+        report(Result(name, "fail", queued, 0.0, note="refused", detail=str(error)))
     finally:
         for lease in (port_lease, held):
             if lease:
                 lease.release()
-    results = []
-    for index, (step, code, output, seconds, log_path) in enumerate(runs):
-        counts = parse_counts(name, output)
-        waited = queued if index == 0 else 0.0
-        if code is None:
-            results.append(
-                Result(
-                    step.label,
-                    "timeout",
-                    waited,
-                    seconds,
-                    counts,
-                    f"killed after {int(args.check_timeout)}s",
-                    f"killed after {int(args.check_timeout)}s\n{tail(output)}",
-                    log_path,
-                    name,
-                )
-            )
-        else:
-            results.append(
-                Result(
-                    step.label,
-                    "pass" if code == 0 else "fail",
-                    waited,
-                    seconds,
-                    counts,
-                    "",
-                    tail(output) if code else "",
-                    log_path,
-                    name,
-                )
-            )
-    return results
 
 
 class Interrupted(BaseException):

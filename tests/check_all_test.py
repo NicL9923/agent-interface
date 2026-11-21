@@ -2277,10 +2277,15 @@ class CommandTest(TempCase):
         self.assertIn("3 tests", self.row(out, "e2e:chromium"))
         self.assertIn("2 tests", self.row(out, "e2e:webkit (podman)"))
         self.assertIn(
-            "WebKit cannot start on this host (Host system is missing dependencies to run browsers.)",
+            "WebKit cannot start on this host: Host system is missing dependencies to run browsers. Chromium",
             err,
         )
         self.assertIn("All 2 checks passed", out)
+        # Chromium's result is out before the container starts, which can take minutes to pull the image.
+        self.assertLess(
+            err.index("e2e:chromium: pass in"),
+            err.index("e2e:webkit (podman): started"),
+        )
 
     def test_each_half_fails_on_its_own_row_and_the_other_half_still_runs(self):
         self.set_plan(
@@ -2318,9 +2323,10 @@ class CommandTest(TempCase):
         self.assertEqual(code, 2)
         self.assertEqual(self.names(), [])
         self.assertIn(
-            "WebKit cannot start on this host (Host system is missing dependencies", err
+            "WebKit cannot start on this host: Host system is missing dependencies to run browsers. Neither",
+            err,
         )
-        self.assertIn("neither podman nor docker is on PATH", err)
+        self.assertIn("Neither podman nor docker is on PATH", err)
         self.assertIn("install podman", err)
 
     def start_container_with_server(self, *argv):
