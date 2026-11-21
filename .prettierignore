@@ -9,6 +9,9 @@ docs/evidence/
 # Recorded fixtures captured from other releases and tools. Tests compare their exact content.
 tests/fixtures/
 
+# The W3 design review fixture. Its SHA-256 is pinned in the iOS UI tests and the review evidence.
+.agents/fixtures/work-triggers.json
+
 # Generated files that tests compare byte for byte against their generators' output. Regenerate them, never format them.
 ios/AgentInterfaceTests/Avatar/avatar-art.json
 ios/AgentInterfaceTests/Motion/avatar-motion.json
