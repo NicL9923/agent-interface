@@ -27,7 +27,8 @@ import XCTest
     }
   }
   private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
-    for _ in 0..<10 {
+    // Profile's controls below the avatar, such as the Talk voice, sit past all 54 shape tiles.
+    for _ in 0..<25 {
       if element.exists && element.canTap { return }
       let surface = app.collectionViews.firstMatch
       if up { surface.swipeUp(velocity: .slow) } else { surface.swipeDown(velocity: .slow) }
