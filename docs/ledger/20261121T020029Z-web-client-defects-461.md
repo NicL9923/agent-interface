@@ -93,3 +93,15 @@ Both runs below used `4ac636d0`, the item 3 commit, under `~/.agents/tools/linux
 | WebKit e2e in `mcr.microsoft.com/playwright:v1.65.0-noble`, after `npm run build` | 138 passed, 3 skipped by their own conditions, 1 failed: `e2e/smoke.spec.ts:811`, which fails in WebKit on main too                                                                                       |
 
 No e2e spec changed. No Playwright spec exercises the three fixes directly. The key behavior in item 3 was checked with the probe page in both browsers, and the app's handling of it with the jsdom tests.
+
+## Review fixes
+
+An independent review of `af8d1c38..ba701a28` found four defects and two nits. Each fix is its own commit on top of `ba701a28`.
+
+### Review 1. Small turn resizes added up past the reading line
+
+A resize report skipped the measure when the turn's border box was within 0.5 px of the measured height. Five turns that each grew by 0.375 px moved the message after them 1.875 px, past the reading line, and the rail kept the old tick. The skip now needs exact equality. A probe in Chromium and in WebKit, the same Playwright 1.65.0 setup as above, observed seven elements with fractional heights. `ResizeObserverEntry.borderBoxSize[0].blockSize` equalled `getBoundingClientRect().height` exactly for every one. Under CSS `zoom: 1.25` the two differ, so the skip never fires there and the rail measures as main did.
+
+| Break                              | Guarding test                                                                         | Result                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| The 0.5 px tolerance back in place | `measures again when turns above the reading line each grow by a fraction of a pixel` | Red: Question 30 stayed marked, Question 29 expected |

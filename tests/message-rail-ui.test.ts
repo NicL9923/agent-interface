@@ -442,6 +442,21 @@ describe("a chat with more sent messages than ticks fit", () => {
     expect(current()).toBe("Jump to: Question 29");
   });
 
+  // The reviewer's case: five turns above the reading line each grow by a fraction of a pixel, which together move
+  // the message there below it.
+  it("measures again when turns above the reading line each grow by a fraction of a pixel", async () => {
+    // The line at 5698 + 202.67 is just below Question 30, at 5900.
+    await scrollTo(5698);
+    expect(current()).toBe("Jump to: Question 30");
+    // The turns of Questions 25 to 29 grow by 0.375 px each, so Question 30 moves down 1.875 px, to 5901.875.
+    const grown = [24, 25, 26, 27, 28].map((index) => turnOf(`q${index}`));
+    moved = (index) => 0.375 * Math.min(5, Math.max(0, index - 24));
+    await firstReport(grown, () => 60.375);
+    // The transcript kept the reader's place. Scrolling back searches the positions the rail holds.
+    await scrollTo(5698);
+    expect(current()).toBe("Jump to: Question 29");
+  });
+
   it("measures no sent message again while a reply streams below the last one", async () => {
     // The last question's answer is still being written.
     conversation = {
