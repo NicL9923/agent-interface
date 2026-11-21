@@ -38,9 +38,9 @@ import XCTest
       let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: up ? 0.7 : 0.3)).withOffset(CGVector(dx: 4, dy: 0))
       let distance = surface.frame.height * 0.35 * (up ? -1 : 1)
       start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)), withVelocity: .slow, thenHoldForDuration: 0.2)
+      guard (save.exists && save.isEnabled) == unsaved else { XCTFail("Scrolling to \(element) changed a setting"); return }
     }
     XCTAssertTrue(element.canTap, "\(element) never became hittable")
-    XCTAssertEqual(save.exists && save.isEnabled, unsaved, "Scrolling to \(element) changed a setting")
   }
   private func waitFor(_ format: String, _ element: XCUIElement, timeout: TimeInterval = 5) {
     expectation(for: NSPredicate(format: format), evaluatedWith: element)
