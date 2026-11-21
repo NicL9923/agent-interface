@@ -28,6 +28,23 @@
   },
   "overrides": [
     {
+      "files": ["e2e/**/*.spec.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@playwright/test",
+                "importNames": ["test"],
+                "message": "Import test from ./fixtures.js: its fixtures refuse routes the service worker would hide in WebKit and check every page for errors."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": [".agents/tools/*.js"],
       "rules": {
         "no-unused-expressions": "off"

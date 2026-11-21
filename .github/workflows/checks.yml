@@ -40,37 +40,39 @@ jobs:
         run: npm run verify:ci
   browser:
     if: github.event_name != 'pull_request'
-    # A real Chromium against the built client and the real server, over a scripted assistant runtime.
-    name: Browser smoke
+    # A real browser against the built client and the real server, over a scripted assistant runtime. Each browser
+    # is its own job, so the two halves run side by side.
+    name: Browser smoke (${{ matrix.project }})
     runs-on: ubuntu-latest
+    # Playwright's image carries both browsers and their system libraries, so nothing comes from a package mirror.
+    # Its version must match the installed @playwright/test, and tests/workflows.test.ts fails when it does not.
+    # User 1001 is the runner's own, so the checkout stays writable by the runner after the job.
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.0-noble@sha256:9beb546099e11f52d62e505537914870e01a67e0e6b00ae41da4775324e73dbe # v1.65.0-noble
+      options: --user 1001 --ipc=host
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [chromium, webkit]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           filter: blob:none
+      # The image ships its own Node. This puts the repository's pinned one first on PATH for npm ci and the tests.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Read the Playwright version
-        id: playwright
-        run: echo "version=$(npx playwright --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
-      - name: Cache Playwright browsers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-      # Browsers come from the cache when present; the system libraries are installed either way.
-      - run: npx playwright install --with-deps webkit chromium
-      - run: npm run test:e2e
+      - run: npx playwright test --project=${{ matrix.project }}
       - name: Upload the report and traces
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.project }}
           path: |
             playwright-report/
             test-results/

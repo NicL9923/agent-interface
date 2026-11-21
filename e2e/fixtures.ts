@@ -1,4 +1,10 @@
-import { test as base, expect, type ConsoleMessage, type Page } from "@playwright/test";
+import {
+  test as base,
+  expect,
+  type BrowserContext,
+  type ConsoleMessage,
+  type Page,
+} from "@playwright/test";
 import { controlPort } from "./ports.js";
 
 const controlUrl = `http://127.0.0.1:${controlPort}/csp-violations`;
@@ -42,8 +48,41 @@ const signedOutProbe = (message: ConsoleMessage) =>
   message.text().includes("401") &&
   new URL(message.location().url || "http://none").pathname === "/api/bootstrap";
 
-export const test = base.extend<{ allowConsoleError: RegExp[]; pageHealth: void }>({
+/**
+ * WebKit sends every request from a page the service worker controls through the worker, including the ones the
+ * worker leaves to the network (scripts/service-worker.js never answers /api), and page and context routes never
+ * see those requests. Chromium still routes them, so a routed test passed there and timed out only in WebKit after
+ * a merge, four times. A route therefore fails at once in both browsers unless the test blocks the worker.
+ */
+const refuseRoutes = (target: Page | BrowserContext, kind: "page" | "context") => {
+  const refuse = (url: unknown) => {
+    throw new Error(
+      `${kind}.route(${typeof url === "string" ? JSON.stringify(url) : String(url)}) cannot see the requests of a page ` +
+        'the service worker controls in WebKit. Add test.use({ serviceWorkers: "block" }) to this test or its describe, ' +
+        "or test the worker without routes.",
+    );
+  };
+  target.route = refuse as typeof target.route;
+  target.routeFromHAR = refuse as typeof target.routeFromHAR;
+};
+
+export const test = base.extend<{
+  allowConsoleError: RegExp[];
+  pageHealth: void;
+  routesNeedBlockedWorker: void;
+}>({
   allowConsoleError: [[], { option: false }],
+  routesNeedBlockedWorker: [
+    async ({ context, serviceWorkers }, use) => {
+      if (serviceWorkers !== "block") {
+        refuseRoutes(context, "context");
+        // The context has no page yet, and the event reaches every page it opens, the `page` fixture's first.
+        context.on("page", (page) => refuseRoutes(page, "page"));
+      }
+      await use();
+    },
+    { auto: true },
+  ],
   // Every page the test opens must stay free of uncaught errors, console errors and CSP violation reports.
   pageHealth: [
     async ({ context, allowConsoleError, browserName }, use) => {

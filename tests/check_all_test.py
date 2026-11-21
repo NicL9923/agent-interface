@@ -1254,6 +1254,68 @@ const child = spawnSync(process.env.FAKE_PROBE, [locks], { encoding: "utf8" });
 fs.writeFileSync(process.env.FAKE_REPORT, JSON.stringify({ npm: own, grandchild: JSON.parse(child.stdout) }));
 console.log("  4 passed (3s)");
 """
+# Podman or docker. `run` records its arguments, the lock descriptors it was given and whether the heavy slot was
+# held while it ran, then follows the plan's "container" step. With "server" it starts the container as a detached
+# process that listens on E2E_PORT, the way conmon keeps a container apart from the client, and on SIGINT the client
+# exits and leaves it running: the worst a real client does. Only `rm --force NAME` ends it.
+FAKE_CONTAINER_RUNTIME = """
+    import json, os, signal, subprocess, sys, time
+    from pathlib import Path
+    args, kind = sys.argv[1:], Path(sys.argv[0]).name
+    state = Path(os.environ["FAKE_CONTAINERS"])
+    def record(entry):
+        with open(os.environ["FAKE_LOG"], "a") as log:
+            log.write(json.dumps({**entry, "at": time.time()}) + "\\n")
+    if args[:2] == ["rm", "--force"] and len(args) == 3:
+        record({"call": f"{kind} rm", "name": args[2]})
+        pidfile = state / args[2]
+        if pidfile.exists():
+            pid = int(pidfile.read_text())
+            try:
+                os.kill(pid, signal.SIGKILL)
+                while True:
+                    os.kill(pid, 0); time.sleep(0.02)
+            except ProcessLookupError:
+                pass
+        sys.exit(0)
+    if args[:1] != ["run"]:
+        print(f"UNPLANNED {kind} call: " + " ".join(args)); sys.exit(97)
+    locks = Path(os.environ["CHECK_ALL_HOME"]) / "locks"
+    identities = {(path.stat().st_dev, path.stat().st_ino) for path in locks.glob("*.lock")}
+    lock_fds = []
+    for number in range(3, 256):
+        try:
+            stat = os.fstat(number)
+        except OSError:
+            continue
+        if (stat.st_dev, stat.st_ino) in identities:
+            lock_fds.append(number)
+    sys.path.insert(0, os.environ["FAKE_TOOLS"])
+    import check_all
+    slot = check_all.try_lock(locks / "heavy-0.lock")
+    if slot:
+        slot.release()
+    record({"call": f"{kind} run", "args": args, "port": os.environ.get("E2E_PORT"), "no_color": os.environ.get("NO_COLOR"), "lock_fds": lock_fds, "slot_free": bool(slot), "pid": os.getpid()})
+    step = json.load(open(os.environ["FAKE_PLAN"]))["container"]
+    if step.get("server"):
+        name = args[args.index("--name") + 1]
+        server = subprocess.Popen([sys.executable, "-c", step["server_source"], os.environ["E2E_PORT"], step["server"]], start_new_session=True)
+        (state / name).write_text(str(server.pid))
+        signal.signal(signal.SIGINT, lambda *_: sys.exit(130))
+    time.sleep(step.get("sleep", 0))
+    sys.stdout.write(step.get("out", ""))
+    sys.exit(step.get("rc", 0))
+"""
+
+# Playwright's launch error on a host without WebKit's libraries, as it prints it.
+MISSING_LIBRARIES = (
+    "browserType.launch: \n╔══════════════════════════════════════════════════════╗\n"
+    "║ Host system is missing dependencies to run browsers. ║\n"
+    "║ Please install them with the following command:      ║\n"
+    "║     sudo npx playwright install-deps                 ║\n"
+    "╚══════════════════════════════════════════════════════╝"
+)
+
 PASSING = {
     "run typecheck": {"out": ""},
     "run lint": {"out": ""},
@@ -1261,6 +1323,8 @@ PASSING = {
     "run build": {"out": "✓ 10 modules transformed.\n"},
     "run test:e2e": {"out": "  4 passed (3s)\n"},
     "run test:py": {"out": "2 passed, 0 skipped, 0 failed in 1.0s (Python 3.14.0)\n"},
+    "run test:e2e -- --project=chromium": {"out": "  3 passed (2s)\n"},
+    "container": {"out": "  2 passed (2s)\n"},
 }
 
 
@@ -1290,6 +1354,8 @@ class CommandTest(TempCase):
         (self.root / "dist/client/index.html").write_text("<html>")
         self.log = self.tmp / "calls.log"
         self.plan = self.tmp / "plan.json"
+        self.containers = self.tmp / "containers"
+        self.containers.mkdir()
         self.set_plan(PASSING)
         script(self.bin / "npm", FAKE_NPM)
         self.fake_node(True, "v24.0.0")
@@ -1310,13 +1376,17 @@ class CommandTest(TempCase):
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
 
     def fake_node(self, ok, version):
-        """The one call the tool makes: `node --input-type=module -e SCRIPT`. Any other arguments exit 97."""
+        """The calls the tool makes: `node --input-type=module -e SCRIPT`, for the engine check and the WebKit launch
+        check. WebKit starts unless FAKE_WEBKIT holds Playwright's launch error. Any other arguments exit 97."""
         script(
             self.bin / "node",
             f"""
-            import json, sys
+            import json, os, sys
             if sys.argv[1:3] != ["--input-type=module", "-e"] or len(sys.argv) != 4:
                 print("UNPLANNED node call: " + " ".join(sys.argv[1:]), file=sys.stderr); sys.exit(97)
+            if "webkit.launch()" in sys.argv[3]:
+                message = os.environ.get("FAKE_WEBKIT")
+                print(json.dumps({{"ok": message is None, "message": message}})); sys.exit(0)
             print(json.dumps({{'ok': {ok!r}, 'version': {version!r}, 'range': '^24'}}))
         """,
         )
@@ -1346,6 +1416,8 @@ class CommandTest(TempCase):
             "PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
             "FAKE_LOG": str(self.log),
             "FAKE_PLAN": str(self.plan),
+            "FAKE_CONTAINERS": str(self.containers),
+            "FAKE_TOOLS": str(TOOLS),
             "HOME": str(self.tmp),
             "CHECK_ALL_HOME": str(self.cache),
             **extra,
@@ -2148,6 +2220,210 @@ class CommandTest(TempCase):
         remaining = sorted(path.name for path in logs.iterdir())
         self.assertEqual(len(remaining), 31)  # 30 kept plus this run's
         self.assertTrue(any(name.endswith(f"-{self.root.name}") for name in remaining))
+
+    # WebKit on a host that cannot start it.
+
+    def without_webkit(self, runtime="podman"):
+        """A host where WebKit cannot start, with `runtime` (or no container runtime) on PATH, which is only the
+        fakes' directory. Returns the environment to run with."""
+        package = self.root / "node_modules/@playwright/test"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text(
+            '{"name": "@playwright/test", "version": "1.65.0"}'
+        )
+        if runtime:
+            script(self.bin / runtime, FAKE_CONTAINER_RUNTIME)
+        return {"PATH": str(self.bin), "FAKE_WEBKIT": MISSING_LIBRARIES}
+
+    def test_webkit_that_cannot_start_here_runs_in_playwrights_container_and_chromium_here(
+        self,
+    ):
+        code, out, err = self.run_main("--only", "e2e", **self.without_webkit())
+        self.assertEqual(code, 0, err)
+        self.assertEqual(
+            self.names(),
+            ["run test:e2e -- --project=chromium", "podman run", "podman rm"],
+        )
+        chromium, container, removed = self.calls()
+        self.assertEqual(
+            container["args"][-6:],
+            [
+                "mcr.microsoft.com/playwright:v1.65.0-noble",
+                "npm",
+                "run",
+                "test:e2e",
+                "--",
+                "--project=webkit",
+            ],
+        )
+        args = " ".join(container["args"])
+        for part in (
+            "--rm",
+            "--userns=keep-id",
+            f"-v {self.root}:{self.root}",
+            f"-w {self.root}",
+            "-e E2E_PORT -e NO_COLOR",
+            "--timeout=1860",
+        ):
+            self.assertIn(part, args)
+        # One port pair for both halves, and the container's own name is what check-all removes afterwards.
+        self.assertEqual(container["port"], chromium["port"])
+        self.assertEqual(container["no_color"], "1")
+        self.assertEqual(
+            removed["name"], container["args"][container["args"].index("--name") + 1]
+        )
+        # The slot is held while the container runs, by check-all itself: the runtime gets no lock descriptor.
+        self.assertEqual((container["slot_free"], container["lock_fds"]), (False, []))
+        self.assertIn("3 tests", self.row(out, "e2e:chromium"))
+        self.assertIn("2 tests", self.row(out, "e2e:webkit (podman)"))
+        self.assertIn(
+            "WebKit cannot start on this host: Host system is missing dependencies to run browsers. Chromium",
+            err,
+        )
+        self.assertIn("All 2 checks passed", out)
+        # Chromium's result is out before the container starts, which can take minutes to pull the image.
+        self.assertLess(
+            err.index("e2e:chromium: pass in"),
+            err.index("e2e:webkit (podman): started"),
+        )
+
+    def test_each_half_fails_on_its_own_row_and_the_other_half_still_runs(self):
+        self.set_plan(
+            {
+                **PASSING,
+                "run test:e2e -- --project=chromium": {
+                    "rc": 1,
+                    "out": "  1 failed\n  2 passed (2s)\n",
+                },
+                "container": {"out": "  2 passed (2s)\n"},
+            }
+        )
+        code, out, _ = self.run_main("--only", "e2e", **self.without_webkit())
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL", self.row(out, "e2e:chromium"))
+        self.assertIn("1 failed", self.row(out, "e2e:chromium"))
+        self.assertIn("pass", self.row(out, "e2e:webkit (podman)"))
+        self.assertIn("FAILED: e2e:chromium (", out)
+
+    def test_docker_runs_the_container_as_this_user_when_podman_is_absent(self):
+        code, out, _ = self.run_main("--only", "e2e", **self.without_webkit("docker"))
+        self.assertEqual(code, 0)
+        args = next(
+            call["args"] for call in self.calls() if call["call"] == "docker run"
+        )
+        self.assertIn(f"--user {os.getuid()}:{os.getgid()}", " ".join(args))
+        self.assertNotIn("--userns=keep-id", args)
+        self.assertIn("docker rm", self.names())
+        self.assertIn("pass", self.row(out, "e2e:webkit (docker)"))
+
+    def test_webkit_that_cannot_start_and_no_container_runtime_refuse_before_anything_runs(
+        self,
+    ):
+        code, _, err = self.run_main("--py", "never", **self.without_webkit(None))
+        self.assertEqual(code, 2)
+        self.assertEqual(self.names(), [])
+        self.assertIn(
+            "WebKit cannot start on this host: Host system is missing dependencies to run browsers. Neither",
+            err,
+        )
+        self.assertIn("Neither podman nor docker is on PATH", err)
+        self.assertIn("install podman", err)
+
+    def start_container_with_server(self, *argv):
+        """Run e2e on a host without WebKit, where the container step starts a detached container that listens on
+        E2E_PORT. Returns (process, container pid, port, the lock files of the port pair and the heavy slot)."""
+        pidfile = self.tmp / "container.pid"
+        self.set_plan(
+            {
+                **PASSING,
+                "container": {
+                    "sleep": 60,
+                    "server": str(pidfile),
+                    "server_source": SERVER,
+                },
+            }
+        )
+        process = self.spawn("--only", "e2e", *argv, **self.without_webkit())
+        self.wait_for(
+            lambda: pidfile.exists() and pidfile.read_text(), "the container to listen"
+        )
+        pid = int(pidfile.read_text())
+        self.addCleanup(self.kill_quietly, pid)
+        port = int(self.calls()[0]["port"])
+        locks = self.cache / "locks"
+        return (
+            process,
+            pid,
+            port,
+            [
+                locks / f"e2e-port-{port}.lock",
+                locks / "heavy-0.lock",
+                locks / f"e2e-port-{port + 1}.lock",
+            ],
+        )
+
+    def test_ctrl_c_removes_the_container_before_the_locks_free(self):
+        process, pid, port, locks = self.start_container_with_server()
+        process.send_signal(signal.SIGINT)
+        self.assert_locks_free_only_after_the_server_is_gone(locks, pid, port)
+        _, err = process.communicate(timeout=30)
+        self.assertEqual(process.returncode, 130)
+        self.assertIn("podman rm", self.names())
+
+    def test_a_check_timeout_removes_the_container_before_the_locks_free(self):
+        process, pid, port, locks = self.start_container_with_server(
+            "--check-timeout", "3"
+        )
+        self.assert_locks_free_only_after_the_server_is_gone(locks, pid, port)
+        out, _ = process.communicate(timeout=30)
+        self.assertEqual(process.returncode, 1)
+        self.assertIn("TIMEOUT", self.row(out, "e2e:webkit (podman)"))
+
+
+class WebKitProbeTest(TempCase):
+    """The launch check against a fake node, and how its answer reads in a message."""
+
+    def probe(self, body, timeout=10):
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        script(bin_dir / "node", body)
+        return check_all.webkit_failure(
+            self.tmp, {"PATH": str(bin_dir)}, timeout=timeout
+        )
+
+    def test_a_browser_that_starts_is_no_failure(self):
+        self.assertIsNone(
+            self.probe('import json; print(json.dumps({"ok": True, "message": None}))')
+        )
+
+    def test_playwrights_boxed_launch_error_reads_as_its_first_sentence(self):
+        body = f"import json; print(json.dumps({{'ok': False, 'message': {MISSING_LIBRARIES!r}}}))"
+        self.assertEqual(
+            self.probe(body), "Host system is missing dependencies to run browsers."
+        )
+
+    def test_a_check_that_crashes_counts_as_a_failure_with_its_error(self):
+        body = "import sys; print(\"Cannot find package '@playwright/test'\", file=sys.stderr); sys.exit(1)"
+        self.assertIn("Cannot find package '@playwright/test'", self.probe(body))
+
+    def test_a_launch_that_hangs_counts_as_a_failure(self):
+        self.assertEqual(
+            self.probe("import time; time.sleep(30)", timeout=0.5),
+            "it did not start within 0.5s",
+        )
+
+    def test_the_image_follows_the_installed_playwright_and_a_missing_install_is_refused(
+        self,
+    ):
+        package = self.tmp / "node_modules/@playwright/test"
+        with self.assertRaisesRegex(check_all.Refusal, "Fix: npm ci"):
+            check_all.playwright_image(self.tmp)
+        package.mkdir(parents=True)
+        (package / "package.json").write_text('{"version": "1.66.1"}')
+        self.assertEqual(
+            check_all.playwright_image(self.tmp),
+            "mcr.microsoft.com/playwright:v1.66.1-noble",
+        )
 
 
 if __name__ == "__main__":

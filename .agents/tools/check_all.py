@@ -25,12 +25,25 @@ processes once held one slot. So `main` closes every inherited descriptor above 
 puts the locks at 3 and 4, and `run_process` refuses to pass on one that is 16 or more. A stopped run (Ctrl-C, SIGTERM or --check-timeout) sends its check SIGINT first, as Ctrl-C would, so Playwright
 can shut down the web server it started in a process group of its own, and kills what is left after ten
 seconds. Nothing here needs a package outside the standard library.
+
+WebKit needs system libraries that some Linux hosts lack (Fedora has no libicu74 or libjpeg-turbo8). Before e2e,
+check-all launches WebKit once. When it starts, e2e runs both browser projects on the host as one check. When it
+cannot, the e2e check runs in two steps under the same slot and ports: Chromium on the host, then WebKit in
+Playwright's container for the installed @playwright/test, under podman or docker. It names the image by tag,
+which CI's Browser smoke job pins by digest. The table shows a row for each step. With no container runtime it
+refuses to run, so WebKit is never skipped silently. The container's network is its own, so two worktrees'
+containers never share a port. The lock
+descriptors are never passed to the container runtime, whose helpers could outlive the run: check-all holds them
+while it waits for the container, and on every stop removes the container before it lets them go. check-all
+killed by SIGKILL frees them while the container runs on; podman's --timeout ends that container after
+--check-timeout.
 """
 
 from __future__ import annotations
 
 import argparse
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -42,6 +55,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -513,6 +527,98 @@ def find_ruff(root, cache, env=None, bootstrap_python=sys.executable, note=None)
 
 
 # ---------------------------------------------------------------------------------------------------------------
+# Where WebKit runs.
+
+WEBKIT_PROBE = """
+import { webkit } from "@playwright/test";
+let message = null;
+try {
+  await (await webkit.launch()).close();
+} catch (error) {
+  message = String(error?.message ?? error);
+}
+console.log(JSON.stringify({ ok: message === null, message }));
+"""
+WEBKIT_PROBE_TIMEOUT = 60
+
+
+def first_sentence(message):
+    """Playwright's launch error without its box drawing and `browserType.launch:` prefix, to its first full stop."""
+    text = " ".join(re.sub(r"[╔╗╚╝║═]", " ", message).split())
+    text = re.sub(r"^browserType\.launch:\s*", "", text)
+    match = re.match(r"(.+?\.)(\s|$)", text)
+    return (match.group(1) if match else text)[:300]
+
+
+def webkit_failure(root, env=None, timeout=WEBKIT_PROBE_TIMEOUT):
+    """Why WebKit cannot start on this host, or None when it starts. It launches the browser once, as a test would."""
+    try:
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", WEBKIT_PROBE],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return f"it did not start within {timeout}s"
+    try:
+        info = json.loads(result.stdout.strip().splitlines()[-1])
+    except IndexError, ValueError:
+        return f"the launch check failed: {(result.stderr or result.stdout).strip()[-300:]}"
+    return None if info.get("ok") else first_sentence(str(info.get("message")))
+
+
+def playwright_image(root):
+    """Playwright's image for the installed @playwright/test. tests/workflows.test.ts reads the same file."""
+    path = root / "node_modules/@playwright/test/package.json"
+    try:
+        version = json.loads(path.read_text())["version"]
+    except (OSError, ValueError, KeyError) as error:
+        raise Refusal(
+            f"Could not read the @playwright/test version from {path} ({error}). Fix: npm ci"
+        ) from error
+    return f"mcr.microsoft.com/playwright:v{version}-noble"
+
+
+def container_runtime(env=None):
+    """podman, or else docker, from PATH. None when neither is there."""
+    path = (os.environ if env is None else env).get("PATH")
+    return shutil.which("podman", path=path) or shutil.which("docker", path=path)
+
+
+def container_command(runtime, root, image, name, timeout, argv):
+    """`argv` in `image` with the checkout mounted at its own path, as the files the suite writes stay owned by this
+    user. E2E_PORT and NO_COLOR come through from the environment the command runs in."""
+    podman = Path(runtime).name == "podman"
+    user = (
+        ["--userns=keep-id"] if podman else ["--user", f"{os.getuid()}:{os.getgid()}"]
+    )
+    # Only podman can end a container that check-all, killed by SIGKILL, could not remove.
+    limit = [f"--timeout={int(timeout) + 60}"] if podman else []
+    return [
+        runtime, "run", "--rm", "--init", "--name", name, *limit, *user,
+        "--security-opt", "label=disable", "--ipc=host",
+        "-v", f"{root}:{root}", "-w", str(root),
+        "-e", "HOME=/tmp", "-e", "E2E_PORT", "-e", "NO_COLOR",
+        image, *argv,
+    ]  # fmt: skip
+
+
+def remove_container(runtime, name):
+    """Remove the container, running or not. A container that already exited and removed itself is fine."""
+    subprocess.run(
+        [runtime, "rm", "--force", name],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+
+# ---------------------------------------------------------------------------------------------------------------
 # Whether the Python suite is worth running.
 
 
@@ -702,6 +808,7 @@ class Result:
         note="",
         detail="",
         log=None,
+        check=None,
     ):
         self.name, self.status, self.queued, self.seconds = (
             name,
@@ -710,6 +817,8 @@ class Result:
             seconds,
         )
         self.counts, self.note, self.detail, self.log = counts or {}, note, detail, log
+        # The check a row belongs to, which says how to read its counts. A step's row is named apart from it.
+        self.check = check or name
 
 
 # How long a stopped check gets to shut itself down after SIGINT before its group is killed.
@@ -764,13 +873,17 @@ def stop_group(process, grace=None):
 NODE_KEEPS_BELOW = 16
 
 
-def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start=None):
+def run_process(
+    argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start=None, on_stop=None
+):
     """Run `argv` in its own process group, saving its output. Returns (returncode or None on timeout, output).
 
     The descriptors in `inherit` (the lock files) go to the child, so the locks last as long as it does, even if
     this process is killed. They must be below 16: Node keeps those from its own children, so only the npm wrapper
     holds the locks, where a higher descriptor reaches every process in the suite tree (see the module docstring).
-    `on_start(pid)` runs once the child exists, for a caller that records who now holds the locks."""
+    `on_start(pid)` runs once the child exists, for a caller that records who now holds the locks. `on_stop()` runs
+    after a timeout or an interrupt has stopped the group, for what the group does not contain, such as a container
+    that holds the output open after its client is gone."""
     too_high = [fd for fd in inherit if fd >= NODE_KEEPS_BELOW]
     if too_high:
         raise RuntimeError(
@@ -792,9 +905,16 @@ def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start
     )
     expired = threading.Event()
 
+    def stop():
+        try:
+            stop_group(process)
+        finally:
+            if on_stop:
+                on_stop()
+
     def expire():
         expired.set()
-        stop_group(process)
+        stop()
 
     timer = threading.Timer(timeout, expire)
     timer.start()
@@ -810,7 +930,7 @@ def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start
                     sys.stderr.write(line)
         process.wait()
     except BaseException:
-        stop_group(process)
+        stop()
         raise
     finally:
         timer.cancel()
@@ -845,11 +965,11 @@ def render_table(results):
     rows = [("check", "result", "queued", "run", "counts")]
     for result in results:
         text = (
-            describe_counts(result.name, result.counts)
+            describe_counts(result.check, result.counts)
             or result.note
             or (
                 "counts unknown"
-                if result.status == "pass" and result.name in COUNTED
+                if result.status == "pass" and result.check in COUNTED
                 else "-"
             )
         )
@@ -958,6 +1078,42 @@ def prune_logs(directory, keep, current):
             shutil.rmtree(path, ignore_errors=True)
 
 
+def plan_e2e(root, env, check_timeout, log):
+    """The browser suite's steps: one on the host when WebKit starts here, else Chromium here and WebKit in a
+    container. Refuses when WebKit cannot start and there is no container runtime, rather than skip it."""
+    failure = webkit_failure(root, env)
+    if failure is None:
+        return [Step("e2e", ["npm", "run", "test:e2e"])]
+    runtime = container_runtime(env)
+    if not runtime:
+        raise Refusal(
+            f"WebKit cannot start on this host: {failure.rstrip('.')}. Neither podman nor docker is on PATH to run it"
+            " in Playwright's container, and check-all does not skip WebKit. Fix: install podman (on Fedora, sudo dnf"
+            " install podman), or give the host what WebKit needs (npx playwright install webkit, and on Debian or"
+            " Ubuntu sudo npx playwright install-deps webkit)."
+        )
+    image, kind = playwright_image(root), Path(runtime).name
+    container = f"check-all-webkit-{os.getpid()}"
+    log(
+        f"e2e: WebKit cannot start on this host: {failure.rstrip('.')}. Chromium runs here and WebKit in {image} under {kind}."
+    )
+    return [
+        Step("e2e:chromium", ["npm", "run", "test:e2e", "--", "--project=chromium"]),
+        Step(
+            f"e2e:webkit ({kind})",
+            container_command(
+                runtime,
+                root,
+                image,
+                container,
+                check_timeout,
+                ["npm", "run", "test:e2e", "--", "--project=webkit"],
+            ),
+            container=(runtime, container),
+        ),
+    ]
+
+
 def run_battery(root, args, cache, log=None, env=None):
     """Run the checks. Returns (results, warnings). Preconditions are checked before anything runs."""
     log = log or (
@@ -1002,6 +1158,8 @@ def run_battery(root, args, cache, log=None, env=None):
                 f"E2E_PORT={env['E2E_PORT']!r} must be a whole number from 1024 to 65534."
             )
         requested = int(env["E2E_PORT"])
+    # Decided before anything runs, so a host that can run no WebKit is refused up front.
+    e2e_steps = plan_e2e(root, env, args.check_timeout, log) if "e2e" in names else []
     run_py, py_reason = False, ""
     if "py" in names:
         paths = (
@@ -1017,17 +1175,39 @@ def run_battery(root, args, cache, log=None, env=None):
         "lint": ["npm", "run", "lint"],
         "test": ["npm", "test"],
         "build": ["npm", "run", "build"],
-        "e2e": ["npm", "run", "test:e2e"],
         "py": ["npm", "run", "test:py"],
     }
     if ruff:
         commands["ruff"] = [ruff, "check", "."]
+    steps = {name: [Step(name, argv)] for name, argv in commands.items()}
+    steps["e2e"] = e2e_steps
     logs = (
         cache / "logs" / f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}-{root.name}"
     )
     prune_logs(cache / "logs", keep=30, current=logs)
 
     results, failed = [], {}
+
+    def report(result):
+        """Record a step's result and say how it went, as soon as it is known."""
+        results.append(result)
+        log(
+            f"{result.name}: {result.status} in {format_seconds(result.seconds)}"
+            + (
+                f" after {format_seconds(result.queued)} queued"
+                if result.queued >= 0.05
+                else ""
+            )
+        )
+        if result.status != "pass":
+            failed[result.check] = result
+            if result.detail:
+                print(
+                    f"\n--- {result.name}: last lines (full output: {result.log}) ---\n{result.detail}\n",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
     for index, name in enumerate(names, 1):
         if name == "py" and not run_py:
             results.append(Result(name, "skip", note=py_reason))
@@ -1040,10 +1220,10 @@ def run_battery(root, args, cache, log=None, env=None):
                 f"[{index}/{len(names)}] {name}"
                 + (f" ({py_reason})" if name == "py" else "")
             )
-            result = run_one(
+            run_one(
                 root,
                 name,
-                commands[name],
+                steps[name],
                 child_env,
                 logs,
                 cache,
@@ -1051,28 +1231,51 @@ def run_battery(root, args, cache, log=None, env=None):
                 args,
                 requested,
                 log,
+                report,
             )
-            results.append(result)
-            log(
-                f"{name}: {result.status} in {format_seconds(result.seconds)}"
-                + (
-                    f" after {format_seconds(result.queued)} queued"
-                    if result.queued >= 0.05
-                    else ""
-                )
-            )
-            if result.status != "pass":
-                failed[name] = result
-                if result.detail:
-                    print(
-                        f"\n--- {name}: last lines (full output: {result.log}) ---\n{result.detail}\n",
-                        file=sys.stderr,
-                        flush=True,
-                    )
     return results, warnings
 
 
-def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
+@dataclass
+class Step:
+    """One command of a check, with its own row in the table. A step with `container` set, as (runtime, name), runs
+    in that container: it gets no lock descriptors, and check-all removes the container when the step ends."""
+
+    label: str
+    argv: list
+    container: tuple | None = None
+
+
+def step_result(name, step, code, output, seconds, log_path, queued, timeout):
+    counts = parse_counts(name, output)
+    if code is None:
+        return Result(
+            step.label,
+            "timeout",
+            queued,
+            seconds,
+            counts,
+            f"killed after {int(timeout)}s",
+            f"killed after {int(timeout)}s\n{tail(output)}",
+            log_path,
+            name,
+        )
+    return Result(
+        step.label,
+        "pass" if code == 0 else "fail",
+        queued,
+        seconds,
+        counts,
+        "",
+        tail(output) if code else "",
+        log_path,
+        name,
+    )
+
+
+def run_one(root, name, steps, env, logs, cache, slots, args, requested, log, report):
+    """Run a check's steps in order, under one heavy slot and, for e2e, one port lease, and `report(Result)` for
+    each step as it ends. The queue time goes on the first step's row."""
     held = port_lease = None
     queued = 0.0
     try:
@@ -1086,20 +1289,21 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
                     note=lambda message: log(f"{name}: {message}"),
                 )
             except LockTimeout as error:
-                return Result(
-                    name,
-                    "locked",
-                    args.lock_timeout,
-                    0.0,
-                    note="gave up queueing for a heavy slot",
-                    detail=str(error),
+                report(
+                    Result(
+                        name,
+                        "locked",
+                        args.lock_timeout,
+                        0.0,
+                        note="gave up queueing for a heavy slot",
+                        detail=str(error),
+                    )
                 )
+                return
         if name == "e2e":
             port_lease, port = pick_e2e_port(cache / "locks", root, requested)
             env = {**env, "E2E_PORT": str(port)}
             log(f"e2e: app port {port}, control port {port + 1}")
-        started = time.monotonic()
-        log_path = logs / f"{name}.log"
         leases = [lease for lease in (held, port_lease) if lease]
 
         def name_the_child(pid):
@@ -1107,45 +1311,48 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
             for lease in leases:
                 lease.update_info(pid=pid)
 
-        code, output = run_process(
-            argv,
-            root,
-            env,
-            log_path,
-            args.check_timeout,
-            args.verbose,
-            inherit=[fd for lease in leases for fd in lease.fds],
-            on_start=name_the_child,
-        )
-        seconds = time.monotonic() - started
+        for step in steps:
+            if len(steps) > 1:
+                log(f"{step.label}: started")
+            started = time.monotonic()
+            log_path = logs / f"{step.label.split(' ')[0].replace(':', '-')}.log"
+            try:
+                code, output = run_process(
+                    step.argv,
+                    root,
+                    env,
+                    log_path,
+                    args.check_timeout,
+                    args.verbose,
+                    inherit=()
+                    if step.container
+                    else [fd for lease in leases for fd in lease.fds],
+                    on_start=name_the_child,
+                    on_stop=functools.partial(remove_container, *step.container)
+                    if step.container
+                    else None,
+                )
+            finally:
+                if step.container:
+                    remove_container(*step.container)
+            report(
+                step_result(
+                    name,
+                    step,
+                    code,
+                    output,
+                    time.monotonic() - started,
+                    log_path,
+                    queued if step is steps[0] else 0.0,
+                    args.check_timeout,
+                )
+            )
     except Refusal as error:
-        return Result(name, "fail", queued, 0.0, note="refused", detail=str(error))
+        report(Result(name, "fail", queued, 0.0, note="refused", detail=str(error)))
     finally:
         for lease in (port_lease, held):
             if lease:
                 lease.release()
-    counts = parse_counts(name, output)
-    if code is None:
-        return Result(
-            name,
-            "timeout",
-            queued,
-            seconds,
-            counts,
-            f"killed after {int(args.check_timeout)}s",
-            f"killed after {int(args.check_timeout)}s\n{tail(output)}",
-            log_path,
-        )
-    return Result(
-        name,
-        "pass" if code == 0 else "fail",
-        queued,
-        seconds,
-        counts,
-        "",
-        tail(output) if code else "",
-        log_path,
-    )
 
 
 class Interrupted(BaseException):
