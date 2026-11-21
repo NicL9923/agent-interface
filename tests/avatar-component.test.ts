@@ -192,6 +192,21 @@ describe("avatar animation loop", () => {
     },
   );
 
+  // A lost connection is the app's state: the connection notice says it once, and a badge on every
+  // assistant would say it again per face. A state that is the assistant's own still gets its badge.
+  it.each([
+    ["a drawn avatar", undefined],
+    ["a portrait", { mode: "portrait", src: "/api/files/portrait" } as AvatarConfig],
+  ])("puts no badge on %s for a lost connection", async (_name, avatar) => {
+    await render("disconnected", avatar);
+    expect(container.querySelector(".avatar-badge")).toBeNull();
+    expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "Ranch hand: Reconnecting",
+    );
+    await render("failed", avatar);
+    expect(container.querySelector(".avatar-badge")).not.toBeNull();
+  });
+
   it.each<ActivityState>(["disconnected", "interrupted"])(
     "holds a %s avatar completely still",
     async (state) => {

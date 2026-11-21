@@ -28,6 +28,9 @@ enum ActivityState: String, Codable, CaseIterable {
     }
   }
   var active: Bool { [.thinking, .working, .waiting, .blocked].contains(self) }
+  /// Whether home captions an assistant with this state. A lost connection is said once, in the
+  /// header; the assistants only dim, as on the web.
+  var captioned: Bool { ![.idle, .done, .disconnected].contains(self) }
 }
 struct AvatarConfig: Codable, Equatable {
   var mode = AvatarMode.geometric
@@ -936,11 +939,24 @@ struct Bootstrap: Codable, Equatable {
   var capabilities: [String: Capability]
   subscript(capability key: CapabilityKey) -> Capability? { capabilities[key.rawValue] }
   var connection: RuntimeStatus
+  /// True when the server has no roster from its current Hermes connection, so `bots`, empty or the last
+  /// connection's rows, says nothing about who is on it. An older server omits it and lists no one while
+  /// Hermes is down instead.
+  var rosterUnknown: Bool?
   var csrfToken: String?
   /// This person's private key for deriving form request IDs. A server from before form cards omits it.
   var formKey: String?
   /// Present when the host publishes the latest distributed iOS build.
   var nativeApp: NativeAppInfo?
+}
+extension Bootstrap {
+  /// Whether `bots` is not a roster Hermes just gave: rows marked `disconnected` are the server's cache,
+  /// which can be stale in either direction, and an unknown roster says nothing at all. An
+  /// assistant such a roster leaves out has not been shown to leave. Read on the lean roster only: a full
+  /// roster's detail rows are not marked.
+  var servedFromCache: Bool {
+    rosterUnknown == true || !connection.connected || bots.contains { $0.activity == .disconnected }
+  }
 }
 struct NativeAppInfo: Codable, Equatable {
   var latestBuild: Int

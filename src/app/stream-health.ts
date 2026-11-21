@@ -7,6 +7,8 @@ import { useEffect, useState, useSyncExternalStore } from "react";
  * event arrives, and a closed one, as on a hidden page, is not listed at all.
  */
 const streams = new Map<string, { up: boolean; since: number }>();
+/** How often each stream has closed, so a stream closed and reopened between renders is a new one. */
+const closings = new Map<string, number>();
 /**
  * How long a stream stays down before the connection notice says live updates stopped. Longer than a
  * deploy's restart or a network handoff, which reconnect in a few seconds, so those never show it.
@@ -30,6 +32,7 @@ export function reportStream(name: string, up: boolean | undefined) {
   if (up === undefined) {
     if (!held) return;
     streams.delete(name);
+    closings.set(name, (closings.get(name) ?? 0) + 1);
   } else if (held?.up === up) return;
   else streams.set(name, { up, since: Date.now() });
   version++;
@@ -77,8 +80,27 @@ export function useStreamsDown(names: readonly string[], afterMs: number) {
   return since !== undefined && Date.now() - since >= afterMs;
 }
 
+/** Where a set of streams stands: all heard from, all open with one still waiting, or one closed. */
+export type StreamsLive = "up" | "waiting" | "closed";
+/**
+ * `live` is `up` while every one of `names` is open and has heard from the server since it last
+ * connected or failed. A stream that is closed, as on a hidden page or an offline device, or not yet
+ * opened, makes them `closed`: nothing says live updates are back until the streams themselves do.
+ *
+ * `scope` names these streams as they are now opened. It changes when the names do and whenever one of
+ * them closes, even when it reopens before the next render, as a chat's stream does for a new session:
+ * what a replacement stream hears says nothing about the stream it replaced.
+ */
+export function useStreamsLive(names: readonly string[]): { live: StreamsLive; scope: string } {
+  useSyncExternalStore(subscribe, () => version);
+  const scope = names.map((name) => `${name}#${closings.get(name) ?? 0}`).join(" ");
+  if (names.some((name) => !streams.has(name))) return { live: "closed", scope };
+  return { live: names.every(streamUp) ? "up" : "waiting", scope };
+}
+
 /** Forgets every stream, as a test's fresh page would. */
 export function resetStreamHealth() {
   streams.clear();
+  closings.clear();
   version++;
 }

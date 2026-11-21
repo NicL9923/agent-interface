@@ -48,6 +48,7 @@ import {
   nothingToStopMessage,
   runChangedMessage,
 } from "../shared/errors.js";
+import { unknownRoster } from "./unknown-roster.js";
 import { httpError } from "./http-error.js";
 import {
   BEFORE_ADMISSION,
@@ -159,6 +160,14 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
   let discoveryFull = false;
   let discoveryGeneration = 0;
   let botCache: Bot[] = [];
+  // Which roster read, by the order reads began, last filled `botCache`.
+  let rosterReads = 0,
+    cachedRead = 0;
+  // Whether `botCache` came from this connection to Hermes. A new connection may reach another Hermes,
+  // so until a read on it succeeds the cache says nothing about who is on the roster. Each connection
+  // counts one more, and only a read begun on the current one may make the cache current.
+  let cacheCurrent = false,
+    connection = 0;
   const live = new Map<string, string>();
   const owners = new Map<string, string>();
   // Assistants with an open in flight, counted, for frames that arrive before its session is known.
@@ -168,6 +177,9 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
   const rosterChanged = () => {
     rosterRequest = undefined;
     rosterReuse = undefined;
+    tellRosterWatchers();
+  };
+  const tellRosterWatchers = () => {
     for (const listener of rosterWatchers) {
       try {
         listener();
@@ -308,7 +320,11 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
       turnSnapshots.clear();
       if (verified) changed();
     },
-    connected: () => changed(),
+    connected: () => {
+      cacheCurrent = false;
+      connection++;
+      changed();
+    },
     watching: () => watchers.size > 0 || rosterWatchers.size > 0,
   });
   const { contract, connect, http } = transport;
@@ -1293,29 +1309,48 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
       return contract.canonicalSubmit;
     },
     async listBots() {
+      // What Hermes last listed, each row marked as not current. Before a read on this connection
+      // succeeded, it says nothing about who is on the roster.
+      const fromCache = () => {
+        const rows = botCache.map((row) => ({ ...row, activity: "disconnected" as const }));
+        return cacheCurrent ? rows : unknownRoster(rows);
+      };
       try {
         await connect();
       } catch {
-        return botCache.map((row) => ({ ...row, activity: "disconnected" as const }));
+        return fromCache();
       }
       if (rosterReuse && Date.now() - rosterReuse.at < ROSTER_REUSE_MS)
         return rosterReuse.bots.slice();
       if (rosterRequest) return rosterRequest;
       let request!: Promise<Bot[]>;
+      const read = ++rosterReads,
+        on = connection;
       request = (async () => {
         try {
           const roster = await rpc("profiles.list", { include_sessions: true }, false);
           const names = new Set(roster.profiles.map((row: Wire) => row.name));
           for (const name of descriptions.keys()) if (!names.has(name)) descriptions.delete(name);
           const bots = await named(roster.profiles.map((row: Wire) => toBot(row)));
-          // A change reported meanwhile cleared rosterRequest, so this read is not reused.
-          if (rosterRequest === request) {
+          // A change reported meanwhile cleared rosterRequest, so this read is not reused. It is still
+          // newer than the roster an outage would list, unless a read that began after it has
+          // answered: what Hermes last said is the best guess while it cannot be asked.
+          // A read begun on a connection since replaced may be another Hermes's roster. It is kept for
+          // nothing, and its caller hears that it says nothing about who is on the roster now.
+          if (on !== connection) return unknownRoster(bots);
+          if (read > cachedRead) {
             botCache = bots;
-            rosterReuse = { at: Date.now(), bots };
+            cachedRead = read;
+            // Who is on the roster is known again; a stream that heard it was not is told.
+            if (!cacheCurrent) {
+              cacheCurrent = true;
+              tellRosterWatchers();
+            }
           }
+          if (rosterRequest === request) rosterReuse = { at: Date.now(), bots };
           return bots;
         } catch {
-          return botCache.map((row) => ({ ...row, activity: "disconnected" as const }));
+          return fromCache();
         }
       })();
       rosterRequest = request;

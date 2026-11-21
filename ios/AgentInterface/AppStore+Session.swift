@@ -19,8 +19,9 @@ extension AppStore {
           let expires = ServerDate.parse(expiry), expires > Date(),
           let snapshot = await OfflineLibrary.load(url), bootstrap == nil, self.api === api {
           bootstrap = snapshot.bootstrap
+          unconfirmedDepartures = snapshot.departed ?? [:]
           // Sends still unsettled come back before any draft is ready, so nothing joins a sent copy.
-          loadPendings(snapshot.bootstrap.bots)
+          loadPendings(knownBots)
           conversationCache = snapshot.conversations
           conversationCapturedAt = snapshot.capturedAt
           cachedChats = Set(snapshot.conversations.keys)
@@ -28,7 +29,7 @@ extension AppStore {
           restoredRosterAt = snapshot.savedAt
           offlineSavedAt = snapshot.selected.flatMap { snapshot.capturedAt[$0] } ?? snapshot.savedAt
           appUnavailable = true
-          if let id = snapshot.selected, bootstrap?.bots.contains(where: { $0.id == id }) == true {
+          if let id = snapshot.selected, knownBot(id) != nil {
             selectedBotId = id
             conversation = conversationCache[id]
             let cachedDraft: Draft? = read(key(.draft, id))
@@ -46,6 +47,8 @@ extension AppStore {
   /// Retries a launch that could not reach the server. Called when the app returns to the foreground.
   func resume() async {
     suspended = false
+    // A chat whose read failed waits for no retry: returning reads it at once. The poll leaves it alone.
+    if chatReadWaits, !deviceOffline, !sessionExpired { requestConversationRefresh() }
     // The network may have changed while the app was away.
     if !sessionExpired { api?.checkRoutes(force: true) }
     if bootstrap != nil {
@@ -223,6 +226,7 @@ extension AppStore {
   }
   /// Every account boundary clears the same account-owned content and async request identities.
   func resetAccountContent() {
+    resetOutages()
     cachedChats.removeAll()
     interruptionReviewed = false
     NotificationController.shared.clearPendingNavigation()

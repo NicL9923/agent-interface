@@ -516,6 +516,13 @@ export interface Bootstrap {
   bots: Bot[];
   capabilities: Capabilities;
   connection: RuntimeStatus;
+  /**
+   * True when the server has had no roster from Hermes since it started, so `bots` is empty, or missing
+   * a runtime's assistants, for that reason and says nothing about who is on the roster. Treat it as no
+   * roster: keep what was shown. A cached roster with rows is not this; its rows are marked
+   * `disconnected` and who is on it stands. Absent from an older server.
+   */
+  rosterUnknown?: boolean;
   csrfToken: string | null;
   /** This person's private key for deriving form request IDs; see formRequestId. Absent from an older server. */
   formKey?: string;

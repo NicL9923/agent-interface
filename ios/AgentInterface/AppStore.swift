@@ -141,6 +141,56 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     upgrade.store = self
   }
   var appUnavailable = false { didSet { updateActivity() } }
+  /// The open chat whose latest conversation read failed. A fact at once, so actions that need the
+  /// connection are refused (`connected`); when the chat shows it is `chatOutage`'s business.
+  var readFailedFor: String? { didSet { if readFailedFor != oldValue { updateActivity() } } }
+  /// Failed conversation reads in a row for `readFailedFor`, and the read the latest one set for later.
+  @ObservationIgnored var readFailures = 0
+  @ObservationIgnored var readRetry: Task<Void, Never>?
+  /// The wait before a failed conversation read is tried again. Tests substitute one they control.
+  @ObservationIgnored var readRetryPause: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+  /// Clears this account's delivered notifications of chats whose assistants left its roster. On a shared
+  /// device another member's for the same assistant stay. Tests watch it.
+  @ObservationIgnored var removeDeliveredChats: (_ bots: Set<String>, _ account: String) -> Void = { ids, account in
+    Task { await NotificationController.shared.removeDelivered(bots: ids, account: account) }
+  }
+  /// The device has no network path, as `NetworkReachability` reports it. The app root keeps it current.
+  var deviceOffline = false {
+    didSet {
+      guard deviceOffline != oldValue else { return }
+      updateActivity()
+      // Back online: a chat whose read failed reads at once instead of waiting out its retry. Not while
+      // the app is away; returning reads it then.
+      if !deviceOffline, !suspended, chatReadWaits { requestConversationRefresh() }
+    }
+  }
+  /// The household's loss and the open chat's, as the screen shows them; see `AppStore+Outage.swift`.
+  internal(set) var appOutage = Outage()
+  internal(set) var chatOutage = Outage()
+  /// Whether a bootstrap in this session has answered, and whether one found Hermes connected. A loss
+  /// before Hermes was ever reached is the state, not a blip, so it shows at once.
+  @ObservationIgnored var bootstrapAnswered = false
+  @ObservationIgnored var everConnected = false
+  /// The next outage deadline the timer waits for, and the timer.
+  @ObservationIgnored var outageDeadline: ContinuousClock.Instant?
+  @ObservationIgnored var outageTimer: Task<Void, Never>?
+  /// The outage timer's wait, until a deadline on `now`'s clock rather than for a duration, so a task
+  /// that starts late still wakes on time. Tests substitute one on their own clock.
+  @ObservationIgnored var outagePause: (ContinuousClock.Instant) async throws -> Void = { try await Task.sleep(until: $0, clock: .continuous) }
+  /// What VoiceOver was last told about the connection, and the recoveries it has heard about.
+  @ObservationIgnored var connectionNews = ""
+  @ObservationIgnored var announcedRecoveries = 0
+  /// Posts a VoiceOver announcement. Tests collect them instead.
+  @ObservationIgnored var announce: (String) -> Void = { AccessibilityNotification.Announcement($0).post() }
+  /// When the roster first came back stale since the last fresh one; see `AppStore.rosterCarry`.
+  @ObservationIgnored var staleRosterSince: ContinuousClock.Instant?
+  /// The roster applied last came from the server's cache: Hermes was down, or its roster read failed and
+  /// rows are marked `disconnected`. Such a roster can be stale either way, so nothing is removed for it.
+  @ObservationIgnored var rosterFromCache = false
+  /// Assistants a cached roster left out, with the row each had last. Home lists what the server lists,
+  /// but only a connected roster that also leaves one out says it left; until then its chat stays open
+  /// on this row and nothing of it is cleared.
+  var unconfirmedDepartures: [String: Bot] = [:]
   var interruptionReviewed = false
   var authConfig: AuthConfig?
   var restoring = false
@@ -203,13 +253,18 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// one. A response older than one already applied is dropped, so it cannot undo newer state.
   @ObservationIgnored var conversationReads = 0
   @ObservationIgnored var appliedConversationRead = 0
+  /// Full refreshes started, apart from the history pages that also count in `conversationReads`, so a
+  /// cancelled refresh knows whether a newer refresh, which owns the retry, set out after it.
+  @ObservationIgnored var conversationRefreshes = 0
   /// Replies already accounted for in the open conversation. As in the web's conversation hook,
   /// the first successful read after opening is the baseline, even when it matches the cache.
   @ObservationIgnored var replyWatch: ReplyWatch?
   @ObservationIgnored private var announcements = 0
   /// The latest settled reply for VoiceOver, numbered so a repeat of the same words is read again.
   private(set) var replyAnnouncement: ReplyAnnouncement?
-  @ObservationIgnored var conversationRefreshAgain = false
+  /// The session a stream notice or retry asked for one more refresh in, while one was running. The read
+  /// after it is checked against that session, not the running one's.
+  @ObservationIgnored var conversationRefreshAgain: UUID?
   /// While the stream is live, change notices drive updates and this slow poll covers a stream
   /// that fails unnoticed, as on the web. Server pings arrive every 25 seconds.
   static let streamFallbackInterval: Duration = .seconds(30)
@@ -267,19 +322,54 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// instead of an error banner. Opening the list again retries, as on the web.
   var earlierFilesFailure: String?
   var loadingEarlier = false
-  var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
-  var connected: Bool {
-    bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired
-      && !cachedChats.contains(selectedBotId ?? "")
+  /// The open assistant. One a cached roster left out keeps its last row, so its chat stays on screen.
+  var bot: Bot? { selectedBotId.flatMap(knownBot) }
+  /// An assistant this person may still have: one the roster lists, or one only a cached roster left out,
+  /// on its last row. Nothing of the second is erased, cancelled or revoked until a connected roster
+  /// leaves it out too.
+  func knownBot(_ id: String) -> Bot? { bootstrap?.bots.first { $0.id == id } ?? unconfirmedDepartures[id] }
+  /// The roster, then the assistants a cached roster left out.
+  var knownBots: [Bot] {
+    let listed = bootstrap?.bots ?? []
+    let ids = Set(listed.map(\.id))
+    return listed + unconfirmedDepartures.values.filter { !ids.contains($0.id) }.sorted { $0.id < $1.id }
   }
-  /// The open assistant's activity as shown. Stored, so a streamed reply patch that leaves it
-  /// unchanged renders nothing that reads it, such as the composer and the iPad home rows.
-  private(set) var activity: ActivityState = .disconnected
-  private func updateActivity() {
-    let next = connected ? conversation?.activity.state ?? bot?.activity ?? .idle : .disconnected
+  /// Whether the open chat can act now: what gates Send, Stop and every write in it. A lost network or
+  /// a failed read of the chat refuses them from the first moment, though the chat shows the loss only
+  /// once an outage does. The household's own controls read `householdReachable`.
+  var connected: Bool {
+    householdReachable && !cachedChats.contains(selectedBotId ?? "") && !chatReadFailed
+  }
+  /// The open chat's latest read failed.
+  var chatReadFailed: Bool { readFailedFor != nil && readFailedFor == selectedBotId }
+  /// The open assistant's activity as the chat acts on it: what Hermes reports, or disconnected once
+  /// the loss is on screen. During a loss's grace period it is still what Hermes last said, and the
+  /// gates read `connected`. Stored, so a streamed reply patch that leaves it unchanged renders
+  /// nothing that reads it, such as the composer.
+  internal(set) var activity: ActivityState = .disconnected
+  /// The open assistant's activity as home lists it, which only the household's own loss changes.
+  internal(set) var listedActivity: ActivityState = .idle
+  /// Set while several inputs of the connection's state change as one, so the outages never see the
+  /// state between them; see `refreshBootstrap`.
+  @ObservationIgnored var activityHeld = false
+  /// Every input of the connection's state changed or may have: recompute the outages, then what
+  /// the chat shows of its assistant.
+  func updateActivity() {
+    guard !activityHeld else { return }
+    updateOutages()
+    let known = conversation?.activity.state ?? bot?.activity ?? .idle
+    // A sign-in that ended, no household yet, or a chat still showing its saved copy are no outage
+    // to wait out: the chat is disconnected at once, as before.
+    let untimed = sessionExpired || bootstrap == nil || cachedChats.contains(selectedBotId ?? "")
+    let next: ActivityState = !connected && (untimed || connectionShown) ? .disconnected : known
     if next != activity { activity = next }
+    if known != listedActivity { listedActivity = known }
   }
   var active: Bool { activity.active }
+  /// The chat's activity row, which says what the assistant is doing. A lost connection is the notice's
+  /// news, so the row stays hidden while one is on screen, including the second its notice lingers
+  /// after the connection is back. The composer reads `activity`, which follows a recovery at once.
+  var activityRowShown: Bool { !connectionShown && ![.idle, .done, .disconnected].contains(activity) }
   /// Chats read on this device since the roster last said otherwise; see `UnreadChats`.
   private(set) var readHere = UnreadChats()
   /// Whether home shows this assistant's chat as unread. The chat on screen never is.
@@ -287,7 +377,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// The chat on screen, and one just left, count as read here until their latest message changes.
   func noteRead(_ ids: [String?]) {
     var next = readHere
-    next.keep(bootstrap?.bots ?? [], user: bootstrap?.user.id)
+    next.keep(knownBots, user: bootstrap?.user.id)
     for case let id? in ids { if let bot = bootstrap?.bots.first(where: { $0.id == id }) { next.read(bot) } }
     if next != readHere { readHere = next }
   }
@@ -437,8 +527,16 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
 
   // MARK: Writes and errors
 
-  func perform<V: Encodable>(_ path: String, _ value: V, method: String = "POST") async throws {
+  /// What a write needs to go out. A write in the open chat needs that chat (`connected`); an assistant's
+  /// settings and anything else not aimed at the open chat need only the household (`householdReachable`),
+  /// so one chat's failed read never refuses them.
+  enum WriteGate { case openChat, household }
+  /// Every write in the open chat and in an assistant's settings. It checks its gate again as it posts, so
+  /// one confirmed after the connection it needs went down, as from an alert left open, is refused instead
+  /// of sent.
+  func perform<V: Encodable>(_ path: String, _ value: V, method: String = "POST", gate: WriteGate) async throws {
     guard let api else { throw APIError(message: "Connect to an app server first.", status: 0) }
+    guard gate == .household ? householdReachable : connected else { throw connectionRefused() }
     let currentGeneration = generation
     do {
       let _: EmptyResponse = try await api.write(path, value, method: method)

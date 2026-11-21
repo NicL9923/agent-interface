@@ -1,0 +1,48 @@
+Test Case '-[AgentInterfaceTests.ConnectionStateStoreTests testAnOfflineDeviceRefusesWritesFromTheFirstMoment]' started.
+ios/AgentInterfaceTests/ConnectionStateTests.swift:528: error: -[AgentInterfaceTests.ConnectionStateStoreTests testAnOfflineDeviceRefusesWritesFromTheFirstMoment] : XCTAssertFalse failed - Nothing can be written without a network
+ios/AgentInterfaceTests/ConnectionStateTests.swift:529: error: -[AgentInterfaceTests.ConnectionStateStoreTests testAnOfflineDeviceRefusesWritesFromTheFirstMoment] : XCTAssertEqual failed: ("nil") is not equal to ("Optional("Checking the connection. Try again in a moment.")") - Send says why before the notice shows
+Test Case '-[AgentInterfaceTests.ConnectionStateStoreTests testAnOfflineDeviceRefusesWritesFromTheFirstMoment]' failed (4.093 seconds).
+Test Case '-[AgentInterfaceTests.ConnectionStateStoreTests testTheNoticeClaimsNoDraftWhileTheMessageBoxShowsItEmptyForASend]' started.
+ios/AgentInterfaceTests/ConnectionStateTests.swift:542: error: -[AgentInterfaceTests.ConnectionStateStoreTests testTheNoticeClaimsNoDraftWhileTheMessageBoxShowsItEmptyForASend] : XCTAssertFalse failed
+Test Case '-[AgentInterfaceTests.ConnectionStateStoreTests testTheNoticeClaimsNoDraftWhileTheMessageBoxShowsItEmptyForASend]' failed (0.952 seconds).
+	 Executed 2 tests, with 3 failures (0 unexpected) in 5.045 (5.051) seconds
+Test Case '-[AgentInterfaceTests.NativeContractTests testABootstrapThatAnswersPastTheGracePeriodBeforeTheTimerRunsShowsAndSaysNothing]' started.
+ios/AgentInterfaceTests/NativeContractTests.swift:3610: error: -[AgentInterfaceTests.NativeContractTests testABootstrapThatAnswersPastTheGracePeriodBeforeTheTimerRunsShowsAndSaysNothing] : XCTAssertFalse failed - The app answered, so nothing shows
+ios/AgentInterfaceTests/NativeContractTests.swift:3611: error: -[AgentInterfaceTests.NativeContractTests testABootstrapThatAnswersPastTheGracePeriodBeforeTheTimerRunsShowsAndSaysNothing] : XCTAssertEqual failed: ("1") is not equal to ("0")
+ios/AgentInterfaceTests/NativeContractTests.swift:3612: error: -[AgentInterfaceTests.NativeContractTests testABootstrapThatAnswersPastTheGracePeriodBeforeTheTimerRunsShowsAndSaysNothing] : XCTAssertEqual failed: ("["Reconnecting…", "Connected again."]") is not equal to ("[]")
+Test Case '-[AgentInterfaceTests.NativeContractTests testABootstrapThatAnswersPastTheGracePeriodBeforeTheTimerRunsShowsAndSaysNothing]' failed (0.956 seconds).
+Test Case '-[AgentInterfaceTests.NativeContractTests testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps]' started.
+ios/AgentInterfaceTests/NativeContractTests.swift:3540: error: -[AgentInterfaceTests.NativeContractTests testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps] : XCTAssertEqual failed: ("Optional(["bot", "family"])") is not equal to ("Optional(["bot"])") - Who is on the roster is the server's word
+ios/AgentInterfaceTests/NativeContractTests.swift:3541: error: -[AgentInterfaceTests.NativeContractTests testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps] : XCTAssertNil failed: "Conversation(attention: nil, botId: "bot", sessionId: nil, messages: [], earlier: nil, earlierFiles: nil, before: nil, activity: AgentInterface.Activity(state: AgentInterface.ActivityState.idle, detail: nil, runId: Optional("run-one"), updatedAt: nil), approvals: [], files: [], draft: Optional(AgentInterface.SavedDraft(text: "server draft for one", attachments: [], revision: nil, reason: nil, sentRevision: nil)), readPosition: Optional(AgentInterface.ReadPosition(messageId: Optional("message-one"), scrollTop: Optional(12.5))), toolCalls: nil, retry: nil)" - The assistant that left takes its saved chat with it
+ios/AgentInterfaceTests/NativeContractTests.swift:3542: error: -[AgentInterfaceTests.NativeContractTests testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps] : XCTAssertEqual failed: ("["bot", "family"]") is not equal to ("["bot"]")
+ios/AgentInterfaceTests/NativeContractTests.swift:3545: error: -[AgentInterfaceTests.NativeContractTests testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps] : XCTAssertEqual failed: ("Optional(AgentInterface.ActivityState.idle)") is not equal to ("Optional(AgentInterface.ActivityState.disconnected)") - Thirty seconds after the first stale roster, the server's word stands
+Test Case '-[AgentInterfaceTests.NativeContractTests testAHermesDownRosterTakesTheServersMembershipAndCarriesOnlyTheRowsItKeeps]' failed (0.060 seconds).
+Test Case '-[AgentInterfaceTests.NativeContractTests testAHermesDownRosterWithoutTheOpenChatKeepsItOpenUntilHermesAnswers]' started.
+ios/AgentInterfaceTests/NativeContractTests.swift:3555: error: -[AgentInterfaceTests.NativeContractTests testAHermesDownRosterWithoutTheOpenChatKeepsItOpenUntilHermesAnswers] : XCTAssertEqual failed: ("Optional(["bot", "family"])") is not equal to ("Optional(["family"])")
+Test Case '-[AgentInterfaceTests.NativeContractTests testAHermesDownRosterWithoutTheOpenChatKeepsItOpenUntilHermesAnswers]' failed (0.020 seconds).
+Test Case '-[AgentInterfaceTests.NativeContractTests testAnUncertainSendIsNotRetriedWhileTheChatOrTheNetworkIsDown]' started.
+ios/AgentInterfaceTests/NativeContractTests.swift:3624: error: -[AgentInterfaceTests.NativeContractTests testAnUncertainSendIsNotRetriedWhileTheChatOrTheNetworkIsDown] : XCTAssertEqual failed: ("1") is not equal to ("0") - Not while the chat's read fails
+ios/AgentInterfaceTests/NativeContractTests.swift:3628: error: -[AgentInterfaceTests.NativeContractTests testAnUncertainSendIsNotRetriedWhileTheChatOrTheNetworkIsDown] : XCTAssertEqual failed: ("1") is not equal to ("0") - Not while the device is offline
+Test Case '-[AgentInterfaceTests.NativeContractTests testAnUncertainSendIsNotRetriedWhileTheChatOrTheNetworkIsDown]' failed (0.036 seconds).
+Test Case '-[AgentInterfaceTests.NativeContractTests testPollingKeepsRefreshingBootstrapWhileTheServerIsDisconnectedOrFailing]' started.
+Test Case '-[AgentInterfaceTests.NativeContractTests testPollingKeepsRefreshingBootstrapWhileTheServerIsDisconnectedOrFailing]' passed (0.089 seconds).
+Test Case '-[AgentInterfaceTests.NativeContractTests testRuntimeDisconnectKeepsKnownRosterAndCurrentDraft]' started.
+Test Case '-[AgentInterfaceTests.NativeContractTests testRuntimeDisconnectKeepsKnownRosterAndCurrentDraft]' passed (0.024 seconds).
+Test Case '-[AgentInterfaceTests.NativeContractTests testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt]' started.
+ios/AgentInterfaceTests/NativeContractTests.swift:3574: error: -[AgentInterfaceTests.NativeContractTests testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt] : XCTAssertEqual failed: ("5") is not equal to ("2") - The poll leaves the failed chat to its retry
+ios/AgentInterfaceTests/NativeContractTests.swift:3575: error: -[AgentInterfaceTests.NativeContractTests testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt] : XCTAssertEqual failed: ("3") is not equal to ("0") - and keeps the retry's wait
+ios/AgentInterfaceTests/NativeContractTests.swift:3578: error: -[AgentInterfaceTests.NativeContractTests testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt] : XCTAssertTrue failed - Timed out after 10.0 seconds waiting for the condition
+ios/AgentInterfaceTests/NativeContractTests.swift:3580: error: -[AgentInterfaceTests.NativeContractTests testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt] : XCTAssertEqual failed: ("8") is not equal to ("2") - Nothing reads while offline
+ios/AgentInterfaceTests/NativeContractTests.swift:3585: error: -[AgentInterfaceTests.NativeContractTests testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt] : XCTAssertEqual failed: ("9") is not equal to ("2") - Coming back online while away reads nothing
+ios/AgentInterfaceTests/NativeContractTests.swift:3587: error: -[AgentInterfaceTests.NativeContractTests testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt] : XCTAssertTrue failed - Timed out after 10.0 seconds waiting for the condition
+ios/AgentInterfaceTests/NativeContractTests.swift:3590: error: -[AgentInterfaceTests.NativeContractTests testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt] : XCTAssertEqual failed: ("16") is not equal to ("3") - Returning reads once
+Test Case '-[AgentInterfaceTests.NativeContractTests testWhileAChatsReadFailsOnlyItsRetryAndAWakeupReadIt]' failed (20.777 seconds).
+	 Executed 7 tests, with 17 failures (0 unexpected) in 21.963 (21.965) seconds
+	 Executed 9 tests, with 20 failures (0 unexpected) in 27.008 (27.017) seconds
+	 Executed 9 tests, with 20 failures (0 unexpected) in 27.008 (27.018) seconds
+Test Case '-[AgentInterfaceUITests.ConnectionStateFlowTests testOneChatsFailedReadsLeaveGroupChatsAndSettingsLive]' started.
+ios/AgentInterfaceUITests/ConnectionStateFlowTests.swift:104: error: -[AgentInterfaceUITests.ConnectionStateFlowTests testOneChatsFailedReadsLeaveGroupChatsAndSettingsLive] : XCTAssertTrue failed - One assistant's chat says nothing about the household's rooms
+Test Case '-[AgentInterfaceUITests.ConnectionStateFlowTests testOneChatsFailedReadsLeaveGroupChatsAndSettingsLive]' failed (35.473 seconds).
+	 Executed 1 test, with 1 failure (0 unexpected) in 35.473 (35.475) seconds
+	 Executed 1 test, with 1 failure (0 unexpected) in 35.473 (35.475) seconds
+	 Executed 1 test, with 1 failure (0 unexpected) in 35.473 (35.476) seconds

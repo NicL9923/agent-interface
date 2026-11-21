@@ -385,7 +385,7 @@ struct BotSettingsView: View {
       if let bot { TalkVoiceSection(bot: bot) }
       Section {
         Button("Delete assistant", role: .destructive) { confirmation = .delete(name: savedName) }.disabled(
-          !store.supports(.botConfiguration) || !store.connected)
+          !store.supports(.botConfiguration) || !store.householdReachable)
       } header: { settingsHeader("Danger zone") }
     }.householdListBackground().accessibilityIdentifier("settings.profile")
       .safeAreaInset(edge: .top, spacing: 0) { compactAvatarPreview }
@@ -505,13 +505,13 @@ struct BotSettingsView: View {
   private var nameReady: Bool { !form.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
   /// Whether the assistant's own fields can be sent: creation, or the PATCH step of Save changes.
   private var canSave: Bool {
-    store.supports(.botConfiguration) && store.connected && nameReady
+    store.supports(.botConfiguration) && store.householdReachable && nameReady
       && !form.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && form.instructions.count <= SettingsLimits.instructions
   }
   private var portraitMissing: Bool { avatar.mode == .portrait && (avatar.src ?? "").isEmpty }
   private var canSaveChanges: Bool {
-    store.connected && !busy && configDirty && !portraitMissing && (form == savedForm || canSave)
+    store.householdReachable && !busy && configDirty && !portraitMissing && (form == savedForm || canSave)
   }
   private var saveBar: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -522,7 +522,7 @@ struct BotSettingsView: View {
       if portraitMissing {
         Text(portraitNextStep).font(.footnote).foregroundStyle(Palette.muted)
       }
-      if !store.connected { Text("Reconnect to save your changes.").font(.footnote).foregroundStyle(Palette.muted) }
+      if !store.householdReachable { Text("Reconnect to save your changes.").font(.footnote).foregroundStyle(Palette.muted) }
       Button { saveChanges() } label: {
         Text(progress.label("changes", idle: "Save changes")).frame(maxWidth: .infinity, minHeight: 44)
       }.buttonStyle(.accentProminent).accessibilityIdentifier("saveChanges").disabled(!canSaveChanges)
@@ -646,7 +646,7 @@ struct BotSettingsView: View {
           Text("Portraits stay still. Activity appears in a separate state indicator.")
             .font(.caption).foregroundStyle(Palette.muted)
           Button("Upload portrait") { beginPortraitImport() }.disabled(
-            bot == nil || !store.supports(.uploads) || !store.connected)
+            bot == nil || !store.supports(.uploads) || !store.householdReachable)
           Text("PNG, JPEG, or WebP, up to 15 MB.").font(.caption).foregroundStyle(Palette.muted)
           unavailable(.uploads)
         } header: { settingsHeader("Upload a portrait") }
@@ -661,7 +661,7 @@ struct BotSettingsView: View {
               .accessibilityIdentifier("portraitPromptLimit")
           }
           Button { generatePortrait() } label: { Text("Generate portrait").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading) }.disabled(
-            bot == nil || !store.supports(.portraitGeneration) || !store.connected
+            bot == nil || !store.supports(.portraitGeneration) || !store.householdReachable
               || portraitPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || portraitPrompt.count > SettingsLimits.portraitPrompt)
           unavailable(.portraitGeneration)
@@ -714,7 +714,7 @@ struct BotSettingsView: View {
       Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.danger)
         .accessibilityIdentifier("avatarFailure")
       Button(progress.label("changes", idle: "Retry saving avatar")) { saveChanges() }
-        .disabled(busy || !store.connected || portraitMissing).accessibilityIdentifier("retryAvatar")
+        .disabled(busy || !store.householdReachable || portraitMissing).accessibilityIdentifier("retryAvatar")
     }
   }
   private var colorSwatches: some View {
@@ -874,7 +874,7 @@ struct BotSettingsView: View {
         Button { setSkillLock(installed, locked: !locked) } label: {
           Text(locked ? "Unlock skill" : "Lock skill").frame(minHeight: 44).contentShape(Rectangle())
         }
-          .disabled(control?.disabled != false || !store.connected || control?.value?.canManageLearningPolicy == false)
+          .disabled(control?.disabled != false || !store.householdReachable || control?.value?.canManageLearningPolicy == false)
           .accessibilityLabel("\(locked ? "Unlock" : "Lock") \(installed.name)")
           .accessibilityIdentifier("skill.lock.\(installed.name)")
       }
@@ -918,7 +918,7 @@ struct BotSettingsView: View {
                 Text(template.name).font(.headline)
                 Text(template.description).font(.caption).foregroundStyle(Palette.muted)
               }
-            }.disabled(!store.supports(.routines) || !store.connected).accessibilityIdentifier("routineTemplate.\(template.id)")
+            }.disabled(!store.supports(.routines) || !store.householdReachable).accessibilityIdentifier("routineTemplate.\(template.id)")
           }
         }
       }
@@ -964,7 +964,7 @@ struct BotSettingsView: View {
       }
       Section {
         Button("Add routine") { addingRoutine = true }.disabled(
-          !store.supports(.routines) || !store.connected)
+          !store.supports(.routines) || !store.householdReachable)
       }
       if routines.isEmpty && store.supports(.routines) {
         Section { Text("No routines for \(bot.name).") }
@@ -1107,7 +1107,7 @@ struct BotSettingsView: View {
         }
         for kind in CatalogKind.allCases where capabilityDirty(kind) {
           let ids = selectedIds(kind)
-          try await store.perform("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT")
+          try await store.perform("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT", gate: .household)
           savedCapabilities[kind] = Set(ids)
         }
       } catch {
@@ -1340,7 +1340,7 @@ struct RoutineEditor: View {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
           ToolbarItem(placement: .confirmationAction) {
             Button(busy ? "Saving…" : routine.id.isEmpty ? "Add routine" : "Save routine") { save() }.disabled(
-              busy || !store.connected
+              busy || !store.householdReachable
                 || routine.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !hasPayload
                 || routine.noAgent == true && (routine.script ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

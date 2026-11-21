@@ -1,3 +1,4 @@
+import { isUnknownRoster } from "../src/server/unknown-roster.js";
 import {
   automationOverviewFixture,
   automationTaskFixture,
@@ -575,6 +576,46 @@ describe("Hermes adapter trust and recovery boundary", () => {
     rpcErrors.set("profiles.list", { code: -1, message: "Offline" });
     deferredMethods.delete("profiles.list");
     expect((await runtime.listBots())[0].id).toBe("new");
+  });
+  // A native change arrives while a roster read is out. That read is not reused, but it is the latest
+  // roster Hermes gave, so an outage lists it rather than the one before it.
+  it("lists the latest roster during an outage, though a change arrived while it was read", async () => {
+    deferredMethods.add("profiles.list");
+    const read = () =>
+      calls.filter((call) => call.method === "profiles.list") as Record<string, any>[];
+    const settled = runtime.listBots();
+    await vi.waitFor(() => expect(read()).toHaveLength(1));
+    sockets[0].receive({ id: read()[0].id, result: { profiles: [{ name: "old" }] } });
+    await settled;
+    const change = () =>
+      sockets[0].receive({
+        method: "event",
+        params: { session_id: "", type: "sessions.changed", payload: {} },
+      });
+    change();
+    const pending = runtime.listBots();
+    await vi.waitFor(() => expect(read()).toHaveLength(2));
+    change();
+    sockets[0].receive({
+      id: read()[1].id,
+      result: { profiles: [{ name: "old" }, { name: "new" }] },
+    });
+    await pending;
+    // Two reads, each cut short by a change, answer out of order: the one that began last still wins.
+    change();
+    const earlier = runtime.listBots();
+    await vi.waitFor(() => expect(read()).toHaveLength(3));
+    change();
+    const later = runtime.listBots();
+    await vi.waitFor(() => expect(read()).toHaveLength(4));
+    change();
+    sockets[0].receive({ id: read()[3].id, result: { profiles: [{ name: "latest" }] } });
+    await later;
+    sockets[0].receive({ id: read()[2].id, result: { profiles: [{ name: "stale" }] } });
+    await earlier;
+    rpcErrors.set("profiles.list", { code: -1, message: "Offline" });
+    deferredMethods.delete("profiles.list");
+    expect((await runtime.listBots()).map((bot) => bot.id)).toEqual(["latest"]);
   });
   it("reuses a settled roster read briefly, until Hermes reports a change", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -3293,6 +3334,106 @@ describe("Hermes transport liveness and diagnostics", () => {
       at: new Date(1791400000500).toISOString(),
     });
   });
+  // Before any roster read succeeded, the cache is empty and says nothing about who is on the roster,
+  // whether the read failed with Hermes connected or Hermes is gone. Once one succeeded, the cache is
+  // the newest roster Hermes gave, and its rows say they are not current.
+  it("marks an empty roster it never read as unknown, and no roster after a read succeeded", async () => {
+    rpcErrors.set("profiles.list", { code: -1, message: "Busy" });
+    const empty = await runtime.listBots();
+    expect(empty).toEqual([]);
+    expect(isUnknownRoster(empty)).toBe(true);
+    sockets[0].close();
+    const gone = await runtime.listBots();
+    expect(gone).toEqual([]);
+    expect(isUnknownRoster(gone)).toBe(true);
+    rpcErrors.delete("profiles.list");
+    await runtime.reconnect!();
+    const fresh = await runtime.listBots();
+    expect(fresh.length).toBeGreaterThan(0);
+    expect(isUnknownRoster(fresh)).toBe(false);
+    rpcErrors.set("profiles.list", { code: -1, message: "Busy" });
+    sockets.at(-1)!.receive({
+      method: "event",
+      params: { session_id: "", type: "sessions.changed", payload: {} },
+    });
+    const cached = await runtime.listBots();
+    expect(cached.map((bot) => [bot.id, bot.activity])).toEqual(
+      fresh.map((bot) => [bot.id, "disconnected"]),
+    );
+    expect(isUnknownRoster(cached)).toBe(false);
+    // A new connection may reach another Hermes: until a read on it succeeds, the cache is unknown.
+    sockets.at(-1)!.close();
+    await runtime.reconnect!();
+    const unsure = await runtime.listBots();
+    expect(unsure.map((bot) => bot.id)).toEqual(fresh.map((bot) => bot.id));
+    expect(isUnknownRoster(unsure)).toBe(true);
+    rpcErrors.delete("profiles.list");
+    expect(isUnknownRoster(await runtime.listBots())).toBe(false);
+  });
+
+  // A read that Hermes answered on one connection can still be naming its models when the adapter
+  // reconnects, perhaps to another Hermes. That read is kept for nothing, and its caller, such as a
+  // bootstrap, hears that it says nothing about who is on the roster now.
+  it("keeps no roster read begun on a connection since replaced", async () => {
+    await runtime.listBots();
+    sockets.at(-1)!.close();
+    await runtime.reconnect!();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await held;
+        return Response.json({ names: [] });
+      }),
+    );
+    const first = sockets.at(-1)!;
+    beforeSend = (request, socket) => {
+      if (request.method !== "profiles.list" || socket !== first) return;
+      queueMicrotask(() =>
+        socket.receive({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: { profiles: [{ name: "only-here", model: "house-model-7", provider: "house" }] },
+        }),
+      );
+    };
+    const old = runtime.listBots();
+    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    first.close();
+    await runtime.reconnect!();
+    rpcErrors.set("profiles.list", { code: -1, message: "Busy" });
+    release();
+    const answered = await old;
+    expect(answered.map((bot) => bot.id)).toEqual(["only-here"]);
+    expect(isUnknownRoster(answered)).toBe(true);
+    // The fallback is still the last current connection's roster, not the replaced one's.
+    const fallback = await runtime.listBots();
+    expect(fallback.map((bot) => bot.id)).toEqual(["shared"]);
+    expect(isUnknownRoster(fallback)).toBe(true);
+  });
+
+  // A stream heard that the roster was unknown. The first read that makes it known again tells the
+  // roster watchers, so the stream can say so, even when the roster's rows did not change.
+  it("tells roster watchers when the roster becomes known again", async () => {
+    const roster = vi.fn();
+    runtime.watchRoster!(roster);
+    rpcErrors.set("profiles.list", { code: -1, message: "Busy" });
+    await runtime.listBots();
+    roster.mockClear();
+    rpcErrors.delete("profiles.list");
+    await runtime.listBots();
+    expect(roster).toHaveBeenCalledOnce();
+    // Known already: a later read tells no one.
+    sockets.at(-1)!.receive({
+      method: "event",
+      params: { session_id: "", type: "sessions.changed", payload: {} },
+    });
+    roster.mockClear();
+    await runtime.listBots();
+    expect(roster).not.toHaveBeenCalled();
+  });
+
   it("keeps the successful bot roster visible and disconnected during an outage", async () => {
     const before = await runtime.listBots();
     sockets[0].close();

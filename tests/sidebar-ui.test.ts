@@ -88,18 +88,23 @@ it("shows attention and failure states without calling them working", async () =
   expect(statuses()[0]).toBe("");
 });
 
-it("replaces stale working indicators during connection loss and restores them on reconnect", async () => {
+// A lost connection is the app's news, not each assistant's: the header says it once.
+it("drops stale working indicators during connection loss, says it once in the header, and restores them on reconnect", async () => {
+  const header = () => container.querySelector(".home-sync")?.textContent;
   await render();
+  expect(header()).toBeUndefined();
   props = { ...props, connectionLost: true, offline: true };
   await render();
-  expect(statuses()).toEqual(["Offline", "Offline"]);
+  expect(statuses()).toEqual(["", ""]);
+  expect(header()).toBe("Offline");
   props = { ...props, offline: false };
   await render();
-  expect(statuses()).toEqual(["Reconnecting", "Reconnecting"]);
-  expect(container.querySelector(".pinned-activity.state-working")).toBeNull();
+  expect(statuses()).toEqual(["", ""]);
+  expect(header()).toBe("Reconnecting");
   props = { ...props, connectionLost: false, offline: false };
   await render();
   expect(statuses()).toEqual(["Working", "Thinking"]);
+  expect(header()).toBeUndefined();
 });
 
 it("marks unread chats until they are on screen or read through their latest message", async () => {

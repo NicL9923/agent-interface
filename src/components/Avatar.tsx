@@ -475,10 +475,12 @@ export function Avatar({
   ].join(" ");
   // A portrait's ring turns at this bot's own offset and pace.
   const ring = avatar.mode === "portrait" ? ringOffset(owner) : null;
+  // A lost connection is the app's state, said once by the connection notice: its assistants only dim.
   const badge =
-    avatar.mode === "portrait"
+    state !== "disconnected" &&
+    (avatar.mode === "portrait"
       ? state !== "idle" && state !== "thinking" && state !== "working"
-      : ["disconnected", "failed", "interrupted", "done"].includes(state);
+      : ["failed", "interrupted", "done"].includes(state));
   return (
     <span
       ref={wrapper}
@@ -671,6 +673,9 @@ function StateGlyph({ state }: { state: ActivityState }) {
       {state === "done" ? (
         <path d="M4 8.4 L6.9 11.2 L12.2 5.2" {...stroke} />
       ) : state === "disconnected" ? (
+        // No avatar draws a badge for a lost connection any more (see `badge`). The native app still
+        // does, and tests/avatar-art-parity.test.ts holds the two catalogs of path data together, so
+        // this path stays until the native badge goes with it.
         <>
           <path
             d="M5.8 6.1 Q5.9 3.6 8.1 3.6 Q10.4 3.7 10.4 5.8 Q10.4 7.4 8.1 8.3 V9.3"
