@@ -718,10 +718,56 @@ were replaced by the finding 1 and 2 tests, since the behavior they pinned is th
 into the fix, dropping a departure a later cached roster listed again, was removed as equivalent: the roster
 row wins over the held one, and a connected roster's removal subtracts what it lists.
 
+### Fourth review
+
+GPT-6.2 Sol, high effort, reviewed the third round's fixes from source at `4d06aa34`: three P2 and one P3
+findings, all reproduced and all fixed. The rule behind the first three: an assistant a cached roster
+leaves out is not removed, so nothing about it is erased, cancelled or revoked until a connected roster
+leaves it out too. Finding 2 also follows the orchestrator's contract change mid-round: `rosterCached`
+(`6adbc343`) became `rosterUnknown` (`dc9b743a`, refined in `23f39df8`), true when the server has no roster
+from its current Hermes connection, whether it lists no one or the last connection's rows. Every new test
+went red on `6adbc343`, the code before the fixes, for the reason the finding gave;
+[`ios-review4-before-fix.out`](../evidence/2026-11-19-connection-states/mutants/ios-review4-before-fix.out)
+is that run: 7 tests, 29 failures. The mock server answers `rosterUnknown` as the new server does, which
+`6adbc343` ignores, so its red run is the old code reading the new contract.
+
+| Finding                                                                                                                                                                                                                          | Reproduced                                                                                                                                      | Fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Failing-first test                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. P2. A cached roster's omission still erased the saved chat from disk: the chat stayed open, but the next saved library kept only listed assistants, leaving the app forced that write, and an offline relaunch found it gone. | Yes: after the cached roster and a suspension, the saved library had no Family chat, and a relaunch opened nothing, without its unsettled send. | The saved library keeps the chats of assistants a cached roster left out (`knownBots`) and saves their last rows as `departed`, marked `disconnected` like every saved row. A relaunch restores them as `unconfirmedDepartures`, reopens the chat on its row and loads its unsettled send. A connected roster that leaves it out then removes it.                                                                                                                                                                                | `testACachedRosterThatLeavesOutTheOpenChatKeepsItsSavedChatAndSendThroughARelaunch`                                                                                                                  |
+| 2. P2. An empty roster with Hermes connected, after the server's first `profiles.list` failed, was taken for a fresh roster: the open chat closed, its saved data went, and the background read could overwrite the widgets.     | Yes, in both paths: the foreground closed Family and cleared its chat, recording and widget row; the background read wrote an empty snapshot.   | `Bootstrap.rosterUnknown`. `servedFromCache` counts it with Hermes down and `disconnected` rows, and both the foreground and `BackgroundRefresh` read it. An unknown roster, empty or with rows, keeps the rows as they were and writes no library or widget. Without the field, as from an older server, an empty roster while Hermes is down means the same; with it false, that roster is known and empty, so home lists no one while the chat and its data wait for a connected roster. This matches the web's `rosterFrom`. | `testAnUnknownRosterIsNoRosterAndRemovesNothing`, `testADownRosterThatListsNoOneIsUnknownOnlyWhenTheServerDoesNotSay`, `NativeReachTests.testABackgroundReadOfAnUnknownRosterLeavesTheSnapshotAlone` |
+| 3. P2. A cached omission discarded a recording in progress: the composer ends capture and deletes the audio when the recording's URL changes, and it became nil.                                                                 | Yes: the URL went nil as the cached roster applied, with the chat still open.                                                                   | `voiceRecordingURL` answers for any assistant this person may still have (`knownBot`), so the URL stays; a connected roster's removal makes it nil and deletes the clip, as before.                                                                                                                                                                                                                                                                                                                                              | `testARecordingKeepsItsPlaceUntilAConnectedRosterSaysItsAssistantLeft`                                                                                                                               |
+| 4. P3. Bootstrap's automatic chat selection sent the conversation GET after the network dropped during a dirty draft's load.                                                                                                     | Yes: with the draft read held and the device going offline, the conversation read went out when the draft answered.                             | `select` takes `automatic:`, bootstrap passes its session, and `refreshConversation` checks `automaticReadAllowed` as it sets out, after the draft wait. The chat stays open for the next read.                                                                                                                                                                                                                                                                                                                                  | `testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait`                                                                                                                      |
+
+The same omission elsewhere, checked per the rule:
+
+- Text waiting for a draft (Siri, a notification's Reply, a share) was dropped for an assistant not on
+  the roster. It now waits while the assistant is a departure and goes on a connected roster's removal.
+- Read marks (`readHere`) were pruned to the roster, so the chat would show unread again when it came
+  back. They now keep departures. Both are in `testHeldTextAndReadMarksWaitForAConnectedRosterToSayTheirAssistantLeft`, red before.
+- Drafts were never pruned; leaving saves them, as before. Uploads in progress finish into the draft. A new
+  attachment for a departure is still refused, as a write is.
+- Delivered notifications, the widgets, Spotlight, Siri's names and the notification pictures were already
+  kept by the third round's fixes and are unchanged.
+- Live Activities: nothing ends one for an omission. A send not yet registered names its assistant from the
+  roster, so a departure's row would show its id until the roster lists it again; left as it is, since the
+  server's next state names it.
+- Unsettled sends are loaded at relaunch for departures too, which finding 1's test covers. The poll's own
+  `loadPendings` reads only the roster, which is equivalent: a departure's send is already loaded.
+
+The #463 merge (`a5467b3c`) changed nothing here: on `6adbc343` it built and passed the native unit suite,
+914 tests with 2 skipped, and `ConnectionStateFlowTests` (6), `NativeFlowTests` (13), `SettingsPolishTests`
+(10) and `TranscriptFlowTests` (21, 3 skipped by design), with no fix.
+
 ### Not done
 
-- No independent review of the third review round's fixes has run. The three reviews' findings are in
-  "Review", "Second review" and "Third review" above.
+- No independent review of the fourth review round's fixes has run. The four reviews' findings are in
+  "Review", "Second review", "Third review" and "Fourth review" above.
+- `Contract/bootstrap.json` has no `rosterUnknown`, and the native decoder reads it. The fixture is
+  generated by `tests/native-contract.test.ts`, which needs a second loopback address this Mac lacks, so it
+  was not regenerated here.
+- `testACancelledReadThatDisplacedTheRetrySetsItAgain` is flaky on its own: it failed 2 of 5 runs on
+  `6adbc343` and once in this round's first focused run, each time when its 20-second wait ran out with a
+  fourth retry wait recorded. It passed 5 of 5 on the fixes. Its cause was not found.
 - `activityRowShown` is tested in the store; the activity row in `ConversationView.swift` that reads it
   has no UI test, since the row's moment is a 1-second linger. The banner's announcement is now tested
   through the hosted chat view and the store's `announce`; real VoiceOver was not run.

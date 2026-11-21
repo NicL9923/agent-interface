@@ -41,4 +41,11 @@ xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface \
   -only-testing:AgentInterfaceTests/NativeContractTests/testAGroupSendAndARoomsSettingsSaveCheckTheHouseholdBeforeTheyStart \
   -only-testing:AgentInterfaceTests/NativeReachTests/testABackgroundReadOfACachedRosterLeavesTheSnapshotAlone \
   -only-testing:AgentInterfaceTests/StoreRequestsTests/testAHouseholdWriteChecksTheConnectionAsItStartsAndOneChatsFailureIsNotIt \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testACachedRosterThatLeavesOutTheOpenChatKeepsItsSavedChatAndSendThroughARelaunch \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testAnUnknownRosterIsNoRosterAndRemovesNothing \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testARecordingKeepsItsPlaceUntilAConnectedRosterSaysItsAssistantLeft \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testHeldTextAndReadMarksWaitForAConnectedRosterToSayTheirAssistantLeft \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait \
+  -only-testing:AgentInterfaceTests/NativeReachTests/testABackgroundReadOfAnUnknownRosterLeavesTheSnapshotAlone \
+  -only-testing:AgentInterfaceTests/NativeContractTests/testADownRosterThatListsNoOneIsUnknownOnlyWhenTheServerDoesNotSay \
   > /dev/null 2>&1
