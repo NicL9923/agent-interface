@@ -1006,9 +1006,11 @@ without WebKit's system libraries, such as Fedora, run the WebKit project in Pla
 instead; `.agents/tools/check-all` does this on its own:
 `podman run --rm --security-opt label=disable --userns=keep-id --ipc=host -v "$PWD:$PWD" -w "$PWD" -e HOME=/tmp mcr.microsoft.com/playwright:v1.65.0-noble npx playwright test --project=webkit`.
 The image version is the installed `@playwright/test`. A test that routes requests with
-`page.route` or `context.route` must set `test.use({ serviceWorkers: "block" })`: WebKit sends a
+`page.route` or `context.route` must set `test.use({ serviceWorkers: "block" })`, or pass
+`serviceWorkers: "block"` to a context it makes with `browser.newContext`: WebKit sends a
 worker-controlled page's requests past the routes, and `e2e/fixtures.ts` makes such a route fail
-at once in both browsers. The accessibility spec
+at once in both browsers, in fixtures as in tests. Specs import `test` and `expect` from
+`e2e/fixtures.ts`; lint refuses value imports from Playwright's test package anywhere else in `e2e/`. The accessibility spec
 scans home, a chat with a reply, Settings, assistant details and Today at phone and desktop sizes in
 light and dark. It fails on serious and critical axe WCAG 2.2 AA violations. `e2e/server.ts`
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,
