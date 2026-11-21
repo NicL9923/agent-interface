@@ -1207,6 +1207,7 @@ FAKE_NPM = """
             server.wait()
             sys.exit(130)
         signal.signal(signal.SIGINT, shut_down)
+    sys.stdout.write(step.get("early", "")); sys.stdout.flush()
     time.sleep(step.get("sleep", 0))
     sys.stdout.write(step.get("out", ""))
     with open(os.environ["FAKE_LOG"], "a") as log:
@@ -1306,6 +1307,7 @@ FAKE_CONTAINER_RUNTIME = """
         server = subprocess.Popen([sys.executable, "-c", step["server_source"], os.environ["E2E_PORT"], step["server"]], start_new_session=True)
         (state / name).write_text(str(server.pid))
         signal.signal(signal.SIGINT, lambda *_: sys.exit(130))
+    sys.stdout.write(step.get("early", "")); sys.stdout.flush()
     time.sleep(step.get("sleep", 0))
     sys.stdout.write(step.get("out", ""))
     sys.exit(step.get("rc", 0))
@@ -1388,7 +1390,7 @@ class CommandTest(TempCase):
             import json, os, sys
             if sys.argv[1:3] != ["--input-type=module", "-e"] or len(sys.argv) != 4:
                 print("UNPLANNED node call: " + " ".join(sys.argv[1:]), file=sys.stderr); sys.exit(97)
-            if "webkit.launch()" in sys.argv[3]:
+            if "webkit.launch(" in sys.argv[3]:
                 message = os.environ.get("FAKE_WEBKIT")
                 print(json.dumps({{"ok": message is None, "message": message}})); sys.exit(0)
             print(json.dumps({{'ok': {ok!r}, 'version': {version!r}, 'range': '^24'}}))
@@ -2125,7 +2127,7 @@ class CommandTest(TempCase):
         )
         with mock.patch.object(check_all, "STOP_GRACE", 1.0):
             started = time.monotonic()
-            code, output = check_all.run_process(
+            code, output, _ = check_all.run_process(
                 [str(self.tmp / "stubborn")],
                 self.tmp,
                 dict(os.environ),
@@ -2190,7 +2192,7 @@ class CommandTest(TempCase):
         marker = self.tmp / "cleanup-marker"
         with mock.patch.object(check_all, "STOP_GRACE", 60.0):
             started = time.monotonic()
-            code, _ = check_all.run_process(
+            code, _, _ = check_all.run_process(
                 [str(self.tmp / "polite"), str(marker)],
                 self.tmp,
                 dict(os.environ),
@@ -2332,6 +2334,7 @@ class CommandTest(TempCase):
             {
                 **PASSING,
                 "container": {
+                    "early": "Error: WebKit crashed before the summary\n",
                     "sleep": 60,
                     "server": str(pidfile),
                     "server_source": SERVER,
@@ -2345,13 +2348,15 @@ class CommandTest(TempCase):
         process = self.spawn(
             "--only", "e2e", "--check-timeout", "1", **self.without_webkit()
         )
-        # The container still holds the output, so the run gives up reading it after the grace instead of waiting.
-        out, err = process.communicate(
-            timeout=1 + check_all.STOP_GRACE + check_all.OUTPUT_GRACE
-        )
+        # The container holds the output for 600 seconds, so only a run that gives up reading it after the grace
+        # returns within this deadline, which is generous so that a loaded machine cannot trip it.
+        out, err = process.communicate(timeout=240)
         self.assertEqual(process.returncode, 1)
         self.assertIn("TIMEOUT", self.row(out, "e2e:webkit (podman)"))
         self.assertTrue(self.alive(int(pidfile.read_text())))
+        # What the check printed before the cutoff is in its saved log, not lost in a buffer.
+        (log,) = self.cache.glob("logs/*/e2e-webkit.log")
+        self.assertIn("Error: WebKit crashed before the summary", log.read_text())
         run = next(
             call["args"] for call in self.calls() if call["call"] == "podman run"
         )
@@ -2362,6 +2367,81 @@ class CommandTest(TempCase):
                 f" Remove it with: {self.bin / 'podman'} rm --force {name}",
                 text,
             )
+
+    def exit_while_a_server_holds_the_output(self, rc):
+        """Run e2e on the host through a fake npm that prints a line and exits with `rc` while the web server it
+        started, in a session of its own, keeps the output pipe open for 600 seconds. Returns (out, err, server pid).
+        """
+        pidfile = self.tmp / "server.pid"
+        self.set_plan(
+            {
+                **PASSING,
+                "run test:e2e": {
+                    "rc": rc,
+                    "out": "Running 4 tests using 1 worker\n",
+                    "server": str(pidfile),
+                    "server_source": SERVER,
+                },
+            }
+        )
+        self.addCleanup(
+            lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text()))
+        )
+        process = self.spawn("--only", "e2e", "--check-timeout", "300")
+        # Only a run that stops reading after the grace returns within this deadline; it is generous for load.
+        out, err = process.communicate(timeout=240)
+        self.assertTrue(self.alive(int(pidfile.read_text())))
+        return out, err, int(pidfile.read_text())
+
+    def test_a_check_that_exits_while_another_process_holds_its_output_frees_its_locks_and_keeps_its_log(
+        self,
+    ):
+        out, err, _ = self.exit_while_a_server_holds_the_output(125)
+        self.assertIn("FAIL", self.row(out, "e2e"))
+        self.assertIn("output cut short", self.row(out, "e2e"))
+        self.assertIn("Running 4 tests using 1 worker", err)
+        (log,) = self.cache.glob("logs/*/e2e.log")
+        self.assertIn("Running 4 tests using 1 worker", log.read_text())
+        # The server still listens, but the run let go of its slot and both port locks when it returned.
+        port = int(self.calls()[0]["port"])
+        for name in ("heavy-0", f"e2e-port-{port}", f"e2e-port-{port + 1}"):
+            held = check_all.try_lock(self.cache / "locks" / f"{name}.lock")
+            self.assertIsNotNone(held, name)
+            held.release()
+
+    def test_a_passing_check_whose_summary_never_arrived_says_its_output_was_cut_short(
+        self,
+    ):
+        out, _, _ = self.exit_while_a_server_holds_the_output(0)
+        self.assertIn("pass", self.row(out, "e2e"))
+        self.assertTrue(
+            self.row(out, "e2e").endswith("output cut short: counts unknown"),
+            self.row(out, "e2e"),
+        )
+
+    def test_a_container_left_holding_the_output_after_its_client_exits_is_removed_and_read_to_the_end(
+        self,
+    ):
+        pidfile = self.tmp / "container.pid"
+        self.set_plan(
+            {
+                **PASSING,
+                "container": {
+                    "out": "  2 passed (2s)\n",
+                    "server": str(pidfile),
+                    "server_source": SERVER,
+                },
+            }
+        )
+        self.addCleanup(
+            lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text()))
+        )
+        process = self.spawn("--only", "e2e", **self.without_webkit())
+        out, _ = process.communicate(timeout=240)
+        self.assertEqual(process.returncode, 0)
+        # The stop a timeout would make removes the container, so its pipe closes and nothing was cut off.
+        self.assertTrue(self.row(out, "e2e:webkit (podman)").endswith("  2 tests"), out)
+        self.assertFalse(self.alive(int(pidfile.read_text())))
 
     def start_container_with_server(self, *argv):
         """Run e2e on a host without WebKit, where the container step starts a detached container that listens on
@@ -2439,6 +2519,61 @@ class WebKitProbeTest(TempCase):
     def test_a_check_that_crashes_counts_as_a_failure_with_its_error(self):
         body = "import sys; print(\"Cannot find package '@playwright/test'\", file=sys.stderr); sys.exit(1)"
         self.assertIn("Cannot find package '@playwright/test'", self.probe(body))
+
+    def test_a_probe_whose_node_exits_leaves_nothing_in_its_group(self):
+        pidfile = self.tmp / "child.pid"
+        body = f"""
+            import json, subprocess, sys
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            open({str(pidfile)!r}, "w").write(str(child.pid))
+            print(json.dumps({{"ok": True, "message": None}}))
+        """
+        self.assertIsNone(self.probe(body, grace=0.5))
+        self.assert_gone(pidfile)
+
+    def test_the_real_probe_ends_a_browser_paused_at_launch_and_answers_at_once(self):
+        """The probe script itself under the real Node and Playwright, with a browser that stops itself as it starts.
+        Stopping Node's group cannot reach it, so Playwright's launch timeout must end it, and Node must exit once it
+        has answered rather than linger."""
+        loads = shutil.which("node") and subprocess.run(
+            ["node", "--input-type=module", "-e", "await import('@playwright/test')"],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        )
+        if not loads or loads.returncode:
+            self.skipTest("needs node and an installed @playwright/test (npm ci)")
+        pidfile, browser = self.tmp / "browser.pid", self.tmp / "webkit"
+        browser.write_text(f"#!/bin/sh\necho $$ > {pidfile}\nkill -STOP $$\n")
+        browser.chmod(0o700)
+        launch = (
+            f"webkit.launch({{ timeout: {check_all.WEBKIT_LAUNCH_TIMEOUT * 1000} }})"
+        )
+        self.assertIn(
+            launch,
+            check_all.WEBKIT_PROBE,
+            "the probe no longer passes Playwright a launch timeout",
+        )
+        script = check_all.WEBKIT_PROBE.replace(
+            launch,
+            f"webkit.launch({{ timeout: 2000, executablePath: {json.dumps(str(browser))} }})",
+        )
+        started = time.monotonic()
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            check=False,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        took = time.monotonic() - started
+        answer = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertFalse(answer["ok"])
+        self.assertIn("Timeout 2000ms exceeded", answer["message"])
+        # Without the exit Node stays about 30 seconds after the timeout; 20 leaves room for a loaded machine.
+        self.assertLess(took, 20)
+        self.assert_gone(pidfile)
 
     def launcher(self, ignores_sigint):
         """A node that starts a browser and hangs. The browser is in a group of its own, as Playwright starts it, and
