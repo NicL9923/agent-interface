@@ -130,3 +130,27 @@ The exception accepted any live render that matched the saved render without the
 | ---------------------------------------------------------------------------------- | ------------- | ------------- |
 | `opensTable` ignores the line above, so a delimiter row under a header row is held | Green         | Red           |
 | No fence check, so a code line starting with `\|` is held                          | Green         | Red           |
+
+### Review 3. Up still counted where nothing scrolled
+
+The review found two cases, both reproduced in Chromium:
+
+- A tool's output box at its top. It sets `overscroll-behavior: contain`, so Chromium scrolls neither the box nor the transcript.
+- Cancel in the "Always allow" dialog. The dialog sits inside the transcript in the page, but it is modal.
+
+A probe confirmed the dialog case in Chromium and in WebKit. A modal dialog's computed `position` is `fixed`. Up, Down, Home, End and Page Up pressed on a button in it left the transcript where it was.
+
+I did not switch to counting a key only once the transcript's scroll position changes, though the review suggested it. That rule does not fit the hook, for two reasons:
+
+- The follow mode's layout pass pins the transcript to the end on every content change. The hook counts a key at keydown because a reply arriving between the key's default scroll and its scroll event would otherwise pin the transcript back and undo the reader's move.
+- The app scrolls the transcript itself: pinning to the end, offsetting late images, and the browser clamping the top when content shrinks. A key that did nothing could be confirmed by one of those.
+
+`measurePosition` already ends following when the transcript moves up while no input was heard. That covers a key scroll the classifier misses, one frame later.
+
+The classifier now stops at a fixed box, which covers a modal dialog, because such a box scrolls with the viewport. At a scrolling box at its end, it also reads `overscroll-behavior-y`: anything but `auto` keeps the key, as Chromium does. WebKit passes the key on anyway. That scroll is then heard by `measurePosition`, as above. Safari before 16 reads the property as empty, which counts as `auto`. The tests set the CSS they depend on inline, because jsdom loads neither the app's stylesheet nor the browser's `dialog:modal` rule. I did not chase the 1 px WebKit case.
+
+| Break                                    | Result                                                                                                                                        |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| The previous commit's `scroll-follow.ts` | Red: `does not hear Up at the top of a box that contains overscroll` and `does not hear keys pressed in the Always allow dialog as scrolling` |
+| No check for a fixed box                 | Red: the dialog test                                                                                                                          |
+| `overscroll-behavior-y` ignored          | Red: the contained box test                                                                                                                   |

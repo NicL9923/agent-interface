@@ -2011,6 +2011,44 @@ describe("keys pressed inside the transcript", () => {
     await press(box, "ArrowUp");
     expect(await follows()).toBe(false);
   });
+
+  // The reviewer's case: a tool's output box contains overscroll, so at its top Chromium scrolls nothing.
+  it("does not hear Up at the top of a box that contains overscroll", async () => {
+    await openMenu();
+    const box = container.querySelector<HTMLElement>(".approval-command")!;
+    // As transcript.css styles a tool's output.
+    box.style.overflowY = "auto";
+    box.style.overscrollBehaviorY = "contain";
+    command.scrollHeight = 400;
+    await press(box, "ArrowUp");
+    expect(await follows()).toBe(true);
+  });
+
+  // The reviewer's case: the Always allow dialog sits inside the transcript in the page, yet it is modal,
+  // so the viewport scrolls with its keys and the transcript does not.
+  it("does not hear keys pressed in the Always allow dialog as scrolling", async () => {
+    for (const [name, open] of [
+      ["showModal", true],
+      ["close", false],
+    ] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, name, {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.open = open;
+        },
+      });
+    await openMenu();
+    await act(async () => buttonText("Always allow…")!.click());
+    const dialog = document.querySelector<HTMLDialogElement>(".always-allow-confirm")!;
+    expect(container.querySelector(".transcript")!.contains(dialog)).toBe(true);
+    // The browser's own style for a modal dialog, which jsdom does not apply.
+    dialog.style.position = "fixed";
+    const cancel = [...dialog.querySelectorAll("button")].find(
+      (button) => button.textContent === "Cancel",
+    )!;
+    await press(cancel, "ArrowUp");
+    expect(await follows()).toBe(true);
+  });
 });
 
 describe("a key a control inside the transcript handles", () => {
