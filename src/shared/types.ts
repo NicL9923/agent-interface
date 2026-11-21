@@ -40,57 +40,65 @@ export type ActivityState =
   | "disconnected"
   | "failed"
   | "interrupted";
-/** Geometric silhouettes in picker order. ios/AgentInterface/Models.swift mirrors this list. */
+/**
+ * Avatar silhouettes by picker group, each in picker order. ios/AgentInterface/AvatarVocabulary.swift
+ * mirrors these lists. The art and face anchor of each is in src/components/avatar-shapes.ts.
+ */
+export const avatarShapeGroups = {
+  classic: [
+    "blob",
+    "pebble",
+    "squircle",
+    "capsule",
+    "triangle",
+    "hex",
+    "drop",
+    "circle",
+    "diamond",
+    "sparkle",
+    "clover",
+    "heart",
+    "cookie",
+    "pentagon",
+    "burst",
+    "alien",
+    "flower",
+    "sun",
+  ],
+  objects: [
+    "cloud",
+    "star",
+    "egg",
+    "shield",
+    "chat",
+    "lightbulb",
+    "mug",
+    "book",
+    "camera",
+    "magnifier",
+    "controller",
+    "barbell",
+    "brain",
+    "rocket",
+    "palette",
+    "paint-brush",
+    "watering-can",
+    "sprout",
+    "cactus",
+    "witch-hat",
+  ],
+  creatures: ["ghost", "cat", "bunny", "bull", "bear", "fox", "owl", "dino", "tars", "rocky"],
+  seasonal: ["pumpkin", "bat", "turkey", "santa-hat", "reindeer", "snowman"],
+} as const;
+export type AvatarShapeGroup = keyof typeof avatarShapeGroups;
 export const avatarShapes = [
-  "blob",
-  "pebble",
-  "squircle",
-  "capsule",
-  "triangle",
-  "hex",
-  "cloud",
-  "drop",
-  "circle",
-  "diamond",
-  "sparkle",
-  "clover",
-  "heart",
-  "cookie",
-  "pentagon",
-  "burst",
-  "alien",
-  "ghost",
-  "flower",
-  "sun",
+  ...avatarShapeGroups.classic,
+  ...avatarShapeGroups.objects,
+  ...avatarShapeGroups.creatures,
+  ...avatarShapeGroups.seasonal,
 ] as const;
 export type AvatarShape = (typeof avatarShapes)[number];
-/** Mascot characters in picker order. ios/AgentInterface/Models.swift mirrors both lists. */
-export const everydayFamilies = [
-  "bear",
-  "fox",
-  "sprout",
-  "panda",
-  "raccoon",
-  "owl",
-  "cactus",
-  "dinosaur",
-] as const;
-/** Listed under their own "Seasonal" heading, in calendar order from spring. */
-export const seasonalFamilies = [
-  "leprechaun",
-  "bunny",
-  "eagle",
-  "pumpkin",
-  "bat",
-  "ghost",
-  "turkey",
-  "santa",
-  "rudolph",
-  "snowman",
-] as const;
-export const mascotFamilies = [...everydayFamilies, ...seasonalFamilies] as const;
-export type MascotFamily = (typeof mascotFamilies)[number];
-export type SeasonalFamily = (typeof seasonalFamilies)[number];
+export type SeasonalShape = (typeof avatarShapeGroups.seasonal)[number];
 export const avatarEyes = ["round", "oval", "visor", "spark"] as const;
 export type Eyes = (typeof avatarEyes)[number];
 export const avatarAccessories = ["none", "hat", "glasses"] as const;
@@ -99,16 +107,6 @@ export type Avatar =
   | {
       mode: "geometric";
       shape: AvatarShape;
-      color: string;
-      eyes: Eyes;
-      accessory: Accessory;
-      eyeWidth?: number;
-      eyeHeight?: number;
-      eyeSpacing?: number;
-    }
-  | {
-      mode: "mascot";
-      family: MascotFamily;
       color: string;
       eyes: Eyes;
       accessory: Accessory;

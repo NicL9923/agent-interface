@@ -1,0 +1,139 @@
+{
+  "scale": 1.07,
+  "shapes": [
+    {
+      "id": "controller"
+    },
+    {
+      "id": "barbell",
+      "face": {
+        "radius": 25,
+        "hat": 0.5
+      }
+    },
+    {
+      "id": "mug"
+    },
+    {
+      "id": "lightbulb"
+    },
+    {
+      "id": "chat"
+    },
+    {
+      "id": "sprout"
+    },
+    {
+      "id": "watering-can"
+    },
+    {
+      "id": "book"
+    },
+    {
+      "id": "brain"
+    },
+    {
+      "id": "bull",
+      "face": {
+        "radius": 29,
+        "hat": 0.6
+      }
+    },
+    {
+      "id": "bunny"
+    },
+    {
+      "id": "camera"
+    },
+    {
+      "id": "cat",
+      "face": {
+        "hat": 0.55
+      }
+    },
+    {
+      "id": "cloud"
+    },
+    {
+      "id": "egg"
+    },
+    {
+      "id": "ghost"
+    },
+    {
+      "id": "magnifier"
+    },
+    {
+      "id": "paint-brush"
+    },
+    {
+      "id": "palette"
+    },
+    {
+      "id": "rocket"
+    },
+    {
+      "id": "shield"
+    },
+    {
+      "id": "star"
+    },
+    {
+      "id": "witch-hat"
+    },
+    {
+      "id": "tars",
+      "face": {
+        "hat": 0.5
+      }
+    },
+    {
+      "id": "rocky"
+    },
+    {
+      "id": "bear",
+      "face": {
+        "hat": 0.6
+      }
+    },
+    {
+      "id": "fox",
+      "face": {
+        "hat": 0.6
+      }
+    },
+    {
+      "id": "owl"
+    },
+    {
+      "id": "cactus",
+      "face": {
+        "hat": 0.5
+      }
+    },
+    {
+      "id": "dino"
+    },
+    {
+      "id": "pumpkin"
+    },
+    {
+      "id": "bat",
+      "face": {
+        "radius": 24
+      }
+    },
+    {
+      "id": "turkey"
+    },
+    {
+      "id": "santa-hat"
+    },
+    {
+      "id": "reindeer"
+    },
+    {
+      "id": "snowman"
+    }
+  ]
+}

@@ -362,8 +362,8 @@ it("marks home with the season and draws its drifting shapes, hidden from assist
             ? {
                 ...bot,
                 avatar: {
-                  mode: "mascot",
-                  family: "snowman",
+                  mode: "geometric",
+                  shape: "snowman",
                   color: "#F4F8FB",
                   eyes: "round",
                   accessory: "none",

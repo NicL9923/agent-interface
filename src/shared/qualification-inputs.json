@@ -118,6 +118,7 @@
   "src/shared/activity-sentence.ts",
   "src/shared/api.ts",
   "src/shared/automation.ts",
+  "src/shared/avatar-legacy.ts",
   "src/shared/collaboration.ts",
   "src/shared/computer.ts",
   "src/shared/cut-text.ts",

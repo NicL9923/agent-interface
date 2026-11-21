@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { avatarAccessories, avatarEyes, avatarShapes, mascotFamilies } from "../shared/types.js";
+import { avatarAccessories, avatarEyes, avatarShapes } from "../shared/types.js";
 import type { Avatar, BotInput, FileRef, Preferences } from "../shared/types.js";
 
 // Request schemas whose output is a shared type. Only the server validates, so zod stays out of
@@ -31,7 +31,6 @@ const face = {
 };
 export const avatar = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("geometric"), shape: z.enum(avatarShapes), ...face }),
-  z.object({ mode: z.literal("mascot"), family: z.enum(mascotFamilies), ...face }),
   z.object({
     mode: z.literal("portrait"),
     src: z.string().regex(/^\/api\/files\//),

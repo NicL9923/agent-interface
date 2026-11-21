@@ -19,7 +19,6 @@ import type {
   Runtime,
   Submission,
 } from "../src/shared/types.js";
-import { mascotFamilies } from "../src/shared/types.js";
 import { historyWindow } from "../src/shared/history.js";
 import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
 import { testFiles } from "./helpers/file-signer.js";
@@ -256,7 +255,7 @@ describe("default roster detail fallback", () => {
   }
 });
 describe("authentication and household state", () => {
-  it("saves every mascot character through native metadata and round-trips it through household presentation", async () => {
+  it("saves an avatar through native metadata and round-trips it through household presentation", async () => {
     const fake = runtimeDouble();
     let nativeAvatar: Avatar | undefined;
     const originalList = fake.runtime.listBots;
@@ -268,33 +267,50 @@ describe("authentication and household state", () => {
     const { app } = await createApp(config(), fake.runtime, { background: false });
     try {
       const headers = await login(app);
-      for (const family of mascotFamilies) {
-        const value: Avatar = {
-          mode: "mascot",
-          family,
-          color: "#FF9800",
-          eyes: "round",
-          accessory: "none",
-          eyeWidth: 1.1,
-        };
-        const saved = await app.inject({
-          method: "PUT",
-          url: "/api/bots/shared/avatar",
-          headers,
-          payload: value,
-        });
-        expect(saved.statusCode).toBe(200);
-        expect(saved.json()).toEqual(value);
-        expect(nativeAvatar).toEqual(value);
-        expect(
-          (await app.inject({ url: "/api/bootstrap", headers })).json().bots[0].avatar,
-        ).toEqual(value);
-        fake.capabilities.avatarMetadata.supported = false;
-        expect(
-          (await app.inject({ url: "/api/bootstrap", headers })).json().bots[0].avatar,
-        ).toEqual(value);
-        fake.capabilities.avatarMetadata.supported = true;
-      }
+      const put = (payload: Record<string, unknown>) =>
+        app.inject({ method: "PUT", url: "/api/bots/shared/avatar", headers, payload });
+      const shown = async () =>
+        (await app.inject({ url: "/api/bootstrap", headers })).json().bots[0].avatar;
+      const value: Avatar = {
+        mode: "geometric",
+        shape: "watering-can",
+        color: "#FF9800",
+        eyes: "round",
+        accessory: "none",
+        eyeWidth: 1.1,
+      };
+      const saved = await put(value);
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json()).toEqual(value);
+      expect(nativeAvatar).toEqual(value);
+      expect(await shown()).toEqual(value);
+      fake.capabilities.avatarMetadata.supported = false;
+      expect(await shown()).toEqual(value);
+      fake.capabilities.avatarMetadata.supported = true;
+
+      // An iOS build from before mascots were retired still saves one. It is kept as its shape,
+      // and a Santa's retired skin color becomes the hat's red.
+      const mascot = { mode: "mascot", color: "#F2B08B", eyes: "round", accessory: "glasses" };
+      const hat = { ...mascot, mode: "geometric", shape: "santa-hat", color: "#FF263C" };
+      const upgraded = await put({ ...mascot, family: "santa" });
+      expect(upgraded.statusCode).toBe(200);
+      expect(upgraded.json()).toEqual(hat);
+      expect(nativeAvatar).toEqual(hat);
+      expect(await shown()).toEqual(hat);
+
+      // Reading a mascot as its shape must not let a bad one past the avatar's own checks.
+      const refused = async (payload: Record<string, unknown>, field: string) => {
+        const response = await put(payload);
+        expect(response.statusCode).toBe(400);
+        expect(response.json().details.map((detail: { path: string[] }) => detail.path)).toEqual([
+          [field],
+        ]);
+      };
+      await refused({ ...value, shape: "tesseract" }, "shape");
+      await refused({ ...mascot, family: "santa", color: "red" }, "color");
+      await refused({ ...mascot, family: "santa", eyes: "laser" }, "eyes");
+      await refused({ mode: "hologram" }, "mode");
+      expect(nativeAvatar).toEqual(hat);
     } finally {
       await app.close();
     }

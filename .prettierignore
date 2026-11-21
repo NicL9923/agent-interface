@@ -13,5 +13,8 @@ tests/fixtures/
 ios/AgentInterfaceTests/Avatar/avatar-art.json
 ios/AgentInterfaceTests/Motion/avatar-motion.json
 
+# Written by .agents/tools/avatar-shapes.mjs, whose --check compares it byte for byte with what it would write.
+src/components/avatar-shape-art.ts
+
 # Holds a block written by .agents/tools/season-tint.mjs, which also parses the season colors from one-line rules.
 src/motion.css

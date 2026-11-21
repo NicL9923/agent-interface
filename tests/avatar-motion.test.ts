@@ -44,8 +44,8 @@ describe("avatar motion", () => {
   it("leaves the face where it is for a frame step of no time or a negative one", () => {
     // A frame timestamp from before the avatar's clock started once gave a negative step, which pushed
     // the eyes' squint past its target and drew them with a negative height.
-    const squinting = { open: 1, tilt: 0, happy: 0, mouth: 0.1, dot: 1 };
-    const target = { open: 0.82, tilt: 0, happy: 0, mouth: 0.3, dot: 0 };
+    const squinting = { open: 1, tilt: 0, happy: 0, dot: 1 };
+    const target = { open: 0.82, tilt: 0, happy: 0, dot: 0 };
     expect(approach(squinting, target, -0.2)).toEqual(squinting);
     expect(approach(squinting, target, 0)).toEqual(squinting);
     const moved = approach(squinting, target, 0.016);
@@ -244,8 +244,6 @@ describe("avatar motion", () => {
   it("chooses readable eyes for custom colors", () => {
     expect(faceInk("#1084FE")).toBe("#fff9ee");
     expect(faceInk("#FFE45C")).toBe("#2b201b");
-    expect(faceInk("#FF9800", true)).toBe("#2b201b");
-    expect(faceInk("#111111", true)).toBe("#fff3db");
     expect(faceInk("not-a-color")).toBe("#fff9ee");
     expect(faceInk("#C3C3C3")).toBe("#2b201b");
     for (const color of avatarColors) expect(faceInk(color)).toBe("#fff9ee");

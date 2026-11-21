@@ -1,10 +1,10 @@
 import type { GroupMember, GroupRoom } from "../shared/collaboration";
+import { currentAvatar, legacyMascots } from "../shared/avatar-legacy";
 import {
   avatarAccessories,
   avatarEyes,
   avatarShapes,
   defaultPreferences,
-  mascotFamilies,
   type Avatar,
   type Bootstrap,
   type Bot,
@@ -95,8 +95,10 @@ const savedAvatar = (value: unknown) =>
   (record(value) &&
     (value.mode === "geometric"
       ? oneOf(avatarShapes)(value.shape) && face(value)
-      : value.mode === "mascot"
-        ? oneOf(mascotFamilies)(value.family) && face(value)
+      : // A copy saved before mascots were retired holds them as that release's server sent them;
+        // savedHome draws each as the shape that took its place.
+        value.mode === "mascot"
+        ? oneOf(Object.keys(legacyMascots))(value.family) && face(value)
         : value.mode === "portrait" &&
           text(value.src, LIMITS.url) &&
           value.src.startsWith("/api/files/") &&
@@ -193,7 +195,7 @@ export function savedHome(saved: SavedRoster): HomeSource {
       id,
       name,
       shared,
-      ...(avatar ? { avatar } : {}),
+      ...(avatar ? { avatar: currentAvatar(avatar) } : {}),
       model: "",
       activity: "idle",
     })),

@@ -1,8 +1,8 @@
-import type { Bot, MascotFamily } from "../shared/types";
+import type { AvatarShape, Bot, SeasonalShape } from "../shared/types";
 
 /**
  * Home's seasonal chrome: a slight shift of the rail's accent and a few drifting motes behind it.
- * The calendar decides first; outside every window, a pinned seasonal character brings its own season.
+ * The calendar decides first; outside every window, a pinned assistant with a seasonal shape brings its own season.
  */
 export type Season = "winter" | "clover" | "spring" | "stars" | "spooky" | "harvest";
 
@@ -45,25 +45,22 @@ export function seasonOn(date: Date): Season | null {
   return null;
 }
 
-const familySeasons: Partial<Record<MascotFamily, Season>> = {
-  leprechaun: "clover",
-  bunny: "spring",
-  eagle: "stars",
+const seasonalShapes = {
   pumpkin: "spooky",
   bat: "spooky",
-  ghost: "spooky",
   turkey: "harvest",
-  santa: "winter",
-  rudolph: "winter",
+  "santa-hat": "winter",
+  reindeer: "winter",
   snowman: "winter",
-};
+} satisfies Record<SeasonalShape, Season>;
+const shapeSeasons: Partial<Record<AvatarShape, Season>> = seasonalShapes;
 
-/** The season home shows: the calendar's, or else the first pinned seasonal character's. */
+/** The season home shows: the calendar's, or else the first pinned seasonal shape's. */
 export function homeSeason(date: Date, pinned: Bot[]): Season | null {
   const calendar = seasonOn(date);
   if (calendar) return calendar;
   for (const bot of pinned) {
-    const season = bot.avatar?.mode === "mascot" ? familySeasons[bot.avatar.family] : undefined;
+    const season = bot.avatar?.mode === "geometric" ? shapeSeasons[bot.avatar.shape] : undefined;
     if (season) return season;
   }
   return null;

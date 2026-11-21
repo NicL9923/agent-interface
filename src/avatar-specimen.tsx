@@ -8,31 +8,52 @@ import {
   stateLabels,
 } from "./components/Avatar";
 import {
-  everydayFamilies,
+  avatarShapeGroups,
+  avatarShapes,
   type ActivityState,
   type Avatar as AvatarConfig,
-  type MascotFamily,
+  type AvatarShape,
 } from "./shared/types";
 import "./avatar-specimen.css";
-import { seasonalAvatar, seasonalChoices } from "./components/character-avatars";
-const everydayColors: Record<(typeof everydayFamilies)[number], string> = {
-  bear: "#FF9800",
+import { seasonalColors, shapeGroups, shapeLabel } from "./components/avatar-shapes";
+/** The color each object and creature is shown in here. In the app a shape takes the color already chosen. */
+const showcase: Partial<Record<AvatarShape, string>> = {
+  cloud: "#00BCA6",
+  star: "#FF6700",
+  egg: "#F4F4F4",
+  shield: "#1084FE",
+  chat: "#9159FE",
+  lightbulb: "#FF9800",
+  mug: "#F4F4F4",
+  book: "#97683D",
+  camera: "#7A7A7A",
+  magnifier: "#1084FE",
+  controller: "#FF6700",
+  barbell: "#FF263C",
+  brain: "#FF309B",
+  rocket: "#7A7A7A",
+  palette: "#97683D",
+  "paint-brush": "#1FBF68",
+  "watering-can": "#00BCA6",
+  sprout: "#1FBF68",
+  cactus: "#1FBF68",
+  "witch-hat": "#9159FE",
+  ghost: "#F4F4F4",
+  cat: "#FF9800",
+  bunny: "#FF309B",
+  bull: "#FF263C",
+  bear: "#97683D",
   fox: "#FF6700",
-  sprout: "#00BCA6",
-  panda: "#292929",
-  raccoon: "#8C8F99",
-  owl: "#97683D",
-  cactus: "#00BCA6",
-  dinosaur: "#9159FE",
+  owl: "#9159FE",
+  dino: "#1FBF68",
+  tars: "#7A7A7A",
+  rocky: "#97683D",
+  ...seasonalColors,
 };
-const everyday = (
-  family: MascotFamily & keyof typeof everydayColors,
-): Extract<AvatarConfig, { mode: "mascot" }> => ({
-  mode: "mascot",
-  family,
-  color: everydayColors[family],
-  eyes: "oval",
-  accessory: "none",
+const shown = (shape: AvatarShape): Extract<AvatarConfig, { mode: "geometric" }> => ({
+  ...defaultAvatar,
+  shape,
+  color: showcase[shape] ?? avatarColors[avatarShapes.indexOf(shape) % avatarColors.length],
 });
 const portrait =
   "data:image/svg+xml," +
@@ -44,20 +65,15 @@ const matrix: [string, AvatarConfig][] = [
   ["Triangle", { ...defaultAvatar, shape: "triangle", color: "#FF309B", eyes: "visor" }],
   ["Drop", { ...defaultAvatar, shape: "drop", color: "#97683D", accessory: "hat" }],
   ["Hex", { ...defaultAvatar, shape: "hex", color: "#9159FE", accessory: "glasses" }],
-  ["Bear", { ...everyday("bear"), eyes: "round" }],
-  ["Fox", everyday("fox")],
-  ["Sprout", { ...everyday("sprout"), accessory: "hat" }],
-  ...everydayFamilies
-    .slice(3)
-    .map((family): [string, AvatarConfig] => [
-      family[0].toUpperCase() + family.slice(1),
-      everyday(family),
-    ]),
+  ["Sprout", shown("sprout")],
+  ["Mug", { ...shown("mug"), eyes: "round" }],
+  ["Ghost", shown("ghost")],
+  ["Cactus", { ...shown("cactus"), accessory: "hat" }],
+  ["Dino", shown("dino")],
+  ["TARS", shown("tars")],
+  ["Rocky", { ...shown("rocky"), accessory: "glasses" }],
+  ["Pumpkin", shown("pumpkin")],
   ["Portrait", { mode: "portrait", src: portrait, origin: "uploaded" }],
-  ...seasonalChoices.map(({ family, label }): [string, AvatarConfig] => [
-    label,
-    seasonalAvatar(family),
-  ]),
 ];
 function Specimen() {
   const [state, setState] = useState<ActivityState>("idle");
@@ -74,8 +90,8 @@ function Specimen() {
           An honest state.
         </h1>
         <p>
-          Original shapes and motion, compared against the Grok lifecycle reference. Mascots are a
-          bounded family; portraits stay still.
+          One flat silhouette with two eyes for every drawn avatar, in the app's own motion rig.
+          Portraits stay still.
         </p>
       </header>
       <div className="spec-controls">
@@ -104,29 +120,24 @@ function Specimen() {
         </div>
       </section>
       <section>
-        <h2>Geometric identity</h2>
+        <h2>Every shape</h2>
         <p>
-          The eight silhouettes and palette observed in the reference. Shape and eye controls below
-          are our own UI.
+          The picker's four groups. Objects and creatures follow the Open Bot Avatar format: one
+          silhouette, with the face on its largest part.
         </p>
-        <div className="spec-shapes">
-          {(
-            ["blob", "pebble", "squircle", "capsule", "triangle", "hex", "cloud", "drop"] as const
-          ).map((shape, i) => (
-            <button
-              key={shape}
-              onClick={() => setAvatar({ ...defaultAvatar, shape, color: avatarColors[i] })}
-            >
-              <Avatar
-                avatar={{ ...defaultAvatar, shape, color: avatarColors[i] }}
-                size={70}
-                state={state}
-                reducedMotion={reduce}
-              />
-              <span>{shape}</span>
-            </button>
-          ))}
-        </div>
+        {shapeGroups.map((group) => (
+          <div key={group.id}>
+            <h3>{group.label}</h3>
+            <div className="spec-shapes">
+              {avatarShapeGroups[group.id].map((shape: AvatarShape) => (
+                <button key={shape} onClick={() => setAvatar(shown(shape))}>
+                  <Avatar avatar={shown(shape)} size={70} state={state} reducedMotion={reduce} />
+                  <span>{shapeLabel(shape)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
         <div className="spec-controls">
           <label>
             Eyes{" "}
@@ -174,38 +185,34 @@ function Specimen() {
         </div>
       </section>
       <section>
-        <h2>Mascot family</h2>
+        <h2>Accessories and eyes on every shape</h2>
         <p>
-          Soft, rounded companions with expressive eyes and controlled customization. Original
-          vector artwork, inspired by Muse's personal character approach.
+          A hat sits on the part that carries the face, and glasses and every eye style stay on it.
         </p>
-        <div className="spec-shapes">
-          {everydayFamilies.map((family) => (
-            <button key={family} onClick={() => setAvatar(everyday(family))}>
-              <Avatar avatar={everyday(family)} size={90} state={state} reducedMotion={reduce} />
-              <span>{family}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-      <section>
-        <h2>Seasonal characters</h2>
-        <p>
-          Original holiday companions with the same working, thinking and reduced-motion behavior.
-        </p>
-        <div className="spec-shapes">
-          {seasonalChoices.map(({ family, label }) => (
-            <button key={family} onClick={() => setAvatar(seasonalAvatar(family))}>
-              <Avatar
-                avatar={seasonalAvatar(family)}
-                size={90}
-                state={state}
-                reducedMotion={reduce}
-              />
-              <span>{label}</span>
-            </button>
-          ))}
-        </div>
+        {(
+          [
+            ["Cowboy hat", { accessory: "hat" }],
+            ["Glasses", { accessory: "glasses" }],
+            ["Visor eyes", { eyes: "visor" }],
+            ["Happy, at sidebar size", {}],
+          ] as const
+        ).map(([label, patch]) => (
+          <div key={label}>
+            <h3>{label}</h3>
+            <div className="spec-wall" data-wall={label}>
+              {avatarShapes.map((shape) => (
+                <Avatar
+                  key={shape}
+                  avatar={{ ...shown(shape), ...patch }}
+                  size={label.startsWith("Happy") ? 28 : 56}
+                  state={label.startsWith("Happy") ? "done" : "idle"}
+                  reducedMotion
+                  name={shapeLabel(shape)}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
       </section>
       <section>
         <h2>Static portrait</h2>
@@ -237,8 +244,8 @@ function Specimen() {
       <section>
         <h2>State matrix</h2>
         <p>
-          Every mode in every state. Thinking and blocked morph into symbols; portraits use a ring
-          and badge instead of a face.
+          Both styles in every state. Blocked morphs into a symbol; portraits use a ring and badge
+          instead of a face.
         </p>
         <div className="spec-matrix" role="table" aria-label="Avatar state matrix">
           <div role="row">

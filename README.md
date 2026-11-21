@@ -933,16 +933,15 @@ a magnifying glass for search and browsing, a laptop for terminal and code, a bo
 for reading, or a notepad for writing. Disconnecting marks activity unknown;
 the last tool event is not evidence that execution is still running.
 
-Mascot avatars offer eight everyday characters: Bear, Fox, Sprout, Panda, Raccoon,
-Owl, Cactus and Dinosaur. They take whichever color you choose; a panda keeps its
-white face and wears the color on its ears and eye patches. Ten seasonal characters
-follow under their own heading in calendar order: Leprechaun, Easter Bunny, Bald
-Eagle, Pumpkin, Bat, Ghost, Turkey, Santa, Rudolph and Snowman. Both web and native
-iOS offer every character. Each keeps its character during working/thinking
-animation and supports the existing eye and accessory controls. Choosing a seasonal
-character applies its default color and preserves your other customization. Very
-light heads get a soft edge so they stay visible on the light theme. All use
-original artwork.
+Drawn avatars are one flat silhouette with two eyes, picked from 54 shapes in four
+groups: Classic, Objects, Creatures and Seasonal. Both web and native iOS offer every
+shape, and each keeps the eye, accessory and color controls and the working and
+thinking animation. A shape takes whichever color is already chosen, except the six
+seasonal ones (Pumpkin, Bat, Turkey, Santa hat, Reindeer and Snowman), which arrive in
+their own. Very light bodies get a soft edge so they stay visible on the light theme.
+Twenty-three shapes come from Open Bot Avatar (MIT); the rest are original artwork.
+[docs/AvatarShapes.md](docs/AvatarShapes.md) lists each shape's source and how to add
+one.
 
 Open Artifacts from the assistant's details (tap its name in the conversation header) to browse its generated
 outputs and shared attachments. Search filenames, filter by type, and preview

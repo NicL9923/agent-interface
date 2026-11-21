@@ -862,8 +862,12 @@ describe("what a saved copy may hold", () => {
       "a geometric avatar's eye spacing under the server's range",
       bot({ ...geometric, eyeSpacing: 0.5 }),
     ],
-    ["a mascot's unknown family", bot({ ...mascot, family: "dragon" })],
-    ["a mascot's color that is not a color", bot({ ...mascot, color: "orange" })],
+    ["a retired mascot's unknown family", bot({ ...mascot, family: "dragon" })],
+    [
+      "a retired mascot's family that is only an object property",
+      bot({ ...mascot, family: "constructor" }),
+    ],
+    ["a retired mascot's color that is not a color", bot({ ...mascot, color: "orange" })],
     ["a portrait's unknown origin", bot({ ...portrait, origin: "found" })],
     [
       "a portrait's address past its bound",
@@ -1010,6 +1014,34 @@ describe("what a saved copy may hold", () => {
       "Fox",
     ])
       expect(railText()).toContain(name);
+  });
+});
+
+describe("a copy saved before mascots were retired", () => {
+  it("draws each mascot as the shape that took its place, in the color it had", async () => {
+    signedInAsOne();
+    store(savedRosterKey, {
+      ...savedOne,
+      bots: [
+        ...savedOne.bots,
+        {
+          id: "fox",
+          name: "Fox",
+          shared: false,
+          avatar: {
+            mode: "mascot",
+            family: "raccoon",
+            color: "#8C8F99",
+            eyes: "round",
+            accessory: "hat",
+          },
+        },
+      ],
+    });
+    await open();
+    const fox = rail()!.querySelector('[role="img"][aria-label^="Fox"]')!;
+    expect(fox.getAttribute("data-shape")).toBe("fox");
+    expect(fox.querySelector(".avatar-body")!.getAttribute("fill")).toBe("#8C8F99");
   });
 });
 

@@ -241,7 +241,7 @@ function LoadedBotSettings({
       : "Upload a portrait before saving."
     : bootstrap.capabilities.portraitGeneration?.supported
       ? "Generate a portrait before saving."
-      : "Portraits are unavailable. Choose Geometric or Mascot.";
+      : "Portraits are unavailable. Choose Character.";
   const portraitPromptLimit =
     prompt.length > 2000
       ? `The description is ${(prompt.length - 2000).toLocaleString()} character${prompt.length - 2000 === 1 ? "" : "s"} over the ${(2000).toLocaleString()} limit. Shorten the text to generate a portrait.`

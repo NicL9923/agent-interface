@@ -556,8 +556,6 @@ export interface Expression {
   tilt: number;
   /** 0 = normal eyes, 1 = closed happy arcs. */
   happy: number;
-  /** Mascot mouth curve: -1 frown, 0 flat, 1 smile. */
-  mouth: number;
   /** 0 = the style's own eyes, 1 = small round dots, as when concentrating. */
   dot: number;
 }
@@ -577,29 +575,28 @@ export function expressionFor(
         open: idea ? 1.1 : 1,
         tilt: 0,
         happy: 0,
-        mouth: idea ? 0.9 : 0.1,
         dot: idea ? 0 : 1,
       };
     }
     case "working":
-      return { open: 0.82, tilt: 0, happy: 0, mouth: 0.3, dot: 0 };
+      return { open: 0.82, tilt: 0, happy: 0, dot: 0 };
     case "waiting":
-      return { open: 0.36, tilt: 0, happy: 0, mouth: 0, dot: 0 };
+      return { open: 0.36, tilt: 0, happy: 0, dot: 0 };
     case "blocked":
-      return { open: 1.1, tilt: 0, happy: 0, mouth: -0.2, dot: 0 };
+      return { open: 1.1, tilt: 0, happy: 0, dot: 0 };
     // Excited until most of the way through a celebration, which may have waited its turn.
     case "done":
       return t < (plan.gesture?.start ?? 0) + CELEBRATION * 0.75
-        ? { open: 1.1, tilt: 0, happy: 0, mouth: 1, dot: 0 }
-        : { open: 1, tilt: 0, happy: 1, mouth: 1, dot: 0 };
+        ? { open: 1.1, tilt: 0, happy: 0, dot: 0 }
+        : { open: 1, tilt: 0, happy: 1, dot: 0 };
     case "failed":
-      return { open: 0.62, tilt: 14, happy: 0, mouth: -1, dot: 0 };
+      return { open: 0.62, tilt: 14, happy: 0, dot: 0 };
     case "disconnected":
-      return { open: 0.7, tilt: 0, happy: 0, mouth: 0, dot: 0 };
+      return { open: 0.7, tilt: 0, happy: 0, dot: 0 };
     case "interrupted":
-      return { open: 0.5, tilt: 0, happy: 0, mouth: 0, dot: 0 };
+      return { open: 0.5, tilt: 0, happy: 0, dot: 0 };
     default:
-      return { open: 1, tilt: 0, happy: 0, mouth: 0.6, dot: 0 };
+      return { open: 1, tilt: 0, happy: 0, dot: 0 };
   }
 }
 /**
@@ -613,7 +610,6 @@ export function approach(current: Expression, target: Expression, dt: number): E
     open: current.open + (target.open - current.open) * k,
     tilt: current.tilt + (target.tilt - current.tilt) * k,
     happy: current.happy + (target.happy - current.happy) * k,
-    mouth: current.mouth + (target.mouth - current.mouth) * k,
     dot: current.dot + (target.dot - current.dot) * k,
   };
 }
@@ -712,22 +708,19 @@ function luminance(color: string) {
   return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
 }
 const contrast = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
-const lightInk = { geometric: "#fff9ee", mascot: "#fff3db" };
+const lightInk = "#fff9ee";
 const darkInk = "#2b201b";
 
 /**
- * Readable eye color for any body color, including custom picks. Each style keeps
- * its signature ink (cream cutouts, dark mascot eyes) while it holds at least 2:1;
- * otherwise the stronger ink wins. Every palette color keeps its signature ink.
+ * Readable eye color for any body color, including custom picks. Eyes are cream cutouts while
+ * cream holds at least 2:1 against the body, which every palette color does; otherwise the
+ * stronger of cream and dark ink wins.
  */
-export function faceInk(color: string, mascot = false) {
+export function faceInk(color: string) {
   const body = luminance(color);
-  const light = mascot ? lightInk.mascot : lightInk.geometric;
-  const preferred = mascot ? darkInk : light;
-  const other = mascot ? light : darkInk;
-  if (body === null) return preferred;
+  if (body === null) return lightInk;
   const score = (ink: string) => contrast(body, luminance(ink)!);
-  return score(preferred) >= 2 || score(preferred) >= score(other) ? preferred : other;
+  return score(lightInk) >= 2 || score(lightInk) >= score(darkInk) ? lightInk : darkInk;
 }
 
 /** Very light bodies get a soft edge so they keep their shape on the light theme's cream surface. */
