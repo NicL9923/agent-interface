@@ -219,3 +219,14 @@ The parser adds about one more parse of the last block per update, only while th
 | The same, with the previous commit's seeded exception     | Green, so the old exception hid case 1127                                                                                                                         |
 | Any line starting with `\|` counts, without the parser    | Red: 12 hold-back cases and the seeded comparison                                                                                                                 |
 | Any table in the parse counts, not one headed at the line | Red: 11 hold-back cases and `renders a growing reply the same as the saved reply`                                                                                 |
+
+### Second review validation
+
+On `9f6f7d9b`:
+
+| Check                                                                                         | Result                        |
+| --------------------------------------------------------------------------------------------- | ----------------------------- |
+| `npm run typecheck`, `npm run lint`                                                           | Passed                        |
+| `npx vitest run`, under `linux-heavy-lock.sh`                                                 | 229 files, 4,224 tests passed |
+| `npm run build`, then `e2e/contained-scroll.spec.ts` and `e2e/live-reply.spec.ts` in Chromium | 11 passed                     |
+| The same two specs in WebKit, in `mcr.microsoft.com/playwright:v1.65.0-noble`                 | 11 passed                     |
