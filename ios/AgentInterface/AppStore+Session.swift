@@ -266,11 +266,18 @@ extension AppStore {
   func revokeSession(_ client: APIClient) async {
     guard client.token != nil else { return }
     let wait = revokeWait
-    await withTaskGroup(of: Void.self) { group in
-      group.addTask { @MainActor in let _: EmptyResponse? = try? await client.write("/auth/logout", [String: String]()) }
-      group.addTask { try? await Task.sleep(for: wait) }
-      _ = await group.next()
-      group.cancelAll()
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      let once = ResumeOnce(continuation)
+      let deadline = Task { @MainActor in
+        // Timer: another member's sign-in never waits longer than this for the last member's session to end.
+        try? await Task.sleep(for: wait)
+        once.resume()
+      }
+      Task { @MainActor in
+        let _: EmptyResponse? = try? await client.write("/auth/logout", [String: String]())
+        deadline.cancel()
+        once.resume()
+      }
     }
   }
   /// Every account boundary clears the same account-owned content and async request identities.

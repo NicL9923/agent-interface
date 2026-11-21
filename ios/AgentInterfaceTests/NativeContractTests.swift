@@ -1575,7 +1575,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         let switching = Task { await value.signIn() }
         try await server.waitForHeld("/api/bootstrap")
         other.user = "two"; other.hold("/api/bootstrap")
-        let api = other.api(); api.token = nil; fresh.api = api
+        let api = client(other); api.token = nil; fresh.api = api
         let signing = Task { await fresh.signIn() }
         try await other.waitForHeld("/api/bootstrap")
         // Kept on purpose: chat screens the views count, haptic and keyboard events, and request counters,
