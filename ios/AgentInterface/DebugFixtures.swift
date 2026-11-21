@@ -530,13 +530,15 @@
         ("tars", "TARS", "tars", ["color": "#7A7A7A", "eyes": "visor"]),
         ("rocky", "Rocky", "rocky", ["color": "#97683D", "accessory": "glasses"]),
       ]
-      return looks.map { id, name, shape, look in
-        let avatar: [String: Any] = ["mode": "geometric", "shape": shape, "color": "#1084FE", "eyes": "oval", "accessory": "none"]
-          .merging(look) { $1 }
+      return looks.map { entry -> [String: Any] in
+        let (id, name, shape, look) = entry
+        let base: [String: Any] = ["mode": "geometric", "shape": shape, "color": "#1084FE", "eyes": "oval", "accessory": "none"]
+        let avatar = base.merging(look.mapValues { $0 as Any }) { $1 }
         // A very light body that needs help shows its exclamation mark with the body's soft edge.
         let activity = id == "coffee" ? "blocked" : "idle"
         return ["id": id, "name": name, "model": "configured-model", "shared": true, "activity": activity, "avatar": avatar]
       }
+    }
     }
     nonisolated(unsafe) static let user: [String: Any] = [
       "id": "native-test", "name": "Local test member", "email": "test@localhost.invalid",

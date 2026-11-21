@@ -83,7 +83,7 @@ extension AvatarConfig {
     guard mode.rawValue == "mascot" else { return }
     let family = (try? values.decodeIfPresent(String.self, forKey: .family)) ?? nil
     // A family no build ever had drew as the plain mascot head; the plain shape is the blob.
-    let known = family.flatMap { AvatarCatalog.legacyMascots[$0] } ?? (.blob, nil, nil)
+    let known = family.flatMap { AvatarCatalog.legacyMascots[$0] } ?? (shape: AvatarShape.blob, was: nil, now: nil)
     mode = .geometric
     shape = known.shape
     if let color, let was = known.was, color.lowercased() == was.lowercased() { self.color = known.now }

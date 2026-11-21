@@ -71,8 +71,9 @@ final class AvatarShapeTests: XCTestCase {
     let mug = try XCTUnwrap(AvatarCatalog.art[.mug]?.face)
     XCTAssertNotEqual(mug.cx, 50, "The mug looks out from its cup, left of the handle")
     let rig = AvatarMotion.faceRig(mug, pose: AvatarMotion.restingPose, state: .idle, eyeSpacing: 1)
-    XCTAssertEqual(rig.eyes.map(\.x), [mug.cx - mug.spacing / 2, mug.cx + mug.spacing / 2])
-    XCTAssertEqual(rig.centerX, mug.cx, "The glasses bridge sits between the eyes")
+    XCTAssertEqual(rig.eyes[0].x, mug.cx - mug.spacing / 2, accuracy: 1e-9)
+    XCTAssertEqual(rig.eyes[1].x, mug.cx + mug.spacing / 2, accuracy: 1e-9)
+    XCTAssertEqual(rig.centerX, mug.cx, accuracy: 1e-9, "The glasses bridge sits between the eyes")
     XCTAssertEqual([rig.hatX, rig.hatY, rig.hatScale], [mug.cx, mug.top + 15 * mug.hat, mug.hat])
     // The spacing slider spreads the eyes around the same middle.
     let wide = AvatarMotion.faceRig(mug, pose: AvatarMotion.restingPose, state: .idle, eyeSpacing: 1.5)
@@ -107,7 +108,7 @@ final class AvatarShapeTests: XCTestCase {
     XCTAssertEqual(AvatarGeometry.outside("M0 0 L1 0 L1 1"), "M0 0 L1 0 L1 1", "An open path is all outside")
     for shape in [AvatarShape.mug, .palette, .wateringCan] {
       // The middle of the hole: filled by the morph's polygon, open in the exact outline.
-      let hole = String(AvatarGeometry.svg(shape).dropFirst(outside(of: shape).count))
+      let hole = String(AvatarGeometry.svg(shape).dropFirst(outsideContour(of: shape).count))
       let numbers = hole.split { !"-.0123456789".contains($0) }.compactMap { Double($0) }
       let xs = stride(from: 0, to: numbers.count, by: 2).map { numbers[$0] }
       let ys = stride(from: 1, to: numbers.count, by: 2).map { numbers[$0] }
@@ -116,7 +117,7 @@ final class AvatarShapeTests: XCTestCase {
       XCTAssertTrue(AvatarGeometry.sampled(shape).polygon.contains(middle, eoFill: false), shape.rawValue)
     }
   }
-  private func outside(of shape: AvatarShape) -> String { AvatarGeometry.outside(AvatarGeometry.svg(shape)) }
+  private func outsideContour(of shape: AvatarShape) -> String { AvatarGeometry.outside(AvatarGeometry.svg(shape)) }
 
   private func points(_ vector: PointVector) -> [CGPoint] {
     stride(from: 0, to: vector.values.count, by: 2).map { CGPoint(x: vector.values[$0], y: vector.values[$0 + 1]) }
@@ -127,7 +128,7 @@ final class AvatarShapeTests: XCTestCase {
     let square = [(10, 10), (30, 10), (50, 10), (50, 30), (50, 50), (30, 50), (10, 50), (10, 30)]
       .map { CGPoint(x: $0.0, y: $0.1) }
     let aligned = AvatarGeometry.aligned(square)
-    XCTAssertEqual(aligned.prefix(2), [CGPoint(x: 30, y: 10), CGPoint(x: 50, y: 10)])
+    XCTAssertEqual(Array(aligned.prefix(2)), [CGPoint(x: 30, y: 10), CGPoint(x: 50, y: 10)])
     // The same square drawn counter-clockwise from its bottom right corner.
     let turned = Array((square[4...] + square[..<4]).reversed())
     XCTAssertLessThan(AvatarGeometry.signedArea(turned), 0)
@@ -258,8 +259,10 @@ final class AvatarShapeTests: XCTestCase {
       AvatarMotion.faceRig(brush, pose: AvatarMotion.restingPose, state: .idle, eyes: laser, eyeWidth: 1.5, eyeSpacing: 1.5),
       AvatarMotion.faceRig(brush, pose: AvatarMotion.restingPose, state: .idle, eyes: .oval, eyeWidth: 1.5, eyeSpacing: 1.5))
     let oval = try render(AvatarConfig(shape: .blob, eyes: .oval), .idle).pixels
-    XCTAssertEqual(try render(AvatarConfig(shape: .blob, eyes: laser), .idle).pixels, oval)
-    XCTAssertNotEqual(try render(AvatarConfig(shape: .blob, eyes: .round), .idle).pixels, oval, "The eyes are in the picture")
+    let unknown = try render(AvatarConfig(shape: .blob, eyes: laser), .idle).pixels
+    let round = try render(AvatarConfig(shape: .blob, eyes: .round), .idle).pixels
+    XCTAssertTrue(unknown == oval, "The unknown style draws the oval pills")
+    XCTAssertFalse(round == oval, "The eyes are in the picture")
   }
   @MainActor func testAVeryLightBodysBlockedMarkKeepsItsEdge() throws {
     XCTAssertNotNil(AvatarMotion.bodyEdge("#F4F4F4"))

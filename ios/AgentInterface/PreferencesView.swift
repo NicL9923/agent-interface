@@ -316,15 +316,18 @@ struct PreferencesView: View {
     @ScaledMetric(relativeTo: .caption2) private var specimenLabel: CGFloat = 9
     /// The color each object and creature is shown in, as on the web specimen. In the app a shape
     /// takes the color already chosen, and a seasonal one its own.
-    private static let showcase: [AvatarShape: String] = [
-      .cloud: "#00BCA6", .star: "#FF6700", .egg: "#F4F4F4", .shield: "#1084FE", .chat: "#9159FE",
-      .lightbulb: "#FF9800", .mug: "#F4F4F4", .book: "#97683D", .camera: "#7A7A7A",
-      .magnifier: "#1084FE", .controller: "#FF6700", .barbell: "#FF263C", .brain: "#FF309B",
-      .rocket: "#7A7A7A", .palette: "#97683D", .paintBrush: "#1FBF68", .wateringCan: "#00BCA6",
-      .sprout: "#1FBF68", .cactus: "#1FBF68", .witchHat: "#9159FE", .ghost: "#F4F4F4",
-      .cat: "#FF9800", .bunny: "#FF309B", .bull: "#FF263C", .bear: "#97683D", .fox: "#FF6700",
-      .owl: "#9159FE", .dino: "#1FBF68", .tars: "#7A7A7A", .rocky: "#97683D",
-    ].merging(AvatarCatalog.seasonalColors) { $1 }
+    private static let showcase: [AvatarShape: String] = {
+      let shown: [AvatarShape: String] = [
+        .cloud: "#00BCA6", .star: "#FF6700", .egg: "#F4F4F4", .shield: "#1084FE", .chat: "#9159FE",
+        .lightbulb: "#FF9800", .mug: "#F4F4F4", .book: "#97683D", .camera: "#7A7A7A",
+        .magnifier: "#1084FE", .controller: "#FF6700", .barbell: "#FF263C", .brain: "#FF309B",
+        .rocket: "#7A7A7A", .palette: "#97683D", .paintBrush: "#1FBF68", .wateringCan: "#00BCA6",
+        .sprout: "#1FBF68", .cactus: "#1FBF68", .witchHat: "#9159FE", .ghost: "#F4F4F4",
+        .cat: "#FF9800", .bunny: "#FF309B", .bull: "#FF263C", .bear: "#97683D", .fox: "#FF6700",
+        .owl: "#9159FE", .dino: "#1FBF68", .tars: "#7A7A7A", .rocky: "#97683D",
+      ]
+      return shown.merging(AvatarCatalog.seasonalColors) { $1 }
+    }()
     static func shown(_ shape: AvatarShape) -> AvatarConfig {
       let index = AvatarConfig.shapes.firstIndex(of: shape) ?? 0
       return AvatarConfig(shape: shape, color: showcase[shape] ?? AvatarConfig.colors[index % AvatarConfig.colors.count])

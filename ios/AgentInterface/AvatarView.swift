@@ -1086,11 +1086,15 @@ enum AvatarGeometry {
       let b = all[segment + 1]
       samples.append(CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
     }
-    return PointVector(values: aligned(samples).flatMap { [$0.x, $0.y] })
+    return PointVector(values: aligned(samples).flatMap { [Double($0.x), Double($0.y)] })
   }
   /// Twice the area the points enclose: positive when they run clockwise on screen, where y grows down.
   static func signedArea(_ points: [CGPoint]) -> Double {
-    zip(points, points.dropFirst() + points.prefix(1)).reduce(0) { $0 + $1.0.x * $1.1.y - $1.1.x * $1.0.y }
+    var sum = 0.0
+    for (point, next) in zip(points, points.dropFirst() + points.prefix(1)) {
+      sum += Double(point.x * next.y - next.x * point.y)
+    }
+    return sum
   }
   /// The same samples, clockwise, starting at the top: the sample nearest the vertical through the
   /// middle of the shape, among those above the middle. Like `alignSamples` in
@@ -1100,12 +1104,12 @@ enum AvatarGeometry {
   static func aligned(_ points: [CGPoint]) -> [CGPoint] {
     let ordered = signedArea(points) < 0 ? Array(points.reversed()) : points
     guard !ordered.isEmpty else { return ordered }
-    let cx = ordered.reduce(0) { $0 + $1.x } / Double(ordered.count)
-    let cy = ordered.reduce(0) { $0 + $1.y } / Double(ordered.count)
+    let cx = ordered.reduce(0.0) { $0 + Double($1.x) } / Double(ordered.count)
+    let cy = ordered.reduce(0.0) { $0 + Double($1.y) } / Double(ordered.count)
     var start: Int?
-    for (i, point) in ordered.enumerated() where point.y < cy {
+    for (i, point) in ordered.enumerated() where Double(point.y) < cy {
       guard let best = start.map({ ordered[$0] }) else { start = i; continue }
-      let closer = abs(point.x - cx) - abs(best.x - cx)
+      let closer = abs(Double(point.x) - cx) - abs(Double(best.x) - cx)
       // Within a millionth of a unit two samples are equally central, and the higher one starts.
       if closer < -1e-6 || (closer <= 1e-6 && point.y < best.y) { start = i }
     }
