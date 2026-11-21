@@ -288,3 +288,14 @@ The exception asked only that the held last line become a table header under som
 | Break                                          | Guarding test                                                 | Result |
 | ---------------------------------------------- | ------------------------------------------------------------- | ------ |
 | `trim()` back in `cellCount`, as on `e9f17cb2` | `holds a table header whose last cell is a nonbreaking space` | Red    |
+
+### Third review validation
+
+On `a5e9df23`:
+
+| Check                                                                                         | Result                                                                                                                                                                                                                   |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run typecheck`, `npm run lint`                                                           | Passed                                                                                                                                                                                                                   |
+| `npx vitest run`, under `linux-heavy-lock.sh`                                                 | 229 files, 4,227 tests passed                                                                                                                                                                                            |
+| `npm run build`, then `e2e/contained-scroll.spec.ts` and `e2e/live-reply.spec.ts` in Chromium | 11 passed                                                                                                                                                                                                                |
+| The same two specs in WebKit, in the container                                                | Flaky. The first run failed `contained-scroll.spec.ts` after 30.3 s, the test's timeout, with the host's load average between 17 and 34. Its error text was not kept. Four more runs with no change passed 11 of 11 each |
