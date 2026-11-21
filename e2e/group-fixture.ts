@@ -87,8 +87,20 @@ const fresh = (route: Route) => {
   return route.fetch({ headers });
 };
 
-/** Scripts the group, and when `preferences` is given, overrides those of the signed-in person. */
-export async function groupFixture(page: Page, preferences?: Record<string, unknown>) {
+/**
+ * Scripts the group, and when `preferences` is given, overrides those of the signed-in person. `ownText` replaces
+ * the Markdown of the person's own message.
+ */
+export async function groupFixture(
+  page: Page,
+  preferences?: Record<string, unknown>,
+  ownText?: string,
+) {
+  const log = events.map((event) =>
+    ownText && event.event_id === "gx-own"
+      ? { ...event, payload: { ...event.payload, text: ownText } }
+      : event,
+  );
   shown.delete(page);
   await page.route(/\/api\/groups(\?.*)?$/, (route) =>
     route.fulfill({
@@ -102,9 +114,9 @@ export async function groupFixture(page: Page, preferences?: Record<string, unkn
     const since = Number(new URL(route.request().url()).searchParams.get("since") || 0);
     return route.fulfill({
       json: {
-        events: events.filter((event) => event.seq > since),
-        cursor: events.length,
-        latest_seq: events.length,
+        events: log.filter((event) => event.seq > since),
+        cursor: log.length,
+        latest_seq: log.length,
         has_more: false,
       },
     });

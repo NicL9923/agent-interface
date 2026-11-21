@@ -794,7 +794,9 @@ messages** chooses **Tinted** or **Solid color**. Solid fills your messages with
 assistant's avatar color, darkened where needed so white text keeps at least 4.5:1
 contrast; a chat without an avatar color, such as one with a photo, keeps the tint.
 Both are saved with your preferences, like Appearance, so they follow you to your other
-devices. Group chats keep their own layout.
+devices. Group chats follow Chat style too: in Bubbles your messages sit at the right and
+everyone else's at the left under their name, and Solid color fills yours with the app's
+green, since a group has no one assistant's color.
 
 When a reply fails, **Retry** under it sends your message again without touching
 your draft. A failed turn can be retried once, by anyone, from any device: a second

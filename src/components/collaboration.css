@@ -293,9 +293,12 @@
   .group-bubbles .group-message.own .reply-bubbles {
     align-items: flex-end;
   }
-  /* The person's bubble mirrors a reply's: the same fill, cap and tail as theirs in a chat with one assistant. */
+  /* The person's bubble mirrors a reply's: the same fill, cap and tail as theirs in a chat with one assistant. Unlike
+     there, its text is Markdown, and a quote holding nested lists indents by ems. So the 86% cap yields to the whole
+     row once the row is under about 19 ems wide, as on a 320 px phone at 200% text, where the last 14% is the room
+     the innermost line needs to stay on the fill. */
   .group-bubbles .group-message.own .reply-bubbles > .reply-bubble {
-    max-width: min(86%, 560px);
+    max-width: min(100%, max(86%, 16em), 560px);
     border-radius: 18px;
     background: var(--user);
   }
@@ -338,7 +341,8 @@
     .group-message.own
     .reply-bubble
     blockquote {
-    border-left-color: color-mix(in srgb, #fff 50%, transparent);
+    /* 3:1 or better against the fill, as the mark that says this is a quote. Half white reached 2.74:1. */
+    border-left-color: color-mix(in srgb, #fff 75%, transparent);
     color: inherit;
   }
   /* Two classes, so `.composer`'s `position: relative` in styles.css cannot undo the sticking. */

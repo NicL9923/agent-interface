@@ -119,9 +119,10 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
-// The contrast of an element's text against the fills of its ancestors, laid over white where none is opaque.
-const contrastOnFill = (text: Locator) =>
-  text.evaluate((element) => {
+// The contrast of an element's text against its own fill and those of its ancestors, laid over white where none is
+// opaque. `ink` names another of the element's colors to read in place of its text, such as a border.
+const contrastOnFill = (text: Locator, ink: "color" | "borderLeftColor" = "color") =>
+  text.evaluate((element, inkColor) => {
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 1;
     const context = canvas.getContext("2d", { willReadFrequently: true })!;
@@ -141,14 +142,14 @@ const contrastOnFill = (text: Locator) =>
       if (fill[3] === 255) break;
     }
     const behind = fills.reduceRight((under, fill) => over(fill, under), [255, 255, 255, 255]);
-    const ink = over(bytes(getComputedStyle(element).color), behind);
+    const ink = over(bytes(getComputedStyle(element)[inkColor]), behind);
     const channel = (value: number) =>
       value / 255 <= 0.04045 ? value / 255 / 12.92 : ((value / 255 + 0.055) / 1.055) ** 2.4;
     const light = (color: number[]) =>
       0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2]);
     const [upper, lower] = [light(ink), light(behind)].sort((a, b) => b - a);
     return (upper + 0.05) / (lower + 0.05);
-  });
+  }, ink);
 
 // A hover fill sits under text that keeps its own color. Two of them once took that text under 4.5:1: the selected
 // avatar preview state, whose light text met the pale hover fill at 1.18:1, and a routine card whose status word, in
@@ -450,6 +451,23 @@ test.describe("group chat bubbles", () => {
         });
         const own = page.locator(".group-bubbles .group-message.own .reply-bubble");
         await expect(own).toHaveCount(1);
+        // The layout's main rule: the person's own bubble reaches its row's trailing edge and hugs its text, and
+        // everyone else's starts at the leading edge. The gaps are the row's 12 px of padding and its border.
+        const gaps = await page.evaluate(() => {
+          const gap = (selector: string) => {
+            const bubble = document.querySelector(selector)!;
+            const row = bubble.closest(".group-message")!.getBoundingClientRect();
+            const box = bubble.getBoundingClientRect();
+            return { leading: box.left - row.left, trailing: row.right - box.right };
+          };
+          return {
+            own: gap(".group-message.own .reply-bubble"),
+            other: gap(".group-message:not(.own) .reply-bubble"),
+          };
+        });
+        expect(gaps.own.trailing).toBeLessThan(16);
+        expect(gaps.own.leading).toBeGreaterThan(gaps.own.trailing);
+        expect(gaps.other.leading).toBeLessThan(16);
         const result = await new AxeBuilder({ page })
           .include(".group-panel")
           .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
@@ -458,57 +476,55 @@ test.describe("group chat bubbles", () => {
           result.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
         ).toEqual([]);
         if (ownBubble === "tint") return;
-        // Axe skips text over a fill it cannot be sure of, so the solid bubble's pieces are measured here.
-        const read = await own.evaluate((bubble) => {
-          const canvas = document.createElement("canvas");
-          canvas.width = canvas.height = 1;
-          const context = canvas.getContext("2d", { willReadFrequently: true })!;
-          const bytes = (color: string) => {
-            context.clearRect(0, 0, 1, 1);
-            context.fillStyle = color;
-            context.fillRect(0, 0, 1, 1);
-            return [...context.getImageData(0, 0, 1, 1).data];
-          };
-          const over = (top: number[], under: number[]) =>
-            [0, 1, 2]
-              .map((at) => (top[at] * top[3] + under[at] * (255 - top[3])) / 255)
-              .concat(255);
-          const channel = (value: number) =>
-            value / 255 <= 0.04045 ? value / 255 / 12.92 : ((value / 255 + 0.055) / 1.055) ** 2.4;
-          const light = (color: number[]) =>
-            0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2]);
-          const fill = bytes(getComputedStyle(bubble).backgroundColor);
-          const contrast = (element: Element) => {
-            let behind = fill;
-            for (
-              let node: Element | null = element;
-              node && node !== bubble;
-              node = node.parentElement
-            )
-              behind = over(bytes(getComputedStyle(node).backgroundColor), behind);
-            const ink = over(bytes(getComputedStyle(element).color), behind);
-            const [upper, lower] = [light(ink), light(behind)].sort((a, b) => b - a);
-            return Math.round(((upper + 0.05) / (lower + 0.05)) * 100) / 100;
-          };
-          const hex = fill
-            .slice(0, 3)
-            .map((value) => value.toString(16).padStart(2, "0").toUpperCase())
-            .join("");
-          return {
-            fill: `#${hex}`,
-            text: contrast(bubble.querySelector("li")!),
-            link: contrast(bubble.querySelector("a")!),
-            code: contrast(bubble.querySelector(":not(pre) > code")!),
-            quote: contrast(bubble.querySelector("blockquote p")!),
-          };
-        });
         // GROUP_SOLID_FILL, the app's green, which solid-bubble.json holds to itself on both clients.
-        expect(read.fill).toBe("#246F59");
-        for (const piece of ["text", "link", "code", "quote"] as const)
-          expect(read[piece], piece).toBeGreaterThanOrEqual(4.5);
+        await expect(own).toHaveCSS("background-color", "rgb(36, 111, 89)");
+        // Axe skips text over a fill it cannot be sure of, so the solid bubble's pieces are measured here.
+        for (const [piece, selector] of [
+          ["text", "li"],
+          ["link", "a"],
+          ["code", ":not(pre) > code"],
+          ["quote", "blockquote p"],
+        ] as const)
+          expect
+            .soft(await contrastOnFill(own.locator(selector).first()), piece)
+            .toBeGreaterThanOrEqual(4.5);
+        // The quote's stripe is a mark, not text: 3:1 against the fill.
+        expect
+          .soft(await contrastOnFill(own.locator("blockquote"), "borderLeftColor"), "quote stripe")
+          .toBeGreaterThanOrEqual(3);
       });
     }
   }
+
+  // The person's own message is Markdown, and a quote holding nested lists indents by ems. Under the 86% cap alone the
+  // innermost line had 2 px at this size, and its white text ran past the green fill onto the pale page.
+  test("a narrow group at 200% text keeps the person's nested text on their bubble", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+    await groupFixture(
+      page,
+      { ownBubble: "solid", chatStyle: "bubbles" },
+      "> - Gates\n>   - North\n>     - Width is fine.",
+    );
+    await signIn(page);
+    await openGroup(page);
+    await page.evaluate(async () => {
+      document.documentElement.style.fontSize = "200%";
+      await document.fonts.ready;
+    });
+    const past = () =>
+      page.evaluate(() => {
+        const bubble = document.querySelector(".group-message.own .reply-bubble")!;
+        const range = document.createRange();
+        range.selectNodeContents([...bubble.querySelectorAll("li")].at(-1)!);
+        return Math.ceil(
+          range.getBoundingClientRect().right - bubble.getBoundingClientRect().right,
+        );
+      });
+    await expect.poll(past).toBeLessThanOrEqual(0);
+  });
 
   // The bubbles' edge in a group comes from the same transparent borders as in a chat with one assistant.
   for (const [mode, media] of [
