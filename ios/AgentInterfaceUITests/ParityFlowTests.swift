@@ -68,17 +68,17 @@ import UIKit
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: preview)
     waitForExpectations(timeout: 5)
     // The first pin opens with Cmd+1, and Cmd+F in that chat finds, keyboard ready.
-    app.shortcut("1", shows: app.textViews["messageComposer"])
+    let pinAttempts = app.shortcut("1", shows: app.textViews["messageComposer"])
     // Cmd+F reaches the chat only once it is on screen; before that, home would take it for Search.
     XCTAssertTrue(app.chatHeader("Ranch hand").waitUntilHittable())
     XCTAssertTrue(app.textViews["messageComposer"].waitUntilHittable())
     let find = app.textFields["findConversation"]
-    // Known app issue: Cmd+F sometimes never reaches the chat after Cmd+1 (#178). Recorded, not
-    // failed, until that is fixed; remove this wrapper with the fix.
-    XCTExpectFailure("Cmd+F sometimes never reaches the open chat (#178)", options: .nonStrict()) {
-      app.shortcut("f", shows: find)
-      XCTAssertTrue(find.waitForKeyboardFocus())
-    }
+    // Strict reproduction for #178. Distinguish missing command delivery from missing field focus.
+    app.shortcut("f", shows: find, attempts: 1, failureContext: "Cmd+1 needed \(pinAttempts) attempts before the chat appeared.")
+    let focused = find.waitForKeyboardFocus()
+    let focusFailure = "Find appeared but did not take keyboard focus after Cmd+1 needed \(pinAttempts) attempts."
+    if !focused { app.attachShortcutDiagnostics(focusFailure) }
+    XCTAssertTrue(focused, focusFailure)
   }
   func testHomePinsSettingsAutosaveAndAdvancedComposer() throws {
     let app = launch(home: true)
