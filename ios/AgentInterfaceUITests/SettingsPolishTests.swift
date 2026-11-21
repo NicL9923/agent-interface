@@ -26,13 +26,21 @@ import XCTest
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
+  /// Scrolls the list until `element` can be tapped, with short drags in the list's leading gutter as
+  /// NativeFlowTests does. A swipe from the middle of Profile can start on an eye slider, which takes
+  /// the drag: the setting changes and the list stays put, so every later swipe lands there too.
   private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
-    for _ in 0..<10 {
-      if element.exists && element.canTap { return }
+    let save = app.buttons["saveChanges"]
+    let unsaved = save.exists && save.isEnabled
+    for _ in 0..<15 {
+      if element.exists && element.canTap { break }
       let surface = app.collectionViews.firstMatch
-      if up { surface.swipeUp(velocity: .slow) } else { surface.swipeDown(velocity: .slow) }
+      let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: up ? 0.7 : 0.3)).withOffset(CGVector(dx: 4, dy: 0))
+      let distance = surface.frame.height * 0.35 * (up ? -1 : 1)
+      start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)), withVelocity: .slow, thenHoldForDuration: 0.2)
     }
     XCTAssertTrue(element.canTap, "\(element) never became hittable")
+    XCTAssertEqual(save.exists && save.isEnabled, unsaved, "Scrolling to \(element) changed a setting")
   }
   private func waitFor(_ format: String, _ element: XCUIElement, timeout: TimeInterval = 5) {
     expectation(for: NSPredicate(format: format), evaluatedWith: element)
