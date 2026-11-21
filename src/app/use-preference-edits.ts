@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { Preferences } from "../shared/types";
-import type { OwnChoice } from "./preference-queue";
+import type { PreferenceField } from "./preference-queue";
 
 /** An edit to whole preferences, applied by the session's save queue to its newest value. */
 export type PreferenceEdit = (value: Preferences) => Preferences;
@@ -12,14 +12,14 @@ export type PreferenceEdit = (value: Preferences) => Preferences;
  */
 export function usePreferenceEdits(
   saved: Preferences,
-  editSaved: (edit: PreferenceEdit, chosen?: readonly OwnChoice[]) => Promise<void>,
+  editSaved: (edit: PreferenceEdit, chosen: readonly PreferenceField[]) => Promise<void>,
 ) {
   const [pending, setPending] = useState<Preferences | null>(null);
   const current = pending ?? saved;
   const latest = useRef(current);
   latest.current = current;
-  /** `chosen` names the chat style choices the person set with this edit; see the save queue. */
-  const commit = (edit: PreferenceEdit, chosen?: readonly OwnChoice[]) => {
+  /** `chosen` names the fields the person set with this edit, which its save carries; see the save queue. */
+  const commit = (edit: PreferenceEdit, chosen: readonly PreferenceField[]) => {
     const next = edit(latest.current);
     latest.current = next;
     setPending(next);

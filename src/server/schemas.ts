@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { avatarAccessories, avatarEyes, avatarShapes, mascotFamilies } from "../shared/types.js";
-import type { Avatar, BotInput, FileRef, Preferences } from "../shared/types.js";
+import type { Avatar, BotInput, FileRef, Preferences, PreferencesPatch } from "../shared/types.js";
 
 // Request schemas whose output is a shared type. Only the server validates, so zod stays out of
 // the client bundle; the checks at the end keep each schema and its type in step.
@@ -56,10 +56,8 @@ export const botSaveRequest = botInput.extend({
   // Sharing someone's main assistant ends it being their main one and stops its check-ins.
   confirmMainCleared: z.boolean().optional(),
 });
-const quietTime = z
-  .string()
-  .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
-  .optional();
+const quietClock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+const quietTime = quietClock.optional();
 const validTimezone = (value: string) => {
   try {
     new Intl.DateTimeFormat("en", { timeZone: value });
@@ -68,6 +66,22 @@ const validTimezone = (value: string) => {
     return false;
   }
 };
+const notificationTimezone = z.string().max(100).refine(validTimezone);
+const batchMinutes = z.number().int().min(0).max(60);
+/** Notification settings as saved: a partial save's merged settings must pass this too. */
+export const notifications = z
+  .object({
+    timezone: notificationTimezone,
+    quietStart: quietTime,
+    quietEnd: quietTime,
+    batchMinutes,
+  })
+  .refine(
+    (value) =>
+      !!value.quietStart === !!value.quietEnd &&
+      (!value.quietStart || value.quietStart !== value.quietEnd),
+    "Choose different quiet start and end times.",
+  );
 export const modelFavoriteList = z.array(z.object({ provider: id, model: id })).max(100);
 export const preferences = z.object({
   presentation: z.enum(["simple", "advanced"]),
@@ -82,20 +96,7 @@ export const preferences = z.object({
   startPage: z.enum(["today", "assistant"]).optional(),
   chatStyle: z.enum(["bubbles", "classic"]).optional(),
   ownBubble: z.enum(["tint", "solid"]).optional(),
-  notifications: z
-    .object({
-      timezone: z.string().max(100).refine(validTimezone),
-      quietStart: quietTime,
-      quietEnd: quietTime,
-      batchMinutes: z.number().int().min(0).max(60),
-    })
-    .refine(
-      (value) =>
-        !!value.quietStart === !!value.quietEnd &&
-        (!value.quietStart || value.quietStart !== value.quietEnd),
-      "Choose different quiet start and end times.",
-    )
-    .optional(),
+  notifications: notifications.optional(),
   hiddenRoutineRuns: z
     .array(z.object({ botId: id, routineId: id }).strict())
     .max(500)
@@ -107,6 +108,34 @@ export const preferences = z.object({
     .strict()
     .optional(),
   mainSuggestionDismissed: z.boolean().optional(),
+});
+const shape = preferences.shape;
+/**
+ * A partial save (`application/merge-patch+json`): every field optional, `null` only where clearing is
+ * allowed. The routed fields are left out, so a partial save ignores them as zod drops unknown keys.
+ */
+export const preferencesPatch = z.object({
+  presentation: shape.presentation.optional(),
+  theme: shape.theme.optional(),
+  favorites: shape.favorites.optional(),
+  defaultBotId: shape.defaultBotId.nullable(),
+  sections: shape.sections.optional(),
+  followBots: shape.followBots.optional(),
+  startPage: shape.startPage.nullable(),
+  chatStyle: shape.chatStyle.nullable(),
+  ownBubble: shape.ownBubble.nullable(),
+  // Merged into the saved settings key by key; the result is checked against `notifications`.
+  notifications: z
+    .object({
+      timezone: notificationTimezone.optional(),
+      quietStart: quietClock.nullable().optional(),
+      quietEnd: quietClock.nullable().optional(),
+      batchMinutes: batchMinutes.optional(),
+    })
+    .nullable()
+    .optional(),
+  hiddenRoutineRuns: shape.hiddenRoutineRuns.nullable(),
+  mainSuggestionDismissed: shape.mainSuggestionDismissed.nullable(),
 });
 // --- Main assistant ---
 export const timezone = z.string().max(100).refine(validTimezone, "Choose a valid timezone.");
@@ -128,4 +157,5 @@ export type SchemaChecks = [
   Assert<Same<z.infer<typeof botInput>, BotInput>>,
   Assert<Same<z.infer<typeof fileRef>, FileRef>>,
   Assert<Same<z.infer<typeof preferences>, Preferences>>,
+  Assert<Same<z.input<typeof preferencesPatch>, PreferencesPatch>>,
 ];

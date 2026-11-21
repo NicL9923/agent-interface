@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { preferenceServer } from "./helpers/preference-server";
 import { App } from "../src/App";
 import { api, write } from "../src/client-api";
 import { ANCHOR_GAP } from "../src/app/scroll-follow";
@@ -299,13 +300,15 @@ describe("a chat with more sent messages than ticks fit", () => {
       ]).flat(),
     };
     const served = vi.mocked(api).getMockImplementation()!;
+    const preferences = preferenceServer(() => bootstrap.preferences);
     vi.mocked(api).mockImplementation(async (path: string, ...rest) =>
       path === "/bots/shared/routine-runs"
         ? ({ runs, unavailable: [] } as never)
         : served(path, ...rest),
     );
     vi.mocked(write).mockImplementation(
-      async (path: string, body?: unknown) => (path === "/preferences" ? body : {}) as never,
+      async (path: string, body?: unknown) =>
+        (path === "/preferences" ? preferences(body) : {}) as never,
     );
     longLayout();
     await act(async () => root.render(createElement(App)));

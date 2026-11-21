@@ -1,5 +1,6 @@
 import {
   routeParts,
+  routeMediaTypes,
   routeUrl,
   type ApiBody,
   type ApiParams,
@@ -105,7 +106,7 @@ export class ApiError extends Error {
 }
 async function send<T>(path: string, init: RequestInit, retried: boolean): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body && !(init.body instanceof FormData))
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type"))
     headers.set("Content-Type", "application/json");
   if (init.method && init.method !== "GET") headers.set("X-CSRF-Token", csrf);
   const controller = new AbortController();
@@ -227,9 +228,11 @@ export function request<K extends ApiRoute>(
     keepalive?: boolean;
   };
   const { method } = routeParts(route);
+  const mediaType = routeMediaTypes[route];
   return api<ApiResponse<K>>(routeUrl(route, params ?? ({} as ApiParams<K>), query), {
     ...(method === "GET" ? {} : { method }),
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(mediaType ? { headers: { "Content-Type": mediaType } } : {}),
     signal,
     keepalive,
   });

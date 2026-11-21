@@ -2,12 +2,13 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { preferenceServer } from "./helpers/preference-server";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
 import { api, ApiError, uploadFile, write } from "../src/client-api";
 import { takeHeartbeats } from "./helpers/request-mock";
 import { defaultPreferences } from "../src/shared/types";
-import type { Bootstrap, Conversation, Message } from "../src/shared/types";
+import type { Bootstrap, Conversation, Message, Preferences } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
@@ -2599,8 +2600,10 @@ describe("conversation state", () => {
     vi.mocked(api).mockImplementation(async <T>(path: string) =>
       path === "/bootstrap?roster=lean" ? (home as T) : (original(path) as Promise<T>),
     );
+    const preferences = preferenceServer(() => home.preferences);
     vi.mocked(write).mockImplementation(
-      async <T>(path: string, value?: unknown) => (path === "/preferences" ? value : {}) as T,
+      async <T>(path: string, value?: unknown) =>
+        (path === "/preferences" ? preferences(value) : {}) as T,
     );
     try {
       await render();
@@ -3808,12 +3811,11 @@ describe("chat style", () => {
       },
     ];
     // As the server does, this keeps a choice a save leaves out and answers with all it holds.
-    let held: Record<string, unknown> = {};
-    vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => {
-      if (path !== "/preferences") return {} as T;
-      held = { ...held, ...(value as Record<string, unknown>) };
-      return held as T;
-    });
+    const preferences = preferenceServer(() => bootstrap.preferences);
+    vi.mocked(write).mockImplementation(
+      async <T>(path: string, value?: unknown) =>
+        (path === "/preferences" ? preferences(value) : {}) as T,
+    );
     try {
       await render();
       const reply = () => container.querySelector(".message-assistant .message-markdown")!;
@@ -3924,6 +3926,63 @@ describe("chat style", () => {
       expect(bodies[2]).toMatchObject({ chatStyle: "bubbles" });
       await act(async () => answers[2]());
       expect(picker("Chat style").value).toBe("bubbles");
+    } finally {
+      bootstrap.preferences = before;
+      vi.mocked(write).mockReset().mockResolvedValue({});
+    }
+  });
+
+  // This tab loaded before another device pinned an assistant and turned on quiet hours. A whole object from
+  // Settings would write this tab's copy back over both.
+  it("saves only the fields Settings changed, so another device's newer ones survive", async () => {
+    for (const [method, open] of [
+      ["showModal", true],
+      ["close", false],
+    ] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, method, {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.open = open;
+        },
+      });
+    const before = bootstrap.preferences;
+    bootstrap.preferences = { ...before, defaultBotId: "shared" };
+    const elsewhere: Preferences = {
+      ...bootstrap.preferences,
+      favorites: ["from phone"],
+      notifications: { timezone: "UTC", quietStart: "22:00", quietEnd: "07:00", batchMinutes: 0 },
+    };
+    const server = preferenceServer(() => elsewhere);
+    let stored = elsewhere;
+    vi.mocked(write).mockImplementation(
+      async <T>(path: string, value?: unknown) =>
+        (path === "/preferences" ? (stored = server(value)) : {}) as T,
+    );
+    const choose = async (label: string, value: string) => {
+      const select = [...container.querySelectorAll(".settings-row")]
+        .find((row) => row.querySelector(".row-label")?.textContent === label)!
+        .querySelector("select")!;
+      select.value = value;
+      await act(async () => select.dispatchEvent(new Event("change", { bubbles: true })));
+    };
+    try {
+      await render();
+      await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
+      await act(async () =>
+        [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+          .find((item) => item.textContent === "Settings")!
+          .click(),
+      );
+      await loaded();
+      await choose("Appearance", "dark");
+      await choose("Open by default", "");
+      const bodies = vi
+        .mocked(write)
+        .mock.calls.filter(([path]) => path === "/preferences")
+        .map(([, body]) => body);
+      expect(bodies).toEqual([{ theme: "dark" }, { defaultBotId: null }]);
+      expect(stored).toEqual({ ...elsewhere, theme: "dark", defaultBotId: undefined });
+      expect(stored).not.toHaveProperty("defaultBotId");
     } finally {
       bootstrap.preferences = before;
       vi.mocked(write).mockReset().mockResolvedValue({});

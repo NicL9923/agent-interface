@@ -13,6 +13,7 @@ import { routinePresets } from "../../shared/routine-presets";
 import { runsHidden, withRunsShown } from "../../shared/routine-runs";
 import { checkInFrequencyLabel, scheduleMinutes } from "../../shared/main-assistant";
 import { usePreferenceEdits, type PreferenceEdit } from "../use-preference-edits";
+import type { PreferenceField } from "../preference-queue";
 
 export function RoutineManager({
   onOpenRoutine,
@@ -25,7 +26,7 @@ export function RoutineManager({
   advanced,
 }: {
   onOpenRoutine?: (botId: string, routineId: string) => void;
-  editPreferences?: (edit: PreferenceEdit) => Promise<void>;
+  editPreferences?: (edit: PreferenceEdit, chosen: readonly PreferenceField[]) => Promise<void>;
   /** Advanced presentation shows per-routine overrides; Simple keeps them as saved. */
   advanced: boolean;
   botId: string;
@@ -201,7 +202,10 @@ export function RoutineManager({
                   checked={!runsHidden(preferences, botId, routine.id)}
                   onChange={(event) => {
                     const shown = event.target.checked;
-                    commitPreferences((value) => withRunsShown(value, botId, routine.id, shown));
+                    commitPreferences(
+                      (value) => withRunsShown(value, botId, routine.id, shown),
+                      ["hiddenRoutineRuns"],
+                    );
                   }}
                 />
                 <span>

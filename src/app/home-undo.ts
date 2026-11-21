@@ -1,9 +1,15 @@
 import type { Preferences } from "../shared/types";
+import type { PreferenceField } from "./preference-queue";
 import { sectionOf } from "./preferences-editing";
 
 type Edit = (preferences: Preferences) => Preferences;
-/** A home change and the edit that puts things back where they were. */
-export type UndoableEdit = { apply: Edit; undo: Edit; message: string };
+/** A home change, the edit that puts things back where they were, and the fields both set. */
+export type UndoableEdit = {
+  apply: Edit;
+  undo: Edit;
+  message: string;
+  fields: readonly PreferenceField[];
+};
 
 /** Pins or unpins; undo returns the assistant to its old place among the pins. */
 export function togglePinEdit(preferences: Preferences, botId: string, name: string): UndoableEdit {
@@ -18,12 +24,14 @@ export function togglePinEdit(preferences: Preferences, botId: string, name: str
     favorites.splice(Math.min(position, favorites.length), 0, botId);
     return { ...value, favorites };
   };
+  const fields = ["favorites"] as const;
   return pinned
-    ? { apply: without, undo: (value) => at(value, index), message: `Unpinned ${name}` }
+    ? { apply: without, undo: (value) => at(value, index), message: `Unpinned ${name}`, fields }
     : {
         apply: (value) => at(value, value.favorites.length),
         undo: without,
         message: `Pinned ${name}`,
+        fields,
       };
 }
 
@@ -52,5 +60,6 @@ export function moveSectionEdit(
     message: target
       ? `Moved ${name} to ${target.name}`
       : `Removed ${name} from ${before?.name ?? "its section"}`,
+    fields: ["sections"],
   };
 }
