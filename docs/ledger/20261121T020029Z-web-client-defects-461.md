@@ -46,3 +46,39 @@ The header now stays held with the next line while that line holds only `|`, `:`
 | Any next line keeps the header held                  | Red: the prefix property test and `a line starting with a pipe once the next line reads as prose`                                                    |
 
 iOS has the same defect, and a broader one. I found it by reading the code. No simulator run checked it. `MarkdownCache.streamingBlocks` in `ios/AgentInterface/MarkdownCache.swift` parses the streamed text with `Markdown.parseTail` and holds nothing back. `ChatBubbles.segments` and `MarkdownView` in `MediaViews.swift` render those blocks while a reply streams. `Markdown.table` in `MarkdownParser.swift` makes a table only once the next line is a delimiter row with as many cells as the header. Until then the header is a paragraph of raw pipes, from its first character until the delimiter row has its last cell. The same path shows an unfinished `**`, link or code span as typed. I did not edit Swift.
+
+## 3. Keys in the transcript that did not scroll it still counted as the reader scrolling
+
+The report said arrow keys, Home and End pressed in the approval card's `role="menu"` reach `scrollIntent` and can stop the transcript from following. They do reach it, but for those keys that is correct. The menu has no key handler, so the browser scrolls the transcript with them. A probe page with a scrolling box, a button in a `role="menu"`, a link, a summary, two scrolling `pre` blocks and a sideways scroller showed what each key does. It ran in Chromium and in WebKit, in the `mcr.microsoft.com/playwright:v1.65.0-noble` container, with Playwright 1.65.0:
+
+| Focused element                                          | Key                               | Chromium               | WebKit                  |
+| -------------------------------------------------------- | --------------------------------- | ---------------------- | ----------------------- |
+| Menu item button                                         | Up, Down, Home, End, Page Down    | The transcript scrolls | The transcript scrolls  |
+| Menu item button, other button                           | Space, Shift Space                | Nothing scrolls        | Nothing scrolls         |
+| Summary                                                  | Space                             | Nothing scrolls        | Nothing scrolls         |
+| Link                                                     | Space, Down                       | The transcript scrolls | The transcript scrolls  |
+| `pre` with more lines than it shows                      | Down, Space, End                  | The `pre` scrolls      | The `pre` scrolls       |
+| The same `pre` at its top or bottom                      | Up at the top, Down at the bottom | The transcript scrolls | The transcript scrolls  |
+| `pre` with `overscroll-behavior: contain`, at its bottom | Down                              | Nothing scrolls        | The transcript scrolls  |
+| Sideways scroller                                        | Down                              | The transcript scrolls | The scroller moved 1 px |
+
+So the reported keys do not reproduce the defect. The same class of defect does reproduce for other keys and elements:
+
+- Space and Shift Space on the menu item, or any button or summary in the transcript, press it and scroll nothing. Shift Space counted as scrolling up, which stopped following. Space counted as scrolling down, which ends the anchor after a send.
+- Up in the approval card's command box, which is at most `9.5em` tall and scrolls, moves the box. It counted as scrolling up.
+- The listener ran on the transcript element, before React's handlers on the root. It could not see a handler that took a key. No control inside the transcript takes a scroll key today: the message rail, Find in chat and the files panel sit outside it, and the question card takes only the digits 1 to 9. A menu with arrow keys, as the ARIA menu pattern describes, would have hit this.
+
+The fix moves the rule into `keyScrollsTranscript` in `src/app/scroll-follow.ts`, and `use-conversation.ts` now hears keys on the document, after every handler. A key counts only when no handler prevented its default, the focused element is not a field, the key is not Space on a button or summary, and no scrolling box between the focused element and the transcript can still move that way. Text fields were already left out. Their check moved into the same function. The function does not read `overscroll-behavior`. The tool call output box sets `contain`, so Up at that box's top in Chromium still counts as scrolling. It also misses WebKit's 1 px sideways scroller.
+
+The tests are in `tests/transcript-ui.test.ts`. On main, three of the five failed at their first assertion: Shift Space on the menu item, Up in the command box, and a key a React handler took. The other two passed on main: Up in the menu, which documents the reported case, and Up in a field.
+
+| Break                                               | Result                                                                           |
+| --------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Main's `scroll-follow.ts` and `use-conversation.ts` | Red: the three tests above                                                       |
+| Keys heard on the transcript element again          | Red: `hears it as scrolling only when the control left it to the browser`        |
+| No `defaultPrevented` check                         | Red: the same                                                                    |
+| No field check                                      | Red: `does not hear Up in a field as scrolling, since the field moves its caret` |
+| No Space check                                      | Red: `does not hear Space or Shift Space on a button as scrolling`               |
+| Space checked on buttons only, not summaries        | Red: the same                                                                    |
+| No check for a scrolling box inside                 | Red: `does not hear a key the command box scrolls with`                          |
+| A scrolling box takes the key even at its end       | Red: the same                                                                    |

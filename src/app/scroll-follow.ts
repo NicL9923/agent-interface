@@ -38,6 +38,33 @@ export function scrollIntent(event: InputEvent): Intent | undefined {
   }
   return undefined;
 }
+/**
+ * Whether a key pressed inside `transcript` scrolls it, so it counts as the reader scrolling. Read once
+ * every handler has had the key. It does not scroll the transcript when a handler took it, as a menu or
+ * listbox does; when the focused field uses it; when Space presses the focused button or opens a summary;
+ * or when a scrolling box inside the transcript can still move that way. A box at its end passes the key
+ * on in WebKit, and in Chromium unless the box sets `overscroll-behavior`, which this does not read.
+ */
+export function keyScrollsTranscript(event: KeyboardEvent, transcript: Element, intent: Intent) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (event.defaultPrevented || !target) return false;
+  if (
+    (target instanceof HTMLElement && target.isContentEditable) ||
+    /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)
+  )
+    return false;
+  if (event.key === " " && /^(BUTTON|SUMMARY)$/.test(target.tagName)) return false;
+  for (let box: Element | null = target; box && box !== transcript; box = box.parentElement)
+    if (scrollsItself(box, intent)) return false;
+  return true;
+}
+function scrollsItself(box: Element, intent: Intent) {
+  if (box.scrollHeight <= box.clientHeight || !/auto|scroll/.test(getComputedStyle(box).overflowY))
+    return false;
+  return intent === "up"
+    ? box.scrollTop >= 1
+    : box.scrollHeight - box.clientHeight - box.scrollTop >= 1;
+}
 /** Any intent ends an anchor; following ends only when the reader heads away from the end. */
 export function afterIntent(mode: ScrollMode, intent: Intent): ScrollMode {
   if (mode === "anchored") return "free";

@@ -24,6 +24,7 @@ import {
   atTrueEnd,
   distanceToEnd,
   endReserve,
+  keyScrollsTranscript,
   scrollIntent,
 } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
@@ -64,9 +65,6 @@ const placeRows = "[data-message-id], [data-place-id]";
 const placeId = (item: HTMLElement) => item.dataset.messageId ?? `place:${item.dataset.placeId}`;
 const placeElement = (container: HTMLElement, id: string) =>
   [...container.querySelectorAll<HTMLElement>(placeRows)].find((item) => placeId(item) === id);
-const editable = (target: EventTarget | null) =>
-  target instanceof HTMLElement &&
-  (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 /**
  * After a failed read that may be one unlucky request, how long the chat waits for a read to succeed
  * before it shows it is disconnected. A second failure in a row shows it sooner. The failure asks for no
@@ -859,9 +857,15 @@ export function useConversation(
   };
   const listen = (element: HTMLElement) => {
     const input = (event: Event) => {
-      if (event.type === "keydown" && editable(event.target)) return;
-      const intent = scrollIntent(event as WheelEvent & KeyboardEvent);
+      const intent = scrollIntent(event as WheelEvent);
       if (intent) intend(intent);
+    };
+    // Keys are heard on the document, after React's handlers on the root, so a control inside the
+    // transcript that took a key has already said so.
+    const key = (event: KeyboardEvent) => {
+      if (!(event.target instanceof Node) || !element.contains(event.target)) return;
+      const intent = scrollIntent(event);
+      if (intent && keyScrollsTranscript(event, element, intent)) intend(intent);
     };
     // A press on the scroll bar lands on the container itself, beyond its content box.
     const press = (event: PointerEvent) => {
@@ -872,12 +876,12 @@ export function useConversation(
         intend("drag");
     };
     const options = { passive: true };
-    for (const type of ["wheel", "touchmove", "keydown"])
-      element.addEventListener(type, input, options);
+    for (const type of ["wheel", "touchmove"]) element.addEventListener(type, input, options);
+    element.ownerDocument.addEventListener("keydown", key, options);
     element.addEventListener("pointerdown", press, options);
     return () => {
-      for (const type of ["wheel", "touchmove", "keydown"])
-        element.removeEventListener(type, input);
+      for (const type of ["wheel", "touchmove"]) element.removeEventListener(type, input);
+      element.ownerDocument.removeEventListener("keydown", key);
       element.removeEventListener("pointerdown", press);
     };
   };
