@@ -143,6 +143,10 @@
   button.attachment-thumb:hover:enabled {
     background: var(--accent-soft);
   }
+  /* The app's press nudge, kept centered: before layers the base rule's transform replaced the centering. */
+  .attachment-image .attachment-retry:active:enabled {
+    transform: translate(-50%, 1px);
+  }
   .attachment-remove {
     position: absolute;
     top: -7px;

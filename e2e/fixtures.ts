@@ -34,6 +34,12 @@ export const uploadedFiles = async () =>
   }[];
 export const enableGroupCatalog = () =>
   fetch(`http://127.0.0.1:${controlPort}/group-catalog`, { method: "POST" });
+/** Makes the runtime a Hermes with settings, routines, automation and live voice, until the next test starts. See e2e/server.ts. */
+export const enableFullHermes = () =>
+  fetch(`http://127.0.0.1:${controlPort}/full-hermes`, { method: "POST" });
+/** Makes Hermes refuse every upload with a 507, until the next test starts. */
+export const failUploads = () =>
+  fetch(`http://127.0.0.1:${controlPort}/upload-failure`, { method: "POST" });
 export const releaseChat = () =>
   fetch(`http://127.0.0.1:${controlPort}/release-chat`, { method: "POST" });
 /** Holds each send's admission this long before the server answers, as a slow Hermes would, until the next test starts. */

@@ -3,14 +3,31 @@ import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
+import { httpError } from "../src/server/http-error.js";
 import { testFiles } from "../tests/helpers/file-signer.js";
 import {
+  automationOverviewFixture,
+  automationRequester,
+  automationTaskFixture,
   botFixture,
   capabilitiesFixture,
   conversationFixture,
   experienceRequester,
+  routineFixture,
+  subscriptionFixture,
 } from "../tests/helpers/runtime-fixtures.js";
-import type { Activity, Bot, LiveTurn, Message, Runtime, ToolCall } from "../src/shared/types.js";
+import type { RoutineResult } from "../src/shared/collaboration.js";
+import type {
+  Activity,
+  Bot,
+  LiveTurn,
+  Message,
+  ModelCatalog,
+  Preferences,
+  Routine,
+  Runtime,
+  ToolCall,
+} from "../src/shared/types.js";
 import { controlPort, port } from "./ports.js";
 
 /**
@@ -225,6 +242,187 @@ const experienceRequest = experienceRequester({
         },
 });
 
+/**
+ * After POST /full-hermes on the control port, until the next test starts, the runtime answers as a Hermes with the
+ * add-on's settings, routines and live voice: the Ranch Hand has a model, a description, routines
+ * that ran, a goal, tasks and a trigger. Off, those reads stay empty and the capabilities stay unsupported, so no
+ * other test sees them. The model catalog, inference controls and automation overview answer either way, since only
+ * screens these capabilities open read them.
+ */
+let fullHermes = false,
+  preferencesBeforeFullHermes: Preferences | undefined;
+/** After POST /upload-failure, Hermes refuses every upload, as one that ran out of space would, until the next test starts. */
+let uploadsFail = false;
+const fullBot = (bot: Bot): Bot =>
+  bot.id === "ranch"
+    ? {
+        ...bot,
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        modelName: "GPT-5.5",
+        description: "Keeps the fences, tanks and gates in order.",
+        instructions: "Keep the gates latched.",
+      }
+    : bot;
+const routines: Routine[] = [
+  routineFixture({
+    id: "feed",
+    botId: "ranch",
+    name: "Feed inventory",
+    prompt: "Count the feed bags and say what to order.",
+    lastStatus: "ok",
+    nextRunAt: "2026-11-06T13:00:00Z",
+  }),
+  routineFixture({
+    id: "fence",
+    botId: "ranch",
+    name: "Fence check",
+    prompt: "Walk the fence line report.",
+    schedule: "0 17 * * 5",
+    enabled: false,
+    lastStatus: "error",
+    lastError: "The gate camera did not answer.",
+  }),
+  routineFixture({
+    id: "tanks",
+    botId: "ranch",
+    name: "Water tanks",
+    prompt: "Read the tank floats.",
+    schedule: "*/30 * * * *",
+  }),
+];
+// One of each status the cards draw, timed after the seeded reply so they sit at the end of the chat.
+const routineRuns: Record<string, RoutineResult[]> = {
+  feed: [
+    {
+      id: "feed-1",
+      title: "Feed inventory",
+      status: "succeeded",
+      startedAt: "2026-11-05T14:10:00Z",
+      finishedAt: "2026-11-05T14:11:00Z",
+      preview: "Twelve bags left. Order **eight** more by Friday.",
+      previewOnly: false,
+    },
+  ],
+  fence: [
+    {
+      id: "fence-1",
+      title: "Fence check",
+      status: "failed",
+      startedAt: "2026-11-05T14:20:00Z",
+      finishedAt: "2026-11-05T14:21:00Z",
+      error: "The gate camera did not answer.",
+      previewOnly: false,
+    },
+    {
+      id: "fence-2",
+      title: "Fence check",
+      status: "succeeded",
+      deliveryFailed: true,
+      startedAt: "2026-11-05T14:25:00Z",
+      finishedAt: "2026-11-05T14:26:00Z",
+      preview: "All posts stand.",
+      previewOnly: false,
+    },
+  ],
+  tanks: [
+    {
+      id: "tanks-1",
+      title: "Water tanks",
+      status: "running",
+      startedAt: "2026-11-05T14:30:00Z",
+      preview: "Reading the east float.",
+      previewOnly: false,
+    },
+  ],
+};
+const modelCatalog: ModelCatalog = {
+  provider: "openai-codex",
+  model: "gpt-5.5",
+  providers: [
+    {
+      id: "openai-codex",
+      name: "ChatGPT",
+      authenticated: true,
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", available: true },
+        { id: "gpt-5.5-mini", name: "GPT-5.5 mini", available: true },
+        { id: "gpt-4.1", name: "GPT-4.1", available: false },
+      ],
+    },
+    {
+      id: "openrouter",
+      name: "OpenRouter",
+      authenticated: true,
+      warning: "Credits are running low.",
+      models: [{ id: "llama-4", name: "Llama 4", available: true }],
+    },
+    { id: "anthropic", name: "Anthropic", authenticated: false, models: [] },
+  ],
+};
+const automationRequest = automationRequester({
+  overview: (input) =>
+    automationOverviewFixture({
+      botId: input.profile,
+      canManageTriggers: true,
+      canManageLearningPolicy: true,
+      goals: {
+        supported: true,
+        goal: {
+          title: "Get the herd ready for winter",
+          status: "active",
+          turnsUsed: 6,
+          maxTurns: 20,
+        },
+      },
+      tasks: {
+        supported: true,
+        items: [
+          automationTaskFixture({
+            id: "t_gate",
+            title: "Fix the north gate",
+            body: "The latch sticks after rain.",
+            blockedReason: "Waiting on a new latch.",
+          }),
+          automationTaskFixture({
+            id: "t_hay",
+            title: "Order hay",
+            status: "running",
+            priority: 2,
+          }),
+          automationTaskFixture({
+            id: "t_tank",
+            title: "Clean the east tank",
+            status: "todo",
+            dependencies: ["t_gate"],
+          }),
+          automationTaskFixture({ id: "t_salt", title: "Put out salt licks", status: "done" }),
+        ],
+      },
+      triggers: {
+        supported: true,
+        platformEnabled: true,
+        items: [subscriptionFixture({ routineId: "fence", enabled: true })],
+      },
+      skills: {
+        supported: true,
+        approvalRequired: true,
+        lockSupported: true,
+        installed: [
+          { name: "fence-report", description: "Writes the fence report.", locked: true },
+        ],
+        pending: [
+          {
+            id: "p_feed",
+            summary: "Count feed from photos",
+            origin: "Feed inventory",
+            revision: "c".repeat(64),
+          },
+        ],
+      },
+    }),
+});
+
 // Members the suite does not script fail at their name, as tests/helpers/server.ts does for the unit tests.
 const unscripted = (name: string) => async (): Promise<never> => {
   throw new Error(`The e2e runtime double does not script ${name}.`);
@@ -243,11 +441,13 @@ const runtime: Runtime = {
   skills: unscripted("skills"),
   setSkills: unscripted("setSkills"),
   saveRoutine: unscripted("saveRoutine"),
+
   deleteRoutine: unscripted("deleteRoutine"),
   // Keeps what the browser uploaded, for GET /uploads on the control port to report.
   // The identifier is signed by the real file signer, so it has the shape the draft routes accept and the server
   // would hand out: a bare id is refused at `attachments[].id`, and a saved draft would never hold the photo.
   upload: async (botId, { name, mime, data }) => {
+    if (uploadsFail) throw httpError(507, "Hermes has no room for this file.", { expose: true });
     uploads.push({ name, mime, base64: data.toString("base64") });
     return {
       ...testFiles().signFile({
@@ -268,10 +468,27 @@ const runtime: Runtime = {
       durableEvents: { supported: true },
       idempotency: { supported: true },
       uploads: { supported: true },
+      ...(fullHermes && {
+        botConfiguration: { supported: true },
+        routines: { supported: true },
+        liveVoice: { supported: true },
+      }),
     }),
-  listBots: async () => bots,
+  listBots: async () => (fullHermes ? bots.map(fullBot) : bots),
   experienceRequest,
-  botDetail: async (botId) => bots.find((bot) => bot.id === botId)!,
+  automationRequest,
+  botDetail: async (botId) => {
+    const bot = bots.find((row) => row.id === botId)!;
+    return fullHermes ? fullBot(bot) : bot;
+  },
+  modelOptions: async () => modelCatalog,
+  inferenceSettings: async () => ({ reasoning: "medium", speed: "normal" }),
+  realtimeSession: async ({ voice }) => ({
+    clientSecret: "ek_e2e",
+    expiresAt: Math.floor(Date.now() / 1000) + 60,
+    model: "gpt-realtime",
+    voice,
+  }),
   conversation: async (botId) => {
     const turn =
       botId === STREAMING && running?.thread === messages.get(botId) ? running : undefined;
@@ -294,7 +511,19 @@ const runtime: Runtime = {
       ],
     });
   },
-  routines: async () => [],
+  routines: async (botId) =>
+    fullHermes ? routines.filter((routine) => !botId || routine.botId === botId) : [],
+  routineResults: async (_botId, routineId) => (fullHermes ? (routineRuns[routineId] ?? []) : []),
+  routineOutput: async (_botId, routineId, resultId) => ({
+    previewOnly: false,
+    messages: [
+      {
+        id: `${resultId}-output`,
+        role: "assistant",
+        text: routineRuns[routineId]?.find((run) => run.id === resultId)?.preview ?? "",
+      },
+    ],
+  }),
   discoverEvents: async (cursor) => ({ cursor, events: [] }),
   lookupSubmission: async () => null,
   // The user's message lands at once. The reply lands a beat later, each announced the way Hermes announces it.
@@ -433,7 +662,8 @@ app.addHook("onRequest", async (req, reply) => {
 await app.listen({ host: "127.0.0.1", port });
 
 // GET reads the violations. DELETE starts the next test from a clean slate. POST /next-release deploys a new worker.
-// GET /uploads reads the files the browser uploaded. POST /admission-delay?ms=N slows each send's admission. POST /activity?bot=ID&state=STATE gives that assistant
+// GET /uploads reads the files the browser uploaded. POST /full-hermes and POST /upload-failure are described above.
+// POST /admission-delay?ms=N slows each send's admission. POST /activity?bot=ID&state=STATE gives that assistant
 // the roster activity from the next bootstrap on, such as "waiting", which the app badge counts.
 const control = createServer((req, res) => {
   if (req.method === "DELETE") {
@@ -445,6 +675,10 @@ const control = createServer((req, res) => {
     nextRelease = "none";
     admissionDelay = 0;
     groupCatalog = false;
+    // A full Hermes's screens save this member's choices, such as a pinned or main assistant, which stay in the store.
+    if (fullHermes) store.savePreferences("local-one", preferencesBeforeFullHermes!);
+    fullHermes = false;
+    uploadsFail = false;
     bots.splice(0, bots.length, ...initialBots.map((bot) => ({ ...bot })));
     // A saved draft outlives the browser that wrote it, so the next test must not open on a photo the last one attached.
     for (const bot of bots)
@@ -452,6 +686,11 @@ const control = createServer((req, res) => {
         store.saveDraft("local-one", bot.id, { text: "", attachments: [] });
   }
   if (req.method === "POST" && req.url === "/group-catalog") groupCatalog = true;
+  if (req.method === "POST" && req.url === "/full-hermes" && !fullHermes) {
+    preferencesBeforeFullHermes = store.preferences("local-one");
+    fullHermes = true;
+  }
+  if (req.method === "POST" && req.url === "/upload-failure") uploadsFail = true;
   if (req.method === "POST" && req.url === "/release-chat") running?.finish();
   if (req.method === "POST" && req.url?.startsWith("/activity")) {
     const query = new URL(req.url, "http://localhost").searchParams,
