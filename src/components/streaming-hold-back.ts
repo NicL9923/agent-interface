@@ -30,7 +30,8 @@
  *    `](` or `][` already makes it a link.
  * 4. A table header: a last line starting with `|` that React Markdown's parser would read as a table's
  *    header row once a delimiter row followed it, and that never read as a finished sentence on the way,
- *    so `| Name | No. |` shows as typed. So a row of a table above is not one, nor a line a list
+ *    so `| Name | No. |` shows as typed. A line under one shaped like a delimiter row is a body row, and
+ *    the parser is not asked. So a row of a table above is not one, nor a line a list
  *    item's paragraph takes in. Once it ends, it stays held with the next line while that line holds only
  *    `|`, `:`, `-`, spaces and tabs, as a delimiter row does while it arrives. The first other character
  *    shows both lines. Only a header held while it was the last line stays held, so a line already
@@ -59,6 +60,8 @@ const markerLine = /^[ \t]*[-=*_+#|:~>][-=*_+#|:~> \t]*$/;
 const tableRow = /^ {0,3}\|/;
 // What a delimiter row holds while it arrives, before any cell's dashes end: `| --- | :-`.
 const delimiterSoFar = /^[-|: \t]*$/;
+// A line shaped like a finished delimiter row, `| --- | :-: |` or `:---`, or a heading's underline `---`.
+const delimiterRow = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/m;
 const spaceOrOpening = /[\s([{"'\u2018\u201c]/;
 const letterOrDigit = /[\p{L}\p{N}]/u;
 const opensAfter = {
@@ -142,8 +145,12 @@ function heldAsHeader(text: string, start: number) {
 function becomesHeader(text: string, start: number) {
   const line = text.slice(start);
   if (!tableRow.test(line)) return false;
+  const above = text.slice(0, start);
+  // Under a delimiter row this line is one of its table's body rows, so a table's rows stream in without a
+  // parse each. Where that line is a heading's underline or a rule instead, this line shows as typed.
+  if (delimiterRow.test(above)) return false;
   const delimiter = `${/^ */.exec(line)![0]}|${"-|".repeat(cellCount(line))}`;
-  const row = (text.slice(0, start).match(/\r\n|\r|\n/g)?.length ?? 0) + 1;
+  const row = (above.match(/\r\n|\r|\n/g)?.length ?? 0) + 1;
   const headed = (node: MdastNode): boolean =>
     node.type === "table"
       ? node.children?.[0]?.position?.start.line === row

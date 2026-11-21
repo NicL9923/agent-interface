@@ -249,3 +249,26 @@ The prefix property test did not catch this. It checked that a shown line never 
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fc002507`'s `streaming-hold-back.ts`                        | Red: the prefix property test ("hid a shown line", the reviewer's reply first) and `keeps showing a header that read as a finished sentence while it arrived` |
 | The header check tests only the last line's own sentence end | Red: the same two                                                                                                                                             |
+
+### Third review 2. The extra parse ran for every row of a long table
+
+`becomesHeader` parsed the block for every pipe-led last line, body rows included. The reviewer replayed a 3,600-character, three-column table in Chromium at 390 px with 4× CPU throttling, 59 updates over its last 1,000 characters:
+
+- Median render and layout time per update rose from 45 to 53 ms before the parser to 71 to 76 ms with it.
+- The median gap between updates rose from 67 to 83 ms.
+
+A line under one shaped like a delimiter row is now a body row: it is not held, and the parser is not asked. The shape is `| --- | :-: |`, `:---` or `---`. Where that line is a heading's underline or a rule instead, the parser might have read the line under it as a header, and it now shows as typed.
+
+Cost, from the parse benchmark's table reply, paced, with three interleaved runs of each version. The hold-back's share is rendering minus React Markdown's parsing.
+
+| Run | Hand-written rule (`b9d6d0a0`) | Parser on every row (`6d0388c5`) | Parser after the delimiter check |
+| --- | ------------------------------ | -------------------------------- | -------------------------------- |
+| 1   | 12 ms/s                        | 37 ms/s                          | 13 ms/s                          |
+| 2   | 17 ms/s                        | 62 ms/s                          | 25 ms/s                          |
+| 3   | 13 ms/s                        | 41 ms/s                          | 13 ms/s                          |
+
+Run 2 ran under more load: React Markdown's own parsing took 47 to 60 ms/s against 33 to 37 in the others.
+
+| Break                              | Guarding test                                       | Result |
+| ---------------------------------- | --------------------------------------------------- | ------ |
+| No check for a delimiter row above | `shows a line under a heading's underline as typed` | Red    |

@@ -275,6 +275,9 @@ describe("holding back a streaming reply's unfinished tail", () => {
     // The reviewer's cases: rows of a table whose delimiter row or an earlier row has no pipe at the start.
     ["a table row under a one-column delimiter row without pipes", "| Meal |\n:---\n| Soup |\n"],
     ["a table row under a row without pipes", "| Meal |\n|---|\nPasta\n| Soup |\n"],
+    // A line shaped like a delimiter row above means a table's rows, which the parser is never asked about.
+    // Where that line is a heading's underline instead, the line under it shows too.
+    ["a line under a heading's underline", "Title\n---\n| Day |\n"],
     // A list item's paragraph takes this line in, and no delimiter row can make it a table.
     ["a line a list item's paragraph takes in", "- item\nText **bold**\n| - | - |\n"],
     // The reviewer's case: a table whose delimiter row, or a row above, has no leading pipe.
