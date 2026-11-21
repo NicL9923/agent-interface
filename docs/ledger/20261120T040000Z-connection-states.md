@@ -642,8 +642,10 @@ the old view never called; their red runs are the mutants that put the old behav
 
 Findings 1 to 3 follow one decision from the orchestrator. A roster the server returns from its cache,
 while Hermes is down or after its roster read failed, with rows marked `disconnected`, can be stale
-either way (`src/server/hermes.ts`, `listBots`: a read a concurrent change overtook never updates
-`botCache`). So an assistant it leaves out has not been shown to leave. Home lists what the server
+either way (`src/server/hermes.ts`, `listBots`: a read a concurrent change overtook never updated
+`botCache`). `fbba1059`, the eighth round's server fix above, closes that cause, but a cache is still the
+roster as of its last read, older than any change since. So an assistant it leaves out has not been
+shown to leave. Home lists what the server
 lists, as the web does, but nothing is removed for it. A connected roster's omission is the word.
 
 | Finding                                                                                                                                                                               | Reproduced                                                                                                                                       | On main                                                                                                            | Fix                                                                                                                                                                                                                                                                                                                                                                                                  | Failing-first test                                                                                                                                                                                                                                                                                                  |
