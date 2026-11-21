@@ -11,7 +11,7 @@
 - See `docs/Dependencies.md` for the tool choice and `README.md` for validation.
 - Before calling work done, run `.agents/tools/check-all`. Use `npm ci` per worktree, never a symlinked `node_modules`.
   Where WebKit cannot start on the host, as on Fedora, check-all runs the WebKit half of e2e in Playwright's
-  container under podman or docker. A WebKit failure there is a real failure.
+  container under podman. A WebKit failure there is a real failure.
 
 # CI
 
@@ -24,7 +24,8 @@
   checks that before a push does.
 - The `Browser smoke` job runs each browser as its own job in Playwright's container image, pinned by digest.
   `tests/workflows.test.ts` allows no other image and fails when its version is not the installed
-  `@playwright/test`, so a Playwright upgrade changes the tag and the digest in `checks.yml` too.
+  `@playwright/test` or its digest is not the one `.github/playwright-image-digests.json` records for
+  that version. A Playwright upgrade adds the new digest there and changes the tag and digest in `checks.yml`.
 - CI does not replace `check-all`: the Mac mini still runs the native iOS checks, and CI never
   runs the `scripts/spike/*` probes that host qualification runs.
 
