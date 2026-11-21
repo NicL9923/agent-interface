@@ -236,6 +236,7 @@ test("a solid bubble keeps its fill while its message sends", async ({ page }) =
     // The seeded assistant has a portrait, so the chat has no tint of its own; a drawn avatar's color stands in.
     panel.setAttribute("data-tint", "");
     panel.style.setProperty("--bot-tint", "#1084FE");
+    panel.style.setProperty("--solid-fill", "#0066CA");
     const sending = document.createElement("article");
     sending.className = "message message-user message-outgoing message-sending";
     sending.innerHTML = '<div class="message-bubble">Fix the south fence too</div>';
@@ -249,6 +250,97 @@ test("a solid bubble keeps its fill while its message sends", async ({ page }) =
     return { tint: read("tint"), solid: read("solid") };
   });
   expect(opacity).toEqual({ tint: "0.66", solid: "1" });
+});
+
+// The app computes the solid fill, the same way and from the same vectors as iOS, and the page shows that color with
+// white text at 4.5:1 or better in either theme. The seeded assistant has a portrait, so its bootstrap row takes a
+// drawn avatar here. WebKit cannot route a request the service worker makes, so the worker stays off.
+test.describe("solid bubble fill", () => {
+  test.use({ serviceWorkers: "block" });
+  for (const theme of ["light", "dark"]) {
+    test(`a solid bubble shows the shared fill under readable text in ${theme}`, async ({
+      page,
+    }) => {
+      await page.emulateMedia({ colorScheme: theme as "light" | "dark", reducedMotion: "reduce" });
+      await page.route("**/api/bootstrap?*", async (route) => {
+        // A cached answer comes back empty, with nothing to change.
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        const body = await response.json();
+        // Before sign-in there is no session to change.
+        if (!body.bots) return route.fulfill({ response });
+        body.preferences = { ...body.preferences, ownBubble: "solid" };
+        body.bots = body.bots.map((bot: { id: string }) =>
+          bot.id === "ranch"
+            ? {
+                ...bot,
+                avatar: {
+                  mode: "geometric",
+                  shape: "blob",
+                  color: "#1084FE",
+                  eyes: "round",
+                  accessory: "none",
+                },
+              }
+            : bot,
+        );
+        await route.fulfill({ response, json: body });
+      });
+
+      await signIn(page);
+      await assistants(page)
+        .getByRole("button", { name: /Ranch Hand/ })
+        .click();
+      await page.getByRole("textbox", { name: "Message Ranch Hand" }).fill("Is the gate latched?");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const bubble = conversation(page)
+        .locator(".message-user:not(.message-sending) > .message-bubble")
+        .last();
+      await expect(bubble).toContainText("Is the gate latched?");
+      const read = await bubble.evaluate((element) => {
+        const link = document.createElement("a");
+        link.className = "file-link";
+        link.textContent = "gate.jpg";
+        element.appendChild(link);
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d", { willReadFrequently: true })!;
+        const bytes = (color: string) => {
+          context.clearRect(0, 0, 1, 1);
+          context.fillStyle = color;
+          context.fillRect(0, 0, 1, 1);
+          return [...context.getImageData(0, 0, 1, 1).data];
+        };
+        const style = getComputedStyle(element);
+        const hex = (color: number[]) =>
+          "#" +
+          color
+            .slice(0, 3)
+            .map((value) => value.toString(16).padStart(2, "0").toUpperCase())
+            .join("");
+        const channel = (value: number) =>
+          value / 255 <= 0.04045 ? value / 255 / 12.92 : ((value / 255 + 0.055) / 1.055) ** 2.4;
+        const light = (color: number[]) =>
+          0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2]);
+        const fill = bytes(style.backgroundColor);
+        const ink = bytes(style.color);
+        const [upper, lower] = [light(ink), light(fill)].sort((a, b) => b - a);
+        return {
+          fill: hex(fill),
+          opaque: fill[3] === 255,
+          contrast: (upper + 0.05) / (lower + 0.05),
+          link: bytes(getComputedStyle(link).borderTopColor),
+        };
+      });
+      // tests/solid-bubble.test.ts and the iOS test hold #1084FE to this fill.
+      expect(read.fill).toBe("#0066CA");
+      expect(read.opaque).toBe(true);
+      expect(read.contrast).toBeGreaterThanOrEqual(4.5);
+      // The link's edge is white at half strength over the fill, not the accent green it has elsewhere.
+      expect(read.link).toEqual([255, 255, 255, 128]);
+    });
+  }
 });
 
 // Both bubbles carry a transparent border that only increased contrast and forced colors draw, so their edge shows

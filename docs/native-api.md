@@ -964,9 +964,14 @@ indented code block, a card, a table, an image, other media or a thematic break;
 that holds any of them is a single full-width block, drawn as `"classic"` draws it
 with its list or quote intact, and the prose before and after it still forms bubbles.
 Inline code, links and nested lists keep a list prose. `"classic"` shows replies flat. In both, the person's own bubble fits its text at the trailing
-edge. `"solid"` fills it with the assistant's avatar color at OKLCH lightness capped at
-0.52, chroma and hue kept, under white text; a chat without an avatar color uses the
-tint. A solid bubble stays opaque while its message sends, because fading the fill
+edge. `"solid"` fills it with the assistant's avatar color under white text; a chat without an
+avatar color uses the tint. Both clients compute the fill the same way, the web in
+`solidFill` (`src/app/bot-tint.ts`) and iOS in `SolidBubble.fill`: cap the color's OKLCH
+lightness at 0.52, keep its hue, reduce its chroma by bisection only as far as sRGB needs,
+round to bytes, and step the lightness down by 0.005 while white text stays under 4.5:1.
+The web sets the result as `--solid-fill` beside `--bot-tint`, so it needs no CSS relative
+color and every browser shows the same fill. `#1084FE` gives `#0066CA`. Both clients'
+tests read the same cases from `ios/AgentInterfaceTests/Vectors/solid-bubble.json`. A solid bubble stays opaque while its message sends, because fading the fill
 under white text takes it below 4.5:1; the tinted bubble fades as before.
 
 The iOS app draws an image as an inline "Open image" link, not as media, so an image
