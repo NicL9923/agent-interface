@@ -829,10 +829,22 @@ The #463 merge (`a5467b3c`) changed nothing here: on `6adbc343` it built and pas
 914 tests with 2 skipped, and `ConnectionStateFlowTests` (6), `NativeFlowTests` (13), `SettingsPolishTests`
 (10) and `TranscriptFlowTests` (21, 3 skipped by design), with no fix.
 
+### Fifth review
+
+GPT-6.2 Sol at high effort reviewed the fourth round's commits (`daeabb07`, `4c52ab71`, `efc125f2`,
+`0249e8fd`) from source and found one P2 and one P3. Both are left open; the merge does not wait on them.
+
+- P2. A roster the server does not know, arriving within the five-second save delay after a chat was
+  opened from a known roster, makes backgrounding skip the forced save. If iOS then ends the app before
+  the delayed write, an offline relaunch has no saved copy of that chat. The chat is still on the server.
+  The fix is for suspension to flush the snapshot already built from the accepted roster
+  (`AppStore+ChatCache.swift:12`).
+- P3. An unknown reply between two cached ones restarts the 30-second activity carry, so the next cached
+  reply can show an old "Working" for longer (`AppStore+Polling.swift:265`).
+
 ### Not done
 
-- No independent review of the fourth review round's fixes has run. The four reviews' findings are in
-  "Review", "Second review", "Third review" and "Fourth review" above.
+- The fifth review's P2 and P3 above.
 - `testACancelledReadThatDisplacedTheRetrySetsItAgain` is flaky on its own: it failed 2 of 5 runs on
   `6adbc343` and once in this round's first focused run, each time when its 20-second wait ran out with a
   fourth retry wait recorded. It passed 5 of 5 on the fixes. Its cause was not found.
