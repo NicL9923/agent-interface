@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
-import type { Page } from "@playwright/test";
-import { assistants, conversation, expect, signIn, test } from "./fixtures.js";
+import type { Locator, Page } from "@playwright/test";
+import { assistants, conversation, expect, setActivity, signIn, test } from "./fixtures.js";
 
 async function useTheme(page: Page, theme: string) {
   const saved = await page.evaluate(async (selectedTheme) => {
@@ -118,6 +118,37 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
+// The contrast of an element's text against the fills of its ancestors, laid over white where none is opaque.
+const contrastOnFill = (text: Locator) =>
+  text.evaluate((element) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true })!;
+    // The canvas turns any CSS color, color-mix and oklab included, into sRGB bytes.
+    const bytes = (color: string) => {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data];
+    };
+    const over = (top: number[], under: number[]) =>
+      [0, 1, 2].map((at) => (top[at] * top[3] + under[at] * (255 - top[3])) / 255).concat(255);
+    const fills: number[][] = [];
+    for (let node: Element | null = element; node; node = node.parentElement) {
+      const fill = bytes(getComputedStyle(node).backgroundColor);
+      if (fill[3] > 0) fills.push(fill);
+      if (fill[3] === 255) break;
+    }
+    const behind = fills.reduceRight((under, fill) => over(fill, under), [255, 255, 255, 255]);
+    const ink = over(bytes(getComputedStyle(element).color), behind);
+    const channel = (value: number) =>
+      value / 255 <= 0.04045 ? value / 255 / 12.92 : ((value / 255 + 0.055) / 1.055) ** 2.4;
+    const light = (color: number[]) =>
+      0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2]);
+    const [upper, lower] = [light(ink), light(behind)].sort((a, b) => b - a);
+    return (upper + 0.05) / (lower + 0.05);
+  });
+
 // A hover fill sits under text that keeps its own color. Two of them once took that text under 4.5:1: the selected
 // avatar preview state, whose light text met the pale hover fill at 1.18:1, and a routine card whose status word, in
 // the attention color, met the app's hover fill at 3.83:1. Bare elements with the components' classes carry the
@@ -126,7 +157,10 @@ test.describe("hover fills under text", () => {
   // The route below changes an API answer. With the service worker registered it does not take effect in
   // Playwright's WebKit; blocking it restores page routing.
   test.use({ serviceWorkers: "block" });
-  for (const colorScheme of ["light", "dark"] as const) hoverContrast(colorScheme);
+  for (const colorScheme of ["light", "dark"] as const) {
+    hoverContrast(colorScheme);
+    attentionRowContrast(colorScheme);
+  }
 });
 
 function hoverContrast(colorScheme: "light" | "dark") {
@@ -179,34 +213,7 @@ function hoverContrast(colorScheme: "light" | "dark") {
     expect(loaded).toEqual({ avatar: "999px", card: "grid" });
     const hoveredContrast = async (hover: string, text: string) => {
       await page.locator(hover).hover();
-      return page.locator(text).evaluate((element) => {
-        const canvas = document.createElement("canvas");
-        canvas.width = canvas.height = 1;
-        const context = canvas.getContext("2d", { willReadFrequently: true })!;
-        // The canvas turns any CSS color, color-mix and oklab included, into sRGB bytes.
-        const bytes = (color: string) => {
-          context.clearRect(0, 0, 1, 1);
-          context.fillStyle = color;
-          context.fillRect(0, 0, 1, 1);
-          return [...context.getImageData(0, 0, 1, 1).data];
-        };
-        const over = (top: number[], under: number[]) =>
-          [0, 1, 2].map((at) => (top[at] * top[3] + under[at] * (255 - top[3])) / 255).concat(255);
-        const fills: number[][] = [];
-        for (let node: Element | null = element; node; node = node.parentElement) {
-          const fill = bytes(getComputedStyle(node).backgroundColor);
-          if (fill[3] > 0) fills.push(fill);
-          if (fill[3] === 255) break;
-        }
-        const behind = fills.reduceRight((under, fill) => over(fill, under), [255, 255, 255, 255]);
-        const ink = over(bytes(getComputedStyle(element).color), behind);
-        const channel = (value: number) =>
-          value / 255 <= 0.04045 ? value / 255 / 12.92 : ((value / 255 + 0.055) / 1.055) ** 2.4;
-        const light = (color: number[]) =>
-          0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2]);
-        const [upper, lower] = [light(ink), light(behind)].sort((a, b) => b - a);
-        return (upper + 0.05) / (lower + 0.05);
-      });
+      return contrastOnFill(page.locator(text));
     };
     const avatar = '[data-probe="avatar"]';
     expect(await hoveredContrast(avatar, avatar), "selected avatar state").toBeGreaterThanOrEqual(
@@ -219,6 +226,46 @@ function hoverContrast(colorScheme: "light" | "dark") {
         `${tone} routine card`,
       ).toBeGreaterThanOrEqual(4.5);
     }
+  });
+}
+
+// An assistant that needs its person says so on its row in the attention color, which met the light theme's row fills
+// at 3.84:1 to 4.14:1 before the token darkened (#459). The selected row's soft accent is the darkest fill it meets.
+function attentionRowContrast(colorScheme: "light" | "dark") {
+  test(`an assistant row that needs help keeps readable text at rest, hovered and selected, ${colorScheme}`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
+    // The roster says the assistant needs help, and so does its conversation, whose state the open assistant's row
+    // shows.
+    await setActivity("ranch", "blocked");
+    await page.route(/\/api\/bots\/ranch\/conversation(\?|$)/, async (route) => {
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      const body = await (await route.fetch({ headers })).json();
+      await route.fulfill({ json: { ...body, activity: { state: "blocked" } } });
+    });
+    await signIn(page);
+    // A row eases toward its hover and selected fills, and a value read mid-ease is the fill it left.
+    await page.addStyleTag({
+      content:
+        "*, *::before, *::after { transition: none !important; animation: none !important; }",
+    });
+    const row = assistants(page).getByRole("button", { name: /Ranch Hand/ });
+    const help = row.locator(".bot-activity.state-blocked");
+    await expect(help).toHaveText("Needs your help");
+    // The far corner is the conversation, well away from the list.
+    const away = () =>
+      page.mouse.move(page.viewportSize()!.width - 1, page.viewportSize()!.height - 1);
+    await away();
+    // Soft, so a failure reports all three states.
+    expect.soft(await contrastOnFill(help), "at rest").toBeGreaterThanOrEqual(4.5);
+    await row.hover();
+    expect.soft(await contrastOnFill(help), "hovered").toBeGreaterThanOrEqual(4.5);
+    await row.click();
+    await expect(row).toHaveClass(/\bselected\b/);
+    await away();
+    expect.soft(await contrastOnFill(help), "selected").toBeGreaterThanOrEqual(4.5);
   });
 }
 
