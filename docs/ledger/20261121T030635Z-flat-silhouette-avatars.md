@@ -98,6 +98,37 @@ both eyes to be drawn for most of the working run. `npx vitest run tests/avatar-
 | an inherited name counts as an eye style | `src/components/Avatar.tsx` | draws an eye style it does not have as oval eyes instead of none  |
 | a fitted avatar draws no eyes at all     | `src/components/Avatar.tsx` | stops tuned eyes growing at the edge of the part the face sits on |
 
+## Full check battery at `2c5727be`, on the Fedora laptop
+
+`~/.agents/tools/linux-heavy-lock.sh .agents/tools/check-all --keep-going`, queued 74 minutes for
+the machine lock and ran 14 minutes 21 seconds. The iOS commits after `2c5727be` change no web,
+server or test file, so these results stand for the branch.
+
+| Check                    | Result                               |
+| ------------------------ | ------------------------------------ |
+| typecheck                | compiled, no errors                  |
+| lint                     | passed                               |
+| ruff                     | passed                               |
+| test                     | unit-passed: 231 files, 4154 tests   |
+| build                    | built: 914 modules                   |
+| e2e, Chromium            | runtime-exercised: 142 of 142 passed |
+| e2e, WebKit on this host | not run: all 142 failed at launch    |
+| py                       | passed: 52 files                     |
+
+WebKit does not start on the Fedora laptop: `browserType.launch` reports "Host system is missing
+dependencies to run browsers" (`libicu74`, `libjpeg-turbo8`). Two other worktrees' runs the same
+day failed the same way, every WebKit test and no Chromium test. So the WebKit half ran in the
+container the [November 20 WebKit entry](20261120T202616Z-webkit-browser-tests.md) used:
+`podman run mcr.microsoft.com/playwright:v1.65.0-noble npx playwright test --project=webkit`, Node
+26.13.1, queued 52 minutes and ran 5 minutes 41 seconds: 138 passed, 3 skipped, 1 failed.
+
+The one failure is `e2e/smoke.spec.ts:811`, "the message box floats over the transcript, whose
+latest message rests just above it". That entry records it failing on main in CI at the same line,
+and issue #462 tracks it. The 3 skips are the worker badge and back-forward cache tests WebKit
+already skipped.
+
+Not exercised: Safari itself, and motion in any browser beyond still frames and the unit tests.
+
 ## iOS
 
 The native port on `t3/refresh-bot-avatars`, through web commit `2c5727be`, on the Mac mini with
@@ -118,7 +149,9 @@ under the shared Mac lock.
   14 skipped, 1 failed. 2 h 29 min of execution after 32 min in the lock queue. The failure is
   `ScreenshotTourTests.testWorkTriggerAfterDesignReview` ("Wrong W3 fixture"): the test pins a
   SHA-256 of `.agents/fixtures/work-triggers.json` that the file has not had since #453 reformatted
-  it. Neither changed on this branch, so it fails on `main` too. It was not run on `main` here.
+  it. Neither changed on this branch, so it fails on `main` too. It was not run on `main` here, but
+  the hashes settle it: the test pins `5ed79b27…`, and `sha256sum` of the file gives `e952e902…`
+  on both `origin/main` and this branch.
 - An earlier full run at `8316c0ad` found two failures of this port: a capture that asked
   `isHittable` directly, which `FixedWaitRuleTests` forbids, and `testAvatarCreationLayoutRegression`,
   which ran out of drags before the creation form's bottom Next now that the form carries 54 tiles.
