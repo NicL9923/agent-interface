@@ -162,3 +162,28 @@ The Space test sent only Shift Space, which ends following. Plain Space on a but
 | Break                                        | Result                                               |
 | -------------------------------------------- | ---------------------------------------------------- |
 | The Space check applies only with Shift held | Red: the new test. The Shift Space test stayed green |
+
+## Second review fixes
+
+A second review of `ba701a28..b9d6d0a0` found three defects and a nit. Each fix is its own commit on top of `b9d6d0a0`.
+
+### Second review 1. WebKit pulled a reader back after a send
+
+After a send, Down or Page Down from the end of a tool's output box made WebKit scroll the transcript. The box sets `overscroll-behavior: contain`. Chromium keeps those keys in the box. The classifier said the key scrolled nothing, so the send's anchor stayed on, and `measurePosition` does not read moves in anchored mode. The anchor pulled the reader back to the sent message.
+
+The classifier, renamed `keyScroll`, now says "unknown" for a contained box at its end. The hook counts an unknown key only while a send's anchor is on. These are the two wrong answers:
+
+- Counting a key that scrolled nothing ends the anchor early in Chromium. The view stays where it is either way while the reply grows.
+- Not counting a key that scrolled moves the reader back.
+
+The hook does not count an unknown key while following, so Up at the top of a tool output box still leaves Chromium following. WebKit's move up there is heard by `measurePosition`, which runs on the next animation frame, before resize observers place the transcript.
+
+`e2e/contained-scroll.spec.ts` covers it in the built app. The fixture's new "Read the gate log" turn saves an 80-line tool output, then streams a reply slowly and stays running. The test opens the output, focuses it at its end, and presses Down and Page Down. Then it waits 2.4 seconds while the reply grows. In WebKit the transcript moves down and stays. In Chromium it does not move.
+
+| Break                                                            | Guarding test                                                                 | Result                                                                                        |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `b9d6d0a0`'s `scroll-follow.ts` and `use-conversation.ts`, built | `e2e/contained-scroll.spec.ts`, WebKit in the container                       | Red: the transcript ended at 50 px, where it started. No scroll event reported a move past it |
+| The same                                                         | The same, Chromium                                                            | Green, as expected: Chromium scrolls nothing                                                  |
+| The same                                                         | `ends a send's anchor on Down from the end of a box that contains overscroll` | Red: the sent message was still pinned 24 px from the top                                     |
+| An unknown key never counts                                      | The same                                                                      | Red                                                                                           |
+| An unknown key always counts                                     | `does not hear Up at the top of a box that contains overscroll`               | Red: following ended                                                                          |
