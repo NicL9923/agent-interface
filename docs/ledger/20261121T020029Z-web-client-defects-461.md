@@ -272,3 +272,11 @@ Run 2 ran under more load: React Markdown's own parsing took 47 to 60 ms/s again
 | Break                              | Guarding test                                       | Result |
 | ---------------------------------- | --------------------------------------------------- | ------ |
 | No check for a delimiter row above | `shows a line under a heading's underline as typed` | Red    |
+
+### Third review 3. The seeded exception could waive a dropped line of prose
+
+The exception asked only that the held last line become a table header under some delimiter row. GFM reads `Title` as a one-cell header under `|-|`, so if the hold-back ever dropped the last line of zero-based case 107, which ends in `Title\n`, the test would have accepted it. The exception still takes what the hold-back held of the last block. It now also requires that line to start with `|` after at most three spaces, as every header the hold-back holds does.
+
+| Break in `streaming-hold-back.ts`                                     | Old exception | New exception |
+| --------------------------------------------------------------------- | ------------- | ------------- |
+| `becomesHeader` no longer requires a leading pipe, so `Title` is held | Green         | Red           |

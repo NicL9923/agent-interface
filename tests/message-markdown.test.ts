@@ -520,14 +520,15 @@ describe("streaming Markdown", () => {
       const text = `See [docs][a] and [x][a b], note[^a].\n\nIntro.\n\n${body}`;
       const live = await renderAs(StreamingMarkdown, text);
       if (live === (await renderAs(MessageMarkdown, text))) continue;
-      // The one difference allowed: the hold-back held the reply's whole last line, and the parser reads that
-      // line as a table's header row once a delimiter row of some width follows it.
+      // The one difference allowed: what the hold-back held of the last block is the reply's whole last line, it
+      // starts with a pipe as every header the hold-back holds does, and the parser reads it as a table's header
+      // row once a delimiter row of some width follows it.
       const last = streamingBlocks(text)?.at(-1) ?? text;
       const held = last.slice(streamingHoldBack(last).length);
       const before = text.slice(0, text.length - held.length);
       const header =
         before.endsWith("\n") &&
-        /^[^\n]*\n$/.test(held) &&
+        /^ {0,3}\|[^\n]*\n$/.test(held) &&
         [1, 2, 3, 4, 5, 6].some((cells) => headedAt(`${text}|${"-|".repeat(cells)}`, text));
       if (!header || live !== (await renderAs(MessageMarkdown, before))) diverged.push(text);
     }
