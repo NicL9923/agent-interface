@@ -97,3 +97,89 @@ both eyes to be drawn for most of the working run. `npx vitest run tests/avatar-
 | an unknown eye style has no width        | `src/components/Avatar.tsx` | draws an eye style it does not have as oval eyes instead of none  |
 | an inherited name counts as an eye style | `src/components/Avatar.tsx` | draws an eye style it does not have as oval eyes instead of none  |
 | a fitted avatar draws no eyes at all     | `src/components/Avatar.tsx` | stops tuned eyes growing at the edge of the part the face sits on |
+
+## iOS
+
+The native port on `t3/refresh-bot-avatars`, through web commit `2c5727be`, on the Mac mini with
+Xcode's iPhone 17 simulator (`0915E0B2`). Every run went through `.agents/tools/validate-ios.sh`
+under the shared Mac lock.
+
+### Checks
+
+- Unit suite at `dfda0001`, `validate-ios.sh 0915E0B2 test -only-testing:AgentInterfaceTests`:
+  851 tests, 0 failures, 2 skipped by design. 80 s of test execution, 147 s with the build.
+- The 17 new tests in `AvatarShapeTests` and the rewritten `AvatarArtParityTests` passed in that run.
+- `NativeFlowTests` and `SettingsPolishTests` at `ecac8e56`: every avatar test passed except
+  `testAFailedAvatarSaveKeepsTheNewAssistantOpenWithRetry`, whose picker sat under the keyboard.
+  `8316c0ad` closes the keyboard first. `testChoosingATalkVoiceSavesItAndSamplesPlayAndStop` failed
+  once in the same run and passed in the run before it, with no change to its code: flaky.
+- Captures at `8316c0ad`: `testVariedRosterHome` and `testAvatarShapesReview` passed.
+- Full unfiltered suite at `d43d5c81`, `validate-ios.sh 0915E0B2 test`: 1022 tests, 1007 passed,
+  14 skipped, 1 failed. 2 h 29 min of execution after 32 min in the lock queue. The failure is
+  `ScreenshotTourTests.testWorkTriggerAfterDesignReview` ("Wrong W3 fixture"): the test pins a
+  SHA-256 of `.agents/fixtures/work-triggers.json` that the file has not had since #453 reformatted
+  it. Neither changed on this branch, so it fails on `main` too. It was not run on `main` here.
+- An earlier full run at `8316c0ad` found two failures of this port: a capture that asked
+  `isHittable` directly, which `FixedWaitRuleTests` forbids, and `testAvatarCreationLayoutRegression`,
+  which ran out of drags before the creation form's bottom Next now that the form carries 54 tiles.
+  `d43d5c81` fixes both. That run does not validate one source state: the fixes were edited in
+  while it ran, and the wrapper said so.
+
+`.agents/tools/check-all` at `d43d5c81` on the Mac mini, with Node 24.22.2 (the Mac's own Node is
+26.10, which `npm ci` refuses): typecheck, lint, ruff, build and py pass. Vitest: 4154 tests, 5
+failed, all on this host's setup. Three need the loopback alias `127.0.0.2`, which this Mac lacks
+(`direct-routes`, and `native-contract`, the one that checks the iOS contract fixture), and two in
+`upgrades.test.ts` run `/usr/bin/python3`, which here is too old for the worker's syntax. e2e: 284
+tests, 6 failed in cascade layers, phone overlays and the phone smoke test, none about avatars. The
+iOS port changes no web, server or test-runner file, so all of these are the branch's web state as
+of `2c5727be`, not this port.
+
+`testScreenshotTour` stops where it waits for a settings button named Avatar
+(`ScreenshotTourTests.swift:3319`, unchanged from `main`). The avatar editor moved under Profile
+with the settings sections on November 6. `testAvatarShapesReview` captures the editor and the
+specimen instead.
+
+### What was looked at
+
+The editor's four shape groups, the Debug specimen's groups and state matrix, a white mug in every
+state, and home with a varied roster (`AGENT_INTERFACE_UI_ROSTER=varied`) in both themes. Eyes sit
+on the cup of the mug, the lens of the magnifier, the palette and the dino's head. The mug's handle
+is open, hats and glasses sit on the head, and the white mug, egg, ghost and snowman keep their soft
+edge. The white mug's and ghost's blocked exclamation marks are edged; saturated ones are not. Home
+shows a blocked assistant as Ready with "Needs your help" in words, as before, so the edged mark is
+checked in the specimen.
+
+### Red runs
+
+Each guarded line was broken by hand, the avatar test classes run, and the line restored by
+`git checkout`. The mutations ran in four batches whose target tests do not overlap, all on
+`dfda0001` except M20 on `ecac8e56`. All 19 went red in the test written for them. The
+numbering skips M10.
+
+| Break                                        | File                   | Test that failed                                                                                                                                                   |
+| -------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| M1 recolor ignores the retired color         | `Models.swift`         | `testASeasonalMascotsFixedFaceColorBecomesItsShapesColor`                                                                                                          |
+| M2 an unknown family becomes a bear          | `Models.swift`         | `testAMascotFamilyNoBuildHadDecodesAsTheBlob`                                                                                                                      |
+| M3 a mascot keeps its mode                   | `Models.swift`         | `testARetiredMascotDecodesAsItsShapeAndKeepsEveryChoice`, `testABotFromAnOlderServerArrivesWithItsMascotConverted`                                                 |
+| M4 a converted avatar writes a family        | `Models.swift`         | `testARetiredMascotDecodesAsItsShapeAndKeepsEveryChoice`                                                                                                           |
+| M5 hat ignores the anchor's cx               | `AvatarView.swift`     | `testAnOffCenterFaceSitsOnItsAnchor`                                                                                                                               |
+| M6 eyes ignore the anchor's cx               | `AvatarView.swift`     | `testAnOffCenterFaceSitsOnItsAnchor`                                                                                                                               |
+| M7 face turns on the default sphere          | `AvatarView.swift`     | `testANarrowFaceTurnsAndGlancesWithinItsOwnRadius`                                                                                                                 |
+| M8 a glance ignores the face's reach         | `AvatarView.swift`     | `testANarrowFaceTurnsAndGlancesWithinItsOwnRadius`                                                                                                                 |
+| M9 morph samples the hole too                | `AvatarView.swift`     | `testAShapeWithAHoleMorphsAlongItsOutsideAndDrawsTheHoleWhenStill`                                                                                                 |
+| M11 samples keep a counter-clockwise outline | `AvatarView.swift`     | `testMorphSamplesStartAtTheTopAndRunClockwise…`, `testTheBlobStartsWhereItsOutlineDoesAndTheDropIsReversed`, `testNoMorphBetweenTwoShapesCollapsesTheBodyOnTheWay` |
+| M12 a tie keeps the earlier sample           | `AvatarView.swift`     | `testBetweenTwoEquallyCentralSamplesTheHigherOneStarts`                                                                                                            |
+| M13 samples are never rotated to the top     | `AvatarView.swift`     | `testMorphSamplesStartAtTheTopAndRunClockwise…`, `testNoMorphBetweenTwoShapesCollapsesTheBodyOnTheWay`                                                             |
+| M14 tuned eyes never fit                     | `AvatarView.swift`     | `testTunedEyesStopGrowingAtTheEdgeOfThePartTheFaceSitsOn`                                                                                                          |
+| M15 a seasonal shape keeps the old color     | `Models.swift`         | `testPickingASeasonalShapeBringsItsColorAndOthersKeepTheChosenOne`                                                                                                 |
+| M16 a light exclamation has no edge          | `AvatarView.swift`     | `testAVeryLightBodysBlockedMarkKeepsItsEdge`                                                                                                                       |
+| M17 an extra fixed path                      | `AvatarPathData.swift` | `testFixedPathsAreExactlyTheOnesTheWebDraws`                                                                                                                       |
+| M18 an unknown mode draws its shape          | `Models.swift`         | `testAnAvatarValueThisAppDoesNotKnowSurvivesASaveUnchanged`                                                                                                        |
+| M19 an unknown eye style draws nothing       | `AvatarView.swift`     | `testAnEyeStyleThisBuildDoesNotHaveDrawsAsOvalEyes`                                                                                                                |
+| M20 an unknown eye style fits as a visor     | `AvatarView.swift`     | `testAnEyeStyleThisBuildDoesNotHaveDrawsAsOvalEyes`                                                                                                                |
+
+M20 first stayed green: the oval had no entry of its own and fell to the same default, so the
+fallback and the oval moved together. `545e8daa` names the oval's width, and M20 then went red.
+
+Not red-run: the UI tests. `NativeFlowTests` reads back the pumpkin's saved color swatch, which
+M15 breaks at the unit level.
