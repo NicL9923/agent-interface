@@ -104,24 +104,6 @@ shape only when the family is one of the 18 below and the rest of the avatar is 
 else is refused, as it was before. A reader is lenient instead, because it has to draw something:
 a family the app never had is drawn as the blob.
 
-### Releasing it
-
-Deploy the server first, then release the iOS build as soon after as you can. Neither order is
-seamless, and this one loses nothing:
-
-- **Server first.** An iOS build from before the change draws a shape it does not have as the
-  blob, so until it updates it shows new shapes and converted mascots that way. It still saves:
-  the server reads a mascot it sends as its shape, and it sends a shape it does not know back
-  unchanged.
-- **iOS first.** The new build draws everything, because it reads mascots from an older server
-  itself. But it saves a converted mascot as its shape, and the older server refuses 34 of the 54
-  shapes, so those avatar saves fail until the server is deployed.
-
-A page still running an older web bundle also draws shapes it does not have as the blob. It
-refuses to keep a home with a shape it does not know, so it discards its saved copy and its next
-launch waits for the server instead of drawing home at once. The copy is saved again once the page
-has the new bundle, which keeps shapes it does not know.
-
 | Mascot     | Shape     | Color                                            |
 | ---------- | --------- | ------------------------------------------------ |
 | Bear       | bear      | kept                                             |
@@ -146,6 +128,24 @@ has the new bundle, which keeps shapes it does not know.
 Only the six shapes in the Seasonal group bring their season to home outside the calendar's
 windows. A converted leprechaun, bunny, eagle or ghost no longer does, because clover, bunny, star
 and ghost are everyday shapes that anyone may pick without wanting seasonal chrome all year.
+
+## Releasing it
+
+Deploy the server first, then release the iOS build as soon after as you can. Neither order is
+seamless, and this one loses nothing:
+
+- **Server first.** An iOS build from before the change draws a shape it does not have as the
+  blob, so until it updates it shows new shapes and converted mascots that way. It still saves:
+  the server reads a mascot it sends as its shape, and it sends a shape it does not know back
+  unchanged.
+- **iOS first.** The new build draws everything, because it reads mascots from an older server
+  itself. But it saves a converted mascot as its shape, and the older server refuses 34 of the 54
+  shapes, so those avatar saves fail until the server is deployed.
+
+A page still running an older web bundle also draws shapes it does not have as the blob. It
+refuses to keep a home with a shape it does not know, so it discards its saved copy and its next
+launch waits for the server instead of drawing home at once. The copy is saved again once the page
+has the new bundle, which keeps shapes it does not know.
 
 ## License of the Open Bot Avatar definitions
 
