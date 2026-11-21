@@ -187,3 +187,7 @@ The hook does not count an unknown key while following, so Up at the top of a to
 | The same                                                         | `ends a send's anchor on Down from the end of a box that contains overscroll` | Red: the sent message was still pinned 24 px from the top                                     |
 | An unknown key never counts                                      | The same                                                                      | Red                                                                                           |
 | An unknown key always counts                                     | `does not hear Up at the top of a box that contains overscroll`               | Red: following ended                                                                          |
+
+### Second review 4. The rail comment claimed more agreement than was measured
+
+My probe ran at a device pixel ratio of 1 with untransformed boxes. At a ratio of 1.25, the reviewer measured a box with `scaleY(1.003)`: it reported 60.375 px through `ResizeObserver` and about 60.556 px through `getBoundingClientRect()`. The comment now says the two agree only for an untransformed turn at a ratio of 1. Under zoom or a transform, every report measures again. This changed a comment only, so no test or red run applies.
