@@ -27,6 +27,7 @@ import {
 } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
 import { clearMessageParam, initialMessage } from "./view";
+import { prefersReducedMotion } from "./reduced-motion";
 /** Within this distance of the end, the reader counts as at the latest message and the jump control hides. */
 const LATEST_DISTANCE = 100;
 /** How long a message opened from find or a link stays highlighted. */
@@ -697,8 +698,14 @@ export function useConversation(
     if (anchor) anchor.content = content;
     if (next !== reserve) space.style.height = next ? `${next}px` : "";
   };
-  // Brings the opened message into view, a little below the top, and marks it briefly.
-  const showFound = (item: HTMLElement, mark = true, needle?: string) => {
+  // Brings the opened message into view, a little below the top, and marks it briefly. The message
+  // rail asks for a send's gap instead, and a glide when the trip is short.
+  const showFound = (
+    item: HTMLElement,
+    mark = true,
+    needle?: string,
+    spot?: { gap: number; glide: boolean },
+  ) => {
     const element = scroll.current!;
     // Search and saved links can point inside a collapsed run of bot messages.
     for (
@@ -710,10 +717,19 @@ export function useConversation(
     }
     const range = needle ? matchRanges(item, needle)[0] : undefined;
     const top = range?.getBoundingClientRect?.().top ?? item.getBoundingClientRect().top;
-    element.scrollTop +=
-      top - element.getBoundingClientRect().top - Math.min(120, element.clientHeight / 4);
+    const shift =
+      top -
+      element.getBoundingClientRect().top -
+      (spot?.gap ?? Math.min(120, element.clientHeight / 4));
+    // As with the jump to the latest message, a long trip jumps rather than scrolling through pages.
+    const glide =
+      !!spot?.glide && Math.abs(shift) < element.clientHeight * 3 && !prefersReducedMotion();
+    if (glide) element.scrollTo({ top: element.scrollTop + shift, behavior: "smooth" });
+    else element.scrollTop += shift;
     mode.current = "free";
     holdPlace();
+    // Until the glide's first scroll event, a layout pass holds the destination, not the starting place.
+    if (glide && spot) anchor.current = { id: placeId(item), offset: spot.gap };
     if (!mark) return;
     if (found.current) {
       clearTimeout(found.current.timer);
@@ -920,6 +936,20 @@ export function useConversation(
     } else requestStart.current(messageId);
   }, []);
   /**
+   * Brings a loaded message to the top of the view, with the gap a send leaves, and marks it briefly,
+   * as the message rail does. The reader is left there, free of the end. False when it is not on the page.
+   */
+  const jumpTo = useCallback((messageId: string) => {
+    const element = scroll.current;
+    const item = element ? messageElement(element, messageId) : undefined;
+    if (!element || !item) return false;
+    setAtAttention(null);
+    jumping.current = 0;
+    showFound(item, true, undefined, { gap: ANCHOR_GAP, glide: true });
+    setAtLatest(distanceToEnd(element) < LATEST_DISTANCE);
+    return true;
+  }, []);
+  /**
    * Opens an assistant's live conversation at a message, as a search result does. Call it with
    * the selection change; a different assistant opens there once it loads.
    */
@@ -1010,6 +1040,7 @@ export function useConversation(
       sentAs,
       openMessage,
       openAt,
+      jumpTo,
     }),
     [
       hasEarlier,
@@ -1024,6 +1055,7 @@ export function useConversation(
       sentAs,
       openMessage,
       openAt,
+      jumpTo,
     ],
   );
   return {

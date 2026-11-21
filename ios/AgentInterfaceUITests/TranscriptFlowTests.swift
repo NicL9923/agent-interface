@@ -241,6 +241,9 @@ import XCTest
     let dark = launch(["AGENT_INTERFACE_UI_ROUTINE_RUNS": "1", "AGENT_INTERFACE_UI_THEME": "dark"])
     let failed = dark.buttons["routineRun-rr-cert-1"]
     XCTAssertTrue(failed.waitForExistence(timeout: 15))
+    // The first run sits above the first message, so it can open under the header; bring it into view.
+    let header = dark.buttons["botProfile"]
+    for _ in 0..<4 where header.exists && failed.frame.minY < header.frame.maxY { dark.scrollViews["conversationTranscript"].swipeDown() }
     try capture(dark, "routine-runs-dark-collapsed")
     failed.tapWhenReady()
     XCTAssertTrue(dark.buttons["routineRunSave"].waitUntilHittable())
@@ -290,6 +293,190 @@ import XCTest
     work.tapWhenReady()
     XCTAssertTrue(app.buttons["Tool calls"].waitForExistence(timeout: 5))
     try capture(app, "progress-expanded")
+  }
+
+  /// Chat style is a saved setting that applies at once: Bubbles sets the answer's prose inside its
+  /// bubble, Classic lays it flat at the column edge, and the choice is still there when Settings reopens.
+  func testChatStyleSettingSwitchesTheTranscript() throws {
+    let app = launch(["AGENT_INTERFACE_UI_PROGRESS": "1"])
+    let answer = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "It will be")).firstMatch
+    XCTAssertTrue(answer.waitForExistence(timeout: 15), app.debugDescription)
+    let bubbled = answer.frame.minX
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    let style = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Chat style")).firstMatch
+    for _ in 0..<6 where !style.canTap { app.swipeUp() }
+    style.tapWhenReady()
+    app.buttons["Classic"].tapWhenReady()
+    XCTAssertTrue(waitFor { style.label.contains("Classic") || (style.value as? String) == "Classic" }, style.debugDescription)
+    app.buttons["Close"].tapWhenReady()
+    if !answer.waitForExistence(timeout: 3) { app.buttons["bot.ranch"].tapWhenReady() }
+    XCTAssertTrue(answer.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(waitFor { answer.frame.minX < bubbled - 8 }, "Classic moves the prose out of the bubble: \(answer.frame.minX) vs \(bubbled)")
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    for _ in 0..<6 where !style.canTap { app.swipeUp() }
+    XCTAssertTrue(style.label.contains("Classic") || (style.value as? String) == "Classic", "The saved choice comes back: \(style.label)")
+  }
+
+  /// A scheduled delivery reads as flat Markdown at the full column width, labeled at the leading edge, as on
+  /// the web. Only words a person sent sit in the person's bubble at the trailing edge.
+  func testAScheduledDeliveryStaysOutOfThePersonsBubble() throws {
+    let app = launch(["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1"])
+    let tables = app.scrollViews.matching(NSPredicate(format: "label == %@", "Table"))
+    XCTAssertTrue(waitFor { tables.count == 2 }, app.debugDescription)
+    let ordered = tables.allElementsBoundByIndex.sorted { $0.frame.minY < $1.frame.minY }
+    let delivery = ordered[0].frame, reply = ordered[1].frame
+    XCTAssertEqual(delivery.minX, reply.minX, accuracy: 2, "The delivery starts at the column edge, as a reply's table does")
+    XCTAssertGreaterThanOrEqual(delivery.width, reply.width - 2, "The delivery's table gets the full column: \(delivery.width) vs \(reply.width)")
+    let label = app.staticTexts["Scheduled"]
+    XCTAssertTrue(label.exists)
+    XCTAssertLessThan(label.frame.minX, app.frame.midX, "Its label sits at the leading edge: \(label.frame)")
+    let ask = app.staticTexts["Which one first?"]
+    XCTAssertGreaterThan(ask.frame.minX, app.frame.midX, "A person's words keep their bubble at the trailing edge: \(ask.frame)")
+  }
+
+  /// A server from before chat styles saves the rest of Settings and answers without the choice. Settings says
+  /// why the choice did not stick and shows what the server holds.
+  func testAServerWithoutChatStylesExplainsWhyTheChoiceDidNotSave() throws {
+    let app = launch(["AGENT_INTERFACE_UI_PROGRESS": "1", "AGENT_INTERFACE_UI_OLD_PREFERENCES": "1"])
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "It will be")).firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    let style = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Chat style")).firstMatch
+    for _ in 0..<6 where !style.canTap { app.swipeUp() }
+    style.tapWhenReady()
+    app.buttons["Classic"].tapWhenReady()
+    let notice = app.staticTexts["This server cannot save that setting yet. Update WildBots on the server to use it."]
+    XCTAssertTrue(notice.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(waitFor { style.label.contains("Bubbles") || (style.value as? String) == "Bubbles" }, "The control shows what the server holds: \(style.debugDescription)")
+  }
+
+  /// A person who changes a chat style choice and changes it back while the first save is still out ends on
+  /// what they chose last, though the change back matches what the server held before. Each save takes 15
+  /// seconds here, and reopening a menu takes XCTest about 5.
+  func testAChoiceChangedBackWhileItsSaveIsOutStays() throws {
+    let app = launch(["AGENT_INTERFACE_UI_PROGRESS": "1", "AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "tint",
+      "AGENT_INTERFACE_UI_PREFERENCES_DELAY_MS": "15000"])
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "It will be")).firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    let saving = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving…")).firstMatch
+    func control(_ title: String) -> XCUIElement { app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch }
+    func shows(_ element: XCUIElement, _ choice: String) -> Bool { element.label.hasSuffix(choice) || (element.value as? String) == choice }
+    for (title, away, back) in [("Chat style", "Classic", "Bubbles"), ("Your messages", "Solid color", "Tinted")] {
+      let picker = control(title)
+      for _ in 0..<6 where !picker.canTap { app.swipeUp() }
+      picker.tapWhenReady()
+      app.buttons[away].tapWhenReady()
+      let sent = Date()
+      XCTAssertTrue(saving.waitForExistence(timeout: 3), "\(title): the first save is out")
+      picker.tapWhenReady()
+      app.buttons[back].tapWhenReady()
+      XCTAssertLessThan(Date().timeIntervalSince(sent), 12, "\(title): the change back must land while the first save is out")
+      XCTAssertTrue(saving.waitForDisappearance(timeout: 40), "\(title): every save finished")
+      XCTAssertTrue(shows(picker, back), "\(title) shows the last choice once the saves are in: \(picker.debugDescription)")
+    }
+    app.buttons["Close"].tapWhenReady()
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
+    for (title, back) in [("Chat style", "Bubbles"), ("Your messages", "Tinted")] {
+      let picker = control(title)
+      for _ in 0..<6 where !picker.canTap { app.swipeUp() }
+      XCTAssertTrue(shows(picker, back), "\(title) reopens on what the server saved: \(picker.debugDescription)")
+    }
+  }
+
+  /// A reply that streams and is then saved, in Bubbles and in Classic, captured as fast as XCTest allows
+  /// with the reply's position, so a flicker or jump when the saved copy replaces the streamed one shows.
+  /// Each style must catch the reply at least once while it streams and once saved. Runs only when
+  /// screenshots are written.
+  func testStreamedReplySettlesForReview() throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"]!).appendingPathComponent("stream")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    for style in ["bubbles", "classic"] {
+      let app = launch(["AGENT_INTERFACE_UI_STREAM_SETTLE": "1", "AGENT_INTERFACE_UI_CHAT_STYLE": style, "AGENT_INTERFACE_UI_THEME": "light"])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Checking the gates")).firstMatch
+      let last = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "I'll remind you")).firstMatch
+      let table = app.scrollViews.matching(NSPredicate(format: "label == %@", "Table"))
+      // The saved copy's time, which the streamed one does not show.
+      let saved = app.descendants(matching: .any)["messageTime-stream-saved"]
+      let start = Date()
+      var log = "ms,saved,firstMinY,tableMinY,lastMinY\n", index = 0, streaming = 0, settled = 0
+      while Date().timeIntervalSince(start) < 14 {
+        let shot = XCUIScreen.main.screenshot()
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        let tables = table.allElementsBoundByIndex.map(\.frame.minY).max() ?? 0
+        let isSaved = saved.exists, first = reply.exists ? reply.frame.minY : -1
+        if first >= 0 { if isSaved { settled += 1 } else { streaming += 1 } }
+        log += "\(ms),\(isSaved),\(first),\(tables),\(last.exists ? last.frame.minY : -1)\n"
+        try shot.pngRepresentation.write(to: directory.appendingPathComponent(String(format: "%@-%03d-%05d.png", style, index, ms)))
+        index += 1
+      }
+      try log.write(to: directory.appendingPathComponent("\(style).csv"), atomically: true, encoding: .utf8)
+      XCTAssertGreaterThan(streaming, 0, "\(style): no sample caught the reply while it streamed; saved samples: \(settled)")
+      XCTAssertGreaterThan(settled, 0, "\(style): no sample caught the saved reply; streaming samples: \(streaming)")
+      app.terminate()
+    }
+  }
+
+  /// The chat styles for visual review: Bubbles and Classic, tinted and solid own messages, light and
+  /// dark, and one at an accessibility text size. Runs only when screenshots are written.
+  func testChatBubbleScreens() throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    func shoot(_ name: String, _ environment: [String: String], arguments: [String] = [], ready: String = "turnWork") throws {
+      let app = XCUIApplication()
+      app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+      for (key, value) in environment { app.launchEnvironment[key] = value }
+      app.launchArguments += arguments
+      app.launch()
+      let device = app.frame.width > 700 ? "ipad" : "iphone"
+      XCTAssertTrue(app.descendants(matching: .any)[ready].waitForExistence(timeout: 15), app.debugDescription)
+      try capture(app, "\(device)-\(name)")
+      app.scrollViews["conversationTranscript"].swipeDown()
+      try capture(app, "\(device)-\(name)-start")
+      app.scrollViews["conversationTranscript"].swipeUp(); app.scrollViews["conversationTranscript"].swipeUp()
+      try capture(app, "\(device)-\(name)-end")
+      app.terminate()
+    }
+    // The app's own theme setting, which every simulator honors, rather than the device appearance.
+    for theme in ["light", "dark"] {
+      for (style, own) in [("bubbles", "tint"), ("bubbles", "solid"), ("classic", "tint"), ("classic", "solid")] {
+        try shoot("progress-\(style)-\(own)-\(theme)", ["AGENT_INTERFACE_UI_PROGRESS": "1", "AGENT_INTERFACE_UI_THEME": theme,
+          "AGENT_INTERFACE_UI_CHAT_STYLE": style, "AGENT_INTERFACE_UI_OWN_BUBBLE": own])
+      }
+      try shoot("work-bubbles-solid-\(theme)", ["AGENT_INTERFACE_UI_WORK": "1", "AGENT_INTERFACE_UI_THEME": theme,
+        "AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid"])
+      // The end of the chat against the floating composer, and a list that holds a code block.
+      for style in ["bubbles", "classic"] {
+        try shoot("nested-code-\(style)-\(theme)", ["AGENT_INTERFACE_UI_NESTED_CODE": "1", "AGENT_INTERFACE_UI_THEME": theme,
+          "AGENT_INTERFACE_UI_CHAT_STYLE": style], ready: "Copy code")
+      }
+    }
+    // Review fixes: a quote in a bubble with a table after it, a scheduled delivery holding a table, and solid
+    // bubbles with Increase Contrast on and while a message is on its way.
+    for theme in ["light", "dark"] {
+      try shoot("review-solid-\(theme)", ["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1", "AGENT_INTERFACE_UI_THEME": theme,
+        "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid"], ready: "Which one first?")
+      try shoot("review-contrast-\(theme)", ["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1", "AGENT_INTERFACE_UI_THEME": theme,
+        "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid", "AGENT_INTERFACE_UI_INCREASE_CONTRAST": "1"], ready: "Which one first?")
+      let app = launch(["AGENT_INTERFACE_UI_BUBBLE_REVIEW": "1", "AGENT_INTERFACE_UI_THEME": theme, "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid",
+        "AGENT_INTERFACE_UI_SEND_HOLD": "1"])
+      let composer = app.textViews["messageComposer"]
+      XCTAssertTrue(composer.waitForExistence(timeout: 15))
+      composer.tapWhenReady()
+      composer.typeText("Thanks, heading out now.")
+      app.buttons["sendMessage"].tapWhenReady()
+      XCTAssertTrue(app.staticTexts["Thanks, heading out now."].waitForExistence(timeout: 5))
+      try capture(app, "iphone-review-sending-\(theme)")
+      app.terminate()
+    }
+    try shoot("progress-bubbles-accessibility-xl", ["AGENT_INTERFACE_UI_PROGRESS": "1"],
+      arguments: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])
   }
 
   func testAdvancedWorkKeepsReasoningInsideTheFold() throws {

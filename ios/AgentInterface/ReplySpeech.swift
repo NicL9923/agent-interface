@@ -256,7 +256,7 @@ struct MessageMetaRow: View {
     if let delivery {
       Text(delivery == .sending ? "Sending…" : "Not confirmed yet")
     } else if let when {
-      WhenText(value: when)
+      WhenText(value: when).accessibilityIdentifier("messageTime-" + message.id)
     }
   }
   @ViewBuilder private var actionButtons: some View {

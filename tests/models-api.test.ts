@@ -176,3 +176,34 @@ it("reports an unavailable capability before judging the request body", async ()
   expect([refused.statusCode, refused.json().error]).toEqual([409, "Bot settings are off."]);
   expect(s.inferenceSettings).not.toHaveBeenCalled();
 });
+
+it("saves the chat style per person, rejects unknown values by field and keeps them through an older client's save", async () => {
+  const s = await setup();
+  const save = (payload: object) =>
+    s.app.inject({ method: "PATCH", url: "/api/preferences", headers: s.one, payload });
+  const saved = await save({ ...defaultPreferences, chatStyle: "classic", ownBubble: "solid" });
+  expect(saved.json()).toMatchObject({ chatStyle: "classic", ownBubble: "solid" });
+  expect(s.store.preferences("two").chatStyle).toBeUndefined();
+  for (const [field, value] of [
+    ["chatStyle", "compact"],
+    ["chatStyle", null],
+    ["ownBubble", "bold"],
+    ["ownBubble", 1],
+  ] as const) {
+    const refused = await save({ ...defaultPreferences, [field]: value });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json().details.map((detail: { path: string[] }) => detail.path)).toEqual([
+      [field],
+    ]);
+  }
+  // A client that predates both fields omits them, which keeps the saved choice.
+  expect((await save({ ...defaultPreferences, theme: "dark" })).json()).toMatchObject({
+    theme: "dark",
+    chatStyle: "classic",
+    ownBubble: "solid",
+  });
+  // Sending the default explicitly is how a person goes back to it.
+  expect(
+    (await save({ ...defaultPreferences, chatStyle: "bubbles", ownBubble: "tint" })).json(),
+  ).toMatchObject({ chatStyle: "bubbles", ownBubble: "tint" });
+});

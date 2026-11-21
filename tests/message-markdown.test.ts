@@ -8,6 +8,9 @@ import {
   ReplyMarkdown,
   StreamingMarkdown,
   blocksAgree,
+  bubbleRuns,
+  fadeSides,
+  parseBlock,
   sameBlock,
   streamingBlocks,
 } from "../src/components/MessageMarkdown";
@@ -816,6 +819,160 @@ describe("a streamed reply once saved", () => {
     expect(
       blocksAgree("```\ncode\n\nmore\n```\n\nAfter", ["```\ncode\n\nmore\n```", "After"]),
     ).toBe(true);
+  });
+});
+
+describe("reply bubbles", () => {
+  /** Each run of a reply as its blocks group: "bubble:" and the prose tags it holds, or the lone block's tag. */
+  const layout = (blocks: string[]) =>
+    bubbleRuns(blocks.flatMap((text) => parseBlock({ text })))
+      .filter((run) => run.pieces.some((piece) => piece.kind !== "space"))
+      .map((run) =>
+        run.bubble
+          ? `bubble:${run.pieces.flatMap((piece) => piece.tag ?? []).join(",")}`
+          : run.pieces[0].tag,
+      );
+
+  it("puts a reply of only prose in one bubble", () => {
+    expect(layout(["Hi.\n\n- Oats\n- Hay\n\n> Feed at dusk.\n\n## Then\n\n1. Water"])).toEqual([
+      "bubble:p,ul,blockquote,h2,ol",
+    ]);
+  });
+  it("keeps a table in the middle at full width, between two bubbles", () => {
+    expect(
+      layout(["Here:\n\n| Gate | Battery |\n| --- | --- |\n| North | 14% |\n\nDone."]),
+    ).toEqual(["bubble:p", "table", "bubble:p"]);
+  });
+  it("starts with a code block when the reply does, and opens a bubble after it", () => {
+    expect(layout(["```js\nlet x = 1;\n```\n\nThat sets it."])).toEqual(["pre", "bubble:p"]);
+  });
+  it("keeps media and a thematic break out of bubbles", () => {
+    expect(
+      layout(["Look:\n\n![Barn](https://example.test/barn.png)\n\n---\n\nThat is the barn."]),
+    ).toEqual(["bubble:p", "p", "hr", "bubble:p"]);
+  });
+  // A list or quote that holds code, a table, media or a rule reads as one full-width block, as in Classic.
+  it("keeps a list or quote that holds a full-width block out of bubbles, with prose around it in them", () => {
+    expect(
+      layout([
+        "First:\n\n1. Open the gate\n2. Run this:\n\n   ```sh\n   gate open\n   ```\n\nThen wait.",
+      ]),
+    ).toEqual(["bubble:p", "ol", "bubble:p"]);
+    expect(layout(["> | Gate | Battery |\n> | --- | --- |\n> | North | 14% |\n\nDone."])).toEqual([
+      "blockquote",
+      "bubble:p",
+    ]);
+    expect(layout(["- The barn: ![Barn](https://example.test/barn.png)\n- Hay"])).toEqual(["ul"]);
+    expect(layout(["- One\n\n  ---\n\n- Two"])).toEqual(["ul"]);
+    // Inline code and nested lists are still prose.
+    expect(layout(["- Run `gate open`\n  - then wait\n\n> Quoted **words**"])).toEqual([
+      "bubble:ul,blockquote",
+    ]);
+  });
+  it("renders a list with nested code at full width, keeping it a list", async () => {
+    const text = "Steps:\n\n- Run this:\n\n  ```sh\n  gate open\n  ```\n- Wait";
+    await act(async () =>
+      root.render(createElement(ReplyMarkdown, { text, live: false, bubbles: true })),
+    );
+    const list = container.querySelector(".message-markdown > ul")!;
+    expect(list.closest(".reply-bubble")).toBeNull();
+    expect(list.querySelectorAll(":scope > li")).toHaveLength(2);
+    expect(list.querySelector("li pre")).not.toBeNull();
+    expect(container.querySelector(".reply-bubble")!.textContent).toBe("Steps:");
+  });
+  it("splits a block where a fence interrupts its paragraph", () => {
+    expect(layout(["Run:\n```sh\nls\n```\nThen look."])).toEqual(["bubble:p", "pre", "bubble:p"]);
+  });
+  it("joins prose from separate streaming blocks in one bubble while a fence is still open", () => {
+    const blocks = streamingBlocks("One.\n\nTwo.\n\n```py\nprint(")!;
+    expect(blocks).toHaveLength(3);
+    expect(layout(blocks)).toEqual(["bubble:p,p", "pre"]);
+  });
+  it("has no runs for an empty reply", () => {
+    expect(layout([""])).toEqual([]);
+    expect(bubbleRuns([])).toEqual([]);
+  });
+
+  const mixed =
+    "Intro with `code`.\n\nMore.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n```txt\nx\n```\n\nDone.";
+  const live = (text: string) =>
+    act(async () => root.render(createElement(ReplyMarkdown, { text, live: true, bubbles: true })));
+  it("keeps a bubble's node while the reply grows into it and once it is saved", async () => {
+    await live("Intro with `code`.");
+    const first = container.querySelector(".reply-bubble");
+    await live("Intro with `code`.\n\nMore.");
+    expect(container.querySelector(".reply-bubble")).toBe(first);
+    expect(first!.querySelectorAll("p")).toHaveLength(2);
+    await live(mixed);
+    await act(async () =>
+      root.render(createElement(ReplyMarkdown, { text: mixed, live: false, bubbles: true })),
+    );
+    expect(container.querySelector(".reply-bubble")).toBe(first);
+    expect(
+      [...container.querySelector(".message-markdown")!.children].map((child) =>
+        child.classList.contains("reply-bubble") ? "bubble" : child.className,
+      ),
+    ).toEqual(["bubble", "markdown-table", "markdown-code-block", "bubble"]);
+  });
+  it("shows reported inputs streamed and saved as they show opened fresh", async () => {
+    const shown = async (element: ReturnType<typeof createElement>) => {
+      await act(async () => root.render(createElement("div")));
+      await act(async () => root.render(element));
+      // Newlines between blocks are insignificant in the transcript's normal white-space.
+      return container.innerHTML.replace(/>\n</g, "><");
+    };
+    for (const text of [
+      mixed,
+      "Steps:\n\n1. Soak\n\n1. Rinse\n\nEnjoy.",
+      "See [docs][a].\n\nMore.\r\r[a]: https://example.test",
+      "Example:\n\n    ```\n    code\n\nDone",
+    ]) {
+      await shown(createElement(ReplyMarkdown, { text, live: true, bubbles: true }));
+      await act(async () =>
+        root.render(createElement(ReplyMarkdown, { text, live: false, bubbles: true })),
+      );
+      const saved = container.innerHTML.replace(/>\n</g, "><");
+      expect(saved).toBe(await shown(createElement(MessageMarkdown, { text, bubbles: true })));
+    }
+  });
+  it("keeps text order and every word whether or not prose sits in bubbles", async () => {
+    await act(async () => root.render(createElement(MessageMarkdown, { text: mixed })));
+    const flat = container.textContent;
+    await act(async () =>
+      root.render(createElement(MessageMarkdown, { text: mixed, bubbles: true })),
+    );
+    expect(container.textContent).toBe(flat);
+  });
+});
+
+describe("a table wider than the reply", () => {
+  it("fades each side that has more to scroll to, left to right and right to left", () => {
+    expect(fadeSides(0, 0, "ltr")).toBe("");
+    expect(fadeSides(0, 200, "ltr")).toBe("right");
+    expect(fadeSides(100, 200, "ltr")).toBe("left right");
+    expect(fadeSides(200, 200, "ltr")).toBe("left");
+    // Right to left, the start is at scrollLeft 0 and the end at minus the overflow.
+    expect(fadeSides(0, 200, "rtl")).toBe("left");
+    expect(fadeSides(-200, 200, "rtl")).toBe("right");
+    // Zoomed, a table scrolled to its end can stop a fraction of a pixel short; that is not more to see.
+    expect(fadeSides(199.6, 200, "ltr")).toBe("left");
+    expect(fadeSides(0.4, 200, "ltr")).toBe("right");
+  });
+  it("updates the fade as the reader scrolls the table", async () => {
+    await act(async () =>
+      root.render(createElement(MessageMarkdown, { text: "| a | b |\n| --- | --- |\n| 1 | 2 |" })),
+    );
+    const scroller = container.querySelector<HTMLElement>(".markdown-table-scroll")!;
+    expect(scroller.dataset.fade).toBeUndefined();
+    Object.defineProperties(scroller, {
+      scrollWidth: { configurable: true, value: 600 },
+      clientWidth: { configurable: true, value: 300 },
+    });
+    scroller.dispatchEvent(new Event("scroll"));
+    expect(scroller.dataset.fade).toBe("right");
+    scroller.scrollLeft = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    expect(scroller.dataset.fade).toBe("left");
   });
 });
 

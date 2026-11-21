@@ -134,8 +134,8 @@
     font-size: 0.75rem;
     color: var(--muted);
   }
+  /* Its margin is the activity copy's, 5 px above each line. */
   .activity-live p {
-    margin: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -295,6 +295,12 @@
       left: 8px;
       right: 8px;
       width: auto;
+    }
+    /* What floats over the transcript must stay above the phone's message box, whose area styles.css raises to 4,
+       and which can cover most of a short view. Here, not in styles.css: this layer outranks the base layer. */
+    .transcript-frame .find-bar,
+    .transcript-frame .quote-selection {
+      z-index: 5;
     }
   }
   ::highlight(find-match) {
@@ -636,6 +642,10 @@
   .reply-file:hover {
     border-color: var(--accent);
     background: color-mix(in srgb, var(--accent-soft) 50%, var(--surface));
+  }
+  /* The app's button hover, restated here: the base layer's rule loses to this layer. */
+  .reply-file:hover:enabled {
+    background: var(--accent-soft);
   }
   .reply-file:focus-visible {
     outline: 2px solid var(--accent);

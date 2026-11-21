@@ -1095,6 +1095,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         className="conversation-panel"
         inert={mobile && railOpen}
         {...(view === "conversation" ? tintProps(selected) : {})}
+        data-own-bubble={boot.preferences.ownBubble === "solid" ? "solid" : undefined}
       >
         <ChatHeader
           offline={offlineShown}

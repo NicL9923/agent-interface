@@ -799,6 +799,23 @@ in the long-press menu of a reply or your own message opens it in a sheet where 
 select any part and copy it; a reply shows there as rendered, without Markdown marks.
 Code blocks are colored by language, and tables can be copied as Markdown or CSV.
 
+Replies read in bubbles. Each run of a reply's paragraphs, lists, quotes and headings
+sits in one bubble up to 600 px wide, about 77 characters a line, while tables, code,
+images and cards stay full width between them, so a reply can read bubble, table,
+bubble. A list or quote that holds code, a table or an image stays full width too, as in
+Classic. Progress lines, tool work and cards keep their own look. A reply that is still
+arriving groups the same way, so saving it usually moves nothing. A link whose definition
+comes later in the reply redraws the reply once that definition arrives, which clears a
+selection inside it. A table wider
+than the chat fades at each side that has more to scroll to. Your own messages hug
+their text at the right edge. In Settings, **Chat style** switches between **Bubbles**
+and **Classic**, which shows replies as flat text across the column, and **Your
+messages** chooses **Tinted** or **Solid color**. Solid fills your messages with the
+assistant's avatar color, darkened where needed so white text keeps at least 4.5:1
+contrast; a chat without an avatar color, such as one with a photo, keeps the tint.
+Both are saved with your preferences, like Appearance, so they follow you to your other
+devices. Group chats keep their own layout.
+
 When a reply fails, **Retry** under it sends your message again without touching
 your draft. A failed turn can be retried once, by anyone, from any device: a second
 tap, tab or phone gets the first retry's result instead of starting another turn.
@@ -821,7 +838,14 @@ reasoning. Decisions and requests for input stay outside the fold.
 
 **Find in chat** (Cmd/Ctrl+F on web, Find on iOS) matches loaded messages at once and
 adds older matches from the conversation's history; choosing one opens the chat at
-that message. A status area above the message box gathers send problems, the
+that message. On a wide web window with a mouse or trackpad, a long chat also shows a
+**message rail** at its right edge: one tick for each message a person sent among the
+loaded messages, with the turn in view marked. Hovering or focusing a tick previews the
+message and the start of its reply; choosing one brings that message to the top of the
+view. When more ticks exist than fit, the rail shows the ones around the turn you are
+reading, with a chevron above or below where more are hidden. The rail is one tab stop;
+Up, Down, Home and End reach every loaded message you sent.
+It does not appear on phones. A status area above the message box gathers send problems, the
 interrupted-task review, waiting decisions with **Review**, and connection trouble,
 most urgent first.
 

@@ -33,9 +33,9 @@
     gap: 12px;
     margin-bottom: 20px;
   }
+  /* Its size is .muted's. */
   .today-timestamp {
     margin: 0;
-    font-size: 0.75rem;
     line-height: 1.5;
   }
   .today-status > button {

@@ -10,17 +10,36 @@ extension View {
   }
 }
 
+/// What Settings shows. Each edit is queued the moment the person makes it, with the chat style choice it
+/// changed, so no later view update can replace it first, and an edit back to what the server held before
+/// still goes out. The server's copy replaces the form only while the queue holds no edit made here.
+@MainActor @Observable final class SettingsForm {
+  var shown = Preferences()
+  func load(_ store: AppStore) { shown = store.preferencesDraft ?? store.bootstrap?.preferences ?? Preferences() }
+  /// Shows and queues `value`. `changed` names the chat style choice the edit made; other edits change none.
+  func edit(_ value: Preferences, changed: Set<PreferenceChoice> = [], store: AppStore) {
+    guard value != shown else { return }
+    shown = value
+    store.queuePreferences(value, changed: changed)
+  }
+  /// After the server's copy changes or saves finish: what the server holds, unless an edit is still unsaved.
+  func resync(_ store: AppStore) {
+    guard let server = store.bootstrap?.preferences else { return }
+    shown = store.preferencesDraft ?? server
+  }
+}
+
 struct PreferencesView: View {
   var close: (() -> Void)? = nil
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var scheme
-  @State private var preferences = Preferences()
+  @State private var form = SettingsForm()
+  private var preferences: Preferences { form.shown }
   @State private var reachability = NetworkReachability()
   private var saving: Bool { store.preferencesSaving }
   private var saveFailed: Bool { store.preferencesSaveFailed }
   @State private var discardConfirm = false
-  @State private var loaded = false
   @State private var signOutConfirm = false
   @State private var changeServerConfirm = false
   @State private var quietError: String?
@@ -77,9 +96,22 @@ struct PreferencesView: View {
           }
         }
         if saveFailed { Section { Button("Retry saving settings") { enqueueSave() } } }
+        if let notice = store.preferencesNotice {
+          Section { NoticeBanner(message: notice) { store.preferencesNotice = nil }.accessibilityIdentifier("preferencesNotice") }
+        }
         Section("Display") {
-          Picker("Appearance", selection: $preferences.theme) {
+          Picker("Appearance", selection: edited().theme) {
             Text("Follow device").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
+          }
+          Picker("Chat style", selection: edited([.chatStyle]).chatStyleChoice) {
+            Text("Bubbles").tag(ChatStyle.bubbles); Text("Classic").tag(ChatStyle.classic)
+          }.accessibilityIdentifier("chatStyle")
+          VStack(alignment: .leading, spacing: 4) {
+            Picker("Your messages", selection: edited([.ownBubble]).ownBubbleChoice) {
+              Text("Tinted").tag(OwnBubble.tint); Text("Solid color").tag(OwnBubble.solid)
+            }.accessibilityIdentifier("ownBubble")
+            Text("Solid color uses each assistant's color. Assistants with a photo keep the tint.").font(.caption).foregroundStyle(Palette.muted)
+              .fixedSize(horizontal: false, vertical: true)
           }
           HStack {
             VStack(alignment: .leading, spacing: 4) {
@@ -87,10 +119,10 @@ struct PreferencesView: View {
               Text("Reasoning, tool inputs and the model menu").font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Toggle("Advanced details", isOn: Binding(get: { preferences.presentation == "advanced" }, set: { preferences.presentation = $0 ? "advanced" : "simple" }))
+            Toggle("Advanced details", isOn: Binding(get: { preferences.presentation == "advanced" }, set: { on in update { $0.presentation = on ? "advanced" : "simple" } }))
               .labelsHidden().fixedSize().accessibilityIdentifier("advancedDetails")
           }
-          Picker("Start page", selection: Binding(get: { preferences.startPage ?? (preferences.defaultBotId == nil ? "today" : "assistant") }, set: { preferences.startPage = $0 })) {
+          Picker("Start page", selection: Binding(get: { preferences.startPage ?? (preferences.defaultBotId == nil ? "today" : "assistant") }, set: { page in update { $0.startPage = page } })) {
             Text("Today").tag("today"); Text("Assistant").tag("assistant")
           }
           defaultPicker
@@ -102,7 +134,7 @@ struct PreferencesView: View {
         Section {
           VStack(alignment: .leading, spacing: 4) {
             Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
-              var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
+              var settings = notificationPreferences; settings.batchMinutes = value; update { $0.notifications = settings }
             })) {
               Text("As updates arrive").tag(0); Text("Every 5 minutes").tag(5); Text("Every 15 minutes").tag(15); Text("Hourly").tag(60)
             }
@@ -113,7 +145,7 @@ struct PreferencesView: View {
           Toggle("Quiet hours", isOn: Binding(get: { preferences.notifications?.quietStart != nil }, set: { enabled in
             quietError = nil
             var settings = notificationPreferences; settings.quietStart = enabled ? "22:00" : nil
-            settings.quietEnd = enabled ? "07:00" : nil; preferences.notifications = settings
+            settings.quietEnd = enabled ? "07:00" : nil; update { $0.notifications = settings }
           }))
           if preferences.notifications?.quietStart != nil {
             DatePicker("From", selection: quietTime(start: true), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
@@ -130,7 +162,7 @@ struct PreferencesView: View {
         }.disabled(store.sessionExpired)
         if !bots.isEmpty {
           Section {
-            HomeSectionRows(preferences: $preferences, bots: bots)
+            HomeSectionRows(preferences: edited(), bots: bots)
           } header: { Text("Home sections") } footer: {
             Text("Group assistants on home. Each assistant can be in one section.")
           }.disabled(store.sessionExpired)
@@ -173,13 +205,12 @@ struct PreferencesView: View {
             else if saveFailed { Text("Settings not saved").foregroundStyle(Palette.danger) }
           }
         }
-        .onAppear { preferences = store.preferencesDraft ?? store.bootstrap?.preferences ?? Preferences(); loaded = true }
-        .onChange(of: store.bootstrap?.preferences) { _, value in
-          if let value, !saving && !saveFailed { preferences = value }
-        }
-        .onChange(of: preferences) { _, value in
-          if loaded && value != store.preferencesDraft && value != store.bootstrap?.preferences { enqueueSave() }
-        }
+        .onAppear { form.load(store) }
+        // Once every save is in, the controls show what the server kept, which a server from before a
+        // setting, or another device, may have answered differently. The end of the saves resyncs too,
+        // because a server that drops a choice can answer with a copy equal to the one already read.
+        .onChange(of: store.bootstrap?.preferences) { _, _ in form.resync(store) }
+        .onChange(of: saving) { _, _ in form.resync(store) }
         .interactiveDismissDisabled(saveFailed)
         .confirmationDialog("Settings could not be saved. Discard these changes?", isPresented: $discardConfirm, titleVisibility: .visible) {
           Button("Discard changes", role: .destructive) { store.discardPreferenceChanges(); closeSheet() }
@@ -227,7 +258,15 @@ struct PreferencesView: View {
     }.householdListBackground().navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
   }
   private func closeSheet() { if let close { close() } else { dismiss() } }
-  private func enqueueSave() { store.queuePreferences(preferences) }
+  /// Retries the failed save. The chat style choices it held stay queued.
+  private func enqueueSave() { store.queuePreferences(preferences, changed: []) }
+  /// The form, for a control whose edits are queued as they happen. `changed` names the chat style choice it sets.
+  private func edited(_ changed: Set<PreferenceChoice> = []) -> Binding<Preferences> {
+    Binding(get: { form.shown }, set: { form.edit($0, changed: changed, store: store) })
+  }
+  private func update(_ change: (inout Preferences) -> Void) {
+    var next = form.shown; change(&next); form.edit(next, store: store)
+  }
   private func quietTime(start: Bool) -> Binding<Date> {
     Binding(get: {
       let value = (start ? preferences.notifications?.quietStart : preferences.notifications?.quietEnd) ?? (start ? "22:00" : "07:00")
@@ -243,14 +282,14 @@ struct PreferencesView: View {
       if start { settings.quietStart = value } else { settings.quietEnd = value }
       guard settings.quietStart != settings.quietEnd else { quietError = "Start and end times can't match."; return }
       quietError = nil
-      preferences.notifications = settings
+      update { $0.notifications = settings }
     })
   }
   private var bots: [Bot] { store.bootstrap?.bots ?? [] }
   /// One summary row instead of a switch per assistant; the list it opens is a single multi-select.
   private var followRow: some View {
     NavigationLink {
-      FollowedAssistantsView(preferences: $preferences, bots: bots)
+      FollowedAssistantsView(preferences: edited(), bots: bots)
     } label: {
       VStack(alignment: .leading, spacing: 4) {
         Text(HomeSummary.following(bots.filter { preferences.isFollowing($0.id) }.count))
@@ -261,7 +300,7 @@ struct PreferencesView: View {
   private var defaultPicker: some View {
     let selection = Binding<String>(
       get: { preferences.defaultBotId ?? "" },
-      set: { value in preferences.defaultBotId = value.isEmpty ? nil : value })
+      set: { value in update { $0.defaultBotId = value.isEmpty ? nil : value } })
     return Picker("Open by default", selection: selection) {
       Text("First assistant").tag("")
       ForEach(store.bootstrap?.bots ?? []) { bot in Text(bot.name).tag(bot.id) }

@@ -52,6 +52,13 @@
 .composer:focus-within {
   box-shadow: inset 0 1px 0 var(--depth-edge), 0 0 0 3px color-mix(in srgb, var(--focus-glow, var(--accent)) 16%, transparent), 0 5px 18px #1b251a08;
 }
+/* The phone's floating glass box: more specific than the box's lit edge above, which it replaces there. */
+@media (max-width: 620px) {
+  .composer-area > .composer { box-shadow: var(--glass-shadow); }
+  .composer-area > .composer:focus-within {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent), var(--glass-shadow);
+  }
+}
 .settings-sheet { box-shadow: inset 0 1px 0 var(--depth-edge), 0 24px 90px #0005; }
 .command-palette { box-shadow: inset 0 1px 0 var(--depth-edge), 0 24px 90px #0006; }
 .bot-menu { box-shadow: inset 0 1px 0 var(--depth-edge), 0 14px 40px #0000003d; }
@@ -79,6 +86,20 @@
       --tint-glow: oklch(from var(--bot-tint) 0.78 max(c, 0.08) h);
       --user: color-mix(in oklab, var(--tint-wash) 60%, #2a3a2e);
     }
+  }
+  /* A person's solid bubble takes the assistant's own color, darkened until white text and links keep 4.5:1. */
+  .conversation-panel[data-tint][data-own-bubble="solid"] .message-user > .message-bubble {
+    --accent: #fff;
+    background: oklch(from var(--bot-tint) min(l, 0.52) c h);
+    color: #fff;
+  }
+  .conversation-panel[data-tint][data-own-bubble="solid"] .message-user > .message-bubble .file-link {
+    border-color: color-mix(in srgb, #fff 50%, transparent);
+  }
+  /* A faded solid fill takes white text under 4.5:1, so a solid bubble stays whole while it sends. The line under it
+     already says the message is on its way. */
+  .conversation-panel[data-tint][data-own-bubble="solid"] .message-user.message-sending {
+    opacity: 1;
   }
   .conversation-panel[data-tint] .chat-header-identity {
     background-image: linear-gradient(to bottom, var(--tint-wash), transparent);
@@ -188,8 +209,12 @@
   color: var(--ink);
   box-shadow: 0 2px 8px #0003;
 }
+/* The app's button hover, restated here: the base layer's rule loses to this layer. */
+.computer-peek-close:hover:enabled { background: var(--accent-soft); }
 @media (max-width: 620px) {
   .computer-peek { right: 12px; bottom: 12px; width: 132px; }
+  /* Above the phone's floating message box, which the transcript runs under. */
+  .transcript-frame .computer-peek { bottom: calc(12px + var(--composer-overlap, 0px)); }
   .computer-peek-close { width: 32px; height: 32px; }
 }
 @media (pointer: coarse) {
@@ -266,6 +291,11 @@
   @media (width > 620px) {
     .command-palette[open] { animation: palette-in 320ms var(--ease-spring-soft); }
     .settings-sheet[open] { animation: settings-in 380ms var(--ease-spring-soft); }
+  }
+  /* On a phone both rise from the bottom edge. Here, beside the dialog spring below, which they replace. */
+  @media (max-width: 620px) {
+    .command-palette[open] { animation: palette-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+    .settings-sheet[open] { animation: settings-up 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
   }
   dialog[open] { animation-duration: 340ms; animation-timing-function: var(--ease-spring-soft); }
   .bot-menu { animation: bot-menu-in 260ms var(--ease-spring-soft); }
