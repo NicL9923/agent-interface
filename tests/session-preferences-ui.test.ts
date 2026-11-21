@@ -105,7 +105,7 @@ describe("a server that predates partial saves", () => {
     expect(vi.mocked(api)).toHaveBeenCalledWith("/bootstrap?roster=lean");
     expect(vi.mocked(write).mock.calls).toEqual([
       ["/preferences", { favorites: ["ranch hand"] }, "PATCH"],
-      ["/preferences", { ...phone, favorites: ["ranch hand"] }, "PATCH"],
+      ["/preferences", { ...phone, favorites: ["ranch hand"] }, "PATCH", { plainJson: true }],
     ]);
     expect(session.boot?.preferences).toEqual({ ...phone, favorites: ["ranch hand"] });
     expect(onError).not.toHaveBeenCalled();

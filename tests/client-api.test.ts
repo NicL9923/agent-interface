@@ -428,9 +428,12 @@ describe("typed route requests", () => {
     vi.stubGlobal("fetch", fetch);
     await request("PATCH /preferences", { body: { theme: "dark" } });
     await request("PUT /preferences/models", { body: { modelFavorites: [] } });
+    // A server from before partial saves gets the save whole, as plain JSON.
+    await request("PATCH /preferences", { body: { theme: "dark" }, plainJson: true });
     const sent = fetch.mock.calls.map(([, init]) => new Headers(init.headers));
     expect(sent.map((headers) => headers.get("Content-Type"))).toEqual([
       "application/merge-patch+json",
+      "application/json",
       "application/json",
     ]);
     expect(sent[0].get("X-CSRF-Token")).toBe("current-session-csrf");

@@ -6,7 +6,6 @@ import {
   changeStream,
   request as apiRequest,
   setCsrf,
-  write,
 } from "../client-api";
 import { preferenceQueue, type PreferenceField } from "./preference-queue";
 import { applyMergePatch } from "../shared/merge-patch";
@@ -35,7 +34,7 @@ async function savePreferencePatch(patch: PreferencesPatch): Promise<Preferences
     });
     // Model stars have their own route; leaving them out keeps that server's list.
     const { modelFavorites: _, ...whole } = applyMergePatch(current, patch) as Preferences;
-    return write<Preferences>("/preferences", whole, "PATCH");
+    return apiRequest("PATCH /preferences", { body: whole, plainJson: true });
   }
 }
 type SessionEvents = {

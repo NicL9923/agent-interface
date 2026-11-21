@@ -31,12 +31,12 @@ value would show.
 
 ## Checks
 
-| Check                                                              | Result                                         |
-| ------------------------------------------------------------------ | ---------------------------------------------- |
-| `npx vitest run` on the 9 touched test files                       | Unit-passed while iterating                    |
-| `e2e/preference-saves.spec.ts`, Chromium                           | Runtime-exercised and passed, 1 test           |
-| `e2e/preference-saves.spec.ts`, WebKit in the Playwright container | Runtime-exercised and passed, 1 test           |
-| `.agents/tools/check-all --keep-going`                             | Recorded in the commit that follows this entry |
+| Check                                                              | Result                               |
+| ------------------------------------------------------------------ | ------------------------------------ |
+| `npx vitest run` on the 9 touched test files                       | Unit-passed while iterating          |
+| `e2e/preference-saves.spec.ts`, Chromium                           | Runtime-exercised and passed, 1 test |
+| `e2e/preference-saves.spec.ts`, WebKit in the Playwright container | Runtime-exercised and passed, 1 test |
+| `.agents/tools/check-all --keep-going`                             | Recorded in the next section         |
 
 ### Red runs
 
@@ -62,7 +62,19 @@ the original bytes back.
 | Same break, after `npm run build`                            | `e2e/preference-saves.spec.ts`, Chromium | failed on the content type                         |
 | Fall back to a whole save on any 4xx                         | `tests/session-preferences-ui.test.ts`   | 1 failed                                           |
 | Fall back with the patch alone, not merged over a fresh copy | `tests/session-preferences-ui.test.ts`   | 1 failed                                           |
+| Send the fallback with the route's merge patch media type    | `tests/session-preferences-ui.test.ts`   | 1 failed                                           |
 | Settings names no fields for its pickers                     | `tests/app-ui.test.ts`                   | 1 failed: the chat style pick a waiting save holds |
+
+## check-all
+
+The first run, on `6aad2931`, passed typecheck, lint, ruff, build and the Python tests. Vitest failed
+3 of 4,209 tests, all from this change: `tests/helper-guards.test.ts` found the 415 fallback calling
+`write()` for a mapped route, `tests/hermes-qualification.test.ts` found `src/shared/merge-patch.ts`
+missing from the qualification inputs, and `tests/worker-opens-ui.test.ts` answered a save with the
+body it was sent. The fallback now goes through `request()` with `plainJson`, the module is a
+qualification input, and that mock merges. The e2e step ran 286 tests: all 143 Chromium tests
+passed, and all 143 WebKit tests failed because the host lacks WebKit's system libraries. The
+second run's results are in the commit that adds them below.
 
 ## Not exercised
 

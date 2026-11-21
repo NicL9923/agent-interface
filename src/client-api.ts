@@ -211,6 +211,8 @@ type Fields<K extends ApiRoute> = (keyof ApiParams<K> extends never
 export type RequestOptions<K extends ApiRoute> = Fields<K> & {
   signal?: AbortSignal;
   keepalive?: boolean;
+  /** Sends the body as plain JSON despite the route's media type, for a server that predates it. */
+  plainJson?: boolean;
 };
 /**
  * Calls a route from the shared map, typed by its method and path: `request("GET /bots/:id/draft",
@@ -220,15 +222,16 @@ export function request<K extends ApiRoute>(
   route: K,
   ...[options]: {} extends RequestOptions<K> ? [RequestOptions<K>?] : [RequestOptions<K>]
 ) {
-  const { params, body, query, signal, keepalive } = (options ?? {}) as {
+  const { params, body, query, signal, keepalive, plainJson } = (options ?? {}) as {
     params?: ApiParams<K>;
     body?: unknown;
     query?: ApiQuery<K>;
     signal?: AbortSignal;
     keepalive?: boolean;
+    plainJson?: boolean;
   };
   const { method } = routeParts(route);
-  const mediaType = routeMediaTypes[route];
+  const mediaType = plainJson ? undefined : routeMediaTypes[route];
   return api<ApiResponse<K>>(routeUrl(route, params ?? ({} as ApiParams<K>), query), {
     ...(method === "GET" ? {} : { method }),
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
