@@ -84,7 +84,7 @@ it("treats a read that overlapped any save as stale for preferences", async () =
   });
   const idle = queue.mark();
   expect(queue.fresh(idle)).toBe(true);
-  const saving = queue.save({ ...base, favorites: ["a"] });
+  const saving = queue.edit((value) => ({ ...value, favorites: ["a"] }), base);
   expect(queue.fresh(idle)).toBe(false);
   const during = queue.mark();
   reply.resolve({ ...base, favorites: ["a"] });
@@ -293,4 +293,118 @@ it("sends a key an object field set to undefined as null", () => {
   expect(patchFor(next, ["notifications"])).toEqual({
     notifications: { timezone: "UTC", batchMinutes: 0, quietStart: null, quietEnd: null },
   });
+});
+
+it("names every clearable key of an object field, whatever an older copy held", () => {
+  const next = { ...base, notifications: { timezone: "UTC", batchMinutes: 0 } } as Preferences;
+  expect(patchFor(next, ["notifications"])).toEqual({
+    notifications: { timezone: "UTC", batchMinutes: 0, quietStart: null, quietEnd: null },
+  });
+});
+
+/** A server whose answers wait for the test, each one the patch merged over what it holds. */
+const slowServer = (stored: Preferences) => {
+  const held = server(stored);
+  const sent: PreferencesPatch[] = [];
+  const answers: (() => void)[] = [];
+  let screen = stored;
+  const queue = preferenceQueue({
+    send: (patch) => {
+      sent.push(patch);
+      return new Promise((resolve, reject) =>
+        answers.push(() =>
+          patch.favorites?.includes("refused")
+            ? reject(new Error("Refused"))
+            : resolve(held.save(patch)),
+        ),
+      );
+    },
+    apply: (value) => {
+      screen = value;
+    },
+    failed: vi.fn(),
+    account: () => 1,
+  });
+  return {
+    held,
+    sent,
+    queue,
+    screen: () => screen,
+    /** Lets the oldest save answer once it has been sent. */
+    answer: async () => {
+      await vi.waitFor(() => expect(answers.length).toBeGreaterThan(0));
+      answers.shift()!();
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    },
+  };
+};
+
+// The tab's copy never had quiet hours. An answer brings another device's 22:00 to 07:00 on screen while a
+// save built on that copy still waits, and the person turns quiet hours off.
+it("turns off quiet hours the screen shows though the tab's first copy never had them", async () => {
+  const tab = {
+    ...base,
+    theme: "light",
+    notifications: { timezone: "UTC", batchMinutes: 0 },
+  } as Preferences;
+  const s = slowServer(tab);
+  s.held.stored = {
+    ...tab,
+    notifications: { timezone: "UTC", quietStart: "22:00", quietEnd: "07:00", batchMinutes: 0 },
+  };
+  void s.queue.edit((value) => ({ ...value, theme: "dark" }), tab, ["theme"]);
+  void s.queue.edit((value) => ({ ...value, startPage: "today" }), tab, ["startPage"]);
+  await s.answer();
+  expect(s.screen().notifications?.quietStart).toBe("22:00");
+  const off = s.queue.edit(
+    (value) => ({ ...value, notifications: { timezone: "UTC", batchMinutes: 0 } }),
+    s.screen(),
+    ["notifications"],
+  );
+  await s.answer();
+  await s.answer();
+  await off;
+  expect(s.sent[2]).toEqual({
+    notifications: { timezone: "UTC", batchMinutes: 0, quietStart: null, quietEnd: null },
+  });
+  expect(s.held.stored.notifications).toEqual({ timezone: "UTC", batchMinutes: 0 });
+});
+
+// An answer brings another device's pin on screen while a save built on the tab's older list still waits.
+// The person pins from that screen, so the new list must keep what they saw.
+it("builds an edit on the pins an answer put on screen, not on a waiting save's older copy", async () => {
+  const tab = { ...base, favorites: [] } as Preferences;
+  const s = slowServer(tab);
+  s.held.stored = { ...tab, favorites: ["creek"] };
+  void s.queue.edit((value) => ({ ...value, theme: "dark" }), tab, ["theme"]);
+  void s.queue.edit((value) => ({ ...value, presentation: "advanced" }), tab, ["presentation"]);
+  await s.answer();
+  expect(s.screen().favorites).toEqual(["creek"]);
+  const pin = s.queue.edit(
+    (value) => ({ ...value, favorites: [...value.favorites, "ranch"] }),
+    s.screen(),
+    ["favorites"],
+  );
+  await s.answer();
+  await s.answer();
+  await pin;
+  expect(s.sent[2]).toEqual({ favorites: ["creek", "ranch"] });
+  expect(s.held.stored.favorites).toEqual(["creek", "ranch"]);
+});
+
+it("does not carry a refused save's change into the edit queued behind it", async () => {
+  const s = slowServer(base);
+  void s.queue.edit((value) => ({ ...value, favorites: [...value.favorites, "refused"] }), base, [
+    "favorites",
+  ]);
+  const next = s.queue.edit(
+    (value) => ({ ...value, favorites: [...value.favorites, "ranch"] }),
+    base,
+    ["favorites"],
+  );
+  await s.answer();
+  await s.answer();
+  await next;
+  expect(s.sent).toEqual([{ favorites: ["refused"] }, { favorites: ["ranch"] }]);
+  expect(s.held.stored.favorites).toEqual(["ranch"]);
 });
