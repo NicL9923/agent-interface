@@ -112,3 +112,71 @@ All on `8bb7e0e6` unless noted.
   read.
 - The chat model popover's save error, which needs Hermes to refuse an assistant save.
 - Increased contrast and forced colors.
+
+## Review fixes
+
+An independent review of `bd5ed912..57953586` found one blocker and four defects, all in the fixtures. Each held up
+against the code. The fixes are on `t3/extend-cascade-layer-guard` at `df926e1b`, after a merge of
+`t3/followups-459-462` at `5cf5e93c`, which fast-forwarded because that branch already held this one. Evidence files
+are under `.private/cascade-guard-review/`.
+
+1. **Stale capabilities after a switch.** Bootstrap reuses the runtime's roster and capabilities for 1.5 s
+   (`src/server/runtime-snapshot.ts`), and the control port's switches never invalidated that read. A test that turned
+   full Hermes on right after another test's bootstrap read `liveVoice` as unsupported, so Talk never started.
+   `createApp` now returns the snapshot, and every control request other than a GET invalidates it, in both
+   directions and for every switch, `/activity` and `/upload-failure` included. The server's other runtime caches
+   do not depend on a switch: routine runs (`RUNS_CACHE_MS`) are only read while full Hermes is on, and their answers
+   do not change between tests.
+2. **A step read before its content arrived.** The chat header's model step now waits for the Reasoning and Speed
+   groups, each with its choice checked, and the chosen model. The other steps were checked against their names: the
+   settings picker now waits for `[open]`, the mascot step for the Character group, and Talk for both captions and the
+   Talk button released at the end.
+3. **A saved theme in a light view.** Before each test the server puts every member's preferences back to the
+   defaults. Before its first read each cascade test asserts the theme is `system` and the page matches the emulated
+   scheme. The suite-wide reset turned up no test that relied on preferences an earlier test saved: the full suite
+   passed in both browsers with it.
+4. **Allowances shared between tests.** `allowConsoleError` was a value fixture, one array every test shared, so the
+   offline smoke test's `ERR_INTERNET_DISCONNECTED` and the failed upload's 507 stayed excused in every later test. Each
+   test now gets a new list. An allowance can name a request's address as well as its text, and the failed upload
+   screen excuses only `…/api/bots/ranch/uploads`. No test failed once the leak closed, so none had passed on a
+   neighbor's allowance. The suite has no `allowPageError`.
+5. **Answers changed with the switch off.** The six runtime members only a full Hermes has (`automationRequest`,
+   `modelOptions`, `inferenceSettings`, `realtimeSession`, `routineResults`, `routineOutput`) are now getters that are
+   undefined while the switch is off, since the server checks each one's presence. With the switch on, `approval_*`
+   automation operations refuse with `approval_settings_unsupported`, as an add-on without them does, so approval
+   settings answer 200 with `supported: false` instead of 502. Other automation operations the fixture does not script
+   still fail at their name, as the rest of the runtime double does.
+
+`.private/cascade-guard-review/probe.mjs` signed in and read 14 routes on a server at `bd5ed912` and on this branch with
+the switch off: bootstrap capabilities, approval settings, the automation overview, automations, the model catalog
+with and without an assistant, inference, routines, routine runs, a routine's results and one output, search, and both
+assistants. Every status and body matched (`bd5.txt`, `fix-off.txt`). Before the fix, approval settings answered 502 and
+the other six differed (`head-off.txt`). With the switch on, approval settings answer 200 with `supported: false`
+(`fix-on.txt`).
+
+### Red runs
+
+| Break                                                                                                               | Result                                                                                                                                                                                                  | Evidence                |
+| ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| No snapshot invalidation, running each Talk test right after the home test (`-g "(home\|Talk) reads"`), three times | Talk failed in all four views each time, 12 of 12, at the session request it never sent. `e2e/test-isolation.spec.ts`'s switch test failed 3 of 3. With the invalidation, the same runs passed 16 of 16 | `red-snapshot.log`      |
+| `allowConsoleError` back to a shared default value                                                                  | "the next test starts with no allowance" failed                                                                                                                                                         | `red-allowance.log`     |
+| An allowance matching text only                                                                                     | "does not excuse the same status from another address" passed, so its expected failure failed                                                                                                           | `red-allowance-url.log` |
+| No preference reset                                                                                                 | "the next test starts from the default preferences" failed on the dark theme, and the switch test after it lost its assistants region to the pin                                                        | `red-preferences.log`   |
+| Every view emulating dark                                                                                           | `wide, light` failed "reads the scheme it emulates" with `dark: true`                                                                                                                                   | `red-theme.log`         |
+| The dark theme saved before the first read                                                                          | `wide, light` failed the same assertion with `theme: "dark"`                                                                                                                                            | `red-theme-saved.log`   |
+
+### Checks on `df926e1b`
+
+| Check                                                     | Result                                                                                                                                                                                                            |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`, `npm run lint`                       | Compiled, and lint passed                                                                                                                                                                                         |
+| Cascade layer spec, Chromium, three runs in a row         | Runtime-exercised: 81 passed each time, in 208, 233 and 218 s. In the first run the 52 existing screen tests took 79.1 s and the 28 new ones 124.7 s                                                              |
+| Cascade layer spec, WebKit container, three runs in a row | Runtime-exercised: 81 passed each time, in 178, 192 and 184 s. In the first run the existing ones took 75.9 s and the new ones 96.6 s                                                                             |
+| Full WebKit suite, container                              | Runtime-exercised: 196 passed and 3 skipped as before, in 488 s. The expected failure in `e2e/test-isolation.spec.ts` counts as passed                                                                            |
+| `.agents/tools/check-all --keep-going`                    | All 8 checks passed in 27 minutes 39 seconds: typecheck, lint, Ruff, 4,266 unit tests in 232 files, the build, 199 Chromium tests, 199 WebKit tests in its own container with 3 skipped, and 52 Python test files |
+
+All of these ran in one hold of `~/.agents/tools/linux-heavy-lock.sh`, after 51 minutes in its queue.
+
+While capturing the route answers, a `pkill -f "tsx e2e/server.ts"` matched every e2e server on the host, not only this
+probe's. No Playwright run from another worktree was active then, and later probes stop only the process listening on
+their own port.
