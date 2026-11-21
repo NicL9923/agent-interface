@@ -144,7 +144,7 @@ final class AvatarPropTests: XCTestCase {
                     frame: AvatarMotion.frame(
                       .entering(.working, at: base), at: base.addingTimeInterval(t), still: t == 0,
                       prop: prop, propSince: .distantPast),
-                    still: t == 0, body: AvatarGeometry.path(avatar.drawnShape),
+                    body: AvatarGeometry.path(avatar.drawnShape),
                     bodyColor: Color(hex: avatar.color ?? "#1084FE")
                   ).draw(ctx)
                 }.frame(width: size * 1.4, height: size * 1.4)

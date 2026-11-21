@@ -67,6 +67,17 @@ final class AvatarShapeTests: XCTestCase {
     XCTAssertEqual(bots[0].avatar?.accessory, .hat)
   }
 
+  func testAMascotWithAMalformedShapeStillDecodes() throws {
+    // An older server's mascot: its shape field is never read, so a bad one cannot fail the roster.
+    let bots = try JSONDecoder().decode([Bot].self, from: Data(##"""
+      [{"id":"k","name":"Kitchen","model":"m","shared":true,"activity":"idle","avatar":{"mode":"mascot","family":"bear","shape":7,"color":"#111111"}}]
+      """##.utf8))
+    XCTAssertEqual(bots[0].avatar?.drawnShape, .bear)
+    XCTAssertEqual(bots[0].avatar?.color, "#111111")
+    // Any other mode still refuses a shape that is not a name.
+    XCTAssertThrowsError(try decode(##"{"mode":"geometric","shape":7,"color":"#111111"}"##))
+  }
+
   func testAnOffCenterFaceSitsOnItsAnchor() throws {
     let mug = try XCTUnwrap(AvatarCatalog.art[.mug]?.face)
     XCTAssertNotEqual(mug.cx, 50, "The mug looks out from its cup, left of the handle")
@@ -116,6 +127,31 @@ final class AvatarShapeTests: XCTestCase {
       XCTAssertFalse(AvatarGeometry.path(shape).contains(middle, eoFill: false), shape.rawValue)
       XCTAssertTrue(AvatarGeometry.sampled(shape).polygon.contains(middle, eoFill: false), shape.rawValue)
     }
+  }
+  func testTheDrawnBodyLandsOnTheExactOutlineHoleAndAll() throws {
+    // What the view draws: halfway, the samples on their way; at the end, the mug with its handle open.
+    let blob = AvatarGeometry.sampled(.blob)
+    XCTAssertNotEqual(AvatarGeometry.body(.mug, from: blob, progress: 0.5), AvatarGeometry.path(.mug))
+    let landed = AvatarGeometry.body(.mug, from: blob, progress: AvatarMotion.smoothstep(1))
+    XCTAssertEqual(landed, AvatarGeometry.path(.mug))
+    let hole = String(AvatarGeometry.svg(.mug).dropFirst(outsideContour(of: .mug).count))
+    let numbers = hole.split { !"-.0123456789".contains($0) }.compactMap { Double($0) }
+    let xs = stride(from: 0, to: numbers.count, by: 2).map { numbers[$0] }
+    let ys = stride(from: 1, to: numbers.count, by: 2).map { numbers[$0] }
+    XCTAssertFalse(landed.contains(CGPoint(x: (xs.min()! + xs.max()!) / 2, y: (ys.min()! + ys.max()!) / 2), eoFill: false))
+    XCTAssertEqual(AvatarGeometry.body(.mug, from: nil, progress: 0), AvatarGeometry.path(.mug), "No morph draws the outline")
+  }
+  func testAChangeOnlyMovesIntoPlaceWhileFramesCanCarryIt() {
+    XCTAssertTrue(AvatarView.animatesChange(state: .idle, reduceMotion: false, visible: true, active: true))
+    XCTAssertTrue(AvatarView.animatesChange(state: .failed, reduceMotion: false, visible: true, active: true),
+      "A change starts the failed avatar's settling frames")
+    // A frozen, reduced, hidden or backgrounded avatar draws once, so a morph would stop on its first frame.
+    for state in [ActivityState.interrupted, .disconnected, .unknown] {
+      XCTAssertFalse(AvatarView.animatesChange(state: state, reduceMotion: false, visible: true, active: true), state.rawValue)
+    }
+    XCTAssertFalse(AvatarView.animatesChange(state: .idle, reduceMotion: true, visible: true, active: true))
+    XCTAssertFalse(AvatarView.animatesChange(state: .idle, reduceMotion: false, visible: false, active: true))
+    XCTAssertFalse(AvatarView.animatesChange(state: .idle, reduceMotion: false, visible: true, active: false))
   }
   private func outsideContour(of shape: AvatarShape) -> String { AvatarGeometry.outside(AvatarGeometry.svg(shape)) }
 
@@ -208,6 +244,11 @@ final class AvatarShapeTests: XCTestCase {
       XCTAssertEqual(pumpkin.selectingShape(shape).color, "#FF6700", shape.rawValue)
     }
     XCTAssertEqual(pumpkin.selectingShape(.snowman).color, "#F4F8FB")
+    // Picking the pumpkin again keeps a color chosen since, while its tile still shows it in orange.
+    var blue = pumpkin
+    blue.color = "#1084FE"
+    XCTAssertEqual(blue.selectingShape(.pumpkin), blue)
+    XCTAssertEqual(blue.showingShape(.pumpkin).color, "#FF6700")
   }
 
   /// One still frame of `avatar` in `state`, as RGBA bytes at twice the 116-unit box.
@@ -217,7 +258,7 @@ final class AvatarShapeTests: XCTestCase {
     let size = 116.0
     let canvas = Canvas { context, _ in
       AvatarArtwork(
-        avatar: avatar, state: state, frame: frame, still: true,
+        avatar: avatar, state: state, frame: frame,
         body: AvatarGeometry.path(avatar.drawnShape), bodyColor: Color(hex: avatar.color ?? "#1084FE")
       ).draw(context)
     }.frame(width: size, height: size)

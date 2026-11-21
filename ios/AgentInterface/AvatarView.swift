@@ -1021,6 +1021,12 @@ enum AvatarGeometry {
   static func path(_ shape: AvatarShape) -> Path { paths[shape] ?? paths[.blob]! }
   static func sampled(_ shape: AvatarShape) -> PointVector { cached[shape] ?? cached[.blob]! }
   static func points(_ shape: AvatarShape) -> PointVector { points(of: outside(svg(shape))) }
+  /// The outline drawn `progress` (eased, 0 to 1) into a morph from `from`: the samples on their
+  /// way, then the exact outline, holes and all, once the morph lands or when there is none.
+  static func body(_ shape: AvatarShape, from: PointVector?, progress: Double) -> Path {
+    guard let from, progress < 1 else { return path(shape) }
+    return from.mixed(with: sampled(shape), progress).polygon
+  }
   static func points(of d: String) -> PointVector {
     var all: [CGPoint] = []
     var current = CGPoint.zero
@@ -1224,7 +1230,6 @@ struct AvatarArtwork {
   var avatar: AvatarConfig
   var state: ActivityState
   var frame: AvatarMotion.Frame
-  var still: Bool
   var body: Path
   var bodyColor: Color
   /// The avatar's point size. Emphasis marks are lost at list sizes, so only larger ones draw them.
@@ -1551,12 +1556,12 @@ struct AvatarView: View {
     .onChange(of: prop) { propSince = Date() }
     .onChange(of: geometry) { old, _ in
       let now = Date()
-      morphFrom = reduceMotion ? nil : bodyPoints(at: now, previous: old)
+      morphFrom = changeAnimates ? bodyPoints(at: now, previous: old) : nil
       morphAt = now
       changes += 1
     }
     .onChange(of: colorHex) { old, _ in
-      colorFrom = reduceMotion ? nil : old
+      colorFrom = changeAnimates ? old : nil
       colorAt = Date()
       changes += 1
     }
@@ -1585,7 +1590,7 @@ struct AvatarView: View {
         && current.map { AvatarMotion.idleQuietAt(frame.t, $0.plan, ahead: AvatarMotion.idleFrame + 0.02) } == true
       let artwork = AvatarArtwork(
         avatar: avatar, state: state, frame: frame,
-        still: isStill, body: bodyPath(at: date), bodyColor: bodyColor(at: date),
+        body: bodyPath(at: date), bodyColor: bodyColor(at: date),
         size: Double(size))
       // Motion can reach past the 116-unit box (trails, hops), as the web SVG overflows.
       let pad = size * 0.2
@@ -1610,8 +1615,17 @@ struct AvatarView: View {
     return morphFrom.mixed(with: target, morphProgress(date))
   }
   private func bodyPath(at date: Date) -> Path {
-    guard let morphFrom, morphProgress(date) < 1 else { return AvatarGeometry.path(geometry) }
-    return morphFrom.mixed(with: AvatarGeometry.sampled(geometry), morphProgress(date)).polygon
+    AvatarGeometry.body(geometry, from: morphFrom, progress: morphProgress(date))
+  }
+  private var changeAnimates: Bool {
+    Self.animatesChange(state: state, reduceMotion: reduceMotion, visible: visible, active: scenePhase == .active)
+  }
+  /// Whether a new shape or color moves into place: only while frames will come to carry it. A
+  /// frozen, hidden or reduced-motion avatar draws only when something changes, so a morph it began
+  /// would stay on its first frame, the old shape's samples or the old color, until some other redraw.
+  static func animatesChange(state: ActivityState, reduceMotion: Bool, visible: Bool, active: Bool) -> Bool {
+    // A change starts the settling window, so a failed avatar animates it too.
+    !AvatarMotion.timelinePaused(state, reduceMotion: reduceMotion, visible: visible, active: active, settling: true)
   }
   private func bodyColor(at date: Date) -> Color {
     let progress = AvatarMotion.smoothstep(

@@ -15,6 +15,25 @@ import XCTest
     Bot(id: id, name: id.capitalized, model: "m", shared: true, avatar: avatar, activity: .idle)
   }
 
+  func testASenderPictureIsDrawnAgainWhenItsShapesArtChanges() throws {
+    let root = temporaryDirectory()
+    var drawn = 0
+    let avatars = SenderAvatars(root: root) { _, _ in drawn += 1; return Data("picture".utf8) }
+    let account = NotificationActions.accountMarker("one")
+    let cloud = AvatarConfig(shape: .cloud)
+    avatars.sync(account: account, bots: [bot("weather", cloud)])
+    avatars.sync(account: account, bots: [bot("weather", cloud)])
+    XCTAssertEqual(drawn, 1, "The same avatar and art are kept")
+    // An earlier build drew this same cloud from another outline, and its index says so.
+    let current = try XCTUnwrap(AvatarCatalog.art[.cloud])
+    let earlier = AvatarCatalog.Art(path: "M20 40 C15 15 46 7 58 25Z", face: current.face)
+    let index = try XCTUnwrap(NotificationSenders.directory(account: account, root: root))
+      .appendingPathComponent(SenderAvatars.indexName)
+    try JSONEncoder().encode(["weather": try XCTUnwrap(SenderAvatars.fingerprint(cloud, art: earlier))]).write(to: index)
+    avatars.sync(account: account, bots: [bot("weather", cloud)])
+    XCTAssertEqual(drawn, 2, "A picture of the old outline is drawn again")
+  }
+
   func testSenderPicturesFollowTheAccountAndRedrawOnlyChangedAvatars() throws {
     let root = temporaryDirectory()
     var drawn: [String] = [], forgotten: [String] = []

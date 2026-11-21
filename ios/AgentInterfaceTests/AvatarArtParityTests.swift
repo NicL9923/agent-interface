@@ -89,8 +89,9 @@ final class AvatarArtParityTests: XCTestCase {
     }
   }
   /// Web paths the app draws another way. The scan in tests/avatar-art-parity.test.ts picks up the
-  /// "M" that starts the web's morph polygon, and the four state-badge glyphs are SF Symbols in
-  /// AvatarView's badge.
+  /// "M" that starts the web's morph polygon. The four state-badge glyphs are SF Symbols in
+  /// AvatarView's badge; neither app badges a lost connection any more, and the web keeps that
+  /// glyph's path only in `StateGlyph`.
   private static let drawnOtherwise: Set<String> = [
     "M",
     "M4 8.4 L6.9 11.2 L12.2 5.2",

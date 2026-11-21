@@ -673,7 +673,7 @@ struct BotSettingsView: View {
             AvatarTiles(
               group: "shape", options: group.shapes.map { ($0, $0.label) },
               selected: avatar.shape ?? .blob,
-              preview: { var a = avatar.selectingShape($0); a.accessory = .plain; return a },
+              preview: { var a = avatar.showingShape($0); a.accessory = .plain; return a },
               select: { avatar = avatar.selectingShape($0) })
           } header: { settingsHeader(group.label) }
         }

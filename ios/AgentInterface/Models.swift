@@ -47,13 +47,18 @@ struct AvatarConfig: Codable, Equatable {
   /// The outline this avatar draws and morphs to. A shape this build does not know, and a mode it
   /// does not know, draw as the blob.
   var drawnShape: AvatarShape { mode == .geometric ? shape ?? .blob : .blob }
-  /// This avatar with `shape` picked. A seasonal shape arrives in its own color; every other shape
-  /// keeps the color already chosen.
-  func selectingShape(_ shape: AvatarShape) -> AvatarConfig {
+  /// This avatar as `shape`'s picker tile shows it: a seasonal shape in its own color, every
+  /// other shape in the color already chosen.
+  func showingShape(_ shape: AvatarShape) -> AvatarConfig {
     var next = self
     next.shape = shape
     if let color = AvatarCatalog.seasonalColors[shape] { next.color = color }
     return next
+  }
+  /// This avatar with `shape` picked. Picking the shape it already has changes nothing, as a second
+  /// click on a checked radio does on the web, so a recolored pumpkin stays recolored.
+  func selectingShape(_ shape: AvatarShape) -> AvatarConfig {
+    shape == self.shape ? self : showingShape(shape)
   }
   static let colors = [
     "#1084FE", "#FF6700", "#00BCA6", "#FF263C", "#FF309B", "#9159FE", "#FF9800", "#97683D",
@@ -74,7 +79,10 @@ extension AvatarConfig {
   init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     mode = try values.decode(AvatarMode.self, forKey: .mode)
-    shape = try values.decodeIfPresent(AvatarShape.self, forKey: .shape)
+    let mascot = mode.rawValue == "mascot"
+    // A mascot's shape is its family's, so whatever an older build stored there is never read: a
+    // malformed one must not fail the bot, the roster and the offline library that carry it.
+    shape = try mascot ? nil : values.decodeIfPresent(AvatarShape.self, forKey: .shape)
     color = try values.decodeIfPresent(String.self, forKey: .color)
     eyes = try values.decodeIfPresent(AvatarEyes.self, forKey: .eyes)
     accessory = try values.decodeIfPresent(AvatarAccessory.self, forKey: .accessory)
@@ -83,7 +91,7 @@ extension AvatarConfig {
     eyeSpacing = try values.decodeIfPresent(Double.self, forKey: .eyeSpacing)
     src = try values.decodeIfPresent(String.self, forKey: .src)
     origin = try values.decodeIfPresent(String.self, forKey: .origin)
-    guard mode.rawValue == "mascot" else { return }
+    guard mascot else { return }
     let family = (try? values.decodeIfPresent(String.self, forKey: .family)) ?? nil
     // A family no build ever had drew as the plain mascot head; the plain shape is the blob.
     let known = family.flatMap { AvatarCatalog.legacyMascots[$0] } ?? (shape: AvatarShape.blob, was: nil, now: nil)
