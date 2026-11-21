@@ -762,7 +762,13 @@ test.describe("on a phone held sideways with its on-screen keyboard up", () => {
 });
 
 test.describe("on a phone held upright", () => {
-  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  // The page route below fills the transcript, and WebKit sends a worker-controlled page's requests past it.
+  test.use({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    serviceWorkers: "block",
+  });
   test.beforeEach(async ({ page }) => {
     // As in the sideways test: Safari reports its keyboard as a shorter visual viewport.
     await page.addInitScript(() => {
