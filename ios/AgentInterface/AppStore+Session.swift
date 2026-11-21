@@ -19,8 +19,9 @@ extension AppStore {
           let expires = ServerDate.parse(expiry), expires > Date(),
           let snapshot = await OfflineLibrary.load(url), bootstrap == nil, self.api === api {
           bootstrap = snapshot.bootstrap
+          unconfirmedDepartures = snapshot.departed ?? [:]
           // Sends still unsettled come back before any draft is ready, so nothing joins a sent copy.
-          loadPendings(snapshot.bootstrap.bots)
+          loadPendings(knownBots)
           conversationCache = snapshot.conversations
           conversationCapturedAt = snapshot.capturedAt
           cachedChats = Set(snapshot.conversations.keys)
@@ -28,7 +29,7 @@ extension AppStore {
           restoredRosterAt = snapshot.savedAt
           offlineSavedAt = snapshot.selected.flatMap { snapshot.capturedAt[$0] } ?? snapshot.savedAt
           appUnavailable = true
-          if let id = snapshot.selected, bootstrap?.bots.contains(where: { $0.id == id }) == true {
+          if let id = snapshot.selected, knownBot(id) != nil {
             selectedBotId = id
             conversation = conversationCache[id]
             let cachedDraft: Draft? = read(key(.draft, id))

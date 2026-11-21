@@ -17,7 +17,9 @@ extension AppStore {
     leftBotId = id
   }
   private static func missing(_ error: Error) -> Bool { (error as? APIError)?.code == "assistant_not_found" }
-  func select(_ id: String?, navigate: Bool = true) async {
+  /// `automatic` is the session a chat nobody tapped was opened in, as bootstrap opens the last one; its
+  /// conversation read is checked as it sets out, after any draft wait, like the poll's.
+  func select(_ id: String?, navigate: Bool = true, automatic session: UUID? = nil) async {
     selections += 1
     // A window an open-at asked for belongs to the selection it was made in.
     requestedWindow = nil
@@ -68,7 +70,7 @@ extension AppStore {
       // An unsaved edit may start its save as the draft loads, and the conversation must see that
       // save finished, not in flight. That case, being rare, keeps the draft strictly first.
       if cached?.dirty == true { await draftLoad.value }
-      await refreshConversation(after: draftLoad)
+      await refreshConversation(after: draftLoad, automatic: session)
       await draftLoad.value
     } onCancel: { draftLoad.cancel() }
   }

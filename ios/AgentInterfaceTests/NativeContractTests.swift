@@ -39,6 +39,17 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     /// marked `disconnected`. Without this the down roster is empty, as when the server has none.
     private var listedWhileDown = false
     func listWhileDown() { lock.withLock { listedWhileDown = true } }
+    /// The server has no roster from its current Hermes connection, though Hermes may be connected, as when its
+    /// first `profiles.list` failed or it reconnected: it says `rosterUnknown`, with whatever rows it last had.
+    /// The empty down roster above says so too.
+    private var unknownRoster = false
+    func rosterUnknown(_ value: Bool = true) { lock.withLock { unknownRoster = value } }
+    /// The roster lists no one, as when this member's last assistant was made private.
+    private var noOneListed = false
+    func listNoOne(_ value: Bool = true) { lock.withLock { noOneListed = value } }
+    /// Answers bootstrap as a server from before `rosterUnknown`, without the field.
+    private var oldRoster = false
+    func answerRosterAsOldServer(_ value: Bool = true) { lock.withLock { oldRoster = value } }
     /// Family's owner made it private: it leaves this member's roster. Also what the server's cached roster
     /// says when that cache missed Family, as after a read a change overtook.
     private var familyHidden = false
@@ -216,17 +227,21 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         guard try await eventually({ lock.withLock { held[path] != nil } }) else { throw URLError(.timedOut) }
     }
     func bootstrapData() -> Data {
-        let (isConnected, hidden, extra, stale, listed) = lock.withLock { (connected, botHidden, extraBot && !familyHidden, rosterStale, listedWhileDown) }
+        let (isConnected, hidden, extra, stale, listed, unknownState) = lock.withLock { (connected, botHidden, extraBot && !familyHidden, rosterStale, listedWhileDown, (unknownRoster, noOneListed, oldRoster)) }
+        let (unknown, noOne, old) = unknownState
         let activity = stale || !isConnected ? "disconnected" : "idle"
         let family: [String: Any] = ["id": "family", "name": "Family", "model": "test", "shared": true, "activity": activity]
-        let lists = isConnected || listed
+        let hasRoster = isConnected || listed
+        let lists = hasRoster && !noOne
         var bots: [[String: Any]] = !lists ? [] : hidden ? [family] : [["id": "bot", "name": "Bot", "model": "test", "shared": true, "activity": activity]]
         if lists && extra && !hidden { bots.append(family) }
-        return Self.json(["user": ["id": user, "name": user, "email": "\(user)@example.test", "picture": NSNull()],
+        var body: [String: Any] = ["user": ["id": user, "name": user, "email": "\(user)@example.test", "picture": NSNull()],
                    "household": [], "preferences": ["presentation": "simple", "theme": "system", "favorites": [], "sections": [], "followBots": []],
                    "bots": bots,
                    "capabilities": ["uploads": ["supported": true], "chat": ["supported": true], "steering": ["supported": true], "idempotency": ["supported": true]],
-                   "connection": ["connected": isConnected], "csrfToken": NSNull()])
+                   "connection": ["connected": isConnected], "csrfToken": NSNull()]
+        if !old { body["rosterUnknown"] = unknown || !hasRoster }
+        return Self.json(body)
     }
     func conversationData(_ bot: String = "bot", query: String? = nil) -> Data {
         let state: String = lock.withLock { self.state }
@@ -4227,5 +4242,182 @@ extension NativeContractTests {
         _ = await value.saveGroupContext(context, roomId: "room", busy: nil, error: binding)
         XCTAssertEqual(saved?.requestId, "request")
         XCTAssertEqual(sends(), 1); XCTAssertEqual(saves(), 1)
+    }
+}
+
+extension NativeContractTests {
+    /// Round 4, finding 1: a cached roster that left out the open chat kept it in memory, but the next saved
+    /// library dropped it, since only listed assistants were saved; leaving the app forces that write, and an
+    /// offline relaunch found the chat, and its unsettled send, gone.
+    func testACachedRosterThatLeavesOutTheOpenChatKeepsItsSavedChatAndSendThroughARelaunch() async throws {
+        let server = NativeMockServer()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let expiryKey = DeviceDefaults.expiry(server.origin)
+        UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date(timeIntervalSinceNow: 3600)), forKey: expiryKey)
+        defer { try? FileManager.default.removeItem(at: root); UserDefaults.standard.removeObject(forKey: expiryKey); clean(server) }
+        let value = try store(server); value.offlineLibraryRoot = root
+        server.addFamilyBot(); await value.refreshBootstrap()
+        value.conversationShown("bot", false)
+        await value.select("family")
+        value.conversationShown("family", true)
+        value.draft = Draft(text: "Feed the dogs", attachments: [], dirty: true)
+        server.sendStatus = 503; await value.send()
+        XCTAssertNotNil(value.pendings["family"], "An uncertain send waits to settle")
+        // The roster read fails with Hermes connected, and the server's cache never had Family.
+        server.staleRoster(); server.hideFamilyBot()
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.selectedBotId, "family")
+        value.suspend()
+        let url = OfflineLibrary.url(origin: server.origin.absoluteString, token: "synthetic-native-session", root: root)
+        try await until { FileManager.default.fileExists(atPath: url.path) }
+        let saved = try XCTUnwrap(OfflineLibrary.read(url))
+        XCTAssertNotNil(saved.conversations["family"], "Leaving the app saves the chat a cached roster left out")
+        XCTAssertEqual(saved.selected, "family")
+        // Relaunch while the server cannot be reached.
+        server.setOffline(true)
+        let launched = launchedStore(server, token: "synthetic-native-session"); launched.offlineLibraryRoot = root
+        defer { launched.suspend() }
+        await launched.restore()
+        XCTAssertEqual(launched.selectedBotId, "family", "The saved chat opens again")
+        XCTAssertEqual(launched.bot?.name, "Family", "on its last row")
+        XCTAssertEqual(launched.bot?.activity, .disconnected, "which, like every saved row, claims no live activity")
+        XCTAssertNotNil(launched.conversation)
+        XCTAssertNotNil(launched.pendings["family"], "and its unsettled send is back")
+        XCTAssertEqual(launched.bootstrap?.bots.map(\.id), ["bot"], "Home lists what the server last listed")
+        // A connected roster that leaves Family out is the word: now it left.
+        server.setOffline(false); server.staleRoster(false)
+        await launched.refreshBootstrap()
+        XCTAssertNil(launched.selectedBotId)
+        XCTAssertEqual(launched.leftBotId, "family")
+        XCTAssertNil(launched.conversationCache["family"])
+    }
+
+    /// Round 4, finding 2: a roster the server does not have from its current Hermes connection, which it answers
+    /// with Hermes connected when its first `profiles.list` failed, lists no one and marks no row. It was taken for
+    /// a fresh, empty roster: the open chat closed and its saved chat, recording and widget row went. With the last
+    /// connection's rows it says no more.
+    func testAnUnknownRosterIsNoRosterAndRemovesNothing() async throws {
+        let server = NativeMockServer(), value = try store(server)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        value.offlineLibraryRoot = root
+        defer { try? FileManager.default.removeItem(at: root); clean(server, value) }
+        let widgets = root.appendingPathComponent("widgets.json")
+        value.widgetSnapshotURL = widgets
+        server.addFamilyBot(); await value.refreshBootstrap()
+        value.conversationShown("bot", false)
+        await value.select("family")
+        value.conversationShown("family", true)
+        let clip = try XCTUnwrap(value.voiceRecordingURL(botId: "family"))
+        value.saveOfflineLibrary(immediately: true)
+        let url = try XCTUnwrap(value.offlineURL)
+        try await until { FileManager.default.fileExists(atPath: url.path) }
+        let savedAt = try XCTUnwrap(OfflineLibrary.read(url)?.savedAt)
+        server.rosterUnknown(); server.listNoOne()
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.connection.connected, true)
+        XCTAssertEqual(value.bootstrap?.bots.map(\.id), ["bot", "family"], "The rows stay as they were")
+        XCTAssertEqual(value.selectedBotId, "family"); XCTAssertNil(value.leftBotId); XCTAssertNil(value.notice)
+        XCTAssertNotNil(value.conversationCache["family"])
+        XCTAssertEqual(value.voiceRecordingURL(botId: "family"), clip)
+        XCTAssertEqual(WidgetSnapshotStore.read(from: widgets)?.assistants.map(\.id), ["bot", "family"])
+        // Unknown with the last connection's rows, which leave Family out: still no roster.
+        server.listNoOne(false); server.hideFamilyBot()
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.bots.map(\.id), ["bot", "family"], "Rows an unknown roster holds are no word either")
+        XCTAssertEqual(value.selectedBotId, "family"); XCTAssertTrue(value.unconfirmedDepartures.isEmpty)
+        XCTAssertEqual(WidgetSnapshotStore.read(from: widgets)?.assistants.map(\.id), ["bot", "family"])
+        // Nothing is saved from it: the library keeps the last good roster's age.
+        value.saveOfflineLibrary(immediately: true)
+        // Absence check: an immediate write lands within milliseconds.
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(OfflineLibrary.read(url)?.savedAt, savedAt, "A roster the server never had rewrites no library")
+        // Hermes answers, and Family is not on this person's roster: now it left.
+        server.rosterUnknown(false)
+        await value.refreshBootstrap()
+        XCTAssertNil(value.selectedBotId)
+        XCTAssertEqual(value.leftBotId, "family")
+        XCTAssertNil(value.voiceRecordingURL(botId: "family"))
+        XCTAssertEqual(WidgetSnapshotStore.read(from: widgets)?.assistants.map(\.id), ["bot"])
+    }
+
+    /// Round 4, finding 3: the composer ends a recording, and deletes its audio, when the recording's place
+    /// changes. A cached roster that left out the open chat took that place away while the chat stayed on screen.
+    func testARecordingKeepsItsPlaceUntilAConnectedRosterSaysItsAssistantLeft() async throws {
+        let server = NativeMockServer(), value = try store(server)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        value.offlineLibraryRoot = root
+        defer { try? FileManager.default.removeItem(at: root); clean(server, value) }
+        server.addFamilyBot(); await value.refreshBootstrap()
+        await value.select("family")
+        let clip = try XCTUnwrap(value.voiceRecordingURL(botId: "family"))
+        server.staleRoster(); server.hideFamilyBot()
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.selectedBotId, "family")
+        XCTAssertEqual(value.voiceRecordingURL(botId: "family"), clip, "The recording goes on")
+        server.staleRoster(false)
+        await value.refreshBootstrap()
+        XCTAssertNil(value.voiceRecordingURL(botId: "family"), "A connected roster's word ends it")
+    }
+
+    /// Round 4, the same omission elsewhere: a notification's reply waiting for an assistant a cached roster left
+    /// out was dropped, and so was the mark that its chat was read here.
+    func testHeldTextAndReadMarksWaitForAConnectedRosterToSayTheirAssistantLeft() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.addFamilyBot(); await value.refreshBootstrap()
+        let index = try XCTUnwrap(value.bootstrap?.bots.firstIndex { $0.id == "family" })
+        value.bootstrap?.bots[index].unread = true
+        value.bootstrap?.bots[index].lastMessage = LastMessage(text: "Dinner is at six", at: "2026-11-20T18:00:00Z")
+        value.noteRead(["family"])
+        let user = try XCTUnwrap(value.bootstrap?.user.id)
+        server.staleRoster(); server.hideFamilyBot()
+        await value.refreshBootstrap()
+        let row = try XCTUnwrap(value.unconfirmedDepartures["family"])
+        XCTAssertTrue(value.addNotificationReply("On my way", botId: "family", account: NotificationActions.accountMarker(user)))
+        await value.deliverAdditions()
+        XCTAssertEqual(value.additions.map(\.text), ["On my way"], "The reply waits for Family's chat")
+        value.noteRead([])
+        XCTAssertFalse(value.unread(row), "Family's chat is still read here")
+        server.staleRoster(false)
+        await value.refreshBootstrap()
+        await value.deliverAdditions()
+        XCTAssertTrue(value.additions.isEmpty, "Once Family left, its reply goes")
+    }
+
+    /// Round 4, finding 4: bootstrap opening a chat nobody tapped checked the network before its draft read, but
+    /// its conversation read, which waits for a draft with unsaved edits, went out after the network dropped.
+    func testABootstrapsAutomaticChatSendsNoReadAfterTheNetworkDropsDuringItsDraftWait() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        // Leaving saves the typed draft, so the chat bootstrap reopens has unsaved edits and waits for its draft.
+        await value.select(nil)
+        let before = conversationReads(server)
+        let draft = "/api/bots/bot/draft"
+        server.holdNext(draft)
+        let bootstrap = Task { await value.refreshBootstrap() }
+        try await server.waitForHeld(draft)
+        XCTAssertEqual(value.selectedBotId, "bot")
+        value.deviceOffline = true
+        server.release(draft); await bootstrap.value
+        XCTAssertEqual(conversationReads(server), before, "No conversation read goes out offline")
+        XCTAssertEqual(value.selectedBotId, "bot", "The chat stays open for the next read")
+    }
+}
+
+extension NativeContractTests {
+    /// Round 4, with finding 2: a down roster that lists no one is unknown only from a server that does not say.
+    /// One that says its roster is known lists no one, as when this member's last assistant was made private:
+    /// home lists no one, while what the open chat had waits for a connected roster's word.
+    func testADownRosterThatListsNoOneIsUnknownOnlyWhenTheServerDoesNotSay() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.addFamilyBot(); await value.refreshBootstrap()
+        await value.select("family")
+        server.answerRosterAsOldServer(); server.disconnect()
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.bots.map(\.id), ["bot", "family"], "An older server's empty down roster keeps the rows")
+        server.answerRosterAsOldServer(false); server.listWhileDown(); server.listNoOne()
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.bots.map(\.id), [], "A known empty roster lists no one")
+        XCTAssertEqual(value.selectedBotId, "family", "Hermes is down, so the chat stays open")
+        XCTAssertNotNil(value.conversationCache["family"])
+        XCTAssertEqual(Set(value.unconfirmedDepartures.keys), ["bot", "family"])
     }
 }

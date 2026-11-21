@@ -149,12 +149,15 @@ section lists the tests and mutants.
 - Who is listed is the server's word even from its cache, as the web's `rosterFrom` takes it. A
   roster from that cache, while Hermes is down or after its roster read failed, can be stale either
   way, so an assistant it leaves out loses nothing: its open chat stays on screen on its last row, as
-  the web keeps it behind its notice, with its saved chat, uploads, delivered notifications and its
-  place on the widgets, in Spotlight and Siri and among the notification pictures. A connected roster
-  that leaves it out closes its chat, saving the draft, and clears all of those, the delivered
-  notifications only for the account it left. A row the roster keeps carries its activity for 30
-  seconds from the first stale roster. A roster that missed Hermes and lists nobody keeps the rows
-  as they were.
+  the web keeps it behind its notice, with its saved chat, which a relaunch reopens, its recording,
+  text waiting for its draft, its read mark, uploads, delivered notifications and its place on the
+  widgets, in Spotlight and Siri and among the notification pictures. A connected roster that leaves
+  it out closes its chat, saving the draft, and clears all of those, the delivered notifications only
+  for the account it left. A row the roster keeps carries its activity for 30 seconds from the first
+  stale roster.
+- A bootstrap with `rosterUnknown`, empty or holding the last connection's rows, is no roster, as on
+  the web: the rows stay as they were and nothing is saved or written to the widgets from it. From an
+  older server that omits the field, a roster that lists nobody while Hermes is down means the same.
 - A disconnected avatar has no badge and a lighter dim that eases over 400 ms. Home captions no
   assistant with the loss; the header's status pill says it once. The chat's activity row is hidden
   while the loss shows, and a chat that never loaded says so.

@@ -250,19 +250,21 @@ extension AppStore {
       guard var value = response.value ?? bootstrap else { return }
       defer { updateActivity() }
       var applied = false
-      // A roster from the server's cache: Hermes is down, or its roster read failed and the rows say so.
-      // The server's cache can be stale either way, as when a read a change overtook never updated it.
-      // An unchanged body is the roster applied last, whose rows may carry what they were doing.
-      let cached = response.value.map { !$0.connection.connected || $0.bots.contains { $0.activity == .disconnected } } ?? rosterFromCache
+      // A roster from the server's cache: Hermes is down, or its roster read failed. The server's cache can
+      // be stale either way, as when a read a change overtook never updated it. An unchanged body is the
+      // roster applied last, whose rows may carry what they were doing.
+      let cached = response.value?.servedFromCache ?? rosterFromCache
       if response.value != nil {
         // Assistants a connected roster says left this person's roster.
         var removed: Set<String> = []
         // The web's `rosterFrom`. Who is listed is the server's word even from its cache: it filters its
-        // last roster for each member. A bootstrap that missed Hermes and lists no roster at all keeps the
-        // rows as they were.
+        // last roster for each member. A bootstrap that knows no roster keeps the rows as they were, whatever it
+        // lists: the server has none from its current Hermes connection, or, from an older server that does
+        // not say, Hermes is down and it lists no one.
         if let previous = bootstrap, previous.user.id == value.user.id {
           let carried = carryActivity(value.bots, from: previous.bots)
-          value.bots = !value.connection.connected && value.bots.isEmpty ? previous.bots : carried
+          let knowsNoRoster = value.rosterUnknown ?? (!value.connection.connected && value.bots.isEmpty)
+          value.bots = knowsNoRoster ? previous.bots : carried
           let listed = Set(value.bots.map(\.id))
           if cached {
             // Left out of a cached roster is not proof of leaving: each keeps its last row, and nothing of it
@@ -329,7 +331,7 @@ extension AppStore {
           value.bots.first { $0.id == last }?.id ?? value.bots.first {
             $0.id == value.preferences.defaultBotId
           }?.id ?? value.bots.first?.id
-        await select(next, navigate: false)
+        await select(next, navigate: false, automatic: generation)
       }
     } catch is CancellationError {} catch {
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }

@@ -49,8 +49,7 @@ import WidgetKit
       let bootstrap: Bootstrap = try await api.get("/bootstrap?roster=lean")
       // An outage, or a roster from the server's cache, keeps the last good snapshot, as the open app does:
       // a cached roster can be stale either way.
-      guard !Task.isCancelled, bootstrap.connection.connected, !bootstrap.bots.contains(where: { $0.activity == .disconnected })
-      else { return false }
+      guard !Task.isCancelled, !bootstrap.servedFromCache else { return false }
       // Signed out or into another account while this read was out: it is not theirs to show.
       guard let current = client(), current.baseURL == api.baseURL, current.token == token else { return false }
       if let stored = WidgetSnapshotStore.read(from: snapshotURL), stored.generatedAt > started { return false }

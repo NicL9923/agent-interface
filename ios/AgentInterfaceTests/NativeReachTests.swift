@@ -15,12 +15,15 @@ import XCTest
     addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
     return directory.appendingPathComponent("snapshot.json")
   }
-  private func bootstrapJSON(user: String = "one", connected: Bool = true, activity: String = "waiting") -> String {
-    """
+  private func bootstrapJSON(user: String = "one", connected: Bool = true, activity: String = "waiting", unknown: Bool = false, rows: Bool = true) -> String {
+    let bots = !rows ? "" : """
+      {"id":"kitchen","name":"Kitchen","model":"m","shared":true,"activity":"\(activity)",
+       "lastMessage":{"text":"Milk is low","at":"2026-11-06T12:00:00Z"}}
+      """
+    return """
     {"user":{"id":"\(user)","name":"One","email":"one@example.test"},"household":[],
      "preferences":{"presentation":"simple","theme":"system","favorites":[],"sections":[],"followBots":[]},
-     "bots":[{"id":"kitchen","name":"Kitchen","model":"m","shared":true,"activity":"\(activity)",
-              "lastMessage":{"text":"Milk is low","at":"2026-11-06T12:00:00Z"}}],
+     "bots":[\(bots)],"rosterUnknown":\(unknown),
      "capabilities":{},"connection":{"connected":\(connected)}}
     """
   }
@@ -81,6 +84,20 @@ import XCTest
     let refreshed = await BackgroundRefresh.refreshWidgets()
     XCTAssertFalse(refreshed)
     XCTAssertNil(WidgetSnapshotStore.read(from: url), "A cached roster never replaces the snapshot")
+  }
+
+  /// Round 4, finding 2: an unknown roster, with Hermes connected, lists no one or the last connection's
+  /// rows, and marks none of them.
+  func testABackgroundReadOfAnUnknownRosterLeavesTheSnapshotAlone() async {
+    for rows in [false, true] {
+      let fake = FakeServer()
+      fake.reply = .init(body: bootstrapJSON(activity: "idle", unknown: true, rows: rows))
+      let api = fake.api()
+      let url = refreshing(with: fake) { api }
+      let refreshed = await BackgroundRefresh.refreshWidgets()
+      XCTAssertFalse(refreshed, "rows: \(rows)")
+      XCTAssertNil(WidgetSnapshotStore.read(from: url), "It never replaces the snapshot, rows: \(rows)")
+    }
   }
 
   func testAReadThatFinishesAfterANewerSnapshotLeavesItAlone() async throws {

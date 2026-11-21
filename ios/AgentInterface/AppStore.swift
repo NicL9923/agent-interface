@@ -323,8 +323,16 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var earlierFilesFailure: String?
   var loadingEarlier = false
   /// The open assistant. One a cached roster left out keeps its last row, so its chat stays on screen.
-  var bot: Bot? {
-    bootstrap?.bots.first { $0.id == selectedBotId } ?? selectedBotId.flatMap { unconfirmedDepartures[$0] }
+  var bot: Bot? { selectedBotId.flatMap(knownBot) }
+  /// An assistant this person may still have: one the roster lists, or one only a cached roster left out,
+  /// on its last row. Nothing of the second is erased, cancelled or revoked until a connected roster
+  /// leaves it out too.
+  func knownBot(_ id: String) -> Bot? { bootstrap?.bots.first { $0.id == id } ?? unconfirmedDepartures[id] }
+  /// The roster, then the assistants a cached roster left out.
+  var knownBots: [Bot] {
+    let listed = bootstrap?.bots ?? []
+    let ids = Set(listed.map(\.id))
+    return listed + unconfirmedDepartures.values.filter { !ids.contains($0.id) }.sorted { $0.id < $1.id }
   }
   /// Whether the open chat can act now: what gates Send, Stop and every write in it. A lost network or
   /// a failed read of the chat refuses them from the first moment, though the chat shows the loss only
@@ -369,7 +377,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// The chat on screen, and one just left, count as read here until their latest message changes.
   func noteRead(_ ids: [String?]) {
     var next = readHere
-    next.keep(bootstrap?.bots ?? [], user: bootstrap?.user.id)
+    next.keep(knownBots, user: bootstrap?.user.id)
     for case let id? in ids { if let bot = bootstrap?.bots.first(where: { $0.id == id }) { next.read(bot) } }
     if next != readHere { readHere = next }
   }
