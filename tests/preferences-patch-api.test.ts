@@ -50,6 +50,8 @@ async function setup() {
       payload: JSON.stringify(payload),
     });
   return {
+    app,
+    headers,
     store,
     patch: (payload: unknown) => send(payload, MERGE_PATCH),
     whole: (payload: unknown) => send(payload, "application/json"),
@@ -116,12 +118,39 @@ it("checks the merged notifications as a whole, so half a quiet-hours window is 
   expect(paths(incomplete)).toEqual([["notifications", "timezone"]]);
 });
 
-it("refuses a merge patch that is not an object, or is not JSON", async () => {
+it("refuses a merge patch that is not an object, with the reason", async () => {
   const s = await setup();
   const list = await s.patch(["theme"]);
   expect([list.statusCode, paths(list)]).toEqual([400, [[]]]);
-  const broken = await s.send(undefined, MERGE_PATCH);
-  expect(broken.statusCode).toBe(400);
+  expect(s.store.preferences("one")).toEqual(saved);
+});
+
+// The parser takes input from any signed-in client; each refusal names its reason and saves nothing.
+it("refuses an empty, malformed or prototype-poisoning merge patch body", async () => {
+  const s = await setup();
+  const raw = (payload: string) =>
+    s.app.inject({
+      method: "PATCH",
+      url: "/api/preferences",
+      headers: { ...s.headers, "content-type": MERGE_PATCH },
+      payload,
+    });
+  const answers = [];
+  for (const payload of [
+    "",
+    "{",
+    '{"__proto__":{"theme":"light"}}',
+    '{"constructor":{"prototype":{"theme":"light"}}}',
+  ])
+    answers.push(
+      await raw(payload).then((response) => [response.statusCode, response.json().code]),
+    );
+  expect(answers).toEqual([
+    [400, "FST_ERR_CTP_EMPTY_JSON_BODY"],
+    [400, "FST_ERR_CTP_INVALID_JSON_BODY"],
+    [400, "FST_ERR_CTP_INVALID_JSON_BODY"],
+    [400, "FST_ERR_CTP_INVALID_JSON_BODY"],
+  ]);
   expect(s.store.preferences("one")).toEqual(saved);
 });
 
@@ -137,19 +166,21 @@ it("refuses a merge patch on any other route, and a media type no route reads", 
   expect(s.store.preferences("one")).toEqual(saved);
 });
 
-it("ignores the routed fields in both kinds of save", async () => {
+it("ignores the routed fields in a partial save, and a whole save keeps only the main assistant's", async () => {
   const s = await setup();
   const routed = {
     mainBotId: "creek",
     checkIns: { enabled: false, everyHours: 4, timezone: "UTC" },
-    modelFavorites: [],
+    modelFavorites: [{ provider: "xyz", model: "test" }],
   };
   await s.patch({ ...routed, theme: "light" });
   expect(s.store.preferences("one")).toEqual({ ...saved, theme: "light" });
+  // A whole save has always replaced model stars it sends, as the models route does.
   await s.whole({ ...defaultPreferences, ...routed });
   expect(s.store.preferences("one")).toMatchObject({
     mainBotId: saved.mainBotId,
     checkIns: saved.checkIns,
+    modelFavorites: routed.modelFavorites,
   });
 });
 
@@ -177,4 +208,29 @@ it("stores a whole save exactly as before: an omitted default assistant clears, 
   expect(paths(partial)).toEqual([["presentation"], ["favorites"], ["sections"], ["followBots"]]);
   const cleared = await s.whole({ ...defaultPreferences, defaultBotId: null });
   expect(paths(cleared)).toEqual([["defaultBotId"]]);
+});
+
+// Released iOS builds read these details. The bodies were answered by the server at af8d1c38.
+it("refuses a bad whole save with every field the server always named", async () => {
+  const s = await setup();
+  const sepia = await s.whole({ theme: "sepia" });
+  expect([sepia.statusCode, sepia.json()]).toEqual([
+    400,
+    {
+      error: "Invalid request",
+      details: [
+        { path: ["presentation"], message: 'Invalid option: expected one of "simple"|"advanced"' },
+        { path: ["theme"], message: 'Invalid option: expected one of "system"|"light"|"dark"' },
+        { path: ["favorites"], message: "Invalid input: expected array, received undefined" },
+        { path: ["sections"], message: "Invalid input: expected array, received undefined" },
+        { path: ["followBots"], message: "Invalid input: expected array, received undefined" },
+      ],
+    },
+  ]);
+  const nulls = await s.whole({ ...defaultPreferences, defaultBotId: null, chatStyle: "compact" });
+  expect(nulls.json().details).toEqual([
+    { path: ["defaultBotId"], message: "Invalid input: expected string, received null" },
+    { path: ["chatStyle"], message: 'Invalid option: expected one of "bubbles"|"classic"' },
+  ]);
+  expect(s.store.preferences("one")).toEqual(saved);
 });

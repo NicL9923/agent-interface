@@ -21,8 +21,8 @@ import { finishSignOut } from "./account-change";
 import { reportStream, streamUp } from "./stream-health";
 /**
  * Sends a partial preferences save. A server from before partial saves refuses its media type with 415
- * and saves nothing; then the patch goes whole, as older clients send, over a copy read just now, so
- * the save overwrites as little as that server allows.
+ * and saves nothing; then the patch goes whole, as older clients send, over a copy read just now. A
+ * value another device saves between that read and the write is overwritten, as it always was there.
  */
 async function savePreferencePatch(patch: PreferencesPatch): Promise<Preferences> {
   try {
@@ -286,7 +286,7 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   /** Puts preferences a server route answered with on screen, such as a new main assistant. */
   const applyPreferences = (value: Preferences) =>
     setBoot((previous) => (previous ? { ...previous, preferences: value } : previous));
-  /** Applies an edit to the newest preferences, including a save still on its way. */
+  /** Queues an edit; it runs on the newest preferences the server answered once the saves before it settle. */
   const editPreferences = (
     edit: (value: Preferences) => Preferences,
     chosen: readonly PreferenceField[],

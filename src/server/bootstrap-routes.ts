@@ -131,17 +131,29 @@ export function installBootstrapRoutes(
       return done(httpError(415, `Only PATCH /api/preferences takes ${MERGE_PATCH}.`), undefined);
     void json(req, body as string, done);
   });
-  apiRoute(app, "PATCH /preferences", { body: preferencesPatch }, async (req, patch) => {
-    const userId = signedIn(req).id;
-    const previous = store.preferences(userId);
-    store.savePreferences(
-      userId,
-      mediaType(req.headers["content-type"]) === MERGE_PATCH
-        ? patched(previous, patch)
-        : whole(previous, preferences.parse(req.body)),
-    );
-    return preferencesFor(userId);
-  });
+  const partial = (req: { headers: { "content-type"?: string } }) =>
+    mediaType(req.headers["content-type"]) === MERGE_PATCH;
+  apiRoute(
+    app,
+    "PATCH /preferences",
+    {
+      // A whole body meets the whole schema first, so an older client's refusal lists every field it
+      // always did, before the looser partial schema reads the body.
+      before: async (req) => {
+        if (!partial(req)) preferences.parse(req.body);
+      },
+      body: preferencesPatch,
+    },
+    async (req, patch) => {
+      const userId = signedIn(req).id;
+      const previous = store.preferences(userId);
+      store.savePreferences(
+        userId,
+        partial(req) ? patched(previous, patch) : whole(previous, preferences.parse(req.body)),
+      );
+      return preferencesFor(userId);
+    },
+  );
   apiRoute(
     app,
     "PUT /preferences/models",

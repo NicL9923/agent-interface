@@ -949,10 +949,10 @@ the person speaks over the voice.
 `PATCH /api/preferences` takes two kinds of body, and its `Content-Type` header says
 which. The server never infers the kind from the fields a body holds.
 
-| `Content-Type`                 | Kind                                        | A field the body leaves out                                                                                                                                                                                                                                    |
-| ------------------------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `application/merge-patch+json` | Partial save, a JSON Merge Patch (RFC 7396) | Keeps its saved value.                                                                                                                                                                                                                                         |
-| `application/json`             | Whole object, as released clients send      | Is cleared, except `modelFavorites`, `startPage`, `chatStyle`, `ownBubble`, `notifications`, `hiddenRoutineRuns` and `mainSuggestionDismissed`, which keep their saved values. `presentation`, `theme`, `favorites`, `sections` and `followBots` are required. |
+| `Content-Type`                 | Kind                                        | A field the body leaves out                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------ | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `application/merge-patch+json` | Partial save, a JSON Merge Patch (RFC 7396) | Keeps its saved value.                                                                                                                                                                                                                                                                                                                                                                                |
+| `application/json`             | Whole object, as released clients send      | Is cleared, except `modelFavorites`, `startPage`, `chatStyle`, `ownBubble`, `notifications`, `hiddenRoutineRuns` and `mainSuggestionDismissed`, which keep their saved values. `presentation`, `theme`, `favorites`, `sections` and `followBots` are required. `mainBotId` and `checkIns` keep their saved values whatever the body holds. A `modelFavorites` the body sends replaces the saved list. |
 
 A partial save follows these rules:
 
@@ -971,25 +971,34 @@ A partial save follows these rules:
   `timezone`, a `batchMinutes` from 0 to 60, and both quiet times or neither, which
   differ. Otherwise the answer is 400 with `["notifications"]` or
   `["notifications", "<key>"]` in `details[].path`.
-- The server ignores `mainBotId`, `checkIns` and `modelFavorites`. They change only
-  through `PUT /api/preferences/main`, `PUT /api/preferences/check-ins` and
-  `PUT /api/preferences/models`. Both kinds of save ignore keys the server does not
-  know.
+- A partial save ignores `mainBotId`, `checkIns` and `modelFavorites`. Change them with
+  `PUT /api/preferences/main`, `PUT /api/preferences/check-ins` and
+  `PUT /api/preferences/models`. Both kinds of save drop a top-level key the server
+  does not know. An unknown key inside a `hiddenRoutineRuns` entry answers 400.
 - The body must be a JSON object. The server validates every value it holds as a whole
   save would, and any 400 saves nothing.
 - The answer is the whole `Preferences` as saved and as the caller may see them. Put it
   on screen.
-- Any other route answers 415 to `application/merge-patch+json`.
+- A body sent as `application/merge-patch+json` to any other route answers 415.
+  A body over the 1 MB limit answers 413 before that.
+- The merge patch parser refuses an empty body with 400 `FST_ERR_CTP_EMPTY_JSON_BODY`,
+  and malformed JSON or a `__proto__` or `constructor.prototype` key with 400
+  `FST_ERR_CTP_INVALID_JSON_BODY`.
 
-The client sends only the fields the person changed. The control the person used names
-the fields it set, and the client also sends any field whose value differs from the
-copy the edit was made on, a queued save's copy included. Values alone cannot show
-every change: the screen may hold another device's value while a save still waiting
-holds the one the person now picks. For `notifications`, send every key the new
-settings hold and `null` for each key the edit removed. Swift's synthesized `Codable`
-leaves a `nil` optional out, so encode a cleared field as an explicit JSON `null`.
-Never send a partial body as `application/json`: every server reads that as a whole
-object.
+The client sends only the fields the person changed. Send one save at a time, and run
+each queued edit when its save is about to go out, on the preferences the server
+answered to the save before it. The edit then starts from what the person sees, and a
+refused save's change is not carried into the edits behind it. The control the person
+used names the fields it set, and the client also sends any field whose value differs
+from the value the edit ran on. Values alone cannot show every change: a pick can
+equal what the server holds while the screen still shows another device's value.
+
+A field the save names says everything about that field, whatever an older copy held.
+A named field the new value lacks goes as `null`. A named `notifications` goes with
+every key the new settings hold, and `null` for `quietStart` and `quietEnd` when they
+are off. Swift's synthesized `Codable` leaves a `nil` optional out, so encode each of
+these as an explicit JSON `null`. Never send a partial body as `application/json`:
+every server reads that as a whole object.
 
 Change the theme and clear the default assistant:
 
@@ -1013,8 +1022,9 @@ A server from before partial saves has no parser for `application/merge-patch+js
 answers 415 with `{"error":"Unsupported Media Type","code":"FST_ERR_CTP_INVALID_MEDIA_TYPE"}`
 and saves nothing. On a 415 from this route, read `GET /api/bootstrap`, apply the patch
 to its `preferences` by RFC 7396, drop `modelFavorites`, and send the result whole as
-`application/json`. Building on a copy read after the refusal keeps another device's
-newer values. That server still keeps the optional fields a whole save leaves out, so a
+`application/json`. This has the old stale-write window: a value another device saves
+between that read and the write is overwritten with the copy just read. That server
+still keeps the optional fields a whole save leaves out, so a
 cleared `startPage`, `chatStyle`, `ownBubble`, `notifications`,
 `hiddenRoutineRuns` or `mainSuggestionDismissed` stays saved there; a cleared
 `defaultBotId` is cleared. Any other failure is a failed save, as before. The web
