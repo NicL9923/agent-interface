@@ -252,11 +252,7 @@ struct ApprovalDecisionView: View {
           Button(label("denied", nil, "Decline", "Declining…")) { decide("denied") }.buttonStyle(.bordered)
             .accessibilityIdentifier("approvalDecline")
           if scoped && approval.offers("always") {
-            Menu {
-              Button("Always allow…") { confirmingAlways = true }
-            } label: {
-              Image(systemName: "ellipsis").frame(width: 44, height: 44)
-            }.accessibilityLabel("More choices").accessibilityIdentifier("approvalMore")
+            ApprovalMoreChoices { confirmingAlways = true }.equatable()
           }
         }
       }.controlSize(.large).disabled(decision != nil || !store.connected || !store.supports(.approvals))
@@ -323,6 +319,21 @@ struct ApprovalDecisionView: View {
         await store.refreshConversation()
       } catch { if session == store.scope { decision = nil; scope = nil; store.buzz(.failed); store.report(error) } }
     }
+  }
+}
+
+/// The approval card's More choices menu. The card renders again on every conversation poll, about
+/// every 1.5 seconds. A render while a finger is on a row of the open menu rebuilds the menu and the
+/// tap is lost, so this view compares equal and keeps the menu it first built.
+private struct ApprovalMoreChoices: View, Equatable {
+  var alwaysAllow: () -> Void
+  static func == (_: Self, _: Self) -> Bool { true }
+  var body: some View {
+    Menu {
+      Button("Always allow…", action: alwaysAllow)
+    } label: {
+      Image(systemName: "ellipsis").frame(width: 44, height: 44)
+    }.accessibilityLabel("More choices").accessibilityIdentifier("approvalMore")
   }
 }
 
