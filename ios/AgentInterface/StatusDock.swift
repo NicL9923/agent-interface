@@ -104,14 +104,18 @@ struct StatusDock: View {
           discardConfirm = true
         }.font(.caption).accessibilityIdentifier("discardUnconfirmedSend")
       }.modifier(DockCard())
+    // The transcript scrolls under the dock, so text in the attention color sits on the dock's card, where it keeps
+    // 4.5:1, rather than on whatever message passes beneath it.
     case .rejected(let message):
       Text(message).font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(DockCard())
     case .notAdmitted(let message):
       Text(message).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("sendNotAdmitted")
     case .interruptedSubmission:
       Text("This submission was interrupted. Review its last actions before trying again.")
         .font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(DockCard())
     case .interruptionReview:
       Toggle("I've reviewed the task's last actions.", isOn: Bindable(store).interruptionReviewed)
         .toggleStyle(CheckboxStyle()).font(.subheadline).fixedSize(horizontal: false, vertical: true)

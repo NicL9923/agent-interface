@@ -20,7 +20,9 @@ enum Palette {
   static let accent = Color.adaptive(light: "#246F59", dark: "#8BD2B2")
   static let onAccent = Color.adaptive(light: "#FFFDF7", dark: "#1B211E")
   static let accentSoft = Color.adaptive(light: "#DCE9DF", dark: "#2A4435")
-  static let attention = Color.adaptive(light: "#9B6733", dark: "#EBC188")
+  /// Status text and marks that need a look. Light is darker than the web's old #9B6733, which fell to 3.83:1 on the
+  /// soft accent; PaletteContrastTests checks every fill it sits on.
+  static let attention = Color.adaptive(light: "#895B2D", dark: "#EBC188")
   static let danger = Color.adaptive(light: "#A33C32", dark: "#FAAFA0")
   static let muted = Color.adaptive(light: "#697268", dark: "#A6B4A7")
   static let messageMetadata = Color.adaptive(light: "#5F685E", dark: "#A6B4A7")

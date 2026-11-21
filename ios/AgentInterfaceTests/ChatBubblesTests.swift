@@ -191,37 +191,15 @@ final class ChatBubblesTests: XCTestCase {
   // MARK: Contrast
 
   private static let avatarColors = AvatarConfig.colors + ["#1084FE", "#FF6700", "#00BCA6", "#FF263C", "#FF309B", "#9159FE", "#FF9800", "#97683D", "#292929"]
-  /// A color as one appearance draws it, with its alpha.
-  private static func resolved(_ color: Color, dark: Bool) -> (r: Double, g: Double, b: Double, a: Double) {
-    let ui = UIColor(color).resolvedColor(with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light))
-    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-    ui.getRed(&r, green: &g, blue: &b, alpha: &a)
-    return (Double(r), Double(g), Double(b), Double(a))
-  }
-  /// `top` at `opacity` (times its own alpha) over an opaque `bottom`, as 0...1 channels.
-  private static func over(_ top: (r: Double, g: Double, b: Double, a: Double), _ bottom: (r: Double, g: Double, b: Double, a: Double),
-    opacity: Double = 1) -> (r: Double, g: Double, b: Double, a: Double) {
-    let a = top.a * opacity
-    return (top.r * a + bottom.r * (1 - a), top.g * a + bottom.g * (1 - a), top.b * a + bottom.b * (1 - a), 1)
-  }
-  private static func luminance(_ c: (r: Double, g: Double, b: Double, a: Double)) -> Double {
-    func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
-    return 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
-  }
-  private static func ratio(_ x: (r: Double, g: Double, b: Double, a: Double), _ y: (r: Double, g: Double, b: Double, a: Double)) -> Double {
-    let (l1, l2) = (luminance(x), luminance(y))
-    return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
-  }
-
   /// Every text color that can sit in a reply bubble or the person's tinted bubble reads at 4.5:1 on its fill
   /// in both appearances; a task's empty box, a graphic, at 3:1. A palette change that lowers one fails here.
   func testTextInsideABubbleKeepsItsContrastInBothAppearances() {
-    let light = Self.resolved(Palette.replyBubble, dark: false), dark = Self.resolved(Palette.replyBubble, dark: true)
+    let light = Contrast.resolved(Palette.replyBubble, dark: false), dark = Contrast.resolved(Palette.replyBubble, dark: true)
     XCTAssertGreaterThan(abs(light.r - dark.r), 0.5, "The reply fill resolves per appearance")
     for isDark in [false, true] {
       let scheme: ColorScheme = isDark ? .dark : .light
-      let reply = Self.resolved(Palette.replyBubble, dark: isDark), person = Self.resolved(Palette.user(scheme), dark: isDark)
-      let pairs: [(String, Color, (r: Double, g: Double, b: Double, a: Double), Double)] = [
+      let reply = Contrast.resolved(Palette.replyBubble, dark: isDark), person = Contrast.resolved(Palette.user(scheme), dark: isDark)
+      let pairs: [(String, Color, Contrast.RGBA, Double)] = [
         ("reply text, headings, inline code and list numbers", Color(uiColor: .label), reply, 4.5),
         ("a link in a reply", Palette.accent, reply, 4.5),
         ("a block quote", Palette.quote, reply, 4.5),
@@ -230,7 +208,7 @@ final class ChatBubblesTests: XCTestCase {
         ("a file's size under the person's message", Palette.bubbleSecondary, person, 4.5),
       ]
       for (name, text, fill, minimum) in pairs {
-        let value = Self.ratio(Self.over(Self.resolved(text, dark: isDark), fill), fill)
+        let value = Contrast.ratio(Contrast.over(Contrast.resolved(text, dark: isDark), fill), fill)
         XCTAssertGreaterThanOrEqual(value, minimum, "\(name) in \(isDark ? "dark" : "light"): \(String(format: "%.2f", value)):1")
       }
     }
@@ -239,13 +217,13 @@ final class ChatBubblesTests: XCTestCase {
   func testIncreasedContrastGivesEveryPersonsBubbleAVisibleEdge() throws {
     for isDark in [false, true] {
       let scheme: ColorScheme = isDark ? .dark : .light
-      let surface = Self.resolved(Palette.surface(scheme), dark: isDark)
+      let surface = Contrast.resolved(Palette.surface(scheme), dark: isDark)
       let tinted = PersonBubbles.border(solid: false, increasedContrast: true) ?? Palette.user(scheme)
-      XCTAssertGreaterThanOrEqual(Self.ratio(Self.resolved(tinted, dark: isDark), surface), 3, "Tinted in \(scheme)")
+      XCTAssertGreaterThanOrEqual(Contrast.ratio(Contrast.resolved(tinted, dark: isDark), surface), 3, "Tinted in \(scheme)")
       for color in Self.avatarColors {
         let fill = try XCTUnwrap(SolidBubble.fill(color))
         let edge = PersonBubbles.border(solid: true, increasedContrast: true) ?? Color(hex: fill)
-        let value = Self.ratio(Self.resolved(edge, dark: isDark), surface)
+        let value = Contrast.ratio(Contrast.resolved(edge, dark: isDark), surface)
         XCTAssertGreaterThanOrEqual(value, 3, "\(color) as \(fill) in \(scheme): \(String(format: "%.2f", value)):1")
       }
     }
@@ -254,12 +232,12 @@ final class ChatBubblesTests: XCTestCase {
   func testASolidBubbleOnItsWayKeepsItsTextReadable() throws {
     let opacity = PersonBubbles.sendingOpacity(solid: true)
     for isDark in [false, true] {
-      let surface = Self.resolved(Palette.surface(isDark ? .dark : .light), dark: isDark)
+      let surface = Contrast.resolved(Palette.surface(isDark ? .dark : .light), dark: isDark)
       for color in Self.avatarColors {
         let fill = try XCTUnwrap(SolidBubble.fill(color))
-        let background = Self.over(Self.resolved(Color(hex: fill), dark: isDark), surface, opacity: opacity)
-        let text = Self.over(Self.over(Self.resolved(.white, dark: isDark), Self.resolved(Color(hex: fill), dark: isDark)), surface, opacity: opacity)
-        let value = Self.ratio(text, background)
+        let background = Contrast.over(Contrast.resolved(Color(hex: fill), dark: isDark), surface, opacity: opacity)
+        let text = Contrast.over(Contrast.over(Contrast.resolved(Color.white, dark: isDark), Contrast.resolved(Color(hex: fill), dark: isDark)), surface, opacity: opacity)
+        let value = Contrast.ratio(text, background)
         XCTAssertGreaterThanOrEqual(value, 4.5, "\(color) as \(fill) in \(isDark ? "dark" : "light"): \(String(format: "%.2f", value)):1")
       }
     }

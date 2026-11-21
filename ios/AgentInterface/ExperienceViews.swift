@@ -256,7 +256,7 @@ struct TodayView: View {
             .padding(.horizontal, 9).padding(.vertical, 6).background(Palette.accentSoft, in: Capsule())
         }
       }.padding(.vertical, 4)
-    }.accessibilityIdentifier("today.bot.\(item.botId)").accessibilityElement(children: .combine)
+    }.buttonStyle(AttentionRowStyle()).accessibilityIdentifier("today.bot.\(item.botId)").accessibilityElement(children: .combine)
   }
   private func open(_ bot: String, routine: String? = nil) {
     openBot()
@@ -708,5 +708,15 @@ struct RoutineEnhancements: View {
       if (failure as? APIError)?.status == 404 { retrySameRun = true }
     case nil: break
     }
+  }
+}
+
+/// A Today attention row while it is pressed: the soft accent at 45% over the raised row, as the web's hover, so the
+/// row's attention reason keeps 4.5:1. The list's own highlight took it to 3.84:1 in light.
+struct AttentionRowStyle: ButtonStyle {
+  static let pressedOpacity = 0.45
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label.contentShape(Rectangle())
+      .background(Palette.accentSoft.opacity(configuration.isPressed ? Self.pressedOpacity : 0), in: RoundedRectangle(cornerRadius: 12).inset(by: -6))
   }
 }
