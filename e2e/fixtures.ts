@@ -1,3 +1,5 @@
+// The one module in e2e/ that imports values from Playwright's test package; .oxlintrc.json refuses it elsewhere.
+// oxlint-disable-next-line no-restricted-imports
 import {
   test as base,
   expect,
@@ -58,36 +60,65 @@ const signedOutProbe = (message: ConsoleMessage) =>
  * WebKit sends every request from a page the service worker controls through the worker, including the ones the
  * worker leaves to the network (scripts/service-worker.js never answers /api), and page and context routes never
  * see those requests. Chromium still routes them, so a routed test passed there and timed out only in WebKit after
- * a merge, four times. A route therefore fails at once in both browsers unless the test blocks the worker.
+ * a merge, four times. A route therefore fails at once in both browsers unless its context blocks the worker.
+ *
+ * The guard replaces the route methods on Playwright's BrowserContext and Page classes, once per worker process and
+ * before any test fixture runs, so it covers fixture setup, `browser.newContext()` and every page alike. Each call
+ * reads the serviceWorkers option its own context was made with.
  */
-const refuseRoutes = (target: Page | BrowserContext, kind: "page" | "context") => {
-  const refuse = (url: unknown) => {
-    throw new Error(
-      `${kind}.route(${typeof url === "string" ? JSON.stringify(url) : String(url)}) cannot see the requests of a page ` +
-        'the service worker controls in WebKit. Add test.use({ serviceWorkers: "block" }) to this test or its describe, ' +
-        "or test the worker without routes.",
-    );
-  };
-  target.route = refuse as typeof target.route;
-  target.routeFromHAR = refuse as typeof target.routeFromHAR;
-};
+const routeMethods = ["route", "routeFromHAR"] as const;
+const guarded = Symbol("routes need a blocked service worker");
 
-export const test = base.extend<{
-  allowConsoleError: RegExp[];
-  pageHealth: void;
-  routesNeedBlockedWorker: void;
-}>({
+function guardRoutes(context: BrowserContext, page: Page) {
+  const targets = [
+    ["context", Object.getPrototypeOf(context), (self: BrowserContext) => self],
+    ["page", Object.getPrototypeOf(page), (self: Page) => self.context()],
+  ] as const;
+  for (const [kind, prototype, contextOf] of targets)
+    for (const method of routeMethods) {
+      const original = prototype[method] as ((...args: unknown[]) => Promise<void>) & {
+        [guarded]?: true;
+      };
+      if (original[guarded]) continue;
+      const replacement = function (this: BrowserContext & Page, url: unknown, ...rest: unknown[]) {
+        // Playwright keeps the options a context was made with here. Fail loudly if an upgrade moves them.
+        const options = (contextOf(this) as unknown as { _options?: { serviceWorkers?: string } })
+          ._options;
+        if (!options)
+          throw new Error(
+            "The route guard in e2e/fixtures.ts cannot read this context's options. Update it for this Playwright.",
+          );
+        if (options.serviceWorkers !== "block")
+          throw new Error(
+            `${kind}.${method}(${typeof url === "string" ? JSON.stringify(url) : String(url)}) cannot see the ` +
+              "requests of a page the service worker controls in WebKit. Add " +
+              'test.use({ serviceWorkers: "block" }) to this test or its describe, pass serviceWorkers: "block" ' +
+              "to browser.newContext, or test the worker without routes.",
+          );
+        return original.call(this, url, ...rest);
+      };
+      Object.assign(replacement, { [guarded]: true });
+      prototype[method] = replacement;
+    }
+}
+
+export const test = base.extend<
+  { allowConsoleError: RegExp[]; pageHealth: void },
+  { routesNeedBlockedWorker: void }
+>({
   allowConsoleError: [[], { option: false }],
   routesNeedBlockedWorker: [
-    async ({ context, serviceWorkers }, use) => {
-      if (serviceWorkers !== "block") {
-        refuseRoutes(context, "context");
-        // The context has no page yet, and the event reaches every page it opens, the `page` fixture's first.
-        context.on("page", (page) => refuseRoutes(page, "page"));
+    async ({ browser }, use) => {
+      // A throwaway context and page give the guard the two classes, which Playwright does not export.
+      const context = await browser.newContext();
+      try {
+        guardRoutes(context, await context.newPage());
+      } finally {
+        await context.close();
       }
       await use();
     },
-    { auto: true },
+    { scope: "worker", auto: true },
   ],
   // Every page the test opens must stay free of uncaught errors, console errors and CSP violation reports.
   pageHealth: [
