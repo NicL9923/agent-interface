@@ -48,7 +48,11 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     private var choicesUnknown = false
     /// Answers preference saves as a server from before chat styles: without either choice.
     func answerPreferencesAsOldServer() { lock.withLock { choicesUnknown = true } }
-    let origin = URL(string: "https://native-\(UUID().uuidString.lowercased()).example.test")!
+    let origin: URL
+    /// `signIn` set skips the system sign-in browser, as the Debug app does for its fixture host.
+    init(signIn: Bool = false) {
+        origin = URL(string: "https://native-\(UUID().uuidString.lowercased()).\(signIn ? "native-fixture.invalid" : "example.test")")!
+    }
     var user: String { get { lock.withLock { currentUser } } set { lock.withLock { currentUser = newValue } } }
     func answerSends(_ extras: [String: Any]) { lock.withLock { sendReceiptExtras = extras } }
     var sendStatus: Int { get { lock.withLock { messageStatus } } set { lock.withLock { messageStatus = newValue } } }
@@ -318,7 +322,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
             status = lock.withLock { authConfigStatus }
             data = status == 200 ? Self.json(["googleClientId": "google", "localDevAuth": false, "nativeAuthVersion": 1]) : Self.json(["error": "Synthetic config outage"])
         }
-        else if path == "/api/auth/native/exchange" { data = Self.json(["token": "replacement-session", "expiresAt": "2026-10-07T09:08:21.125Z", "user": ["id": "one", "name": "One", "email": "one@example.test"]]) }
+        else if path == "/api/auth/native/exchange" { data = Self.json(["token": "replacement-session", "expiresAt": "2099-10-07T09:08:21.125Z", "user": ["id": user, "name": user, "email": "\(user)@example.test"]]) }
         else if request.httpMethod == "GET", lock.withLock({ assistantsChanged > 0 ? { assistantsChanged -= 1; return true }() : false }) {
             status = 503; data = Self.errorBody("Assistants changed while this loaded. Try again.", code: "assistants_changed")
         }
@@ -1371,6 +1375,77 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         server.failConversation(false); await value.refreshBootstrap(); await value.refreshConversation()
         XCTAssertEqual(value.activity, .idle); XCTAssertTrue(value.canSend)
         XCTAssertEqual(value.draft.text, "Send this")
+    }
+
+    /// Member one with a failed settings save, an unsaved draft, a file waiting to upload and a send
+    /// waiting for its receipt, whose sign-in then expires on this device.
+    private func expiredWithUnsavedWork(_ server: NativeMockServer) async throws -> AppStore {
+        let value = try store(server)
+        server.hold("/api/preferences")
+        var dark = try XCTUnwrap(value.bootstrap?.preferences); dark.theme = "dark"
+        value.queuePreferences(dark)
+        try await server.waitForHeld("/api/preferences"); server.failHeld("/api/preferences")
+        try await until { value.preferencesSaveFailed }
+        value.pending = PendingSubmission(requestId: "one-send", botId: "bot", text: "One's message", attachments: [], reviewedInterruption: false)
+        // In its own folder, as `attach` stages a file: removing an upload removes that folder.
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("upload-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("one.txt")
+        try Data("One's attachment".utf8).write(to: file)
+        value.uploads.items.append(AttachmentUpload(botId: "bot", url: file, name: "one.txt", mime: "text/plain", size: 16))
+        // The poll loop finds the sign-in about to expire.
+        let api = try XCTUnwrap(value.api)
+        UserDefaults.standard.set(ServerDate.string(Date().addingTimeInterval(30)), forKey: DeviceDefaults.expiry(api.baseURL))
+        let polling = await value.pollOnce()
+        XCTAssertFalse(polling); XCTAssertTrue(value.sessionExpired)
+        return value
+    }
+    private func forgetSignIn(_ server: NativeMockServer) {
+        UserDefaults.standard.removeObject(forKey: DeviceDefaults.expiry(server.origin))
+        try? SecureToken.save(nil, host: server.origin.absoluteString)
+    }
+
+    /// Issue #460: until another member's account loads, nothing of the last member's can be saved
+    /// to the server under the new member's token.
+    func testAnotherMemberSigningInWritesNothingOfTheLastMembersUnderTheirToken() async throws {
+        let server = NativeMockServer(signIn: true), value = try await expiredWithUnsavedWork(server)
+        defer { clean(server, value); forgetSignIn(server) }
+        server.user = "two"; server.hold("/api/bootstrap")
+        let signIn = Task { await value.signIn() }
+        try await server.waitForHeld("/api/bootstrap")
+        // What can run before member two's account loads: Retry in Settings, a typing pause or
+        // leaving the app, a queued file, Retry on the unconfirmed send and the reading position.
+        if value.preferencesSaveFailed, let draft = value.preferencesDraft { value.queuePreferences(draft, changed: []) }
+        value.flushDraft()
+        await value.uploads.drain()
+        await value.send(reviewedUncertain: true)
+        value.markRead("message-one")
+        server.release("/api/bootstrap"); await signIn.value
+        XCTAssertEqual(value.bootstrap?.user.id, "two"); XCTAssertFalse(value.sessionExpired)
+        // Absence: the saves above run in their own tasks, so give any that started time to arrive.
+        try await Task.sleep(for: .milliseconds(300))
+        let asTwo = server.requests.filter { $0.value(forHTTPHeaderField: "Authorization") == "Bearer replacement-session" }
+        let preferences = asTwo.filter { $0.url?.path == "/api/preferences" }.compactMap { FakeExchange.body($0).flatMap { String(data: $0, encoding: .utf8) } }
+        XCTAssertEqual(preferences, [], "Member one's dark theme must not be saved to member two's account")
+        XCTAssertEqual(asTwo.filter { $0.httpMethod != "GET" }.map { "\($0.httpMethod ?? "") \($0.url?.path ?? "")" }, [],
+                       "Member two did nothing, so nothing is written as them")
+        XCTAssertFalse(value.preferencesSaveFailed); XCTAssertNil(value.preferencesDraft)
+        XCTAssertTrue(value.uploads.items.isEmpty); XCTAssertTrue(value.pendings.isEmpty)
+        // Member one's draft stays on this device for when they sign in again.
+        let oneScope = AppStore.scope(server: server.origin, userId: "one")
+        let saved = try XCTUnwrap(UserDefaults.standard.data(forKey: "native.\(oneScope).draft.bot"))
+        XCTAssertEqual(try JSONDecoder().decode(Draft.self, from: saved).text, "Send this")
+    }
+
+    func testTheSameMemberSigningBackInKeepsTheirDraftAndFailedSave() async throws {
+        let server = NativeMockServer(signIn: true), value = try await expiredWithUnsavedWork(server)
+        defer { clean(server, value); forgetSignIn(server) }
+        await value.signIn()
+        XCTAssertEqual(value.bootstrap?.user.id, "one"); XCTAssertFalse(value.sessionExpired)
+        XCTAssertTrue(value.preferencesSaveFailed); XCTAssertEqual(value.preferencesDraft?.theme, "dark")
+        XCTAssertEqual(value.selectedBotId, "bot"); XCTAssertEqual(value.draft.text, "Send this")
+        XCTAssertEqual(value.pendings["bot"]?.requestId, "one-send")
+        XCTAssertEqual(value.uploads.items.map(\.name), ["one.txt"])
     }
 
     func testDelayedSendAndReviewedRetryCannotClearAnotherPersonsDraft() async throws {

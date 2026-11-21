@@ -249,11 +249,7 @@ extension AppStore {
             conversationRefreshedAt = nil
           }
         }
-        if let previous = bootstrap, previous.user.id != value.user.id {
-          clearOfflineLibrary()
-          persistDraft()
-          resetAccountContent()
-        }
+        if let previous = bootstrap, previous.user.id != value.user.id { leaveAccount() }
         if bootstrap != value { bootstrap = value; applied = true }
         appliedBootstrapTag = response.etag
       }
