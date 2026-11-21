@@ -102,11 +102,26 @@ function guardRoutes(context: BrowserContext, page: Page) {
     }
 }
 
+/**
+ * A console error a test causes on purpose. A pattern matches the message text. A request the test makes fail is
+ * named by its address as well, so the same status from any other request still fails the test.
+ */
+export type AllowedConsoleError = RegExp | { text: RegExp; url: RegExp };
+const allows = (allowed: AllowedConsoleError, message: ConsoleMessage) =>
+  allowed instanceof RegExp
+    ? allowed.test(message.text())
+    : allowed.text.test(message.text()) && allowed.url.test(message.location().url);
+
 export const test = base.extend<
-  { allowConsoleError: RegExp[]; pageHealth: void },
+  { allowConsoleError: AllowedConsoleError[]; pageHealth: void },
   { routesNeedBlockedWorker: void }
 >({
-  allowConsoleError: [[], { option: false }],
+  // A new list for each test: a default value is one array every test shares, so one test's push excused the
+  // same error in every test after it.
+  // oxlint-disable-next-line no-empty-pattern -- Playwright requires a fixture's first parameter to destructure.
+  allowConsoleError: async ({}, use) => {
+    await use([]);
+  },
   routesNeedBlockedWorker: [
     async ({ browser }, use) => {
       // A throwaway context and page give the guard the two classes, which Playwright does not export.
@@ -146,7 +161,7 @@ export const test = base.extend<
           if (
             message.type() !== "error" ||
             signedOutProbe(message) ||
-            allowConsoleError.some((allowed) => allowed.test(message.text()))
+            allowConsoleError.some((allowed) => allows(allowed, message))
           )
             return;
           problems.push(`Console error: ${message.text()} (${message.location().url})`);
