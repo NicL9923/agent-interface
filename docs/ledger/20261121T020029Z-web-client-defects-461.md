@@ -93,3 +93,72 @@ Both runs below used `4ac636d0`, the item 3 commit, under `~/.agents/tools/linux
 | WebKit e2e in `mcr.microsoft.com/playwright:v1.65.0-noble`, after `npm run build` | 138 passed, 3 skipped by their own conditions, 1 failed: `e2e/smoke.spec.ts:811`, which fails in WebKit on main too                                                                                       |
 
 No e2e spec changed. No Playwright spec exercises the three fixes directly. The key behavior in item 3 was checked with the probe page in both browsers, and the app's handling of it with the jsdom tests.
+
+## Review fixes
+
+An independent review of `af8d1c38..ba701a28` found four defects and two nits. Each fix is its own commit on top of `ba701a28`.
+
+### Review 1. Small turn resizes added up past the reading line
+
+A resize report skipped the measure when the turn's border box was within 0.5 px of the measured height. Five turns that each grew by 0.375 px moved the message after them 1.875 px, past the reading line, and the rail kept the old tick. The skip now needs exact equality. A probe in Chromium and in WebKit, the same Playwright 1.65.0 setup as above, observed seven elements with fractional heights. `ResizeObserverEntry.borderBoxSize[0].blockSize` equalled `getBoundingClientRect().height` exactly for every one. Under CSS `zoom: 1.25` the two differ, so the skip never fires there and the rail measures as main did.
+
+| Break                              | Guarding test                                                                         | Result                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| The 0.5 px tolerance back in place | `measures again when turns above the reading line each grow by a fraction of a pixel` | Red: Question 30 stayed marked, Question 29 expected |
+
+### Review 2. A finished table row stayed hidden under a delimiter row without a leading pipe
+
+`| Day | Meal |\n--- | ---\n| Mon | Pasta |\n` is a table with one body row. Rule 4 asked only that the line above not start with `|`, so it read `| Mon | Pasta |` as a header. The new hold kept it hidden after its line ended. Main's rule 4 also hid it while it was the last line. Both holds now share `opensTable`: the line above must hold no `|` at all. That rules out a table row or delimiter row in either form. It also rules out prose with a pipe, whose header then shows as typed, as it did on main.
+
+| Break                                                                 | Result                                                                                                                                            |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opensTable` checks only that the line above does not start with `\|` | Red: the row under a delimiter row without a leading pipe, the row under a row without one, and the row still arriving under such a delimiter row |
+
+### Review 5. Without a grapheme segmenter, a shown header went away
+
+Without `Intl.Segmenter` the hold-back holds nothing after the first character, because it cannot prove a cut falls between characters. The header hold returned before that check, so `Intro\n| Day |` showed whole and then hid `| Day |` once the newline arrived. Both holds now cut through `cutAt`, which keeps that check.
+
+| Break                                             | Guarding test                                                        | Result                                              |
+| ------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------- |
+| The header hold slices without the boundary check | `holds nothing it showed when the runtime has no grapheme segmenter` | Red: `Intro\n` shown, `Intro\n\| Day \|\n` expected |
+
+### Review 4. The seeded live and saved comparison accepted a dropped delimiter row or code line
+
+The exception accepted any live render that matched the saved render without the reply's last line, when that line started with `|`. That would pass a live render missing a valid delimiter row, as in zero-based case 301, or missing a fenced code line, as in case 8. The exception now asks the hold-back what it held in the last block, as `StreamingMarkdown` does. It applies only when that is the reply's whole last line, starting with `|`, under a line with no pipe, and the saved parse puts it in paragraph text, not in code or a table. A lazy line in a list item stays accepted. The seed holds one, and it is paragraph text inside a list.
+
+| Break in `streaming-hold-back.ts`                                                  | Old exception | New exception |
+| ---------------------------------------------------------------------------------- | ------------- | ------------- |
+| `opensTable` ignores the line above, so a delimiter row under a header row is held | Green         | Red           |
+| No fence check, so a code line starting with `\|` is held                          | Green         | Red           |
+
+### Review 3. Up still counted where nothing scrolled
+
+The review found two cases, both reproduced in Chromium:
+
+- A tool's output box at its top. It sets `overscroll-behavior: contain`, so Chromium scrolls neither the box nor the transcript.
+- Cancel in the "Always allow" dialog. The dialog sits inside the transcript in the page, but it is modal.
+
+A probe confirmed the dialog case in Chromium and in WebKit. A modal dialog's computed `position` is `fixed`. Up, Down, Home, End and Page Up pressed on a button in it left the transcript where it was.
+
+I did not switch to counting a key only once the transcript's scroll position changes, though the review suggested it. That rule does not fit the hook, for two reasons:
+
+- The follow mode's layout pass pins the transcript to the end on every content change. The hook counts a key at keydown because a reply arriving between the key's default scroll and its scroll event would otherwise pin the transcript back and undo the reader's move.
+- The app scrolls the transcript itself: pinning to the end, offsetting late images, and the browser clamping the top when content shrinks. A key that did nothing could be confirmed by one of those.
+
+`measurePosition` already ends following when the transcript moves up while no input was heard. That covers a key scroll the classifier misses, one frame later.
+
+The classifier now stops at a fixed box, which covers a modal dialog, because such a box scrolls with the viewport. At a scrolling box at its end, it also reads `overscroll-behavior-y`: anything but `auto` keeps the key, as Chromium does. WebKit passes the key on anyway. That scroll is then heard by `measurePosition`, as above. Safari before 16 reads the property as empty, which counts as `auto`. The tests set the CSS they depend on inline, because jsdom loads neither the app's stylesheet nor the browser's `dialog:modal` rule. I did not chase the 1 px WebKit case.
+
+| Break                                    | Result                                                                                                                                        |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| The previous commit's `scroll-follow.ts` | Red: `does not hear Up at the top of a box that contains overscroll` and `does not hear keys pressed in the Always allow dialog as scrolling` |
+| No check for a fixed box                 | Red: the dialog test                                                                                                                          |
+| `overscroll-behavior-y` ignored          | Red: the contained box test                                                                                                                   |
+
+### Review 6. No test sent plain Space
+
+The Space test sent only Shift Space, which ends following. Plain Space on a button ends a send's anchor, and nothing tested it. `keeps this person's sent message near the top after Space presses a button in the transcript` anchors a send, presses Space on a button in the transcript, and checks that the sent message still lands 24 px from the top.
+
+| Break                                        | Result                                               |
+| -------------------------------------------- | ---------------------------------------------------- |
+| The Space check applies only with Shift held | Red: the new test. The Shift Space test stayed green |

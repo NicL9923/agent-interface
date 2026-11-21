@@ -115,12 +115,15 @@ export const MessageRail = memo(function MessageRail({
     heights.current = measured;
     stale.current = false;
   };
-  /** Whether a turn's reported size is the one it had when the positions were measured. */
+  /**
+   * Whether a turn's reported size is exactly the one it had when the positions were measured. Any
+   * difference measures again: shifts too small to matter alone add up across turns. Chromium and
+   * WebKit report the same number as getBoundingClientRect, except under CSS zoom, which measures again.
+   */
   const unchanged = ({ target, borderBoxSize }: ResizeObserverEntry) => {
     const known = heights.current.get(target);
     // Safari before 15.4 reports no border box.
-    const size = borderBoxSize?.[0]?.blockSize;
-    return known !== undefined && size !== undefined && Math.abs(size - known) <= 0.5;
+    return known !== undefined && borderBoxSize?.[0]?.blockSize === known;
   };
   const lastRow = (view: HTMLElement) => {
     const cached = places.current;

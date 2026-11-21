@@ -1,7 +1,7 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BLOCK_LIMIT, HOLD_LIMIT, streamingHoldBack } from "../src/components/streaming-hold-back";
 
 interface Node {
@@ -253,6 +253,19 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["a table header longer than the bound, once it ends", `| ${"Day | ".repeat(25)}\n`],
     ["a line starting with a pipe once the next line reads as prose", "| Day |\n- Saturday"],
     ["a table row under another row", "| Day |\n| --- |\n| Sat |\n"],
+    // The reviewer's case: a table whose delimiter row, or a row above, has no leading pipe.
+    [
+      "a table row under a delimiter row without a leading pipe",
+      "| Day | Meal |\n--- | ---\n| Mon | Pasta |\n",
+    ],
+    [
+      "a table row under a row without a leading pipe",
+      "| Day | Meal |\n|---|---|\nMon | Pasta\n| Tue | Soup |\n",
+    ],
+    [
+      "a table row still arriving under a delimiter row without a leading pipe",
+      "| Day | Meal |\n--- | ---\n| Mon | Pas",
+    ],
     ["a line starting with a pipe before a blank line", "| Day |\n\n"],
     [
       "a table header over a delimiter row longer than the bound",
@@ -298,6 +311,22 @@ describe("holding back a streaming reply's unfinished tail", () => {
 
   // U+0600 joins the character after it into one grapheme, so cutting between them would render a
   // detached mark. An ordinary combining accent sits before the cut and stays whole.
+  // Without a segmenter nothing after the first character is held, so a header that showed as typed
+  // stays shown once its line ends.
+  it("holds nothing it showed when the runtime has no grapheme segmenter", async () => {
+    vi.stubGlobal("Intl", Object.create(Intl, { Segmenter: { value: undefined } }));
+    vi.resetModules();
+    try {
+      const { streamingHoldBack: withoutSegmenter } =
+        await import("../src/components/streaming-hold-back");
+      expect(withoutSegmenter("Intro\n| Day |")).toBe("Intro\n| Day |");
+      expect(withoutSegmenter("Intro\n| Day |\n")).toBe("Intro\n| Day |\n");
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
   it("never cuts inside a grapheme", () => {
     expect(streamingHoldBack("\u0600`abc")).toBe("\u0600`abc");
     expect(streamingHoldBack("Cafe\u0301 `abc")).toBe("Cafe\u0301 ");
