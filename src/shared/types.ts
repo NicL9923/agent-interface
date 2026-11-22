@@ -154,6 +154,36 @@ export interface Preferences {
   mainSuggestionDismissed?: boolean;
   // --- End main assistant ---
 }
+/** Preferences fields only their own routes change. A partial save ignores them. */
+export type RoutedPreference = "modelFavorites" | "mainBotId" | "checkIns";
+/** Fields a partial save may clear with `null`. Leaving any field out keeps it. */
+export type ClearablePreference =
+  | "defaultBotId"
+  | "startPage"
+  | "chatStyle"
+  | "ownBubble"
+  | "notifications"
+  | "hiddenRoutineRuns"
+  | "mainSuggestionDismissed";
+type NotificationSettings = NonNullable<Preferences["notifications"]>;
+/**
+ * A partial preferences save, sent as a JSON Merge Patch (RFC 7396, `application/merge-patch+json`).
+ * Each field it names replaces the saved one, `null` clears a clearable field, and a field left out
+ * keeps the saved one. `notifications` merges key by key, and `null` there clears the quiet hours.
+ */
+export type PreferencesPatch = {
+  [K in Exclude<keyof Preferences, RoutedPreference>]?: K extends "notifications"
+    ?
+        | {
+            [N in keyof NotificationSettings]?: N extends "quietStart" | "quietEnd"
+              ? NotificationSettings[N] | null
+              : NotificationSettings[N];
+          }
+        | null
+    : K extends ClearablePreference
+      ? Preferences[K] | null
+      : Preferences[K];
+};
 // --- Main assistant and check-ins ---
 export interface CheckInSettings {
   enabled: boolean;

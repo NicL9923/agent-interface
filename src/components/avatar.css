@@ -59,7 +59,7 @@
     background: var(--danger, #a33c32);
   }
   .avatar-wrap[data-state="blocked"] .avatar-badge {
-    background: var(--attention, #b5813a);
+    background: var(--attention, #895b2d);
   }
   .avatar-wrap[data-state="interrupted"] .avatar-badge,
   .avatar-wrap[data-state="waiting"] .avatar-badge {
@@ -107,7 +107,7 @@
     --avatar-ring-color: var(--line, #d9ded2);
   }
   .avatar-wrap[data-state="blocked"] .avatar-ring {
-    --avatar-ring-color: var(--attention, #b5813a);
+    --avatar-ring-color: var(--attention, #895b2d);
   }
   .avatar-wrap[data-state="done"] .avatar-ring {
     --avatar-ring-color: var(--accent, #246f59);

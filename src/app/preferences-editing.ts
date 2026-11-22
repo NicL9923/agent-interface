@@ -17,8 +17,17 @@ export function setFollowing(
   botId: string,
   following: boolean,
 ): Preferences {
+  // Already in the asked-for state: the same value, so running this twice changes nothing.
+  if (preferences.followBots.includes(botId) === following) return preferences;
   const rest = preferences.followBots.filter((id) => id !== botId);
   return { ...preferences, followBots: following ? [...rest, botId] : rest };
+}
+
+/** Pins a bot at the end of the pins, or unpins it. Already in that state, it returns the same value. */
+export function setPinned(preferences: Preferences, botId: string, pinned: boolean): Preferences {
+  if (preferences.favorites.includes(botId) === pinned) return preferences;
+  const rest = preferences.favorites.filter((id) => id !== botId);
+  return { ...preferences, favorites: pinned ? [...rest, botId] : rest };
 }
 
 /** Replaces the followed set, keeping the order of bots already followed. */
@@ -28,12 +37,17 @@ export function setFollowedBots(preferences: Preferences, botIds: string[]): Pre
   return { ...preferences, followBots: [...kept, ...botIds.filter((id) => !kept.includes(id))] };
 }
 
-/** Puts a bot in one section, or in none with `null`, taking it out of any other. */
+/**
+ * Puts a bot in one section, or in none with `null`, taking it out of any other. A section that is not
+ * in the list returns the same value, so the bot never leaves its place for one that is gone.
+ */
 export function moveBotToSection(
   preferences: Preferences,
   botId: string,
   sectionId: string | null,
 ): Preferences {
+  if (sectionId !== null && !preferences.sections.some((section) => section.id === sectionId))
+    return preferences;
   return {
     ...preferences,
     sections: preferences.sections.map((section) => {
@@ -43,12 +57,13 @@ export function moveBotToSection(
   };
 }
 
-/** Sets a section's members; bots chosen here leave the section they were in. */
+/** Sets a section's members; bots chosen here leave the section they were in. A missing section changes nothing. */
 export function setSectionBots(
   preferences: Preferences,
   sectionId: string,
   botIds: string[],
 ): Preferences {
+  if (!preferences.sections.some((section) => section.id === sectionId)) return preferences;
   const chosen = new Set(botIds);
   return {
     ...preferences,

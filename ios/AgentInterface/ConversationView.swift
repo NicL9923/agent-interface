@@ -12,6 +12,8 @@ private struct ReadingChat: ViewModifier {
       .onAppear { visible = true; update(scenePhase, store.chatCovers) }
       .onChange(of: scenePhase, initial: true) { _, phase in update(phase, store.chatCovers) }
       .onChange(of: store.chatCovers) { _, covers in update(scenePhase, covers) }
+      // An account change ends presence; the next account reports this chat once its account loads.
+      .onChange(of: store.scope) { _, _ in update(scenePhase, store.chatCovers) }
       .onDisappear { visible = false; store.leave(botId) }
   }
   private func update(_ phase: ScenePhase, _ covers: Int) {
@@ -40,6 +42,8 @@ struct ConversationView: View {
   @State private var visibleMessage: String?
   @State private var openedBot: String?
   @State private var readSaveTask: Task<Void, Never>?
+  /// The last place read here, for saving as the chat leaves the screen, when another may already be open.
+  @State private var lastReadPlace: ReadPlace?
   @State private var latestTrigger = 0
   @State private var viewportHeight: CGFloat = 0
   /// The message box floating over the transcript's bottom, which the transcript keeps room for.
@@ -149,6 +153,8 @@ struct ConversationView: View {
     .environment(speech)
     .onAppear { configureSpeech() }
     .onChange(of: store.scope) { _, _ in speech.reset(); configureSpeech() }
+    // Each sign-in has its own client; the one this chat was given ends with the last sign-in.
+    .onChange(of: store.api.map(ObjectIdentifier.init)) { _, _ in configureSpeech() }
     // Audio belongs to a reachable chat on screen, so it stops when the connection drops or the chat closes.
     .onChange(of: store.connected) { _, connected in if !connected { speech.cancel() } }
     .sheet(isPresented: $modelOpen) { ChatModelSheet(botId: bot.id).appStore(store) }
@@ -399,10 +405,7 @@ struct ConversationView: View {
       .onChange(of: store.replyAnnouncement) { _, reply in
         if visible, let reply, reply.botId == bot.id { AccessibilityNotification.Announcement("\(bot.name) replied: \(reply.text)").post() }
       }
-      .onDisappear {
-        readSaveTask?.cancel()
-        if let id = readPosition { store.markRead(id) }
-      }
+      .onDisappear { saveReadPositionNow() }
     }
   }
   private func transcriptScroll(_ proxy: ScrollViewProxy) -> some View {
@@ -680,14 +683,21 @@ struct ConversationView: View {
     if following { return messages.last?.id }
     return visibleMessage.flatMap { id in messages.contains { $0.id == id } ? id : nil }
   }
+  private var readPlace: ReadPlace? {
+    guard let id = readPosition else { return nil }
+    return store.readPlace(id, in: bot.id)
+  }
+  /// As the chat leaves the screen: its place now while it is still the open chat, or the last one kept from then.
+  private func saveReadPositionNow() {
+    readSaveTask?.cancel()
+    guard let place = readPlace ?? lastReadPlace else { return }
+    store.markRead(place)
+  }
   private func saveReadPosition() {
     readSaveTask?.cancel()
-    guard visible, placed, let id = readPosition else { return }
-    readSaveTask = Task {
-      try? await Task.sleep(for: .milliseconds(350))
-      guard !Task.isCancelled else { return }
-      store.markRead(id)
-    }
+    guard visible, placed, let place = readPlace else { return }
+    lastReadPlace = place
+    readSaveTask = store.markReadSoon(place)
   }
   /// The tool the working avatar can hold, as the web picks it: the latest running call while connected.
   /// Beside it, one live line for the running turn: the current tool's receipt and, in Advanced
@@ -885,6 +895,8 @@ struct MessageView: View {
       }
       .modifier(ReplyActions(message: message))
       .accessibilityElement(children: .contain)
+      // Names the row, so a UI test can tell a streamed reply from its saved copy.
+      .accessibilityIdentifier("message-" + message.id)
   }
   @ViewBuilder private var content: some View {
     if message.isAgentExchange {

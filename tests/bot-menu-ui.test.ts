@@ -8,6 +8,8 @@ import { mountRoot, waitForUi } from "./ui-harness";
 
 // The menu code is held back to play a slow network, so these are gestures that beat it.
 const gate = { hold: undefined as Promise<void> | undefined };
+// How many times the page has asked the network for the menu code.
+const asked = { count: 0 };
 
 type SidebarProps = ComponentProps<typeof import("../src/app/Sidebar").Sidebar>;
 let root: Root;
@@ -24,7 +26,9 @@ beforeEach(async () => {
     release = resolve;
   });
   // Registered afresh each time, because a mock factory's module is remembered once it has resolved.
+  asked.count = 0;
   vi.doMock("../src/app/BotMenuPopup", async () => {
+    asked.count++;
     await gate.hold;
     return vi.importActual<typeof import("../src/app/BotMenuPopup")>("../src/app/BotMenuPopup");
   });
@@ -85,6 +89,34 @@ const touch = (row: Element, type: string, x = 30, y = 40) =>
     });
     row.dispatchEvent(event);
   });
+
+it("leaves the menu code alone while offline and fetches it when the connection returns", async () => {
+  // Idle time comes at once here, so the test does not wait out the two-second fallback.
+  vi.stubGlobal("requestIdleCallback", (run: () => void) => {
+    run();
+    return 0;
+  });
+  const online = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+  try {
+    await render();
+    // A request made offline can only fail, and WebKit reports that failure as an uncaught error.
+    expect(asked.count).toBe(0);
+    online.mockReturnValue(true);
+    await act(async () => window.dispatchEvent(new Event("online")));
+    expect(asked.count).toBe(1);
+    // The rows take the real menu once the code is here, as they do after any first paint.
+    await arrive();
+    await act(async () =>
+      rows()[1].dispatchEvent(
+        new MouseEvent("contextmenu", { clientX: 100, clientY: 180, button: 2, bubbles: true }),
+      ),
+    );
+    await opened("Garden planner");
+  } finally {
+    online.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
 
 it("opens the first right-click menu once the code arrives, without ever showing the browser's menu", async () => {
   await render();

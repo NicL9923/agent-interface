@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { preferenceServer } from "./helpers/preference-server";
 import { App } from "../src/App";
 import { api, write } from "../src/client-api";
 import { ANCHOR_GAP } from "../src/app/scroll-follow";
@@ -188,8 +189,10 @@ describe("a chat with more sent messages than ticks fit", () => {
   // A routine run card, shown before Question 31's turn and as tall as `card`, pushes every message from there down.
   let card = 0;
   const cardShown = () => !!container.querySelector('[data-run-id="r1"]');
+  // An earlier page of ten turns, Question -10 to Question -1, goes in above the first one and pushes it down.
+  const paged = () => (container.querySelector('[data-message-id="q-1"]') ? 10 : 0);
   const top = (index: number) =>
-    100 + index * 200 + shift + moved(index) + (index >= 30 && cardShown() ? card : 0);
+    100 + (index + paged()) * 200 + shift + moved(index) + (index >= 30 && cardShown() ? card : 0);
   // One message a minute, so the card's run falls between the 30th and the 31st turn.
   const at = (minute: number) => new Date(Date.UTC(2026, 9, 6, 0, minute)).toISOString();
   const runs: RoutineRun[] = [
@@ -231,7 +234,7 @@ describe("a chat with more sent messages than ticks fit", () => {
       this: Element,
     ) {
       const id = (this as HTMLElement).dataset.messageId ?? "";
-      const match = /^q(\d+)$|^a(\d+)$/.exec(id);
+      const match = /^q(-?\d+)$|^a(-?\d+)$/.exec(id);
       // Only the rail's own reads count; the transcript keeps the reader's place with a search of its own.
       if (match && new Error().stack?.includes("MessageRail")) rowReads++;
       const offset = match ? top(Number(match[1] ?? match[2])) + (match[2] ? 100 : 0) : undefined;
@@ -299,13 +302,15 @@ describe("a chat with more sent messages than ticks fit", () => {
       ]).flat(),
     };
     const served = vi.mocked(api).getMockImplementation()!;
+    const preferences = preferenceServer(() => bootstrap.preferences);
     vi.mocked(api).mockImplementation(async (path: string, ...rest) =>
       path === "/bots/shared/routine-runs"
         ? ({ runs, unavailable: [] } as never)
         : served(path, ...rest),
     );
     vi.mocked(write).mockImplementation(
-      async (path: string, body?: unknown) => (path === "/preferences" ? body : {}) as never,
+      async (path: string, body?: unknown) =>
+        (path === "/preferences" ? preferences(body) : {}) as never,
     );
     longLayout();
     await act(async () => root.render(createElement(App)));
@@ -371,6 +376,88 @@ describe("a chat with more sent messages than ticks fit", () => {
     expect(rowReads).toBe(0);
     // The active tick still follows the reader: 5800 puts the line at 5800 + 202, Question 30's top.
     expect(current()).toBe("Jump to: Question 30");
+  });
+
+  /** Loads the ten turns before the 64 the chat opened with. Resolves once they are on the page. */
+  async function loadEarlierPage() {
+    // The page the app reads says ten more turns come before it.
+    conversation = { ...conversation, earlier: 10, version: "2" } as Conversation;
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(1500);
+    const earlier = Array.from({ length: 10 }, (_, at) => -10 + at).flatMap((index) => [
+      { ...prompt(`q${index}`, `Question ${index}`), createdAt: at(index) },
+      { ...answer(`a${index}`, `Answer ${index}`), createdAt: at(index + 0.5) },
+    ]);
+    const served = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path: string, ...rest) =>
+      path.includes("before=q0")
+        ? ({ ...conversation, messages: earlier, earlier: 0, before: "q0" } as never)
+        : served(path, ...rest),
+    );
+    rowReads = 0;
+    const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (item) => item.textContent === "Show earlier messages",
+    )!;
+    await act(async () => button.click());
+    await advance(20);
+    expect(paged()).toBe(10);
+    return [...transcript().firstElementChild!.children].filter((turn) =>
+      turn.querySelector('[data-message-id^="q-"]'),
+    );
+  }
+  /** A browser's first report of each turn the rail started to watch, at the size it had when it joined. */
+  const firstReport = (turns: Element[], height: (turn: Element) => number = () => 60) =>
+    act(async () =>
+      resized.forEach((callback) =>
+        callback(
+          turns.map((target) => ({ target, borderBoxSize: [{ blockSize: height(target) }] })),
+        ),
+      ),
+    );
+
+  it("measures each sent message once when an earlier page loads above them", async () => {
+    const turns = await loadEarlierPage();
+    expect(turns).toHaveLength(10);
+    // The new turns are watched like the rest, though their arrival was not what measured them.
+    expect(turns.every((turn) => observed.has(turn))).toBe(true);
+    // 74 sent messages, each read once. The page going in measured them, and its arrival is no reason to again.
+    expect(rowReads).toBeLessThanOrEqual(74 + 1);
+    await firstReport(turns);
+    // Nor is each new turn's first report, at the size the measurement found.
+    expect(rowReads).toBeLessThanOrEqual(74 + 1);
+    expect(names()).toHaveLength(20);
+    await act(async () => rail().querySelector<HTMLButtonElement>('button[tabindex="0"]')!.focus());
+    await press("Home");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Jump to: Question -10");
+  });
+
+  it("measures again when a turn from an earlier page has changed size by its first report", async () => {
+    const turns = await loadEarlierPage();
+    await scrollTo(2000 + 5800);
+    expect(current()).toBe("Jump to: Question 30");
+    // An image in Question -5's turn loaded before the browser first reported it, moving every message after it.
+    const grown = turns[5]!;
+    moved = (index) => (index > -5 ? 150 : 0);
+    await firstReport(turns, (turn) => (turn === grown ? 210 : 60));
+    // The transcript kept the reader's place. Scrolling back searches the positions the rail holds:
+    // Question 30 moved from 7900 to 8050, below the line at 8002.
+    await scrollTo(2000 + 5800);
+    expect(current()).toBe("Jump to: Question 29");
+  });
+
+  // The reviewer's case: five turns above the reading line each grow by a fraction of a pixel, which together move
+  // the message there below it.
+  it("measures again when turns above the reading line each grow by a fraction of a pixel", async () => {
+    // The line at 5698 + 202.67 is just below Question 30, at 5900.
+    await scrollTo(5698);
+    expect(current()).toBe("Jump to: Question 30");
+    // The turns of Questions 25 to 29 grow by 0.375 px each, so Question 30 moves down 1.875 px, to 5901.875.
+    const grown = [24, 25, 26, 27, 28].map((index) => turnOf(`q${index}`));
+    moved = (index) => 0.375 * Math.min(5, Math.max(0, index - 24));
+    await firstReport(grown, () => 60.375);
+    // The transcript kept the reader's place. Scrolling back searches the positions the rail holds.
+    await scrollTo(5698);
+    expect(current()).toBe("Jump to: Question 29");
   });
 
   it("measures no sent message again while a reply streams below the last one", async () => {

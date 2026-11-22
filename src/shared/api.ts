@@ -53,6 +53,7 @@ import type { AddVaultLogin, ProfileVault, SecureRequestAnswer, VaultResponse } 
 import type { RoutineRunPage } from "./routine-runs.js";
 import type { LinkedMacs } from "./mac.js";
 import type { ReplyCardState } from "./reply-cards.js";
+import { MERGE_PATCH } from "./merge-patch.js";
 import type { Routine } from "./types.js";
 import type { ApprovalScope, ApprovalSettings } from "./types.js";
 import type { routinePresets } from "./routine-presets.js";
@@ -70,6 +71,7 @@ import type {
   ModelCatalog,
   ModelChoice,
   Preferences,
+  PreferencesPatch,
   CheckInSettings,
   RuntimeStatus,
   SavedDraft,
@@ -355,7 +357,8 @@ export interface ApiRoutes {
   };
   "GET /bootstrap": { query: { roster?: "lean" }; response: Bootstrap };
   "POST /connection/retry": { response: RuntimeStatus };
-  "PATCH /preferences": { body: Preferences; response: Preferences };
+  // A partial save: see `routeMediaTypes`. A body sent as application/json is a whole object, as older clients send.
+  "PATCH /preferences": { body: PreferencesPatch; response: Preferences };
   "PUT /preferences/models": {
     body: { modelFavorites: ModelChoice[] };
     response: { modelFavorites: ModelChoice[] };
@@ -605,6 +608,10 @@ export type ApiMethod<K extends ApiRoute> = K extends `${infer Method} ${string}
 /** The route's path parameters, such as `{ id: string }` for "/bots/:id". */
 export type ApiParams<K extends ApiRoute> = { [Name in ParamNames<ApiPath<K>>]: string };
 
+/** Routes whose body is not plain JSON. The client sends each with this media type. */
+export const routeMediaTypes: Partial<Record<ApiRoute, string>> = {
+  "PATCH /preferences": MERGE_PATCH,
+};
 /** The method and path pattern a route key names. */
 export function routeParts<K extends ApiRoute>(route: K) {
   const space = route.indexOf(" ");

@@ -816,7 +816,9 @@ messages** chooses **Tinted** or **Solid color**. Solid fills your messages with
 assistant's avatar color, darkened where needed so white text keeps at least 4.5:1
 contrast; a chat without an avatar color, such as one with a photo, keeps the tint.
 Both are saved with your preferences, like Appearance, so they follow you to your other
-devices. Group chats keep their own layout.
+devices. Group chats follow Chat style too: in Bubbles your messages sit at the right and
+everyone else's at the left under their name, and Solid color fills yours with the app's
+green, since a group has no one assistant's color.
 
 When a reply fails, **Retry** under it sends your message again without touching
 your draft. A failed turn can be retried once, by anyone, from any device: a second
@@ -1022,7 +1024,16 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/dev.agentinterface.loopba
 ```
 
 `npm run test:e2e` runs Playwright against Chromium and WebKit. Run `npm run build`
-first, and `npx playwright install chromium webkit` once per Playwright version. The accessibility spec
+first, and `npx playwright install chromium webkit` once per Playwright version. On a Linux host
+without WebKit's system libraries, such as Fedora, run the WebKit project in Playwright's container
+instead; `.agents/tools/check-all` does this on its own:
+`podman run --rm --security-opt label=disable --userns=keep-id --ipc=host -v "$PWD:$PWD" -w "$PWD" -e HOME=/tmp mcr.microsoft.com/playwright:v1.65.0-noble npx playwright test --project=webkit`.
+The image version is the installed `@playwright/test`. A test that routes requests with
+`page.route` or `context.route` must set `test.use({ serviceWorkers: "block" })`, or pass
+`serviceWorkers: "block"` to a context it makes with `browser.newContext`: WebKit sends a
+worker-controlled page's requests past the routes, and `e2e/fixtures.ts` makes such a route fail
+at once in both browsers, in fixtures as in tests. Specs import `test` and `expect` from
+`e2e/fixtures.ts`; lint refuses value imports from Playwright's test package anywhere else in `e2e/`. The accessibility spec
 scans home, a chat with a reply, Settings, assistant details and Today at phone and desktop sizes in
 light and dark. It fails on serious and critical axe WCAG 2.2 AA violations. `e2e/server.ts`
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,
@@ -1038,8 +1049,8 @@ console errors or CSP violation reports. It runs in full Chromium (`channel: "ch
 `npx playwright install chromium` installs beside the headless shell): the shell crashes the
 page when a service worker calls the badge API, which the worker does for every page it controls,
 and it has no back-forward cache. Playwright WebKit skips the worker badge instrumentation and the two back-forward cache tests. It uses a fake push service. It does not cover real Hermes behavior, push
-delivery, Google sign-in, the iOS app, or other browsers. Main pushes and manual CI runs execute it in the `browser` job, while PR CI excludes it
-and uploads the report and traces when it fails.
+delivery, Google sign-in, the iOS app, or other browsers. Main pushes and manual CI runs execute it in the `browser` job, one job per
+browser in Playwright's container image, pinned by digest, while PR CI excludes it. Each job uploads its report and traces when it fails.
 
 The [validation ledger](docs/ledger/README.md) distinguishes application tests,
 real Hermes execution using a deterministic local provider, visual checks, and

@@ -5,13 +5,14 @@ import XCTest
 /// server; they establish native behavior, not Hermes or a real desktop.
 @MainActor final class ShellFlowTests: XCTestCase {
   override func setUp() { continueAfterFailure = false }
-  private func launch(_ switches: [String] = [], home: Bool = false) -> XCUIApplication {
+  private func launch(_ switches: [String] = [], values: [String: String] = [:], home: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
     if home { app.launchEnvironment["AGENT_INTERFACE_UI_HOME"] = "1" }
     for name in switches { app.launchEnvironment["AGENT_INTERFACE_UI_" + name] = "1" }
+    for (name, value) in values { app.launchEnvironment["AGENT_INTERFACE_UI_" + name] = value }
     app.launch()
     return app
   }
@@ -174,7 +175,7 @@ import XCTest
     let app = launch(["GROUP"], home: true)
     // The room is a row on home beside the assistants.
     app.buttons["room.fixture-room"].tapWhenReady(timeout: 15)
-    XCTAssertTrue(app.staticTexts["Second test member"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(speaker(app, "Second test member").waitForExistence(timeout: 10), app.debugDescription)
     let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
     composer.typeWhenFocused("Ask @kit")
     let mention = app.buttons["mention.kitchen"]
@@ -185,9 +186,10 @@ import XCTest
     composer.typeWhenFocused("to check the pantry")
     app.buttons["Send to group"].tapWhenReady()
     // The group names your own message "You" and another member's by name, as the web's thread does.
-    XCTAssertTrue(app.staticTexts["You"].waitForExistence(timeout: 10), "Your message says it is yours: \(app.debugDescription)")
+    XCTAssertTrue(speaker(app, "You").waitForExistence(timeout: 10), "Your message says it is yours: \(app.debugDescription)")
     XCTAssertTrue(app.staticTexts["Ask @kitchen to check the pantry"].exists)
-    XCTAssertFalse(app.staticTexts["Local test member"].exists, "Your own name is not shown on your own message")
+    XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Local test member")).firstMatch.exists,
+      "Your own name is not shown on your own message")
     // The reply arrives by the stream's notice, well before the 30-second fallback poll.
     XCTAssertTrue(app.staticTexts["Fixture live reply: the smoker is free Sunday."].waitForExistence(timeout: 15), app.debugDescription)
     try capture("06-group-live")
@@ -202,14 +204,165 @@ import XCTest
     XCTAssertTrue(kitchen.label.contains("Kitchen companion is working..."), kitchen.label)
     XCTAssertFalse(app.staticTexts["Assistants are discussing…"].exists)
     // A routine's post reads as the routine, not as a household member.
-    XCTAssertTrue(app.staticTexts["Morning brief"].waitForExistence(timeout: 5), app.debugDescription)
-    XCTAssertTrue(app.staticTexts["Routine"].exists)
+    let routine = speaker(app, "Morning brief")
+    XCTAssertTrue(routine.waitForExistence(timeout: 5), app.debugDescription)
+    // The tag's own words: "Routine failed" holds "Routine" too.
+    XCTAssertTrue(routine.label.components(separatedBy: ", ").contains("Routine"), routine.label)
     try capture("06a-group-activity")
     app.buttons["groupSettings"].tapWhenReady()
     let purpose = app.descendants(matching: .any).matching(identifier: "groupPurpose").firstMatch
     purpose.typeWhenFocused("Plan Sunday supper")
     app.buttons["saveGroupSettings"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Plan Sunday supper"].waitForExistence(timeout: 10), "The saved purpose shows under the members: \(app.debugDescription)")
+  }
+
+  /// A group message's speaker line in Bubbles, the default style: one element whose label starts with the name.
+  private func speaker(_ app: XCUIApplication, _ name: String) -> XCUIElement {
+    app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "groupSpeaker-", name)).firstMatch
+  }
+  /// Opens the group fixture that holds every kind of speaker in the chat style the environment sets. The app opens the
+  /// room itself, so this works where home's row is out of reach, as on an iPad or at an accessibility text size.
+  private func openStyledGroup(_ environment: [String: String], arguments: [String] = []) -> XCUIApplication {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    app.launchEnvironment["AGENT_INTERFACE_UI_GROUP"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_GROUP_BUBBLES"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_CAPTURE_GROUP"] = "1"
+    for (key, value) in environment { app.launchEnvironment[key] = value }
+    app.launchArguments += arguments
+    app.launch()
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+    // The latest message, which the room opens at.
+    app.staticTexts["Then the trailer fits through."].revealInGroup(app)
+    return app
+  }
+
+  /// In Bubbles the person's own messages and their speaker line sit at the trailing edge, and everyone else's,
+  /// another member's, an assistant's and a routine's, at the leading edge. Classic keeps every message flat at the
+  /// leading edge. Positions are compared with each other, so the list's margins on each device do not matter.
+  func testGroupBubblesSeatThePersonAtTheTrailingEdgeAndEveryoneElseAtTheLeading() throws {
+    let others = ["What should we cook on Sunday?", "Brisket, if the smoker is free.", "Fixture routine post: the smoker is free Sunday.",
+      "Here is the plan so far:"]
+    // One that wraps on a phone and one that does not, so a shared trailing edge cannot be a coincidence of length.
+    let own = ["I can light the smoker at six. Who brings the rub?", "Then the trailer fits through."]
+    for style in ["bubbles", "classic"] {
+      let app = openStyledGroup(["AGENT_INTERFACE_UI_CHAT_STYLE": style])
+      func frame(_ element: XCUIElement) -> CGRect { element.revealInGroup(app); return element.frame }
+      func starting(_ label: String) -> XCUIElement { app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch }
+      let othersFrames = others.map { frame(app.staticTexts[$0]) }
+      let ownFrames = own.map { frame(app.staticTexts[$0]) }
+      let leading = othersFrames.map(\.minX).min()!
+      for (text, value) in zip(others, othersFrames) {
+        XCTAssertEqual(value.minX, leading, accuracy: 4, "\(style): \(text) speaks from the leading edge: \(othersFrames)")
+      }
+      let table = frame(app.scrollViews.matching(NSPredicate(format: "label == %@", "Table")).firstMatch)
+      let trailing = ownFrames.map(\.maxX).max()!
+      for (text, value) in zip(own, ownFrames) {
+        if style == "bubbles" {
+          XCTAssertGreaterThan(value.minX, leading + 20, "Bubbles: your \(text) leaves the leading edge: \(value)")
+          XCTAssertEqual(value.maxX, trailing, accuracy: 4, "Bubbles: your \(text) ends at the trailing edge: \(ownFrames)")
+        } else {
+          XCTAssertEqual(value.minX, leading, accuracy: 4, "Classic: your \(text) stays flat at the leading edge: \(value)")
+        }
+      }
+      if style == "bubbles" { XCTAssertGreaterThanOrEqual(table.maxX, trailing - 2, "A table keeps the column's width: \(table)") }
+      // Bubbles makes each speaker line one element; Classic keeps the name as its own text.
+      func speaker(_ event: String, _ name: String) -> XCUIElement {
+        style == "bubbles" ? app.descendants(matching: .any)["groupSpeaker-" + event] : app.staticTexts[name].firstMatch
+      }
+      let yours = speaker("group-own-2", "You")
+      let you = frame(yours), line = yours.label
+      // An assistant's name also fills a table cell, so Classic is checked on the routine's, which no cell repeats.
+      let routine = frame(speaker("cron-post:2", "Morning brief"))
+      XCTAssertLessThan(routine.minX, leading + 40, "\(style): the routine's name stays at the leading edge: \(routine)")
+      if style == "bubbles" {
+        let kitchen = frame(speaker("group-2", "Kitchen companion"))
+        XCTAssertLessThan(kitchen.minX, leading + 40, "Bubbles: the assistant's name stays at the leading edge: \(kitchen)")
+      }
+      if style == "bubbles" {
+        XCTAssertGreaterThan(you.minX, leading + 20, "Bubbles: your name moves to the trailing edge: \(you)")
+        XCTAssertGreaterThanOrEqual(you.maxX, trailing - 2, "Bubbles: your name ends at the trailing edge: \(you)")
+        XCTAssertTrue(line.hasPrefix("You") && line != "You", "Bubbles reads the name with its time, as one stop before the message: \(line)")
+        // A long thread line wraps across the row on a phone, so it is held to the trailing edge, not off the leading one.
+        XCTAssertEqual(frame(starting("In thread with")).maxX, you.maxX, accuracy: 4, "Your thread line follows your message")
+      }
+      XCTAssertLessThanOrEqual(table.minX, leading + 2, "\(style): the table starts at the column's edge: \(table)")
+      app.terminate()
+    }
+  }
+
+  /// The group in each chat style for review: Classic and Bubbles in light and dark.
+  /// Runs only when screenshots are written. Each capture's accessibility tree is written beside it, so a change to
+  /// Classic's shows in a diff.
+  func testGroupChatStyleScreens() throws {
+    try captureGroups([
+      ("classic-light", ["AGENT_INTERFACE_UI_CHAT_STYLE": "classic", "AGENT_INTERFACE_UI_THEME": "light"], []),
+      ("classic-dark", ["AGENT_INTERFACE_UI_CHAT_STYLE": "classic", "AGENT_INTERFACE_UI_THEME": "dark"], []),
+      ("bubbles-light", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_THEME": "light"], []),
+      ("bubbles-dark", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_THEME": "dark"], []),
+    ])
+  }
+  /// The group's Solid and Increase Contrast captures, apart from the rest so each stays within the time allowance on a
+  /// shared Mac. Runs only when screenshots are written.
+  func testGroupSolidAndContrastScreens() throws {
+    try captureGroups([
+      ("bubbles-solid-dark", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid", "AGENT_INTERFACE_UI_THEME": "dark"], []),
+      ("bubbles-solid-light", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid", "AGENT_INTERFACE_UI_THEME": "light"], []),
+      ("bubbles-solid-contrast-dark", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid",
+        "AGENT_INTERFACE_UI_THEME": "dark", "AGENT_INTERFACE_UI_INCREASE_CONTRAST": "1"], []),
+      ("bubbles-contrast-light", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_THEME": "light", "AGENT_INTERFACE_UI_INCREASE_CONTRAST": "1"], []),
+    ])
+  }
+  /// A link, inline code and task boxes in the person's bubble, tinted and solid, which draw in colors of their own
+  /// elsewhere. Runs only when screenshots are written.
+  func testGroupInkScreens() throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    for (own, theme) in [("solid", "light"), ("solid", "dark"), ("tint", "light"), ("tint", "dark")] {
+      let app = launch(["GROUP", "GROUP_INK", "CAPTURE_GROUP"], values: ["CHAT_STYLE": "bubbles", "OWN_BUBBLE": own, "THEME": theme])
+      let text = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "See the plan")).firstMatch
+      XCTAssertTrue(text.waitForExistence(timeout: 15), app.debugDescription)
+      try capture("group-ink-\(own)-\(theme)")
+      app.terminate()
+    }
+  }
+  /// The group in Bubbles at the largest accessibility text size, tinted and solid, where the person's quote holding
+  /// nested lists has the least room. A test of its own, since scrolling at this size takes most of the time allowance.
+  func testGroupLargeTextScreens() throws {
+    let large = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+    try captureGroups([
+      ("bubbles-large-light", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_THEME": "light"], large),
+      ("bubbles-solid-large-dark", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid", "AGENT_INTERFACE_UI_THEME": "dark"], large),
+    ])
+  }
+  private func captureGroups(_ variants: [(String, [String: String], [String])]) throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"]!)
+    for (name, environment, arguments) in variants {
+      let app = openStyledGroup(environment, arguments: arguments)
+      let device = app.frame.width > 700 ? "ipad" : app.frame.width < 380 ? "iphone-small" : "iphone"
+      // The latest message, the quote holding nested lists, is on screen.
+      try capture("group-\(device)-\(name)-end")
+      // At the largest size the quote scrolls off above the message's last line, so its top is captured too.
+      if name.contains("large") {
+        app.staticTexts["Gates"].revealInGroup(app)
+        try capture("group-\(device)-\(name)-quote")
+      }
+      // The tree gives VoiceOver's reading order and labels.
+      try app.debugDescription.write(to: directory.appendingPathComponent("group-\(device)-\(name)-tree.txt"), atomically: true, encoding: .utf8)
+      app.staticTexts["What should we cook on Sunday?"].revealInGroup(app)
+      try capture("group-\(device)-\(name)-start")
+      // The audit's findings are written down rather than failed on, so Classic's before and after can be compared;
+      // AccessibilityAuditTests holds the gating audits. It runs last, since it can leave the room's elements stale.
+      var findings: [String] = []
+      try app.performAccessibilityAudit { issue in
+        findings.append("\(issue.auditType.rawValue) \(issue.compactDescription): \(issue.element?.label ?? "no element") \(issue.element?.identifier ?? "")")
+        return true
+      }
+      try findings.joined(separator: "\n").write(to: directory.appendingPathComponent("group-\(device)-\(name)-audit.txt"), atomically: true, encoding: .utf8)
+      app.terminate()
+    }
   }
 
   func testComputerOpensInTheAppAndTakesOverThenHandsBack() throws {
@@ -371,5 +524,44 @@ import XCTest
     try capture("10-assistant-card")
     app.buttons["profileFind"].tapWhenReady()
     XCTAssertTrue(app.textFields["findConversation"].waitForExistence(timeout: 5))
+  }
+}
+
+extension XCUIApplication {
+  /// The part of the group's messages between the navigation bar and the message box.
+  var groupViewport: ClosedRange<CGFloat> {
+    let box = descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
+    return navigationBars.firstMatch.frame.maxY...(box.frame.minY - 12)
+  }
+  /// Drags the group's messages by `distance` points, down toward the first message when positive, slowly and with a
+  /// hold at the end so the list does not coast past.
+  func scrollGroup(by distance: CGFloat) {
+    let box = descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
+    let viewport = groupViewport
+    let step = min(abs(distance), viewport.upperBound - viewport.lowerBound - 40)
+    let startY = distance > 0 ? viewport.upperBound - 10 - step : viewport.upperBound - 10
+    let start = coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: box.frame.midX, dy: startY))
+    start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance > 0 ? step : -step)),
+      withVelocity: .slow, thenHoldForDuration: 0.3)
+  }
+  func scrollGroup(down: Bool) { scrollGroup(by: down ? 10_000 : -10_000) }
+}
+
+extension XCUIElement {
+  /// Scrolls the group's messages until this element is on screen above the message box, or, when it is taller than
+  /// that space, until its top is. The list builds rows only near the screen, so a row not built yet is looked for
+  /// toward the latest message first, then toward the first.
+  func revealInGroup(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+    for attempt in 0..<40 where !exists { app.scrollGroup(down: attempt >= 20) }
+    for _ in 0..<8 {
+      guard exists else { break }
+      let viewport = app.groupViewport, box = frame
+      if box.minY < viewport.lowerBound { app.scrollGroup(by: viewport.lowerBound - box.minY + 16) }
+      else if box.maxY > viewport.upperBound && box.height < viewport.upperBound - viewport.lowerBound {
+        app.scrollGroup(by: viewport.upperBound - box.maxY - 16)
+      } else if box.minY > viewport.upperBound { app.scrollGroup(by: viewport.lowerBound - box.minY + 16) }
+      else { return }
+    }
+    XCTFail("\(self) shows in the group: \(app.debugDescription)", file: file, line: line)
   }
 }

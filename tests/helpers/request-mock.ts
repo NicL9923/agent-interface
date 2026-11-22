@@ -14,6 +14,7 @@ type Options = {
   body?: unknown;
   signal?: AbortSignal;
   keepalive?: boolean;
+  plainJson?: boolean;
 };
 
 /** The app's own background reports, which each have a test file of their own. */
@@ -30,7 +31,8 @@ export function takeHeartbeats() {
 /**
  * Adds a request() to a mocked client-api module. It calls the module's api and write with the
  * URL, method and body the real request() builds, so mocks keyed by path and assertions on those
- * calls see the mapped routes too. A route without a body is written with `{}`.
+ * calls see the mapped routes too. A route without a body is written with `{}`. A body sent as
+ * plain JSON despite its route's media type gets `{ plainJson: true }` as a fourth argument.
  *
  * `heartbeats: false` answers the chat presence and device activity reports with `{}` without
  * calling `write`, so the real hooks run while the writes a test counts stay its own. A test that
@@ -62,7 +64,9 @@ export function withRequest<M extends Mocked>(
         ? (mocked.write as Call)(url, body)
         : options.keepalive
           ? (mocked.write as Call)(url, body, method, { keepalive: true })
-          : (mocked.write as Call)(url, body, method);
+          : options.plainJson
+            ? (mocked.write as Call)(url, body, method, { plainJson: true })
+            : (mocked.write as Call)(url, body, method);
     },
   };
 }

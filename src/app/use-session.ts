@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Bootstrap, Bot, Preferences } from "../shared/types";
+import type { Bootstrap, Bot, Preferences, PreferencesPatch } from "../shared/types";
 import {
   AccountChanged,
   ApiError,
@@ -7,7 +7,8 @@ import {
   request as apiRequest,
   setCsrf,
 } from "../client-api";
-import { preferenceQueue, type OwnChoice } from "./preference-queue";
+import { preferenceQueue, type PreferenceField } from "./preference-queue";
+import { applyMergePatch } from "../shared/merge-patch";
 import { prefetchLinkedChat, settleLinkedChat } from "./linked-chat";
 import {
   accountEpoch,
@@ -18,9 +19,39 @@ import {
 } from "./account-epoch";
 import { finishSignOut } from "./account-change";
 import { reportStream, streamUp } from "./stream-health";
+/**
+ * Sends a partial preferences save. A server from before partial saves refuses its media type with 415
+ * and saves nothing; then the patch goes whole, as older clients send, over a copy read just now. A
+ * value another device saves between that read and the write is overwritten, as it always was there.
+ */
+async function savePreferencePatch(patch: PreferencesPatch): Promise<Preferences> {
+  try {
+    return await apiRequest("PATCH /preferences", { body: patch });
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 415)) throw error;
+    const { preferences: current } = await apiRequest("GET /bootstrap", {
+      query: { roster: "lean" },
+    });
+    // Model stars have their own route; leaving them out keeps that server's list.
+    const { modelFavorites: _, ...whole } = applyMergePatch(current, patch) as Preferences;
+    return apiRequest("PATCH /preferences", { body: whole, plainJson: true });
+  }
+}
+/**
+ * What a person reads when a preferences save fails. The client's network messages are written for a
+ * chat message, which keeps a draft; a preference change has none and has already left the screen.
+ */
+function refusalMessage(error: Error) {
+  if (error instanceof ApiError && error.code === "CONNECTION_UNAVAILABLE")
+    return error.status === 504
+      ? "The app took too long to answer, so your change may not have saved. If it's missing after a reload, make it again."
+      : "Your change didn't save because the app can't be reached. Make it again once you're connected.";
+  return `Your change didn't save. ${error.message}`;
+}
 type SessionEvents = {
   onFirstBootstrap(next: Bootstrap): void;
-  onError(message: string): void;
+  /** A preferences save was refused or lost; its change has left the screen. `message` says so in full. */
+  onPreferencesRefused(message: string): void;
   /** The open assistant left this person's roster, as when another member made it personal. */
   onBotGone(botId: string): void;
   /** The roster this device saved for `userId`, if any, for a first bootstrap that knows none. */
@@ -350,24 +381,31 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   }, [boot?.user.id, auth, refresh]);
   const preferences = useRef<ReturnType<typeof preferenceQueue> | null>(null);
   preferences.current ??= preferenceQueue({
-    // Model stars have their own endpoint; leaving them out keeps the server's current list.
-    send: ({ modelFavorites: _, ...value }) => apiRequest("PATCH /preferences", { body: value }),
+    send: savePreferencePatch,
     apply: (saved) =>
       setBoot((previous) => (previous ? { ...previous, preferences: saved } : previous)),
-    failed: (error) => handlers.current.onError(error.message),
+    failed: (error) => handlers.current.onPreferencesRefused(refusalMessage(error)),
     account: () => accountEpoch.current,
   });
-  const savePreferences = (value: Preferences) => preferences.current!.save(value);
-  /** Puts preferences a server route answered with on screen, such as a new main assistant. */
-  const applyPreferences = (value: Preferences) =>
-    setBoot((previous) => (previous ? { ...previous, preferences: value } : previous));
-  /** Applies an edit to the newest preferences, including a save still on its way. */
+  /**
+   * Takes preferences a server route answered with, such as a new main assistant, as the confirmed copy.
+   * Any saves still waiting stay laid over them on screen.
+   */
+  const applyPreferences = (value: Preferences) => preferences.current!.confirm(value);
+  /**
+   * Runs an edit now on the preferences on screen, which are the server's last answer with the saves still
+   * waiting laid over them, puts it on screen, and queues its patch. Answers how the save ended.
+   */
   const editPreferences = (
     edit: (value: Preferences) => Preferences,
-    chosen?: readonly OwnChoice[],
+    chosen: readonly PreferenceField[],
   ) => preferences.current!.edit(edit, bootRef.current?.preferences, chosen);
   return {
     boot,
+    /** The preferences the server confirmed, without the saves still waiting: what to keep for a later launch. */
+    confirmedPreferences: boot
+      ? (preferences.current.confirmedCopy() ?? boot.preferences)
+      : undefined,
     auth,
     botId,
     setBotId,
@@ -379,7 +417,6 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     identityEpoch: accountEpoch,
     refresh,
     reconnect,
-    savePreferences,
     editPreferences,
     applyPreferences,
     /** This server sends `groups` notices, so a slow fallback poll is enough. */

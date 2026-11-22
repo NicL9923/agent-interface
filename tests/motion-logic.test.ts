@@ -82,7 +82,10 @@ it("tints a chat with a drawn avatar's color, and never with a photo or an unexp
     avatar: { mode: "geometric", shape: "fox", color: "#C46F2C", eyes: "round", accessory: "none" },
   } as Bot;
   expect(botTint(drawn)).toBe("#C46F2C");
-  expect(tintProps(drawn)).toEqual({ "data-tint": "", style: { "--bot-tint": "#C46F2C" } });
+  expect(tintProps(drawn)).toEqual({
+    "data-tint": "",
+    style: { "--bot-tint": "#C46F2C", "--solid-fill": "#9F5000" },
+  });
   expect(
     botTint({ avatar: { mode: "portrait", src: "/a.png", origin: "uploaded" } } as Bot),
   ).toBeUndefined();

@@ -85,7 +85,9 @@ enum ReplyCards {
         parts.append(.init(id: parts.count, inline: doc)); cursor = whole.upperBound
         continue
       }
-      guard block.language == "agent-ui" else { continue }
+      // A card fence starts at the margin, as the server and the web read one (`replyCardsFromText`). An
+      // indented one may sit in a list item, which keeps it as code, so the list stays whole.
+      guard block.language == "agent-ui", text[whole.lowerBound] != " " else { continue }
       guard
         let data = String(text[payload]).data(using: .utf8), strictJSON(data),
         let doc = try? JSONDecoder().decode(ReplyCardDocument.self, from: data), valid(doc) else { continue }

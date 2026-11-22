@@ -312,7 +312,26 @@ class ValidateIosTests(unittest.TestCase):
         self.assertEqual(
             release["destination"], f"platform=iOS Simulator,id={SIMULATOR}"
         )
-        self.assertEqual(release["derived data"], ".private/ios-build")
+        self.assertEqual(release["derived data"], f".private/ios-build-{SIMULATOR}")
+
+    def test_a_test_builds_apart_from_a_build_in_the_same_checkout(self):
+        # The machine lock runs a test beside a build, and beside a test on another simulator. In one directory the
+        # second run would delete the first one's test plan, so the simulator's ID is part of a test's directory.
+        for operation, directory in [
+            ("build", ".private/ios-build"),
+            ("test", f".private/ios-build-{SIMULATOR}"),
+            ("live", ".private/ios-live-build"),
+        ]:
+            with self.subTest(operation=operation):
+                self.log.unlink(missing_ok=True)
+                result = self.run_script(operation)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                builds = [
+                    argv[argv.index("-derivedDataPath") + 1]
+                    for argv in self.calls()
+                    if "-derivedDataPath" in argv
+                ]
+                self.assertEqual(set(builds), {directory})
 
     def test_summary_records_the_live_compiler_conditions_and_derived_data(self):
         result = self.run_script(

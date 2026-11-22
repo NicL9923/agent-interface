@@ -21,7 +21,8 @@
     --accent: #246f59;
     --accent-soft: #dce9df;
     --danger: #a33c32;
-    --attention: #9b6733;
+    /* Text in it keeps 4.5:1 on every fill it sits on; the darkest is the selected row's soft accent, at 4.66:1. */
+    --attention: #895b2d;
     --user: #e7eee4;
     /* A reply's prose bubble. It follows the theme, since --ink and --surface do. */
     --reply-bubble: color-mix(in oklab, var(--ink) 7%, var(--surface));

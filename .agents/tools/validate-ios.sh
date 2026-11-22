@@ -86,8 +86,14 @@ trap cleanup EXIT
 
 run_id="${operation}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 result_path=".private/ios-${run_id}.xcresult"
-# Concurrent runs need separate derived data; IOS_DERIVED_DATA selects it.
-derived_data=${IOS_DERIVED_DATA:-.private/ios-build}
+# Two runs that share derived data delete each other's test plans and overwrite each other's products. The machine
+# lock runs tests on different simulators together, so a test builds in its own simulator's directory. Builds run
+# one at a time on the Mac, and a live run has the Mac to itself. IOS_DERIVED_DATA overrides the choice.
+case "$operation" in
+  test) derived_data=${IOS_DERIVED_DATA:-.private/ios-build-$simulator_id} ;;
+  live) derived_data=${IOS_DERIVED_DATA:-.private/ios-live-build} ;;
+  *) derived_data=${IOS_DERIVED_DATA:-.private/ios-build} ;;
+esac
 destination="platform=iOS Simulator,id=$simulator_id"
 build_options=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
 if [[ "$operation" == build ]]; then
@@ -102,7 +108,6 @@ test_options=()
 if [[ "$operation" == live ]]; then
   # This smoke check refuses non-loopback hosts and servers without explicit local test auth.
   node .agents/tools/native-smoke.mjs http://127.0.0.1:3004
-  derived_data=${IOS_DERIVED_DATA:-.private/ios-live-build}
   build_options+=('SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LIVE_HERMES_UI_TESTS')
   test_options+=(-only-testing:AgentInterfaceUITests/LiveConnectionTests)
 fi

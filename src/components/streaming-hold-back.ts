@@ -7,9 +7,11 @@
  * - The result is a prefix of the input. No character is added, removed or reordered, so the live
  *   view only ever shows a state the reply actually passed through.
  * - At most HOLD_LIMIT characters are held, all on the last line: the cut never crosses a line
- *   break. A construct that started further back is shown as typed.
+ *   break. A construct that started further back is shown as typed. The one exception is rule 4's
+ *   header over its delimiter row, which holds two lines of at most HOLD_LIMIT each.
  * - A block longer than BLOCK_LIMIT comes back whole without being read. Otherwise each step is
- *   one pass over at most BLOCK_LIMIT characters, so the cost does not grow with the reply.
+ *   one pass over at most BLOCK_LIMIT characters, so the cost does not grow with the reply. A line
+ *   that may be a table header adds one Markdown parse of the block, which is no longer.
  * - Code is never cut. A block with any fence-shaped line, or whose last line is indented as
  *   code, comes back whole.
  * - Only a construct recognized as unfinished is held; anything else comes back whole.
@@ -26,11 +28,22 @@
  * 3. A link or image whose text or destination is still arriving. Its `[` must follow a space,
  *    the line start, `(`, `*` or a quote, so `arr[0` and a URL holding `[` show at once, unless
  *    `](` or `][` already makes it a link.
- * 4. A table header: a last line starting with `|` under a line that does not.
+ * 4. A table header: a last line starting with `|` that React Markdown's parser would read as a table's
+ *    header row once a delimiter row followed it, and that never read as a finished sentence on the way,
+ *    so `| Name | No. |` shows as typed. A line under one shaped like a delimiter row is a body row, and
+ *    the parser is not asked. So a row of a table above is not one, nor a line a list
+ *    item's paragraph takes in. Once it ends, it stays held with the next line while that line holds only
+ *    `|`, `:`, `-`, spaces and tabs, as a delimiter row does while it arrives. The first other character
+ *    shows both lines. Only a header held while it was the last line stays held, so a line already
+ *    shown never goes away.
  * 5. A run that cannot be classified yet: a last line of only `-`, `=`, `*`, `_`, `+`, `#`, `|`,
  *    `:`, `~` and `>`, which may become a rule, heading underline, list item, heading or delimiter
  *    row; or a trailing `*`, `_`, `~` or `|` run after a space.
  */
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
+
 /** The most characters held back: about one short phrase, a bold term or a link to a docs page. */
 export const HOLD_LIMIT = 120;
 /** The longest block read, so every pass is bounded; a longer block shows as typed. */
@@ -43,6 +56,12 @@ const container = String.raw`(?:[ \t>]|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))*`;
 const fenceLine = new RegExp(String.raw`^${container}(?:\`{3,}|~{3,})`, "m");
 const containerPrefix = new RegExp(`^${container}`);
 const markerLine = /^[ \t]*[-=*_+#|:~>][-=*_+#|:~> \t]*$/;
+// A line that may start a table row, as React Markdown's GFM tables read one.
+const tableRow = /^ {0,3}\|/;
+// What a delimiter row holds while it arrives, before any cell's dashes end: `| --- | :-`.
+const delimiterSoFar = /^[-|: \t]*$/;
+// A line shaped like a finished delimiter row, `| --- | :-: |` or `:---`, or a heading's underline `---`.
+const delimiterRow = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/m;
 const spaceOrOpening = /[\s([{"'\u2018\u201c]/;
 const letterOrDigit = /[\p{L}\p{N}]/u;
 const opensAfter = {
@@ -52,6 +71,8 @@ const opensAfter = {
 };
 // A line that ends a sentence, with any closing quote or bracket after its full stop.
 const sentenceEnd = /[.!?\u3002\uff01\uff1f]["')\]\u2019\u201d]*[ \t]*$/;
+// Some prefix of a line that holds one of these read as a finished sentence, and showed.
+const endedSentence = /[.!?\u3002\uff01\uff1f]/;
 // Without a segmenter a cut cannot be proved to fall between characters, so nothing is held.
 const graphemes =
   typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
@@ -64,31 +85,99 @@ export function streamingHoldBack(text: string): string {
     const lineStart = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1;
     const line = text.slice(lineStart);
     if (/[\t]| {4}/.test(containerPrefix.exec(line)![0])) return text;
+    const header = heldHeader(text, lineStart, line);
+    if (header !== undefined) return cutAt(text, header);
     const earliest = text.length - HOLD_LIMIT - lineStart;
     const cut =
-      markerLine.test(line) ||
-      (/^ {0,3}\|/.test(line) && !/^ {0,3}\|/.test(previousLine(text, lineStart)))
-        ? 0
-        : inlineCut(line, earliest);
+      markerLine.test(line) || heldAsHeader(text, lineStart) ? 0 : inlineCut(line, earliest);
     if (cut === undefined || cut < earliest) return text;
     // Only quote and list markers stay before the cut, so the hold hides everything the line says.
     if (containerPrefix.exec(line)![0].length >= cut && sentenceEnd.test(line)) return text;
-    const at = lineStart + cut;
-    if (at > 0 && graphemes?.segment(text).containing(at)?.index !== at) return text;
-    return text.slice(0, at);
+    return cutAt(text, lineStart + cut);
   } catch {
     return text;
   }
 }
 
-function previousLine(text: string, lineStart: number): string {
-  if (lineStart === 0) return "";
+/** `text` up to `at`, or all of it when `at` may not fall between characters. */
+function cutAt(text: string, at: number) {
+  if (at > 0 && graphemes?.segment(text).containing(at)?.index !== at) return text;
+  return text.slice(0, at);
+}
+
+/** The line that ends just before `lineStart`, and where it starts. */
+function previousLine(text: string, lineStart: number): { line: string; start: number } {
+  if (lineStart === 0) return { line: "", start: 0 };
   let end = lineStart - 1;
   if (text[end] === "\n" && text[end - 1] === "\r") end--;
-  return text.slice(
-    Math.max(text.lastIndexOf("\n", end - 1), text.lastIndexOf("\r", end - 1)) + 1,
-    end,
+  const start = Math.max(text.lastIndexOf("\n", end - 1), text.lastIndexOf("\r", end - 1)) + 1;
+  return { line: text.slice(start, end), start };
+}
+
+/**
+ * Where rule 4's table header starts when its delimiter row is still the last line: the line above
+ * is a header that rule 4 held while it was last, and this one could still become its delimiter row.
+ */
+function heldHeader(text: string, lineStart: number, line: string): number | undefined {
+  if (line.length > HOLD_LIMIT || !delimiterSoFar.test(line)) return undefined;
+  const header = previousLine(text, lineStart);
+  return lineStart > 0 &&
+    header.line.length <= HOLD_LIMIT &&
+    heldAsHeader(text.slice(0, header.start + header.line.length), header.start)
+    ? header.start
+    : undefined;
+}
+
+/**
+ * Whether rule 4 holds the last line of `text`, which starts at `start`, as a table header. It holds a line
+ * only if no prefix of it ended a sentence, since the hold drops such a line and it would then show and go.
+ */
+function heldAsHeader(text: string, start: number) {
+  return !endedSentence.test(text.slice(start)) && becomesHeader(text, start);
+}
+
+/**
+ * Whether the last line of `text`, which starts at `start`, would be a table's header row once a delimiter
+ * row with as many cells followed it. The parser answers, as React Markdown parses the block, so a row of a
+ * table above, a line in a list item's paragraph, or a line in code is not one. Only a line starting with
+ * `|` is asked, which keeps the parse rare.
+ */
+function becomesHeader(text: string, start: number) {
+  const line = text.slice(start);
+  if (!tableRow.test(line)) return false;
+  const above = text.slice(0, start);
+  // Under a delimiter row this line is one of its table's body rows, so a table's rows stream in without a
+  // parse each. Where that line is a heading's underline or a rule instead, this line shows as typed.
+  if (delimiterRow.test(above)) return false;
+  const delimiter = `${/^ */.exec(line)![0]}|${"-|".repeat(cellCount(line))}`;
+  const row = (above.match(/\r\n|\r|\n/g)?.length ?? 0) + 1;
+  const headed = (node: MdastNode): boolean =>
+    node.type === "table"
+      ? node.children?.[0]?.position?.start.line === row
+      : !!node.children?.some(headed);
+  return headed(
+    fromMarkdown(`${text}\n${delimiter}`, {
+      extensions: [gfm()],
+      mdastExtensions: [gfmFromMarkdown()],
+    }),
   );
+}
+type MdastNode = { type: string; children?: MdastNode[]; position?: { start: { line: number } } };
+
+/**
+ * How many cells GFM splits a row into: at each `|` no backslash escapes, less a leading and a trailing one.
+ * A miscount only means the parser finds no table, so the line shows as typed.
+ */
+function cellCount(row: string) {
+  // GFM trims spaces and tabs only, so a cell holding a nonbreaking space stays a cell.
+  const trimmed = row.replace(/^[ \t]+|[ \t]+$/g, "");
+  const pipes = [...trimmed.matchAll(/(?<!\\)(?:\\\\)*\|/g)].map(
+    (match) => match.index + match[0].length - 1,
+  );
+  const edges =
+    (trimmed.startsWith("|") ? 1 : 0) +
+    (trimmed.length > 1 && pipes.at(-1) === trimmed.length - 1 ? 1 : 0);
+  return Math.max(1, pipes.length + 1 - edges);
 }
 
 /** Where an unfinished inline construct on the line starts, if one does. One pass over the line. */

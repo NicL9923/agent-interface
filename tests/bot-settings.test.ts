@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement, StrictMode } from "react";
 import type { Root } from "react-dom/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { preparePortrait } from "../src/portrait-upload";
 import { BotSettings } from "../src/BotSettings";
 import { api, ApiError, write } from "../src/client-api";
@@ -1606,11 +1606,16 @@ describe("routines in Automation", () => {
       },
     ]);
     const edits: ((value: typeof bootstrap.preferences) => typeof bootstrap.preferences)[] = [];
-    // Saves stay on their way, so the switch shows the edit as it would until the server answers.
+    // Like the session: the edit's result goes on screen at once while its save stays on its way.
+    let shown = bootstrap;
     const editPreferences = vi.fn(
       (edit: (value: typeof bootstrap.preferences) => typeof bootstrap.preferences) => {
         edits.push(edit);
-        return new Promise<void>(() => {});
+        shown = { ...shown, preferences: edit(shown.preferences) };
+        root.render(
+          createElement(BotSettings, { bot, bootstrap: shown, onClose, onSaved, editPreferences }),
+        );
+        return new Promise<never>(() => {});
       },
     );
     await render({ editPreferences });
@@ -1631,6 +1636,43 @@ describe("routines in Automation", () => {
       }).hiddenRoutineRuns,
     ).toEqual([]);
     expect(write).not.toHaveBeenCalled();
+  });
+
+  // The app's toast sits outside this modal, where a person in it cannot reach it.
+  it("says inside the sheet, in view, when a Show runs in chat change was refused", async () => {
+    const scrolled = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: function (this: HTMLElement) {
+        scrolled(this);
+      },
+    });
+    onTestFinished(() => {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    });
+    serve("/routines", [
+      {
+        id: "r1",
+        botId: bot.id,
+        name: "Certificates",
+        prompt: "",
+        schedule: "every 6h",
+        enabled: true,
+      },
+    ]);
+    const editPreferences = vi.fn(() => new Promise<never>(() => {}));
+    await render({ editPreferences });
+    await click("Automation");
+    await act(async () =>
+      container.querySelector<HTMLInputElement>(".routine-chat-toggle input")!.click(),
+    );
+    await render({
+      editPreferences,
+      saveRefusal: { message: "Your change didn't save. The server refused that change.", id: 1 },
+    });
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe("Your change didn't save. The server refused that change.");
+    expect(scrolled).toHaveBeenCalledWith(alert);
   });
 
   it("posts a routine's results in chosen group chats, and never sends rooms it could not read", async () => {

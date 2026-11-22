@@ -26,19 +26,40 @@ import XCTest
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
-  /// Drags the form's left gutter. A swipe up its middle can start on an eye slider's thumb, which
-  /// then moves the slider and leaves the form where it is.
-  private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
-    for _ in 0..<25 {
-      if element.exists && element.canTap { return }
-      let gutter = app.collectionViews.firstMatch.coordinate(withNormalizedOffset: .zero)
-        .withOffset(CGVector(dx: 4, dy: 0))
-      let height = app.collectionViews.firstMatch.frame.height
-      let low = gutter.withOffset(CGVector(dx: 0, dy: height * 0.7))
-      let high = gutter.withOffset(CGVector(dx: 0, dy: height * 0.35))
-      (up ? low : high).press(forDuration: 0.05, thenDragTo: up ? high : low, withVelocity: .slow, thenHoldForDuration: 0.1)
+  /// Scrolls the list until all of `element` is clear of the navigation bar and of Profile's sticky
+  /// avatar preview and Save bars, with short drags in the list's leading gutter as NativeFlowTests does.
+  /// A row partly under a bar still reads as hittable, but a tap on it lands on the bar. A swipe from the
+  /// middle of Profile can start on an eye slider, which takes the drag: the setting changes and the list
+  /// stays put, so every later swipe lands there too. Save turning on is how a changed setting shows, so
+  /// a caller with an edit already waiting passes `unsaved` and gets no such check.
+  private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true, unsaved: Bool = false) {
+    let save = app.buttons["saveChanges"]
+    let preview = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
+    let saveBar = app.descendants(matching: .any)["saveBar"].firstMatch
+    // An edit made while Save is already on changes nothing this test can see, so the caller says which
+    // state it starts in, and a wrong claim fails either way.
+    if unsaved {
+      XCTAssertTrue(save.wait(until: "enabled == true"), "Revealing \(element) as unsaved needs an edit waiting")
+    } else {
+      XCTAssertFalse(save.exists && save.isEnabled, "Revealing \(element) must start with nothing unsaved")
     }
-    XCTAssertTrue(element.canTap, "\(element) never became hittable")
+    func band() -> (top: CGFloat, bottom: CGFloat) {
+      let bars = app.navigationBars.allElementsBoundByIndex + [preview]
+      let top = bars.filter(\.hasFrame).map(\.frame.maxY).max() ?? 0
+      return (top, saveBar.hasFrame ? saveBar.frame.minY : app.frame.maxY)
+    }
+    for _ in 0..<25 {
+      let (top, bottom) = band()
+      if element.canTap && element.frame.minY >= top && element.frame.maxY <= bottom { break }
+      let upward = element.hasFrame ? element.frame.maxY > bottom : up
+      let surface = app.collectionViews.firstMatch
+      let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: upward ? 0.7 : 0.3)).withOffset(CGVector(dx: 4, dy: 0))
+      let distance = surface.frame.height * 0.35 * (upward ? -1 : 1)
+      start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)), withVelocity: .slow, thenHoldForDuration: 0.2)
+      guard unsaved || !(save.exists && save.isEnabled) else { XCTFail("Scrolling to \(element) changed a setting"); return }
+    }
+    let (top, bottom) = band()
+    XCTAssertTrue(element.canTap && element.frame.minY >= top && element.frame.maxY <= bottom, "\(element) never showed clear of the bars")
   }
   private func waitFor(_ format: String, _ element: XCUIElement, timeout: TimeInterval = 5) {
     expectation(for: NSPredicate(format: format), evaluatedWith: element)
@@ -169,7 +190,7 @@ import XCTest
     // The sheet now edits the created assistant on its Profile, its chosen look intact.
     XCTAssertTrue(app.navigationBars["Profile"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.navigationBars["Profile"].buttons["All settings"].exists)
-    reveal(app, pebble)
+    reveal(app, pebble, unsaved: true)
     XCTAssertTrue(pebble.isSelected)
     try capture("after-create-avatar-failed")
     app.buttons["retryAvatar"].tap()
@@ -247,7 +268,7 @@ import XCTest
     XCTAssertTrue(name.wait(until: "enabled == true"))
     name.typeWhenFocused(" two\n")
     let pebble = app.buttons["avatarTile.shape.pebble"]
-    reveal(app, pebble)
+    reveal(app, pebble, unsaved: true)
     pebble.tap()
     XCTAssertTrue(save.wait(until: "enabled == true"))
     save.tap()

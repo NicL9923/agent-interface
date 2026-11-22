@@ -6,6 +6,7 @@ import { App } from "../src/App";
 import { clearResponseCache } from "../src/client-api";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
+import { preferenceServer } from "./helpers/preference-server";
 import { advance, click, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
 // The app runs whole, through the real client API, against a fake server at fetch. A request the
@@ -109,6 +110,7 @@ beforeEach(async () => {
   calls = [];
   unexpected = [];
   bodies = {};
+  const preferences = preferenceServer(() => signedIn.preferences);
   signedIn = bootstrap;
   vi.stubGlobal(
     "fetch",
@@ -144,7 +146,7 @@ beforeEach(async () => {
       if (/^GET \/bots\/[^/]+\/routines\/[^/]+\/results$/.test(call)) return json([]);
       if (/^GET \/bots\/[^/]+\/routine-runs$/.test(call))
         return json({ runs: [], unavailable: [] });
-      if (call === "PATCH /preferences") return json(bodies[call]!.at(-1) as object);
+      if (call === "PATCH /preferences") return json(preferences(bodies[call]!.at(-1)));
       // Reading reports, which these tests do not inspect.
       if (/^PUT \/(bots\/[^/]+\/presence|devices\/activity)$/.test(call)) return json({});
       if (/^PUT \/bots\/[^/]+\/read-position$/.test(call)) return json(bodies[call]!.at(-1));

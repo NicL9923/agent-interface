@@ -7,9 +7,11 @@ extension AppStore {
     stopPolling()
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
-        guard let self, await self.pollOnce() else { return }
+        guard let self, await self.pollOnce() else { break }
         try? await Task.sleep(for: Self.pollDelay(failures: self.failures))
       }
+      // Ended by itself, as an expiring sign-in ends it. One that was stopped or replaced is not the handle's.
+      if !Task.isCancelled { self?.pollTask = nil }
     }
   }
   /// The wait before the next pass: short while all is well, and after failed bootstraps the same
@@ -23,8 +25,10 @@ extension AppStore {
     let currentGeneration = generation
     await renewSignInIfDue()
     // Signing out, switching accounts or suspending during renewal ends this pass before it
-    // starts any stream for a session that is gone.
-    guard !suspended, !Task.isCancelled, generation == currentGeneration, api?.token != nil else { return false }
+    // starts any stream for a session that is gone. After a switch the next pass is the new account's: a bootstrap
+    // that answered as another member starts no poll of its own.
+    guard !suspended, !Task.isCancelled, api?.token != nil else { return false }
+    guard generation == currentGeneration else { return true }
     if let api,
       let expiry = UserDefaults.standard.string(forKey: DeviceDefaults.expiry(api.baseURL)),
       let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
@@ -56,7 +60,7 @@ extension AppStore {
     pollTask = nil
     stopStream()
   }
-  private func stopStream() {
+  func stopStream() {
     rosterTask?.cancel()
     rosterTask = nil
     latestInflight = nil
@@ -242,6 +246,7 @@ extension AppStore {
     let currentGeneration = generation
     bootstrapReads += 1
     let bootstrapRead = bootstrapReads
+    let preferenceOrder = preferenceSaves, preferencesMark = preferenceOrder.mark
     do {
       let response: (value: Bootstrap?, etag: String?) = try await api.changed("/bootstrap?roster=lean", since: appliedBootstrapTag)
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
@@ -291,12 +296,7 @@ extension AppStore {
           // Recheck redacted references without destroying the open view or its scroll anchor.
           conversationRefreshedAt = nil
         }
-        if let previous = bootstrap, previous.user.id != value.user.id {
-          clearOfflineLibrary()
-          clearNotificationPrefetch()
-          persistDraft()
-          resetAccountContent()
-        }
+        if let previous = bootstrap, previous.user.id != value.user.id { leaveAccount(nextToken: api.token) }
         // After any account change above, which starts the outages over.
         bootstrapAnswered = true
         if value.connection.connected { everConnected = true }
@@ -306,17 +306,21 @@ extension AppStore {
         if appUnavailable { appUnavailable = false }
         // Before the roster is applied, which publishes it to the widgets.
         rosterFromCache = cached
+        // A preferences save that overlapped this read may be newer than its copy, so the saved one stays.
+        let stalePreferences = preferenceOrder === preferenceSaves && !preferenceOrder.fresh(preferencesMark)
+        if stalePreferences, let previous = bootstrap { value.preferences = previous.preferences }
         if bootstrap != value { bootstrap = value; applied = true }
         activityHeld = false
         updateActivity()
-        // A stale roster is read whole each time, so the end of its carry is judged on it.
-        appliedBootstrapTag = staleRosterSince == nil ? response.etag : nil
+        // A stale roster is read whole each time, so the end of its carry is judged on it. A read whose
+        // preferences were set aside keeps no tag either, so the next read applies them even when unchanged.
+        appliedBootstrapTag = stalePreferences || staleRosterSince != nil ? nil : response.etag
       }
       // Publishing follows a changed roster; an unchanged one still renews the widgets' freshness.
       if !applied { publishWidgetSnapshot() }
       restoredRosterAt = nil
       if offlineSavedAt != nil, !cachedChats.contains(selectedBotId ?? "") { offlineSavedAt = nil }
-      api.csrf = value.csrfToken
+      self.api?.csrf = value.csrfToken
       Task { await self.uploads.drain() }
       if appUnavailable { appUnavailable = false }
       failures = 0

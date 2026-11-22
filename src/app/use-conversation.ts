@@ -23,6 +23,7 @@ import {
   atTrueEnd,
   distanceToEnd,
   endReserve,
+  keyScroll,
   scrollIntent,
 } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
@@ -63,9 +64,6 @@ const placeRows = "[data-message-id], [data-place-id]";
 const placeId = (item: HTMLElement) => item.dataset.messageId ?? `place:${item.dataset.placeId}`;
 const placeElement = (container: HTMLElement, id: string) =>
   [...container.querySelectorAll<HTMLElement>(placeRows)].find((item) => placeId(item) === id);
-const editable = (target: EventTarget | null) =>
-  target instanceof HTMLElement &&
-  (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 /**
  * How long after each failed read in a row the chat reads again: the read that failed was asked for a
  * reason, such as a new message, and with the stream live the poll would not ask again for two minutes.
@@ -836,9 +834,22 @@ export function useConversation(
   };
   const listen = (element: HTMLElement) => {
     const input = (event: Event) => {
-      if (event.type === "keydown" && editable(event.target)) return;
-      const intent = scrollIntent(event as WheelEvent & KeyboardEvent);
+      const intent = scrollIntent(event as WheelEvent);
       if (intent) intend(intent);
+    };
+    // Keys are heard on the document, after React's handlers on the root, so a control inside the
+    // transcript that took a key has already said so.
+    const key = (event: KeyboardEvent) => {
+      if (!(event.target instanceof Node) || !element.contains(event.target)) return;
+      const intent = scrollIntent(event);
+      if (!intent) return;
+      const scrolls = keyScroll(event, element, intent);
+      // Where the engines differ, the answer that never moves the reader back wins. A send's anchor would
+      // pull a reader WebKit scrolled back to the sent message, and nothing else would notice the move, so
+      // the key ends it. Following goes on: Chromium scrolled nothing, and measurePosition hears WebKit's
+      // move up within a frame.
+      if (scrolls === "scrolls" || (scrolls === "unknown" && mode.current === "anchored"))
+        intend(intent);
     };
     // A press on the scroll bar lands on the container itself, beyond its content box.
     const press = (event: PointerEvent) => {
@@ -849,12 +860,12 @@ export function useConversation(
         intend("drag");
     };
     const options = { passive: true };
-    for (const type of ["wheel", "touchmove", "keydown"])
-      element.addEventListener(type, input, options);
+    for (const type of ["wheel", "touchmove"]) element.addEventListener(type, input, options);
+    element.ownerDocument.addEventListener("keydown", key, options);
     element.addEventListener("pointerdown", press, options);
     return () => {
-      for (const type of ["wheel", "touchmove", "keydown"])
-        element.removeEventListener(type, input);
+      for (const type of ["wheel", "touchmove"]) element.removeEventListener(type, input);
+      element.ownerDocument.removeEventListener("keydown", key);
       element.removeEventListener("pointerdown", press);
     };
   };

@@ -162,6 +162,10 @@
     font-size: 0.875rem;
     line-height: 1.5;
   }
+  /* The settings notes' line height, restated here: the base layer's .settings-content .muted loses to the rule above. */
+  .settings-content .model-status {
+    line-height: 1.55;
+  }
   .model-update-error strong,
   .model-update-error span {
     display: block;

@@ -27,26 +27,28 @@ extension AppStore {
   /// Sends the open draft's save now, unless it is the text being sent. One save at a time: a
   /// save in flight checks again when its response is merged, and is never cancelled, because it
   /// may already have reached the server. Leaving (`force`) sends anyway.
-  @discardableResult private func startDraftSave(botId: String, force: Bool = false) -> Bool {
+  @discardableResult private func startDraftSave(botId: String, force: Bool = false) -> Task<Void, Never>? {
     scheduledDraftSave = nil
-    if !force, !settled(botId) { return false }
+    if !force, !settled(botId) { return nil }
     let snapshot = draft
     let sent = pendings[botId]
     guard sent == nil || !snapshot.isSentCopy || sent?.text != snapshot.text || sent?.attachments != snapshot.attachments
-    else { return false }
+    else { return nil }
     let currentGeneration = generation
-    Task {
-      do { try await self.saveDraft(snapshot, botId: botId) } catch is CancellationError {} catch {
+    // The client is taken now, with the copy: a later sign-in retires it, and the save does not go out.
+    let client = api
+    return Task {
+      do { try await self.saveDraft(snapshot, botId: botId, via: client) } catch is CancellationError {} catch {
         if currentGeneration == self.generation { self.report(error) }
       }
     }
-    return true
   }
   /// Sends a waiting edit now, when switching assistants or leaving the app, instead of
-  /// dropping it. Leaving gets a short background task to finish the saves in flight.
-  func flushDraft(inBackground: Bool = false) {
+  /// dropping it. Leaving gets a short background task to finish the saves in flight. The task it returns, if
+  /// it started a save, ends when that save does.
+  @discardableResult func flushDraft(inBackground: Bool = false) -> Task<Void, Never>? {
     draftTask?.cancel()
-    var started = false
+    var started: Task<Void, Never>?
     // The latest edit always goes, unless a save of exactly that edit is already in flight.
     if draftReady, draft.dirty == true, let botId = selectedBotId, let localKey = key(.draft, botId),
       draftSavesInFlight[localKey]?.contains(draft.seq ?? 0) != true
@@ -54,10 +56,11 @@ extension AppStore {
       started = startDraftSave(botId: botId, force: true)
     }
     scheduledDraftSave = nil
-    guard inBackground, started || !draftSavesInFlight.isEmpty, draftBackgroundTask == .invalid else { return }
+    guard inBackground, started != nil || !draftSavesInFlight.isEmpty, draftBackgroundTask == .invalid else { return started }
     draftBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save draft") { [weak self] in
       self?.endDraftBackgroundTask()
     }
+    return started
   }
   private func endDraftBackgroundTask() {
     guard draftBackgroundTask != .invalid else { return }
@@ -73,8 +76,9 @@ extension AppStore {
   func settled(_ botId: String) -> Bool { key(.draft, botId).map { draftSavesInFlight[$0] == nil } ?? true }
   /// Saves a draft on its base revision, then merges the response into the open copy and the
   /// cached copy as they are now. Kept edits after a conflict save again on the new base.
-  func saveDraft(_ snapshot: Draft, botId: String, retries: Int = 3) async throws {
-    guard let api, let localKey = key(.draft, botId) else { return }
+  /// `client` is the one the save was queued under, when it was queued before this runs.
+  func saveDraft(_ snapshot: Draft, botId: String, retries: Int = 3, via client: APIClient? = nil) async throws {
+    guard let api = client ?? self.api, let localKey = key(.draft, botId) else { return }
     let currentGeneration = generation
     let seq = snapshot.seq ?? 0
     draftSavesInFlight[localKey, default: []].append(seq)
@@ -143,7 +147,8 @@ extension AppStore {
     if selectedBotId == botId && draftReady {
       if draft.dirty == true, scheduledDraftSave == nil { startDraftSave(botId: botId) }
     } else if let cached: Draft = read(localKey), cached.dirty == true, retries > 0 {
-      Task { try? await self.saveDraft(cached, botId: botId, retries: retries) }
+      let client = api
+      Task { try? await self.saveDraft(cached, botId: botId, retries: retries, via: client) }
     }
   }
   /// Writes the open draft to this device now. Leaving, switching, signing out, every merge and text
@@ -193,8 +198,10 @@ extension AppStore {
     if error?.hasPrefix(Self.draftLoadFailure) == true { error = nil }
   }
   /// Adds a voice transcript to the open assistant's draft on its own line, as the web does.
-  @discardableResult func appendTranscript(_ text: String, botId: String) -> Bool {
-    guard selectedBotId == botId, draftReady else { return false }
+  /// `scope` is the account the recording started under: words dictated for one member never join
+  /// the next member's draft, even for the same assistant.
+  @discardableResult func appendTranscript(_ text: String, botId: String, scope: String?) -> Bool {
+    guard scope == self.scope, selectedBotId == botId, draftReady else { return false }
     editComposer {
       $0.text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? text : $0.text + "\n" + text
     }
