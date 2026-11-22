@@ -26,17 +26,21 @@ import XCTest
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
-  /// Scrolls the list until all of `element` shows between the navigation bar and the Save changes bar,
-  /// with short drags in the list's leading gutter as NativeFlowTests does. A swipe from the middle of
-  /// Profile can start on an eye slider, which takes the drag: the setting changes and the list stays
-  /// put, so every later swipe lands there too. A row half under the navigation bar still reads as
-  /// hittable, but a tap on it lands on the bar.
+  /// Scrolls the list until all of `element` is clear of the navigation bar and of Profile's sticky
+  /// avatar preview and Save bars, with short drags in the list's leading gutter as NativeFlowTests does.
+  /// A row partly under a bar still reads as hittable, but a tap on it lands on the bar. A swipe from the
+  /// middle of Profile can start on an eye slider, which takes the drag: the setting changes and the list
+  /// stays put, so every later swipe lands there too.
   private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
     let save = app.buttons["saveChanges"]
-    let unsaved = save.exists && save.isEnabled
+    let preview = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
+    let saveBar = app.descendants(matching: .any)["saveBar"].firstMatch
+    // An edit made while Save is already on changes nothing this test can see, so start without one.
+    XCTAssertFalse(save.exists && save.isEnabled, "Revealing \(element) must start with nothing unsaved")
     func band() -> (top: CGFloat, bottom: CGFloat) {
-      let top = app.navigationBars.allElementsBoundByIndex.filter(\.hasFrame).map(\.frame.maxY).max() ?? 0
-      return (top, save.hasFrame ? save.frame.minY : app.frame.maxY)
+      let bars = app.navigationBars.allElementsBoundByIndex + [preview]
+      let top = bars.filter(\.hasFrame).map(\.frame.maxY).max() ?? 0
+      return (top, saveBar.hasFrame ? saveBar.frame.minY : app.frame.maxY)
     }
     for _ in 0..<15 {
       let (top, bottom) = band()
@@ -46,10 +50,10 @@ import XCTest
       let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: upward ? 0.7 : 0.3)).withOffset(CGVector(dx: 4, dy: 0))
       let distance = surface.frame.height * 0.35 * (upward ? -1 : 1)
       start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)), withVelocity: .slow, thenHoldForDuration: 0.2)
-      guard (save.exists && save.isEnabled) == unsaved else { XCTFail("Scrolling to \(element) changed a setting"); return }
+      guard !(save.exists && save.isEnabled) else { XCTFail("Scrolling to \(element) changed a setting"); return }
     }
     let (top, bottom) = band()
-    XCTAssertTrue(element.canTap && element.frame.minY >= top && element.frame.maxY <= bottom, "\(element) never showed in full")
+    XCTAssertTrue(element.canTap && element.frame.minY >= top && element.frame.maxY <= bottom, "\(element) never showed clear of the bars")
   }
   private func waitFor(_ format: String, _ element: XCUIElement, timeout: TimeInterval = 5) {
     expectation(for: NSPredicate(format: format), evaluatedWith: element)
