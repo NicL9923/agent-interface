@@ -113,4 +113,111 @@ extension AppStore {
       saveOfflineLibrary()
     }
   }
+
+  // MARK: Notification service extension prefetch
+
+  /// Keeps the App Group's prefetch config in step with the signed-in server and account.
+  func syncNotificationPrefetch(_ bootstrap: Bootstrap?) {
+    guard let root = prefetchRoot else { return }
+    guard let bootstrap, let api, api.token != nil, !sessionExpired else {
+      NotificationPrefetchStore.clear(root: root)
+      return
+    }
+    let config = NotificationPrefetchConfig(
+      origin: api.baseURL.absoluteString,
+      account: NotificationActions.accountMarker(bootstrap.user.id)
+    )
+    NotificationPrefetchStore.writeConfig(config, root: root)
+  }
+
+  func clearNotificationPrefetch() {
+    guard let root = prefetchRoot else { return }
+    NotificationPrefetchStore.clear(root: root)
+  }
+
+  /// Drops staged prefetch data only when it belongs to another account, so restoring this
+  /// account's disconnected offline library never wipes conversations prefetched while closed.
+  func clearOtherAccountPrefetch(_ bootstrap: Bootstrap) {
+    guard let root = prefetchRoot else { return }
+    let account = NotificationActions.accountMarker(bootstrap.user.id)
+    if let existing = NotificationPrefetchStore.readConfig(root: root), existing.account != account {
+      NotificationPrefetchStore.clear(root: root)
+    }
+  }
+
+  func removePrefetchedConversation(_ botId: String) {
+    guard let root = prefetchRoot, let bootstrap else { return }
+    NotificationPrefetchStore.remove(
+      account: NotificationActions.accountMarker(bootstrap.user.id),
+      botId: botId,
+      root: root
+    )
+  }
+
+  /// Merges conversations prefetched by the notification service extension into memory so
+  /// opening or resuming a chat renders the new message immediately before the network responds.
+  @discardableResult
+  func absorbPrefetchedConversations(only targetBotId: String? = nil) -> Bool {
+    guard !sessionExpired, let root = prefetchRoot, let bootstrap else { return false }
+    let account = NotificationActions.accountMarker(bootstrap.user.id)
+    let entries: [PrefetchedConversation]
+    if let targetBotId {
+      entries = NotificationPrefetchStore.read(account: account, botId: targetBotId, root: root).map { [$0] } ?? []
+    } else {
+      entries = NotificationPrefetchStore.readAll(account: account, root: root)
+    }
+    guard !entries.isEmpty else { return false }
+    var changed = false
+    for entry in entries {
+      let removeAfter = offlineSavedAt == nil
+      guard knownBot(entry.botId) != nil else {
+        NotificationPrefetchStore.remove(account: account, botId: entry.botId, root: root)
+        continue
+      }
+      guard entry.fetchedAt > (conversationCapturedAt[entry.botId] ?? .distantPast) else {
+        if removeAfter { NotificationPrefetchStore.remove(account: account, botId: entry.botId, root: root) }
+        continue
+      }
+      guard let decoded = try? JSONDecoder().decode(Conversation.self, from: entry.payload),
+        decoded.botId == entry.botId
+      else {
+        NotificationPrefetchStore.remove(account: account, botId: entry.botId, root: root)
+        continue
+      }
+      let next = latestInflight?.botId == entry.botId ? (latestInflight?.applying(to: decoded) ?? decoded) : decoded
+      conversationCapturedAt[entry.botId] = entry.fetchedAt
+      if conversationCache[entry.botId] != next {
+        conversationCache[entry.botId] = next
+        changed = true
+      }
+      recentChats.removeAll { $0 == entry.botId }
+      recentChats.append(entry.botId)
+      while recentChats.count > OfflineLibrary.maximumChats {
+        let discardIndex = recentChats.firstIndex { $0 != selectedBotId } ?? 0
+        let expired = recentChats.remove(at: discardIndex)
+        conversationCache[expired] = nil
+        cachedChats.remove(expired)
+      }
+      if selectedBotId == entry.botId {
+        let widenedWindow: Bool = {
+          guard let current = conversation, current.botId == entry.botId,
+            let currentFirst = current.messages.first?.id,
+            !next.messages.contains(where: { $0.id == currentFirst }),
+            let currentEarlier = current.earlier, let nextEarlier = next.earlier
+          else { return false }
+          return currentEarlier < nextEarlier
+        }()
+        if !widenedWindow {
+          if conversation != next { conversation = next }
+          historyStarts[entry.botId] = next.messages.first?.id
+        }
+        if cachedChats.contains(entry.botId) { offlineSavedAt = entry.fetchedAt }
+      }
+      if removeAfter {
+        NotificationPrefetchStore.remove(account: account, botId: entry.botId, root: root)
+      }
+    }
+    if changed { saveOfflineLibrary() }
+    return changed
+  }
 }

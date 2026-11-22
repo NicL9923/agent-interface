@@ -17,6 +17,10 @@ import UserNotifications
         )
         .task {
           NotificationController.shared.store = store
+          store.onBootstrapReady = {
+            guard NotificationController.shared.hasPendingNavigation else { return nil }
+            return Task { await NotificationController.shared.openPendingConversation() }
+          }
           LiveActivityController.shared.store = store
           DeviceActivity.shared.store = store
           CrashReporter.shared.api = { [weak store] in store?.api }
@@ -256,9 +260,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     UserDefaults.standard.set(value, forKey: DeviceDefaults.pushDeviceId)
     return value
   }
+  var hasPendingNavigation: Bool {
+    pendingURL != nil || pendingBotId != nil || !pendingReplies.isEmpty
+  }
   /// Brings this device's registration in line with what the person chose and what iOS allows.
   /// It never asks iOS for permission: that happens only after Enable, from the in-app card or Settings.
   func synchronize() async {
+    await openPendingConversation()
     guard !synchronizing else { synchronizeAgain = true; return }
     synchronizing = true
     defer { synchronizing = false }
