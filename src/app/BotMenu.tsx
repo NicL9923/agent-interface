@@ -62,6 +62,12 @@ function preloadWhenIdle() {
   if (scheduled || loading) return;
   scheduled = true;
   const run = () => {
+    // Offline, the request can only fail, and WebKit reports a chunk its worker never kept as an uncaught
+    // error on a page that is otherwise fine. The next connection loads it. A gesture before then still asks.
+    if (navigator.onLine === false) {
+      window.addEventListener("online", run, { once: true });
+      return;
+    }
     preloadBotMenu().catch(() => {});
   };
   if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 5000 });
