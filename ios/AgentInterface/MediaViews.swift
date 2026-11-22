@@ -42,24 +42,32 @@ struct AuthenticatedImage: View {
     let key = cacheKey(path, store)
     while let api = store.api {
       do {
-        return try await loads.image(key, client: ObjectIdentifier(api)) { try await api.data(path: path) }
+        let image = try await loads.image(key, client: ObjectIdentifier(api)) { try await api.data(path: path) }
+        // Decoding runs off the main actor, so the account can change after the download has ended.
+        guard cacheKey(path, store) == key else { throw CancellationError() }
+        return image
       } catch is CancellationError {
         guard !Task.isCancelled, store.api !== api, cacheKey(path, store) == key else { throw CancellationError() }
       }
     }
     throw CancellationError()
   }
+  /// The views waiting for this image on the current client.
+  static func waiting(_ path: String, _ store: AppStore) -> Int {
+    store.api.map { loads.waiting(cacheKey(path, store), client: ObjectIdentifier($0)) } ?? 0
+  }
   /// One download and decode per image at a time: the same picture in a reply and the file
   /// list, or a row scrolled back in, waits for the load already running.
   private static let loads = ImageLoads()
   @MainActor final class ImageLoads {
     private struct Load { var task: Task<UIImage?, Error>; var waiters = 1; var abandoned = 0 }
-    /// Keyed by the cache key's text: a String crosses into the cancellation handler, an NSString does not. Each
-    /// client has its own loads, so one a sign-in ended is never joined.
-    private var running: [String: Load] = [:]
+    /// The cache key's text, since a String crosses into the cancellation handler and an NSString does not, and the
+    /// client: each has its own loads, so one a sign-in ended is never joined.
+    private struct Key: Hashable, Sendable { var text: String; var client: ObjectIdentifier? }
+    private var running: [Key: Load] = [:]
+    func waiting(_ cacheKey: NSString, client: ObjectIdentifier?) -> Int { running[Key(text: cacheKey as String, client: client)]?.waiters ?? 0 }
     func image(_ cacheKey: NSString, client: ObjectIdentifier? = nil, fetch: @escaping @MainActor () async throws -> Data) async throws -> UIImage? {
-      let cached = cacheKey as String
-      let key = cached + (client.map { "|\($0.hashValue)" } ?? "")
+      let key = Key(text: cacheKey as String, client: client)
       // A load every view abandoned is ending; a new view starts its own.
       if let load = running[key], !load.task.isCancelled {
         running[key]?.waiters += 1
@@ -71,25 +79,25 @@ struct AuthenticatedImage: View {
         // Decoding a camera photo takes tens of milliseconds, so it stays off the main actor.
         let image = await Task.detached(priority: .userInitiated) { AuthenticatedImage.downsampled(data) }.value
         if let image, let cgImage = image.cgImage {
-          AuthenticatedImage.cache.setObject(image, forKey: cached as NSString, cost: cgImage.bytesPerRow * cgImage.height)
+          AuthenticatedImage.cache.setObject(image, forKey: key.text as NSString, cost: cgImage.bytesPerRow * cgImage.height)
         }
         return image
       }
       running[key] = Load(task: task)
       return try await wait(key, task)
     }
-    private func wait(_ key: String, _ task: Task<UIImage?, Error>) async throws -> UIImage? {
+    private func wait(_ key: Key, _ task: Task<UIImage?, Error>) async throws -> UIImage? {
       defer { leave(key, task) }
       return try await withTaskCancellationHandler { try await task.value } onCancel: {
         Task { @MainActor in self.abandon(key, task) }
       }
     }
-    private func leave(_ key: String, _ task: Task<UIImage?, Error>) {
+    private func leave(_ key: Key, _ task: Task<UIImage?, Error>) {
       guard let load = running[key], load.task == task else { return }
       if load.waiters > 1 { running[key]?.waiters -= 1 } else { running[key] = nil }
     }
     /// Views that scrolled away stop the download, unless another view still waits for it.
-    private func abandon(_ key: String, _ task: Task<UIImage?, Error>) {
+    private func abandon(_ key: Key, _ task: Task<UIImage?, Error>) {
       guard running[key]?.task == task else { return }
       running[key]?.abandoned += 1
       if let load = running[key], load.abandoned >= load.waiters { task.cancel() }

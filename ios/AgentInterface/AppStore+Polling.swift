@@ -7,9 +7,11 @@ extension AppStore {
     stopPolling()
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
-        guard let self, await self.pollOnce() else { return }
+        guard let self, await self.pollOnce() else { break }
         try? await Task.sleep(for: Self.pollDelay(failures: self.failures))
       }
+      // Ended by itself, as an expiring sign-in ends it. One that was stopped or replaced is not the handle's.
+      if !Task.isCancelled { self?.pollTask = nil }
     }
   }
   /// The wait before the next pass: short while all is well, and after failed bootstraps the same
@@ -23,8 +25,10 @@ extension AppStore {
     let currentGeneration = generation
     await renewSignInIfDue()
     // Signing out, switching accounts or suspending during renewal ends this pass before it
-    // starts any stream for a session that is gone.
-    guard !suspended, !Task.isCancelled, generation == currentGeneration, api?.token != nil else { return false }
+    // starts any stream for a session that is gone. After a switch the next pass is the new account's: a bootstrap
+    // that answered as another member starts no poll of its own.
+    guard !suspended, !Task.isCancelled, api?.token != nil else { return false }
+    guard generation == currentGeneration else { return true }
     if let api,
       let expiry = UserDefaults.standard.string(forKey: DeviceDefaults.expiry(api.baseURL)),
       let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60

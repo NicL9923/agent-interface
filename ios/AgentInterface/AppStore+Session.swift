@@ -47,8 +47,8 @@ extension AppStore {
         let started = api
         await refreshBootstrap()
         await pendingOpen?.value
-        // A sign-in meanwhile polls for itself. A bootstrap that changed the account replaces the client without
-        // polling, so that one still starts here.
+        // A sign-in meanwhile polls for itself, and a poll already running goes on for an account the bootstrap
+        // changed to. One with no poll yet starts here.
         if let api, api.token != nil, api === started || pollTask == nil { startPolling() }
       } else {
         try await ensureAuthConfig()

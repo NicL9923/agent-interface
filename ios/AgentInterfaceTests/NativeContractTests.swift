@@ -4935,17 +4935,48 @@ extension NativeContractTests {
         XCTAssertEqual(server.requestCount("/api/bots/bot/conversation"), reads)
     }
 
+    /// A bootstrap answers as another member while the poll renews the sign-in. What the notification extension staged
+    /// for the last one goes, and the poll goes on for the new one.
+    func testABootstrapAnsweringAsAnotherMemberClearsThePrefetchAndKeepsPolling() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("prefetch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staged) }
+        let one = NotificationActions.accountMarker("one"), renew = "/api/auth/native/renew", key = DeviceDefaults.expiry(server.origin)
+        value.prefetchRoot = staged
+        NotificationPrefetchStore.writeConfig(NotificationPrefetchConfig(origin: server.origin.absoluteString, account: one), root: staged)
+        NotificationPrefetchStore.save(PrefetchedConversation(botId: "bot", account: one, fetchedAt: Date(), etag: nil, payload: server.conversationData()), root: staged)
+        XCTAssertEqual(NotificationPrefetchStore.readAll(account: one, root: staged).count, 1)
+        UserDefaults.standard.set(ServerDate.string(Date().addingTimeInterval(24 * 3600)), forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        server.holdNext(renew)
+        value.startPolling()
+        try await server.waitForHeld(renew)
+        server.user = "two"; await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.user.id, "two")
+        XCTAssertEqual(NotificationPrefetchStore.readConfig(root: staged)?.account, NotificationActions.accountMarker("two"))
+        XCTAssertEqual(NotificationPrefetchStore.readAll(account: one, root: staged).map(\.botId), [])
+        let reads = server.requestCount("/api/bootstrap")
+        server.release(renew)
+        try await until { server.requestCount("/api/bootstrap") > reads }
+        XCTAssertNotNil(value.pollTask)
+    }
+
     /// The same member signing in again while a chat opens still gets its conversation, and no draft error.
     func testAChatStillOpeningWhenTheSameMemberSignsInAgainStillLoads() async throws {
         let server = NativeMockServer(signIn: true), value = try store(server); defer { clean(server, value); forgetSignIn(server) }
         value.draft.dirty = false; value.persistDraft()
-        let draft = "/api/bots/bot/draft"; server.holdNext(draft)
+        let draft = "/api/bots/bot/draft", conversation = "/api/bots/bot/conversation"
+        server.holdNext(draft); server.holdNext(conversation)
         let opening = Task { await value.select("bot") }
-        try await server.waitForHeld(draft)
+        try await server.waitForHeld(draft); try await server.waitForHeld(conversation)
         try await expireSoon(value)
-        await value.signIn(); value.suspend()
-        server.release(draft); await opening.value
-        XCTAssertNil(value.error); XCTAssertEqual(value.conversation?.botId, "bot")
+        // Not polling yet, so nothing reads the draft or the conversation again and clears an error first.
+        value.suspended = true
+        await value.signIn()
+        server.release(draft); server.release(conversation); await opening.value
+        XCTAssertNil(value.error, "A read its sign-in ended is no failure to report"); XCTAssertNil(value.conversation)
+        value.suspended = false; value.startPolling()
+        try await until { value.conversation?.botId == "bot" }
     }
 
     /// The same member signing in again ends a download with its client. Each view waiting for it loads again on the
@@ -4956,6 +4987,7 @@ extension NativeContractTests {
         let views = [Task { try await AuthenticatedImage.load(path, value) }, Task { try await AuthenticatedImage.load(path, value) }]
         let left = Task { try await AuthenticatedImage.load(path, value) }
         try await server.waitForHeld(path)
+        try await until { AuthenticatedImage.waiting(path, value) == 3 }
         left.cancel()
         try await expireSoon(value)
         await value.signIn()
@@ -4987,9 +5019,13 @@ extension NativeContractTests {
         var fetches = 0
         let first = Task { try await loads.image(key, client: ObjectIdentifier(old)) { fetches += 1; for await _ in gate { break }; throw CancellationError() } }
         try await until { fetches == 1 }
-        let image = try await loads.image(key, client: ObjectIdentifier(new)) { fetches += 1; return NativeMockServer.png }
-        XCTAssertNotNil(image); XCTAssertEqual(fetches, 2)
+        let second = Task { try await loads.image(key, client: ObjectIdentifier(new)) { fetches += 1; return NativeMockServer.png } }
+        let apart = try await eventually(timeout: .seconds(3)) { fetches == 2 }
+        XCTAssertTrue(apart, "The second load joined the first client's")
+        // Opened before waiting for either, so one that joined the other ends with it.
         finished.yield(); finished.finish()
         _ = try? await first.value
+        let image = try? await second.value
+        XCTAssertNotNil(image ?? nil)
     }
 }
