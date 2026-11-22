@@ -508,7 +508,7 @@
           "id": "kitchen", "name": "Kitchen companion", "model": "configured-model", "shared": true,
           "activity": "idle",
           "avatar": [
-            "mode": "mascot", "family": "bear", "color": "#FF9800", "eyes": "round",
+            "mode": "geometric", "shape": "bear", "color": "#FF9800", "eyes": "round",
             "accessory": "none",
           ],
         ],
@@ -517,7 +517,27 @@
           "ownerId": "native-test", "activity": "idle", "unread": true,
           "lastMessage": ["text": "Your library books are due Friday.", "at": personalReplyAt],
         ],
-      ] + createdBots
+      ] + variedRoster + createdBots
+    }
+    /// More assistants for screenshots of the avatar set, with AGENT_INTERFACE_UI_ROSTER=varied.
+    /// Other UI tests count on the three above, so these stay opt-in.
+    private static var variedRoster: [[String: Any]] {
+      guard ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_ROSTER"] == "varied" else { return [] }
+      let looks: [(String, String, String, [String: String])] = [
+        ("garden", "Garden helper", "sprout", ["color": "#1FBF68"]),
+        ("coffee", "Coffee run", "mug", ["color": "#F4F4F4", "eyes": "round"]),
+        ("trail", "Trail boss", "cactus", ["color": "#1FBF68", "accessory": "hat"]),
+        ("tars", "TARS", "tars", ["color": "#7A7A7A", "eyes": "visor"]),
+        ("rocky", "Rocky", "rocky", ["color": "#97683D", "accessory": "glasses"]),
+      ]
+      return looks.map { entry -> [String: Any] in
+        let (id, name, shape, look) = entry
+        let base: [String: Any] = ["mode": "geometric", "shape": shape, "color": "#1084FE", "eyes": "oval", "accessory": "none"]
+        let avatar = base.merging(look.mapValues { $0 as Any }) { $1 }
+        // A very light body that needs help shows its exclamation mark with the body's soft edge.
+        let activity = id == "coffee" ? "blocked" : "idle"
+        return ["id": id, "name": name, "model": "configured-model", "shared": true, "activity": activity, "avatar": avatar]
+      }
     }
     nonisolated(unsafe) static let user: [String: Any] = [
       "id": "native-test", "name": "Local test member", "email": "test@localhost.invalid",

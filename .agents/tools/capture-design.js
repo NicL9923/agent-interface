@@ -3543,11 +3543,10 @@ async (
         await shot("accessory-keyboard-focus", 1440);
       }
       await open();
-      await choose("Mascot");
       await choose("Pumpkin");
       await top();
       await previewState("blocked");
-      await shot("mascot-seasonal-phone");
+      await shot("seasonal-phone");
       if (stage === "after") await previewState("idle");
       await choose("Cowboy hat");
       await shot("choices-phone");

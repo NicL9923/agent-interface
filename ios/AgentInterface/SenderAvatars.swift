@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 
 /// Keeps the App Group's notification sender pictures in step with the signed-in account's
@@ -11,7 +12,7 @@ import SwiftUI
   var render: @MainActor (AvatarConfig, String) -> Data? = { SenderAvatars.png($0, name: $1) }
   /// Deletes an account's donated notification messages when its pictures go.
   var forget: (String) -> Void = { NotificationSenders.forget(account: $0) }
-  private static let indexName = "index.json"
+  static let indexName = "index.json"
 
   /// `account` is the server's account marker for the signed-in person, or nil after sign-out.
   func sync(account: String?, bots: [Bot]) {
@@ -53,10 +54,18 @@ import SwiftUI
     }
   }
 
-  private static func fingerprint(_ avatar: AvatarConfig) -> String? {
+  /// What a sender picture shows: the avatar's settings and the art they draw. The art is in it so a
+  /// picture drawn from an earlier outline or face of the same shape, such as the cloud's before
+  /// November 2026, is drawn again instead of kept for good.
+  static func fingerprint(_ avatar: AvatarConfig, art: AvatarCatalog.Art? = nil) -> String? {
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys
-    return (try? encoder.encode(avatar)).map { String(decoding: $0, as: UTF8.self) }
+    guard let settings = try? encoder.encode(avatar) else { return nil }
+    let drawn = art ?? avatar.drawnShape.art
+    let face = drawn.face
+    let parts = [String(decoding: settings, as: UTF8.self), drawn.path]
+      + [face.cx, face.cy, face.scale, face.spacing, face.radius, face.top, face.hat].map { "\($0)" }
+    return SHA256.hash(data: Data(parts.joined(separator: "\n").utf8)).map { String(format: "%02x", $0) }.joined()
   }
   /// A still avatar on a light tint of its own color, the way a contact photo fills its circle.
   static func png(_ avatar: AvatarConfig, name: String) -> Data? {

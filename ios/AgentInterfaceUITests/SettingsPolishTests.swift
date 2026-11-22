@@ -26,11 +26,17 @@ import XCTest
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
+  /// Drags the form's left gutter. A swipe up its middle can start on an eye slider's thumb, which
+  /// then moves the slider and leaves the form where it is.
   private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
-    for _ in 0..<10 {
+    for _ in 0..<25 {
       if element.exists && element.canTap { return }
-      let surface = app.collectionViews.firstMatch
-      if up { surface.swipeUp(velocity: .slow) } else { surface.swipeDown(velocity: .slow) }
+      let gutter = app.collectionViews.firstMatch.coordinate(withNormalizedOffset: .zero)
+        .withOffset(CGVector(dx: 4, dy: 0))
+      let height = app.collectionViews.firstMatch.frame.height
+      let low = gutter.withOffset(CGVector(dx: 0, dy: height * 0.7))
+      let high = gutter.withOffset(CGVector(dx: 0, dy: height * 0.35))
+      (up ? low : high).press(forDuration: 0.05, thenDragTo: up ? high : low, withVelocity: .slow, thenHoldForDuration: 0.1)
     }
     XCTAssertTrue(element.canTap, "\(element) never became hittable")
   }
@@ -123,8 +129,7 @@ import XCTest
     XCTAssertFalse(app.buttons["creationNext"].isEnabled)
     let name = app.textFields["Name"]
     name.typeWhenFocused("Barn cat\n")
-    app.buttons["Mascot"].tapWhenReady()
-    let fox = app.buttons["avatarTile.family.fox"]
+    let fox = app.buttons["avatarTile.shape.fox"]
     reveal(app, fox)
     fox.tap()
     for _ in 0..<3 { app.collectionViews.firstMatch.swipeDown() }
@@ -141,7 +146,7 @@ import XCTest
     created.tap()
     app.openAssistantSettings("Barn cat")
     app.selectSettingsTab("Profile")
-    let savedFox = app.buttons["avatarTile.family.fox"]
+    let savedFox = app.buttons["avatarTile.shape.fox"]
     reveal(app, savedFox)
     XCTAssertTrue(savedFox.wait(until: "selected == true"), "The look chosen while creating is the saved avatar")
   }
@@ -151,8 +156,11 @@ import XCTest
     app.tapNewAssistant()
     let name = app.textFields["Name"]
     XCTAssertTrue(name.waitForExistence(timeout: 5))
-    name.typeWhenFocused("Feed tracker")
-    app.buttons["Mascot"].tapWhenReady()
+    // Return closes the keyboard, which would otherwise hide the picker.
+    name.typeWhenFocused("Feed tracker\n")
+    let pebble = app.buttons["avatarTile.shape.pebble"]
+    reveal(app, pebble)
+    pebble.tap()
     app.buttons["creationNext"].tapWhenReady()
     app.buttons["creationCreate"].tapWhenReady()
     let failure = app.staticTexts["Feed tracker was created, but its avatar wasn't saved yet."]
@@ -161,7 +169,8 @@ import XCTest
     // The sheet now edits the created assistant on its Profile, its chosen look intact.
     XCTAssertTrue(app.navigationBars["Profile"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.navigationBars["Profile"].buttons["All settings"].exists)
-    XCTAssertTrue(app.buttons["Mascot"].isSelected)
+    reveal(app, pebble)
+    XCTAssertTrue(pebble.isSelected)
     try capture("after-create-avatar-failed")
     app.buttons["retryAvatar"].tap()
     let created = app.buttons["bot.created-1"]
@@ -170,7 +179,8 @@ import XCTest
     created.tap()
     app.openAssistantSettings("Feed tracker")
     app.selectSettingsTab("Profile")
-    XCTAssertTrue(app.buttons["Mascot"].wait(until: "selected == true"), "The retried avatar was saved")
+    reveal(app, pebble)
+    XCTAssertTrue(pebble.wait(until: "selected == true"), "The retried avatar was saved")
   }
   /// A new assistant that keeps the default look still owes its first avatar save after a failure.
   func testRetryingAFailedDefaultAvatarSendsItAgain() throws {
@@ -236,8 +246,9 @@ import XCTest
     let name = app.textFields["Name"]
     XCTAssertTrue(name.wait(until: "enabled == true"))
     name.typeWhenFocused(" two\n")
-    let style = app.buttons["Mascot"].isSelected ? app.buttons["Geometric"] : app.buttons["Mascot"]
-    style.tapWhenReady()
+    let pebble = app.buttons["avatarTile.shape.pebble"]
+    reveal(app, pebble)
+    pebble.tap()
     XCTAssertTrue(save.wait(until: "enabled == true"))
     save.tap()
     XCTAssertTrue(app.staticTexts["Fixture avatar save failed"].waitForExistence(timeout: 10), app.debugDescription)

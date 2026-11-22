@@ -1,5 +1,9 @@
 # Avatar reference inventory
 
+On November 20, 2026 the mascot mode described below was retired and its characters became flat
+shapes beside the geometric ones. [AvatarShapes.md](AvatarShapes.md) describes the current set.
+This inventory stays as the record of the references and of the motion rig, which did not change.
+
 Observed September 29, 2026. This inventory was completed before application integration; app treatment notes were updated October 1. The standalone specimen is `/avatar-specimen/` under the Vite development server. Its artwork and motion engine are original implementation; upstream source and imagery are inspection references only.
 
 ## Sources and reuse

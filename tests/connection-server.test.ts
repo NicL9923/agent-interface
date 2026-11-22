@@ -348,8 +348,8 @@ describe("connection recovery API", () => {
 
   it("retains app avatar fallback when native avatar metadata is unsupported", async () => {
     const avatar: Avatar = {
-      mode: "mascot",
-      family: "fox",
+      mode: "geometric",
+      shape: "fox",
       color: "#FF6700",
       eyes: "round",
       accessory: "hat",

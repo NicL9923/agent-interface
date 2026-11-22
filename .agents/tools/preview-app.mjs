@@ -129,7 +129,13 @@ const bots = [
     modelName: "GPT-6.1-Terra",
     provider: "openai",
     activity: "idle",
-    avatar: { mode: "mascot", family: "bear", color: "#FF9800", eyes: "round", accessory: "none" },
+    avatar: {
+      mode: "geometric",
+      shape: "bear",
+      color: "#FF9800",
+      eyes: "round",
+      accessory: "none",
+    },
   },
   {
     id: "garden",
@@ -142,7 +148,13 @@ const bots = [
     model: "configured-model",
     provider: "openrouter",
     activity: "thinking",
-    avatar: { mode: "mascot", family: "sprout", color: "#00BCA6", eyes: "oval", accessory: "hat" },
+    avatar: {
+      mode: "geometric",
+      shape: "sprout",
+      color: "#00BCA6",
+      eyes: "oval",
+      accessory: "hat",
+    },
   },
   {
     id: "homework",
@@ -193,7 +205,7 @@ const bots = [
     model: "configured-model",
     provider: "openrouter",
     activity: "done",
-    avatar: { mode: "mascot", family: "fox", color: "#FF6700", eyes: "oval", accessory: "none" },
+    avatar: { mode: "geometric", shape: "fox", color: "#FF6700", eyes: "oval", accessory: "none" },
   },
   {
     id: "guide",

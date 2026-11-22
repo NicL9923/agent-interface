@@ -5,8 +5,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AvatarEditor } from "../src/components/AvatarEditor";
 import { mountRoot } from "./ui-harness";
 import type { Avatar } from "../src/shared/types";
-import { seasonalChoices } from "../src/components/character-avatars";
-import { everydayFamilies } from "../src/shared/types";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -44,78 +42,43 @@ beforeEach(async () => {
 });
 
 describe("avatar editor", () => {
-  it.each(seasonalChoices)(
-    "selects $label with a recognizable palette and remembers it across styles",
-    async ({ family, label, color }) => {
-      await choose("Mascot");
-      await choose(label);
-      expect(current).toMatchObject({
-        mode: "mascot",
-        family,
-        color,
-        eyes: "visor",
-        accessory: "hat",
-        eyeWidth: 1.2,
-      });
-      await choose("Geometric");
-      expect(current).toMatchObject({ mode: "geometric", shape: "hex" });
-      await choose("Mascot");
-      expect(current).toMatchObject({ mode: "mascot", family, color });
-    },
-  );
-
-  it.each(everydayFamilies)("offers the %s character in your own color", async (family) => {
-    await choose("Mascot");
-    await choose(family[0].toUpperCase() + family.slice(1));
-    expect(current).toMatchObject({
-      mode: "mascot",
-      family,
-      color: "#FF309B",
-      eyes: "visor",
-      accessory: "hat",
-    });
-  });
-
-  it("keeps color, eyes and accessory when switching to a mascot", async () => {
-    await choose("Mascot");
+  it("brings a seasonal shape in its own color and keeps every other choice", async () => {
+    await choose("Pumpkin");
     expect(current).toEqual({
-      mode: "mascot",
-      family: "bear",
-      color: "#FF309B",
+      mode: "geometric",
+      shape: "pumpkin",
+      color: "#FF6700",
       eyes: "visor",
       accessory: "hat",
       eyeWidth: 1.2,
-      eyeHeight: undefined,
-      eyeSpacing: undefined,
     });
+  });
+
+  it("offers every other shape in the color already chosen", async () => {
+    // The names with two words and the acronym are the ones a derived label could get wrong.
+    for (const [label, shape] of [
+      ["Watering can", "watering-can"],
+      ["TARS", "tars"],
+      ["Rocky", "rocky"],
+    ]) {
+      await choose(label);
+      expect(current).toMatchObject({ mode: "geometric", shape, color: "#FF309B", eyes: "visor" });
+    }
   });
 
   it("restores the drawn character after trying a portrait", async () => {
+    const drawn = current;
     await choose("Portrait");
     expect(current.mode).toBe("portrait");
     expect(container.textContent).toContain("Portrait controls");
-    await choose("Geometric");
-    expect(current).toMatchObject({
-      mode: "geometric",
-      shape: "hex",
-      color: "#FF309B",
-      eyes: "visor",
-    });
-  });
-
-  it("remembers the last shape and character across styles", async () => {
-    await choose("Mascot");
-    await choose("Fox");
-    await choose("Geometric");
-    expect(current).toMatchObject({ mode: "geometric", shape: "hex" });
-    await choose("Mascot");
-    expect(current).toMatchObject({ mode: "mascot", family: "fox" });
+    await choose("Character");
+    expect(current).toEqual(drawn);
   });
 
   it("restores a saved portrait after trying a drawn style", async () => {
     current = { mode: "portrait", src: "/api/files/portrait", origin: "uploaded" };
     await render();
-    await choose("Geometric");
+    await choose("Character");
     await choose("Portrait");
     expect(current).toEqual({ mode: "portrait", src: "/api/files/portrait", origin: "uploaded" });
   });

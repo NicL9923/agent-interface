@@ -143,7 +143,7 @@ final class AvatarMotionParityTests: XCTestCase {
   private func fields(_ expression: M.Expression) -> [String: Double] {
     [
       "open": expression.open, "tilt": expression.tilt, "happy": expression.happy,
-      "mouth": expression.mouth, "dot": expression.dot,
+      "dot": expression.dot,
     ]
   }
   private func assertMatch(

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { avatarAccessories, avatarEyes, avatarShapes, mascotFamilies } from "../shared/types.js";
+import { legacyMascotFamilies, mascotShape } from "../shared/avatar-legacy.js";
+import { avatarAccessories, avatarEyes, avatarShapes } from "../shared/types.js";
 import type { Avatar, BotInput, FileRef, Preferences } from "../shared/types.js";
 
 // Request schemas whose output is a shared type. Only the server validates, so zod stays out of
@@ -31,7 +32,11 @@ const face = {
 };
 export const avatar = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("geometric"), shape: z.enum(avatarShapes), ...face }),
-  z.object({ mode: z.literal("mascot"), family: z.enum(mascotFamilies), ...face }),
+  // iOS builds from before mascots were retired still save one. A mascot that release could have
+  // sent is stored as its shape; any other is refused like every other bad avatar.
+  z
+    .object({ mode: z.literal("mascot"), family: z.enum(legacyMascotFamilies), ...face })
+    .transform(mascotShape),
   z.object({
     mode: z.literal("portrait"),
     src: z.string().regex(/^\/api\/files\//),

@@ -1,3 +1,4 @@
+import { currentAvatar } from "../shared/avatar-legacy.js";
 import type { Avatar, RuntimeEvent } from "../shared/types.js";
 import { isTalkVoice, type TalkVoice } from "../shared/voice.js";
 import { visible } from "./bot-access.js";
@@ -37,7 +38,7 @@ export class PresentationRepository {
       ? {
           ownerId: row.ownerId ?? undefined,
           shared: !!row.shared,
-          avatar: row.avatar ? (JSON.parse(row.avatar) as Avatar) : undefined,
+          avatar: row.avatar ? currentAvatar(JSON.parse(row.avatar) as Avatar) : undefined,
         }
       : {};
   }
