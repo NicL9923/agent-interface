@@ -1057,32 +1057,43 @@ under white text takes it below 4.5:1; the tinted bubble fades as before.
 Group chats follow `chatStyle` too; `src/components/GroupChats.tsx` and
 `src/components/collaboration.css` hold the web layout. `"classic"` keeps the log: each
 message is a full-width row with a divider under it, and the person's own rows take the
-`--user` wash. In `"bubbles"`:
+`--user` wash. The iOS app's Classic rows are list rows with separators, the person's own
+in the rail color; `GroupConversationView` in `ios/AgentInterface/CollaborationViews.swift`
+holds both of its layouts. In `"bubbles"`:
 
 - Every message keeps its speaker line above its content, as in `"classic"`, a second
   message in a row from the same speaker included: a 24 pt avatar for an assistant, the
   name and a "Routine" or "Routine failed" tag on a routine's post, 8 pt apart, then the
   time 12 pt after them, all 6 pt above the content. The person's own line ("You" and
-  the time) sits at the trailing edge; everyone else's sits at the leading edge.
+  the time) sits at the trailing edge; everyone else's sits at the leading edge. The iOS
+  app makes the line one VoiceOver element, so the name, tag and time are read together
+  right before the message, and at an accessibility text size it puts the time under the
+  name.
 - Every message, a person's included, is laid out by the reply rules above: each run of
   prose in a bubble capped at 600 pt, every other block at the column's width.
 - Everyone else's bubbles, assistants, other household members and routine posts alike,
   sit at the leading edge with the reply bubble's fill, padding and corners.
-- The person's own bubbles sit at the trailing edge, capped at 86% of the column and
-  560 pt, in the `--user` fill with the reply bubble's padding. Their corners mirror a
+- The person's own bubbles sit at the trailing edge, in the `--user` fill with the reply
+  bubble's padding. They may take 86% of the column, or 16 times the body text's size
+  when that is wider, but never more than the column or 560 pt. A quote holding nested
+  lists indents with the text size, so on a small phone at an accessibility size 86% left
+  its innermost line no room; there the bubble takes the whole row. Their corners mirror a
   reply's: 18 pt, 8 pt on the trailing side where the bubble meets another piece of the
   message, and 4 pt at the trailing bottom corner of the message's last bubble. A table
   or code block of theirs keeps the column's width like anyone else's. Their "In thread
   with" line and Reply in thread button sit at the trailing edge too.
 - Rows lose the divider and the own-row wash, and take 10 pt of padding above and below
   and 12 pt at the sides. The selected reply keeps its accent wash, outline and leading
-  bar. Hand-off lines, the activity list and approvals do not change.
+  bar; the iOS app draws the wash and bar without an outline, as its Classic row does.
+  Hand-off lines, the activity list and approvals do not change.
 - A group has no one assistant's color, and any member's color would read as that member
   speaking, so `"solid"` fills the person's bubbles with the app's green, `#246F59`,
-  which `SolidBubble.fill` returns unchanged (white text at 6.0:1). Its links are white, inline code
-  sits on black at 22% over the fill, and a quote's text is white beside a bar of white at
-  50%, so each keeps 4.5:1. Classic groups have no person's bubble, so `ownBubble` does
-  not change them.
+  which `SolidBubble.fill` returns unchanged (white text at 6.0:1). Its links, a quote's
+  text and, on iOS, a checked task box are white, so each keeps 6.0:1. The web puts inline
+  code on black at 22% over the fill; iOS draws inline code with no chip, in white. A
+  quote's bar is white at 75%, 4.17:1 against the fill where a mark needs 3:1; white at
+  50% reached 2.74:1. Classic groups have no person's bubble, so `ownBubble` does not
+  change them.
 - Under increased contrast and forced colors every bubble draws a 1 pt edge, as a reply
   bubble does.
 
