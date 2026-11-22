@@ -285,7 +285,9 @@ extension AppStore {
   }
   /// Every account boundary clears the same account-owned content and async request identities.
   func resetAccountContent() {
-    resetOutages()
+    // The outages start over once everything else is gone. A step between, with the account still loaded,
+    // would show its loss again and then call the end of the account a recovery.
+    activityHeld = true
     cachedChats.removeAll()
     unconfirmedDepartures = [:]
     declinedApprovals = [:]
@@ -337,6 +339,9 @@ extension AppStore {
     replyWatch = nil
     failures = 0
     forgetSentEchoes()
+    resetOutages()
+    activityHeld = false
+    updateActivity()
   }
   /// Returns false when the server could not be reached to revoke the session. The caller
   /// then asks before repeating with `localOnly`, which still lets the person leave.

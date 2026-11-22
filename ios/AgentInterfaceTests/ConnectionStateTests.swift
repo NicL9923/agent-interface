@@ -383,6 +383,17 @@ final class ConnectionCopyTests: XCTestCase {
     said = []
   }
 
+  /// Hermes needing setup shows at once. Leaving that account clears the loss without showing it again on the
+  /// way out, so VoiceOver hears neither the loss nor a recovery during the change.
+  func testLeavingAnAccountWhoseHouseholdNeedsSetupSaysNothing() throws {
+    let value = try store(connection: #"{"connected":false,"code":"not_configured"}"#)
+    XCTAssertTrue(value.appOutage.shown)
+    said = []
+    value.resetAccountContent()
+    XCTAssertEqual(said, [])
+    XCTAssertEqual(value.appOutage, Outage()); XCTAssertEqual(value.activity, .disconnected)
+  }
+
   func testAHouseholdLossRefusesSendAtOnceAndShowsOnlyAfterItsGracePeriod() async throws {
     let value = try store()
     value.appUnavailable = true
