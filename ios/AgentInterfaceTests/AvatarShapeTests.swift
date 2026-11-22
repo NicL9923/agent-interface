@@ -134,12 +134,38 @@ final class AvatarShapeTests: XCTestCase {
     XCTAssertNotEqual(AvatarGeometry.body(.mug, from: blob, progress: 0.5), AvatarGeometry.path(.mug))
     let landed = AvatarGeometry.body(.mug, from: blob, progress: AvatarMotion.smoothstep(1))
     XCTAssertEqual(landed, AvatarGeometry.path(.mug))
-    let hole = String(AvatarGeometry.svg(.mug).dropFirst(outsideContour(of: .mug).count))
+    XCTAssertFalse(landed.contains(holeCenter(.mug), eoFill: false))
+    XCTAssertEqual(AvatarGeometry.body(.mug, from: nil, progress: 0), AvatarGeometry.path(.mug), "No morph draws the outline")
+  }
+  /// The middle of a shape's hole in the 0-100 box.
+  private func holeCenter(_ shape: AvatarShape) -> CGPoint {
+    let hole = String(AvatarGeometry.svg(shape).dropFirst(outsideContour(of: shape).count))
     let numbers = hole.split { !"-.0123456789".contains($0) }.compactMap { Double($0) }
     let xs = stride(from: 0, to: numbers.count, by: 2).map { numbers[$0] }
     let ys = stride(from: 1, to: numbers.count, by: 2).map { numbers[$0] }
-    XCTAssertFalse(landed.contains(CGPoint(x: (xs.min()! + xs.max()!) / 2, y: (ys.min()! + ys.max()!) / 2), eoFill: false))
-    XCTAssertEqual(AvatarGeometry.body(.mug, from: nil, progress: 0), AvatarGeometry.path(.mug), "No morph draws the outline")
+    return CGPoint(x: (xs.min()! + xs.max()!) / 2, y: (ys.min()! + ys.max()!) / 2)
+  }
+  @MainActor func testAFrozenAvatarsViewShowsItsNewShapeAndColorWithoutWaitingForAMorph() async throws {
+    let before = AvatarConfig(shape: .blob, color: "#1084FE"), after = AvatarConfig(shape: .mug, color: "#FF6700")
+    for state in [ActivityState.interrupted, .disconnected, .unknown] {
+      let stage = try HostedAvatar(before, state), fresh = try HostedAvatar(after, state)
+      defer { stage.close(); fresh.close() }
+      try await until { stage.difference(from: fresh) > 0.05 }
+      stage.show(after, state)
+      // Production timer: longer than the 280 ms morph, shorter than the second a change keeps settling.
+      try await Task.sleep(for: .milliseconds(500))
+      XCTAssertLessThan(stage.difference(from: fresh), 0.005, state.rawValue)
+    }
+  }
+  @MainActor func testTheViewsMorphLandsWithTheMugsHandleOpen() async throws {
+    let stage = try HostedAvatar(AvatarConfig(shape: .blob, color: "#1084FE"), .idle)
+    defer { stage.close() }
+    let hole = holeCenter(.mug)
+    try await until { !stage.isBackground(hole) }
+    stage.show(AvatarConfig(shape: .mug, color: "#1084FE"), .idle)
+    // The samples carry no hole, so the handle opens only once the view draws the exact outline.
+    try await until { stage.isBackground(hole) }
+    XCTAssertFalse(stage.isBackground(CGPoint(x: 41, y: 75)), "The cup itself is drawn")
   }
   func testAChangeOnlyMovesIntoPlaceWhileFramesCanCarryIt() {
     XCTAssertTrue(AvatarView.animatesChange(state: .idle, reduceMotion: false, visible: true, active: true))
@@ -314,5 +340,68 @@ final class AvatarShapeTests: XCTestCase {
     let saturated = try edgePixels("#FF6700")
     XCTAssertGreaterThan(saturated.fill, 0)
     XCTAssertEqual(saturated.edge, 0, "A saturated mark has no outline")
+  }
+}
+
+/// The real avatar view in a window, so a test reads the pixels a person sees: its timeline, its
+/// morph and its state changes included.
+@MainActor private final class HostedAvatar {
+  struct Content: View {
+    var avatar: AvatarConfig
+    var state: ActivityState
+    var body: some View {
+      AvatarView(avatar: avatar, state: state, size: 200, name: "Hosted avatar")
+        .frame(width: 240, height: 240).background(Color.white).environment(\.scenePhase, .active)
+    }
+  }
+  private let window: UIWindow
+  private let host: UIHostingController<Content>
+
+  init(_ avatar: AvatarConfig, _ state: ActivityState) throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    host = UIHostingController(rootView: Content(avatar: avatar, state: state))
+    host.safeAreaRegions = []
+    window = UIWindow(windowScene: scene)
+    window.frame = CGRect(x: 0, y: 0, width: 240, height: 240)
+    window.overrideUserInterfaceStyle = .light
+    window.rootViewController = host
+    window.isHidden = false
+    window.layoutIfNeeded()
+  }
+  func close() { window.isHidden = true }
+  func show(_ avatar: AvatarConfig, _ state: ActivityState) { host.rootView = Content(avatar: avatar, state: state) }
+
+  /// 240 by 240 RGBA pixels, one per point.
+  func pixels() -> [UInt8] {
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    format.preferredRange = .standard
+    let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+      window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+    }
+    var bytes = [UInt8](repeating: 0, count: 240 * 240 * 4)
+    bytes.withUnsafeMutableBytes { buffer in
+      guard let image = image.cgImage, let context = CGContext(
+        data: buffer.baseAddress, width: 240, height: 240, bitsPerComponent: 8, bytesPerRow: 240 * 4,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+      else { return }
+      context.draw(image, in: CGRect(x: 0, y: 0, width: 240, height: 240))
+    }
+    return bytes
+  }
+  /// The share of pixels that differ visibly from `other`'s.
+  func difference(from other: HostedAvatar) -> Double {
+    let a = pixels(), b = other.pixels()
+    var changed = 0
+    for i in stride(from: 0, to: a.count, by: 4) where (0..<3).contains(where: { abs(Int(a[i + $0]) - Int(b[i + $0])) > 24 }) {
+      changed += 1
+    }
+    return Double(changed) / Double(240 * 240)
+  }
+  /// Whether the white behind the avatar shows at `point` in the 0-100 box.
+  func isBackground(_ point: CGPoint) -> Bool {
+    let x = Int(20 + (8 + point.x) / 116 * 200), y = Int(20 + (8 + point.y) / 116 * 200)
+    let bytes = pixels(), i = (y * 240 + x) * 4
+    return bytes[i] > 235 && bytes[i + 1] > 235 && bytes[i + 2] > 235
   }
 }

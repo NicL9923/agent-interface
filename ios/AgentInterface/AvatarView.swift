@@ -1622,7 +1622,8 @@ struct AvatarView: View {
   }
   /// Whether a new shape or color moves into place: only while frames will come to carry it. A
   /// frozen, hidden or reduced-motion avatar draws only when something changes, so a morph it began
-  /// would stay on its first frame, the old shape's samples or the old color, until some other redraw.
+  /// would hold its first frame, the old shape's samples and the old color, for the second a change
+  /// keeps settling.
   static func animatesChange(state: ActivityState, reduceMotion: Bool, visible: Bool, active: Bool) -> Bool {
     // A change starts the settling window, so a failed avatar animates it too.
     !AvatarMotion.timelinePaused(state, reduceMotion: reduceMotion, visible: visible, active: active, settling: true)
