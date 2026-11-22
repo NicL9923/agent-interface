@@ -163,6 +163,28 @@ run at `2c5727be` matched that.
 GitHub's PR checks on `8c4b3c7b` (run 44927252277): Node on `.node-version`, Node 26.13.0, Python
 3.14.7 and the release archive build passed. Browser smoke does not run on pull requests.
 
+## Review rounds
+
+Independent reviews by GPT-6.2 Sol at high reasoning effort. The count is for the whole change.
+
+| Round | Reviewed state | What it read                                                      | Findings |
+| ----- | -------------- | ----------------------------------------------------------------- | -------- |
+| 1     | `313acec4`     | Web, server, tests, the shape tool and docs                       | 7        |
+| 2     | `d27f38c7`     | The fixes for round 1                                             | 4        |
+| 3     | `31dd5e4b`     | The iOS port, read for the first time, and the web fix `2c5727be` | 6        |
+
+No reviewer has read what came after `31dd5e4b`:
+
+- `c7f02959`, the merge of `origin/main` with #466, which was reviewed in its own pull request.
+- `6a072c2a` and `8c4b3c7b`, the release order in `docs/AvatarShapes.md`.
+- `df363670` and `92f2d96f`, the iOS fixes for round 3, with the test-only `326efbd2` and
+  `a1589517`. Outside tests they change 62 lines in four Swift files: a mascot's `shape` is not
+  read, the sender picture's fingerprint covers its art, a frozen avatar does not start a morph,
+  and picking the shape an avatar already has changes nothing.
+
+That is under the round limit's 300 lines and touches no authentication, secrets, deletion or
+migration, so there is no round 4.
+
 ## iOS
 
 The native port on `t3/refresh-bot-avatars`, through web commit `2c5727be`, on the Mac mini with
