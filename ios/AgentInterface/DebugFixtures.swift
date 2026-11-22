@@ -199,6 +199,12 @@
               "actor": ["kind": "user", "id": "cron:fixture-job", "display_name": "[bot:ranch] Morning brief"],
               "payload": ["text": "Fixture routine post: the smoker is free Sunday.", "thread_id": "cron-1"]])
           }
+          if environment["AGENT_INTERFACE_UI_GROUP_INK"] == "1" {
+            // The prose with colors of its own, in the person's bubble: a link, inline code and a checked box.
+            FixtureProtocol.groupEvents.append(["event_id": "group-ink", "seq": FixtureProtocol.groupEvents.count + 1, "kind": "message.user",
+              "created_at": 1_790_000_900, "sender": ["id": "native-test", "name": "Local test member"],
+              "payload": ["text": "See [the plan](https://example.com/plan) and `gate 4`.\n\n- [x] Brisket ordered\n- [ ] Beans soaked", "thread_id": "thread-ink"]])
+          }
           if environment["AGENT_INTERFACE_UI_GROUP_BUBBLES"] == "1" {
             // Every kind of speaker for the chat styles: a routine's post, the person's reply in a thread, an assistant's
             // reply holding a table, and the person's quote holding nested lists.

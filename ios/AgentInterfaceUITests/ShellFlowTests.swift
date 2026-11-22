@@ -5,13 +5,14 @@ import XCTest
 /// server; they establish native behavior, not Hermes or a real desktop.
 @MainActor final class ShellFlowTests: XCTestCase {
   override func setUp() { continueAfterFailure = false }
-  private func launch(_ switches: [String] = [], home: Bool = false) -> XCUIApplication {
+  private func launch(_ switches: [String] = [], values: [String: String] = [:], home: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
     if home { app.launchEnvironment["AGENT_INTERFACE_UI_HOME"] = "1" }
     for name in switches { app.launchEnvironment["AGENT_INTERFACE_UI_" + name] = "1" }
+    for (name, value) in values { app.launchEnvironment["AGENT_INTERFACE_UI_" + name] = value }
     app.launch()
     return app
   }
@@ -306,6 +307,18 @@ import XCTest
         "AGENT_INTERFACE_UI_THEME": "dark", "AGENT_INTERFACE_UI_INCREASE_CONTRAST": "1"], []),
       ("bubbles-contrast-light", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_THEME": "light", "AGENT_INTERFACE_UI_INCREASE_CONTRAST": "1"], []),
     ])
+  }
+  /// A link, inline code and task boxes in the person's bubble, tinted and solid, which draw in colors of their own
+  /// elsewhere. Runs only when screenshots are written.
+  func testGroupInkScreens() throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    for (own, theme) in [("solid", "light"), ("solid", "dark"), ("tint", "light"), ("tint", "dark")] {
+      let app = launch(["GROUP", "GROUP_INK", "CAPTURE_GROUP"], values: ["CHAT_STYLE": "bubbles", "OWN_BUBBLE": own, "THEME": theme])
+      let text = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "See the plan")).firstMatch
+      XCTAssertTrue(text.waitForExistence(timeout: 15), app.debugDescription)
+      try capture("group-ink-\(own)-\(theme)")
+      app.terminate()
+    }
   }
   /// The group in Bubbles at the largest accessibility text size, tinted and solid, where the person's quote holding
   /// nested lists has the least room. A test of its own, since scrolling at this size takes most of the time allowance.

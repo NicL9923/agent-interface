@@ -712,7 +712,8 @@ struct RoutineEnhancements: View {
 }
 
 /// A Today attention row while it is pressed: the soft accent at 45% over the raised row, as the web's hover, so the
-/// row's attention reason keeps 4.5:1. The list's own highlight took it to 3.84:1 in light.
+/// row's attention reason keeps 4.5:1. On systemGray4, a gray a list
+/// may highlight with, the reason reads 3.84:1 in light.
 struct AttentionRowStyle: ButtonStyle {
   static let pressedOpacity = 0.45
   func makeBody(configuration: Configuration) -> some View {
