@@ -26,12 +26,17 @@ import XCTest
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
+  /// Drags the form's left gutter. A swipe up its middle can start on an eye slider's thumb, which
+  /// then moves the slider and leaves the form where it is.
   private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
-    // Profile's controls below the avatar, such as the Talk voice, sit past all 54 shape tiles.
     for _ in 0..<25 {
       if element.exists && element.canTap { return }
-      let surface = app.collectionViews.firstMatch
-      if up { surface.swipeUp(velocity: .slow) } else { surface.swipeDown(velocity: .slow) }
+      let gutter = app.collectionViews.firstMatch.coordinate(withNormalizedOffset: .zero)
+        .withOffset(CGVector(dx: 4, dy: 0))
+      let height = app.collectionViews.firstMatch.frame.height
+      let low = gutter.withOffset(CGVector(dx: 0, dy: height * 0.7))
+      let high = gutter.withOffset(CGVector(dx: 0, dy: height * 0.35))
+      (up ? low : high).press(forDuration: 0.05, thenDragTo: up ? high : low, withVelocity: .slow, thenHoldForDuration: 0.1)
     }
     XCTAssertTrue(element.canTap, "\(element) never became hittable")
   }
