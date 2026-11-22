@@ -292,7 +292,7 @@ import XCTest
     }
   }
 
-  /// The group in each chat style for review: Classic and Bubbles in light and dark, Solid and Increase Contrast.
+  /// The group in each chat style for review: Classic and Bubbles in light and dark.
   /// Runs only when screenshots are written. Each capture's accessibility tree is written beside it, so a change to
   /// Classic's shows in a diff.
   func testGroupChatStyleScreens() throws {
@@ -301,6 +301,12 @@ import XCTest
       ("classic-dark", ["AGENT_INTERFACE_UI_CHAT_STYLE": "classic", "AGENT_INTERFACE_UI_THEME": "dark"], []),
       ("bubbles-light", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_THEME": "light"], []),
       ("bubbles-dark", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_THEME": "dark"], []),
+    ])
+  }
+  /// The group's Solid and Increase Contrast captures, apart from the rest so each stays within the time allowance on a
+  /// shared Mac. Runs only when screenshots are written.
+  func testGroupSolidAndContrastScreens() throws {
+    try captureGroups([
       ("bubbles-solid-dark", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid", "AGENT_INTERFACE_UI_THEME": "dark"], []),
       ("bubbles-solid-light", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid", "AGENT_INTERFACE_UI_THEME": "light"], []),
       ("bubbles-solid-contrast-dark", ["AGENT_INTERFACE_UI_CHAT_STYLE": "bubbles", "AGENT_INTERFACE_UI_OWN_BUBBLE": "solid",

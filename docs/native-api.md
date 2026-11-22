@@ -1088,8 +1088,8 @@ holds both of its layouts. In `"bubbles"`:
   Hand-off lines, the activity list and approvals do not change.
 - A group has no one assistant's color, and any member's color would read as that member
   speaking, so `"solid"` fills the person's bubbles with the app's green, `#246F59`,
-  which `SolidBubble.fill` returns unchanged (white text at 6.0:1). Its links, a quote's
-  text and, on iOS, a checked task box are white, so each keeps 6.0:1. The web puts inline
+  which `SolidBubble.fill` returns unchanged (white text at 6.0:1). Its links, underlined
+  on both clients, a quote's text and, on iOS, task boxes are white, so each keeps 6.0:1. The web puts inline
   code on black at 22% over the fill; iOS draws inline code with no chip, in white. A
   quote's bar is white at 75%, 4.17:1 against the fill where a mark needs 3:1; white at
   50% reached 2.74:1. Classic groups have no person's bubble, so `ownBubble` does not

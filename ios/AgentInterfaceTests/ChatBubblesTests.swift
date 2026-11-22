@@ -330,6 +330,22 @@ final class ChatBubblesTests: XCTestCase {
       XCTAssertGreaterThanOrEqual(Contrast.ratio(Contrast.resolved(edge, dark: isDark), surface), 3, "Increase Contrast's edge")
     }
   }
+  /// What the solid bubble draws a task's box in, both states, resolved as the screen does. The empty box was the
+  /// system's secondary gray, which a capture showed all but gone on the green in light.
+  @MainActor func testBothTaskBoxesShowOnTheGroupsSolidFill() {
+    for isDark in [false, true] {
+      let green = Contrast.resolved(Color(hex: GroupBubbles.solidColor), dark: isDark)
+      for done in [false, true] {
+        let box = Contrast.over(Contrast.resolved(MarkdownListView.boxColor(done: done, onSolid: true), dark: isDark), green)
+        XCTAssertGreaterThanOrEqual(Contrast.ratio(box, green), 3, "\(done ? "Checked" : "Empty") in \(isDark ? "dark" : "light")")
+      }
+    }
+  }
+  /// On a solid fill a link is as white as the words around it, so it is underlined, and nothing else is.
+  @MainActor func testALinkOnASolidFillIsUnderlined() {
+    let ink = MarkdownBlockView.solidInk(Markdown.attributed("See [the plan](https://example.com/plan) and `gate 4`."))
+    XCTAssertEqual(ink.runs.filter { $0.underlineStyle != nil }.map { String(ink[$0.range].characters) }, ["the plan"])
+  }
   /// In a group the person's bubble holds Markdown, so on a narrow row at a large text size it takes the whole row,
   /// as the web's min(100%, max(86%, 16em), 560px), and otherwise follows the 86% and 560-point rules.
   func testThePersonsGroupBubbleUsesTheRowWhenTheTextIsLarge() {
