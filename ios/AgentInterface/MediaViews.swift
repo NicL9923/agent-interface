@@ -242,19 +242,21 @@ struct MarkdownBlockView: View {
   var block: MarkdownBlock
   var listDepth: Int
   @Environment(\.markdownSettled) private var settled
+  @Environment(\.markdownOnSolid) private var onSolid
   var body: some View {
     switch block {
     case .paragraph(let text):
-      Text(MarkdownCache.shared.attributed(text, keep: settled)).textSelection(.enabled).lineSpacing(4)
+      Text(inline(text)).textSelection(.enabled).lineSpacing(4)
     case .heading(let level, let text):
-      Text(MarkdownCache.shared.attributed(text, keep: settled)).font(Self.headingFont(level)).textSelection(.enabled)
+      Text(inline(text)).font(Self.headingFont(level)).textSelection(.enabled)
         .padding(.top, 4).accessibilityAddTraits(.isHeader)
     case .code(let language, let text):
       MarkdownCodeBlock(code: text, language: language)
     case .quote(let blocks):
-      AnyView(MarkdownBlocksView(blocks: blocks, listDepth: listDepth)).foregroundStyle(Palette.quote)
+      // On a solid fill the quote keeps the bubble's white text, beside a bar of white at 75%, 4.17:1 on the group's green.
+      AnyView(MarkdownBlocksView(blocks: blocks, listDepth: listDepth)).foregroundStyle(onSolid ? Color.white : Palette.quote)
         .padding(.leading, 14)
-        .overlay(alignment: .leading) { Rectangle().fill(Palette.line).frame(width: 3) }
+        .overlay(alignment: .leading) { Rectangle().fill(onSolid ? Color.white.opacity(Self.solidQuoteBar) : Palette.line).frame(width: 3) }
     case .list(let list):
       MarkdownListView(list: list, depth: listDepth)
     case .rule:
@@ -263,6 +265,18 @@ struct MarkdownBlockView: View {
       MarkdownTableView(table: table)
     }
   }
+  private func inline(_ text: String) -> AttributedString {
+    let value = MarkdownCache.shared.attributed(text, keep: settled)
+    return onSolid ? Self.solidInk(value) : value
+  }
+  /// Text on a solid fill, where a link is white like the words around it, so an underline marks it, as on the web.
+  static func solidInk(_ text: AttributedString) -> AttributedString {
+    var value = text
+    for run in text.runs where run.link != nil { value[run.range].underlineStyle = .single }
+    return value
+  }
+  /// The opacity of a quote's bar on a solid fill: half white reached only 2.74:1 on the group's green.
+  static let solidQuoteBar = 0.75
   /// The web's sizes: h1 1.4em, h2 1.2em, and h3 to h6 1.05em, all semibold.
   static func headingFont(_ level: Int) -> Font {
     switch level {
@@ -275,6 +289,7 @@ struct MarkdownBlockView: View {
 struct MarkdownListView: View {
   var list: MarkdownList
   var depth: Int
+  @Environment(\.markdownOnSolid) private var onSolid
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
@@ -290,11 +305,13 @@ struct MarkdownListView: View {
   @ViewBuilder private func marker(_ index: Int, _ item: MarkdownListItem) -> some View {
     if let done = item.task {
       Image(systemName: done ? "checkmark.square.fill" : "square")
-        .foregroundStyle(done ? Palette.accent : .secondary).accessibilityHidden(true)
+        .foregroundStyle(Self.boxColor(done: done, onSolid: onSolid)).accessibilityHidden(true)
     } else {
       Text(Self.marker(list, index: index, depth: depth)).monospacedDigit().accessibilityHidden(true)
     }
   }
+  /// A task's box. On a solid fill both states are white: the system's secondary gray vanishes into the green in light.
+  static func boxColor(done: Bool, onSolid: Bool) -> Color { onSolid ? .white : done ? Palette.accent : .secondary }
   /// Ordered items count up from the list's first number; bullets change with nesting.
   static func marker(_ list: MarkdownList, index: Int, depth: Int) -> String {
     if let start = list.start { return "\(start + index)." }
