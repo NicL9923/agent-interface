@@ -163,6 +163,26 @@ run at `2c5727be` matched that.
 GitHub's PR checks on `8c4b3c7b` (run 44927252277): Node on `.node-version`, Node 26.13.0, Python
 3.14.7 and the release archive build passed. Browser smoke does not run on pull requests.
 
+## After the second merge of main, at `8f04d058`
+
+`main` moved again and the pull request conflicted. `8f04d058` merges `ccb855e8`, which brought in
+#468 (the Mac lock's simulator and build-only modes) and #469 (notification prefetch). No file
+changed on both sides except `.agents/tools/README.md` and the generated Xcode project, which was
+regenerated. The merge changes nothing under `src`, `e2e` or the web tests, so the build and
+browser results at `8c4b3c7b` stand.
+
+- Fedora laptop: `npm run typecheck` and `npm run lint` clean, `npx vitest run` 233 files, 4244
+  tests passed.
+- Mac mini: `validate-ios.sh 96565E5C-4421-46FB-9EAD-A6007885CFBB test
+-only-testing:AgentInterfaceTests` on an iPhone 17 simulator, twice. The merged Swift compiles.
+  The first run failed 1 of 944 tests, `NativeContractTests.testACancelledReadThatDisplacedTheRetrySetsItAgain`,
+  the #466 test already recorded as flaky on main. The second run, with `IOS_VALIDATION_FRESH=1`,
+  passed all 944 with 2 skipped by design. Under a second in the lock queue each time; 99 s and
+  65 s of test time. The Mac's regenerated project matched the committed one.
+
+Not run on this merge: the iOS UI tests and the full unfiltered suite, whose last run was at
+`92f2d96f`. #469's Swift shares no file with this branch.
+
 ## Review rounds
 
 Independent reviews by GPT-6.2 Sol at high reasoning effort. The count is for the whole change.
