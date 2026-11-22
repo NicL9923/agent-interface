@@ -14,6 +14,8 @@ struct RequestContext {
 struct StaleRequest: Error {}
 
 extension AppStore {
+  /// What a request or upload says when the same member signed in again before it was answered.
+  static let signInChanged = "You signed in again before this finished. Try it again."
   /// Runs a request for a view and keeps a stale one from touching it.
   ///
   /// The scope and client are captured when the request starts. When it ends, the outcome is
@@ -44,6 +46,8 @@ extension AppStore {
       return .success(value)
     } catch {
       guard !(error is StaleRequest), !Task.isCancelled, scope == context.scope, current() else { return nil }
+      // The same member signed in again while this ran, which ended it without an answer.
+      if error is CancellationError, context.api.retired { return .failure(APIError(message: Self.signInChanged, status: 0)) }
       return .failure(error)
     }
   }
