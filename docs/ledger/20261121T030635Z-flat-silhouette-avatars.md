@@ -177,7 +177,7 @@ under the shared Mac lock.
 - `NativeFlowTests` and `SettingsPolishTests` at `ecac8e56`: every avatar test passed except
   `testAFailedAvatarSaveKeepsTheNewAssistantOpenWithRetry`, whose picker sat under the keyboard.
   `8316c0ad` closes the keyboard first. `testChoosingATalkVoiceSavesItAndSamplesPlayAndStop` failed
-  once in the same run and passed in the run before it, with no change to its code: flaky.
+  in the same run. This entry first called it flaky; it was this port's. See "iOS review fixes".
 - Captures at `8316c0ad`: `testVariedRosterHome` and `testAvatarShapesReview` passed.
 - Full unfiltered suite at `d43d5c81`, `validate-ios.sh 0915E0B2 test`: 1022 tests, 1007 passed,
   14 skipped, 1 failed. 2 h 29 min of execution after 32 min in the lock queue. The failure is
@@ -197,9 +197,11 @@ under the shared Mac lock.
 failed, all on this host's setup. Three need the loopback alias `127.0.0.2`, which this Mac lacks
 (`direct-routes`, and `native-contract`, the one that checks the iOS contract fixture), and two in
 `upgrades.test.ts` run `/usr/bin/python3`, which here is too old for the worker's syntax. e2e: 284
-tests, 6 failed in cascade layers, phone overlays and the phone smoke test, none about avatars. The
-iOS port changes no web, server or test-runner file, so all of these are the branch's web state as
-of `2c5727be`, not this port.
+tests, 6 failed in cascade layers, phone overlays and the phone smoke test, none about avatars. This
+entry first put all six down to the branch's web state, which was reasoned and not checked. One is:
+WebKit `smoke.spec.ts:811`, which fails on main too. The other five are Chromium (four in
+`cascade-layers.spec.ts:350`, one in `phone-overlays.spec.ts:56`), and the Fedora run above passed
+all 142 Chromium tests on the same web code, so they belong to this Mac. Why was not looked into.
 
 `testScreenshotTour` stops where it waits for a settings button named Avatar
 (`ScreenshotTourTests.swift:3319`, unchanged from `main`). The avatar editor moved under Profile
@@ -250,3 +252,70 @@ fallback and the oval moved together. `545e8daa` names the oval's width, and M20
 
 Not red-run: the UI tests. `NativeFlowTests` reads back the pumpkin's saved color swatch, which
 M15 breaks at the unit level.
+
+### iOS review fixes
+
+After `c7f02959` merged `main` (#466), the review of the Swift found five things. All five held,
+the third for about a second rather than for good.
+
+- A mascot with a malformed `shape` failed the decode of its bot, the roster and the offline library.
+  `AvatarConfig.init(from:)` now reads `mode` first and never reads a mascot's `shape`. Other modes
+  still refuse a shape that is not a name.
+- Notification sender pictures were cached by the avatar's settings alone, so a cloud or ghost kept
+  its old outline. The fingerprint now covers the shape's outline and face from `AvatarCatalog`.
+- A shape or color change on a frozen avatar started a morph that no frame carried. Measured on the view before the fix, in a window: an interrupted, disconnected or unknown
+  avatar kept the old shape and color for about one second, until the timer that follows any change
+  redrew it. It did not stay until some other redraw, as the finding had it. The editor's preview
+  offers no frozen state; the specimen's frozen cells and an outage's home rows do. A change now
+  moves into place only while the timeline runs, and otherwise shows at once.
+- Tapping the selected seasonal tile reset a color chosen since. Picking the shape an avatar already
+  has now changes nothing; the tile still previews the seasonal color, as on the web.
+- `AvatarArtwork.still` was never read. It is gone.
+
+`testChoosingATalkVoiceSavesItAndSamplesPlayAndStop` was also this port's. A recording shows the form
+stop once the eye sliders reach the middle of the screen: `reveal`'s swipe then starts on a slider's
+thumb and drags it. The longer picker moved where the swipes land, so the test failed in 3 of 6 runs.
+`326efbd2` blamed the number of swipes and fixed nothing; `a1589517` drags the form's gutter.
+
+The merge needed no Swift fix. #466 removed the lost-connection badge on both apps; the parity
+test's exclusions were already exact, and its comment now says why.
+
+#### Red runs
+
+Each break was made by hand, the named test classes run, and the line restored. R1 to R5 ran on
+`df363670` (`AvatarShapeTests`, `NativeFeatureTests`), R6 to R8 on `92f2d96f` (`AvatarShapeTests`).
+R4 covers the decision only: the first tests would have passed with the view still asking the old
+condition. R6 to R8 host the real view and read its pixels.
+
+| Break                                                   | File                  | Test that failed                                                        |
+| ------------------------------------------------------- | --------------------- | ----------------------------------------------------------------------- |
+| R1 a mascot's shape field is read                       | `Models.swift`        | `testAMascotWithAMalformedShapeStillDecodes`                            |
+| R2 a sender picture's fingerprint ignores the art       | `SenderAvatars.swift` | `testASenderPictureIsDrawnAgainWhenItsShapesArtChanges`                 |
+| R3 the body stays the samples once the morph lands      | `AvatarView.swift`    | `testTheDrawnBodyLandsOnTheExactOutlineHoleAndAll`                      |
+| R4 a frozen avatar starts a morph                       | `AvatarView.swift`    | `testAChangeOnlyMovesIntoPlaceWhileFramesCanCarryIt`                    |
+| R5 picking the shape again resets its color             | `Models.swift`        | `testPickingASeasonalShapeBringsItsColorAndOthersKeepTheChosenOne`      |
+| R6 R3 again, seen on the view                           | `AvatarView.swift`    | `testTheViewsMorphLandsWithTheMugsHandleOpen`                           |
+| R7 the view's shape change asks only for reduced motion | `AvatarView.swift`    | `testAFrozenAvatarsViewShowsItsNewShapeAndColorWithoutWaitingForAMorph` |
+| R8 the view's color change asks only for reduced motion | `AvatarView.swift`    | the same                                                                |
+
+#### Checks
+
+Final code commit `92f2d96f`, iOS 27.0 iPhone 17 simulator made for this task. The runs came from a
+detached checkout of that commit with the lock-scope helper (`25b31de5`, pull request #468) on top
+so they could share the Mac; its `ios/` tree is the commit's, `c373b9ba`. The helper is not on this
+branch.
+
+- Unit suite: 936 tests, 0 failed, 2 skipped, 61 s.
+- `NativeFlowTests`, `SettingsPolishTests`, `testVariedRosterHome`, `testAvatarShapesReview`: 25
+  tests, 0 failed, 1033 s. The Talk voice test alone passed 3 of 3 at `a1589517`.
+- Full unfiltered suite: 1113 tests, 1097 passed, 14 skipped, 2 failed, 9577 s.
+  - `testWorkTriggerAfterDesignReview` ("Wrong W3 fixture") is main's: it failed the same way on
+    `320740c3`, run here.
+  - `AutomationFlowTests.testInterruptedGoalRequiresReviewThenResumesAndPauses` lost its review
+    switch on the Work tab. Not attributed. It passed in three full runs of this branch before this
+    one, then 9 of 10 repeats on this branch and 10 of 10 on `320740c3`: too few to tell a flaky
+    test from a difference. The branch changes neither the Work tab nor that test.
+- `NativeContractTests.testACancelledReadThatDisplacedTheRetrySetsItAgain` (#466) failed some runs of
+  this branch. Cold, alone, it failed 1 of 3 here and 1 of 3 on `320740c3`, so it is flaky on main.
+- `testScreenshotTour` stops at the same "Avatar" button on `320740c3`, run here.
+- An earlier full run, at `d09fd2e1`: 1111 tests, 2 failed, that retry test and W3.
