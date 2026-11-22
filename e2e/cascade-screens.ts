@@ -439,12 +439,12 @@ export const STATEFUL: StatefulScreen[] = [
     },
     steps: [
       {
-        name: "a mascot in a custom color with tuned eyes",
+        name: "a chosen shape in a custom color with tuned eyes",
         reach: async (page) => {
           await openSettings(page, "Profile");
           const editor = page.locator(".avatar-editor");
-          await editor.getByText("Mascot", { exact: true }).click();
-          await editor.getByRole("group", { name: "Character" }).waitFor();
+          await editor.getByText("Fox", { exact: true }).click();
+          await expect(editor.getByRole("radio", { name: "Fox" })).toBeChecked();
           await editor.locator('input[type="color"]').fill("#3a7d44");
           await editor.getByRole("slider", { name: /Eye width/ }).press("ArrowRight");
           await editor.getByRole("button", { name: "Reset eyes" }).waitFor();
