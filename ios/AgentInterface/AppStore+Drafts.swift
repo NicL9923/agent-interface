@@ -27,28 +27,28 @@ extension AppStore {
   /// Sends the open draft's save now, unless it is the text being sent. One save at a time: a
   /// save in flight checks again when its response is merged, and is never cancelled, because it
   /// may already have reached the server. Leaving (`force`) sends anyway.
-  @discardableResult private func startDraftSave(botId: String, force: Bool = false) -> Bool {
+  @discardableResult private func startDraftSave(botId: String, force: Bool = false) -> Task<Void, Never>? {
     scheduledDraftSave = nil
-    if !force, !settled(botId) { return false }
+    if !force, !settled(botId) { return nil }
     let snapshot = draft
     let sent = pendings[botId]
     guard sent == nil || !snapshot.isSentCopy || sent?.text != snapshot.text || sent?.attachments != snapshot.attachments
-    else { return false }
+    else { return nil }
     let currentGeneration = generation
     // The client is taken now, with the copy: a later sign-in retires it, and the save does not go out.
     let client = api
-    Task {
+    return Task {
       do { try await self.saveDraft(snapshot, botId: botId, via: client) } catch is CancellationError {} catch {
         if currentGeneration == self.generation { self.report(error) }
       }
     }
-    return true
   }
   /// Sends a waiting edit now, when switching assistants or leaving the app, instead of
-  /// dropping it. Leaving gets a short background task to finish the saves in flight.
-  func flushDraft(inBackground: Bool = false) {
+  /// dropping it. Leaving gets a short background task to finish the saves in flight. The task it returns, if
+  /// it started a save, ends when that save does.
+  @discardableResult func flushDraft(inBackground: Bool = false) -> Task<Void, Never>? {
     draftTask?.cancel()
-    var started = false
+    var started: Task<Void, Never>?
     // The latest edit always goes, unless a save of exactly that edit is already in flight.
     if draftReady, draft.dirty == true, let botId = selectedBotId, let localKey = key(.draft, botId),
       draftSavesInFlight[localKey]?.contains(draft.seq ?? 0) != true
@@ -56,10 +56,11 @@ extension AppStore {
       started = startDraftSave(botId: botId, force: true)
     }
     scheduledDraftSave = nil
-    guard inBackground, started || !draftSavesInFlight.isEmpty, draftBackgroundTask == .invalid else { return }
+    guard inBackground, started != nil || !draftSavesInFlight.isEmpty, draftBackgroundTask == .invalid else { return started }
     draftBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save draft") { [weak self] in
       self?.endDraftBackgroundTask()
     }
+    return started
   }
   private func endDraftBackgroundTask() {
     guard draftBackgroundTask != .invalid else { return }

@@ -415,6 +415,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         else if path == "/api/native/push/device", request.httpMethod == "PUT", lock.withLock({ deviceConflicts > 0 ? { deviceConflicts -= 1; return true }() : false }) {
             status = 409; data = Self.errorBody("This notification device belongs to another household member. Sign out there first.", code: nil)
         }
+        else if path.hasPrefix("/api/files/image") { data = Self.png }
         else if path == "/api/preferences/models" { data = FakeExchange.body(request) ?? Data() }
         else if path == "/api/native/push/config" { data = Self.json(["available": lock.withLock { pushAvailable }]) }
         else if path == "/api/preferences" {
@@ -454,6 +455,8 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         }
         if !park { answer() }
     }
+    /// A one pixel PNG.
+    static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
     /// A second of 8 kHz, 8-bit mono silence as WAV.
     static let silence: Data = {
         var data = Data("RIFF".utf8)
@@ -1466,7 +1469,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         value.flushDraft()
         await value.uploads.drain()
         await value.send(reviewedUncertain: true)
-        value.markRead("message-one")
+        if let place = value.readPlace("message-one", in: "bot") { value.markRead(place) }
         server.release("/api/bootstrap"); await signIn.value
         XCTAssertEqual(value.bootstrap?.user.id, "two"); XCTAssertFalse(value.sessionExpired)
         // Absence: the saves above run in their own tasks, so give any that started time to arrive.
@@ -1572,27 +1575,30 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         let end = try XCTUnwrap(requests.firstIndex { $0.url?.path == "/api/auth/logout" })
         let first = try XCTUnwrap(requests.firstIndex { $0.value(forHTTPHeaderField: "Authorization") == "Bearer replacement-session" })
         XCTAssertLessThan(end, first)
+        // Every request that names a sign-in: member one's up to and with the logout, member two's from then on.
+        let tokens = requests.map { $0.value(forHTTPHeaderField: "Authorization") }
+        XCTAssertEqual(Set(tokens[...end].compactMap { $0 }), ["Bearer synthetic-native-session"])
+        XCTAssertEqual(Set(tokens[(end + 1)...].compactMap { $0 }), ["Bearer replacement-session"])
     }
 
-    /// The steps of one save stop at the switch, as in the assistant settings save: it takes its client once,
-    /// and after member two signs in no later step goes out under either token.
-    func testTheLaterStepsOfASaveStopWhenAnotherMemberSignsIn() async throws {
+    /// The assistant settings save, between two of its steps when member two signs in: the household is reachable
+    /// and the gate lets the next step through, but its client is gone, so it goes out under neither token.
+    func testTheLaterStepsOfASettingsSaveStopWhenAnotherMemberSignsIn() async throws {
         let server = NativeMockServer(signIn: true), value = try store(server); defer { clean(server, value); forgetSignIn(server) }
-        let api = try XCTUnwrap(value.api), path = "/api/bots/bot"
-        server.hold(path)
-        let save = Task { () -> Error? in
-            do {
-                let _: EmptyResponse = try await api.write("/bots/bot", ["name": "Member one's name"], method: "PATCH")
-                let _: EmptyResponse = try await api.write("/bots/bot/skills", ["ids": ["one"]], method: "PUT")
-                return nil
-            } catch { return error }
-        }
-        try await server.waitForHeld(path)
-        try await expireSoon(value)
-        server.user = "two"; await value.signIn()
-        server.release(path)
-        let failure = await save.value
-        XCTAssertTrue(failure is CancellationError, String(describing: failure))
+        var steps: [String] = []
+        do {
+            try await value.householdSave { save in
+                let _: EmptyResponse = try await save.api.write("/bots/bot", ["name": "Member one's name"], method: "PATCH")
+                steps.append("name")
+                try await self.expireSoon(value)
+                server.user = "two"; await value.signIn()
+                XCTAssertEqual(value.bootstrap?.user.id, "two"); XCTAssertTrue(value.householdReachable)
+                try await save.perform("/bots/bot/skills", ["ids": ["one"]], method: "PUT")
+                steps.append("skills")
+            }
+            XCTFail("The save must stop")
+        } catch { XCTAssertTrue(error is CancellationError, "\(error)") }
+        XCTAssertEqual(steps, ["name"])
         XCTAssertEqual(server.requestCount("/api/bots/bot/skills"), 0)
     }
 
@@ -1603,9 +1609,11 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         let voice = VoiceController()
         let (gate, finished) = AsyncStream.makeStream(of: Void.self)
         voice.api = value.api; voice.botId = "bot"
-        voice.localTranscriber = LocalTranscriber { _ in for await _ in gate { break }; return "" }
+        let (reading, began) = AsyncStream.makeStream(of: Void.self)
+        voice.localTranscriber = LocalTranscriber { _ in began.yield(); for await _ in gate { break }; return "" }
         voice.transcribe(Data("Member one's words".utf8))
         XCTAssertEqual(voice.state, .transcribing)
+        for await _ in reading { break }
         try await expireSoon(value)
         server.user = "two"; await value.signIn()
         finished.yield(); finished.finish()
@@ -1626,6 +1634,8 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(value.bootstrap?.preferences.theme, "light", "Member two's change from another device arrives")
         server.answerHeld(path, status: 503, code: nil)
         _ = await save.value
+        server.theme = "dark"; await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.preferences.theme, "dark", "It settled in member one's count, not member two's")
     }
 
     /// Review finding 6: once another member signs in, before their account loads, every stored property of the
@@ -1640,6 +1650,20 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         value.leftBotId = "family"; value.deletedBotId = "family"
         value.notice = "Member one's notice"; value.earlierFilesFailure = "Member one's failure"
         value.openedFile = PreviewFile(url: FileManager.default.temporaryDirectory.appendingPathComponent("one.txt"))
+        // What the notification extension staged for member one. Its process reads the new token as soon as it is saved,
+        // so both must be gone by then.
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("prefetch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staged) }
+        let marker = NotificationActions.accountMarker("one")
+        value.prefetchRoot = staged; fresh.prefetchRoot = staged
+        var whenSaved: (config: NotificationPrefetchConfig?, chats: Int)?
+        value.saveToken = { token, host in
+            whenSaved = (NotificationPrefetchStore.readConfig(root: staged), NotificationPrefetchStore.readAll(account: marker, root: staged).count)
+            try SecureToken.save(token, host: host)
+        }
+        NotificationPrefetchStore.writeConfig(NotificationPrefetchConfig(origin: server.origin.absoluteString, account: marker), root: staged)
+        NotificationPrefetchStore.save(PrefetchedConversation(botId: "bot", account: marker, fetchedAt: Date(), etag: nil, payload: server.conversationData()), root: staged)
+        XCTAssertNotNil(NotificationPrefetchStore.readConfig(root: staged)); XCTAssertEqual(NotificationPrefetchStore.readAll(account: marker, root: staged).count, 1)
         value.interruptionReviewed = true; value.stayHome = true; value.failures = 3; value.preferencesNotice = "Member one's notice"
         value.recentChats = ["bot"]; value.historyStarts = ["bot": "message-one"]; value.chatReadAt = ["bot": .now]
         value.conversationCache["bot"] = value.conversation; value.conversationCapturedAt = ["bot": Date()]
@@ -1650,6 +1674,10 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         server.user = "two"; server.hold("/api/bootstrap")
         let switching = Task { await value.signIn() }
         try await server.waitForHeld("/api/bootstrap")
+        let moment = try XCTUnwrap(whenSaved)
+        XCTAssertNil(moment.config, "Member one's config would pair with member two's token"); XCTAssertEqual(moment.chats, 0)
+        XCTAssertNil(NotificationPrefetchStore.readConfig(root: staged))
+        XCTAssertEqual(NotificationPrefetchStore.readAll(account: marker, root: staged).map(\.botId), [])
         other.user = "two"; other.hold("/api/bootstrap")
         let api = client(other); api.token = nil; fresh.api = api
         let signing = Task { await fresh.signIn() }
@@ -4809,38 +4837,49 @@ extension NativeContractTests {
     /// two's own save is queued after it on the same actor, so its request shows the first one has run.
     func testADraftSaveQueuedAtTheSwitchIsNotSentForTheNextMember() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        value.flushDraft()
-        try switchToMemberTwoNow(value, server)
-        value.flushDraft()
         let path = "/api/bots/bot/draft"
-        try await until { server.requests.contains { $0.httpMethod == "PUT" && $0.url?.path == path } && value.draftSavesInFlight.isEmpty }
-        XCTAssertEqual(Set(server.draftSaves().map(\.text)), ["Member two's words"], "Member one's draft is not among them")
-    }
-
-    /// A later step of the assistant settings save passes the client the save started with, so a switch between
-    /// two steps refuses it, though the household is reachable and the gate lets it through.
-    func testALaterStepOfASaveGoesThroughTheClientItStartedWith() async throws {
-        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        let started = value.api, path = "/api/bots/bot/skills"
+        func puts() -> Int { server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == path }.count }
+        let one = try XCTUnwrap(value.flushDraft())
         try switchToMemberTwoNow(value, server)
-        XCTAssertTrue(value.householdReachable)
-        do {
-            try await value.perform("/bots/bot/skills", ["ids": ["one"]], method: "PUT", gate: .household, via: started)
-            XCTFail("Member one's step must not go out")
-        } catch { XCTAssertTrue(error is CancellationError, "\(error)") }
-        XCTAssertEqual(server.requestCount(path), 0)
+        await one.value
+        XCTAssertEqual(puts(), 0, "Member one's draft goes to no account")
+        let two = try XCTUnwrap(value.flushDraft())
+        await two.value
+        XCTAssertEqual(puts(), 1)
+        XCTAssertEqual(server.draftSaves().map(\.text), ["Member two's words"])
     }
 
     /// A reading position queued at the switch is refused the same way.
     func testAReadingPositionQueuedAtTheSwitchIsNotSentForTheNextMember() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        let queued = try XCTUnwrap(value.markRead("message-one"))
+        let queued = value.markRead(try XCTUnwrap(value.readPlace("message-one", in: "bot")))
         try switchToMemberTwoNow(value, server)
         await queued.value
         XCTAssertEqual(server.requestCount("/api/bots/bot/read-position"), 0)
-        let next = try XCTUnwrap(value.markRead("message-two"))
-        await next.value
+        XCTAssertNil(value.readPlace("message-one", in: "bot"), "Member two's chat has not loaded, so nothing is read in it yet")
+        value.conversation = try JSONDecoder().decode(Conversation.self, from: server.conversationData())
+        await value.markRead(try XCTUnwrap(value.readPlace("message-two", in: "bot"))).value
         XCTAssertEqual(server.requestCount("/api/bots/bot/read-position"), 1, "Member two's own position still goes out")
+    }
+
+    /// The pause before a position is saved takes nothing from whoever is signed in, or whatever chat is open, when
+    /// it ends. Two members in turn read the same assistant's chat, as on a shared iPad.
+    func testAReadingPositionWaitsForAPauseInItsOwnChatAndSignIn() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let (gate, pausing) = AsyncStream.makeStream(of: Void.self)
+        value.readPause = { _ in for await _ in gate { break } }
+        let one = value.markReadSoon(try XCTUnwrap(value.readPlace("message-one", in: "bot")))
+        try switchToMemberTwoNow(value, server)
+        value.conversation = try JSONDecoder().decode(Conversation.self, from: server.conversationData())
+        pausing.yield(); await one.value
+        XCTAssertEqual(server.requests.filter { $0.url?.path.hasSuffix("/read-position") == true }.count, 0, "Member one's position is refused")
+        let two = value.markReadSoon(try XCTUnwrap(value.readPlace("message-two", in: "bot")))
+        value.selectedBotId = "family"
+        XCTAssertNil(value.readPlace("message-two", in: "bot"), "Another chat is open")
+        pausing.yield(); await two.value
+        let saved = server.requests.filter { $0.url?.path.hasSuffix("/read-position") == true }
+        XCTAssertEqual(saved.map { "\($0.url?.path ?? "") \($0.value(forHTTPHeaderField: "Authorization") ?? "none")" },
+                       ["/api/bots/bot/read-position Bearer replacement-session"], "In the chat it was read in")
     }
 
     /// The same member signing in again cuts off an upload on its way. Its file stays, ready for Retry, which
@@ -4876,5 +4915,117 @@ extension NativeContractTests {
         XCTAssertFalse(value.appendTranscript("Member one's words", botId: "bot", scope: one))
         XCTAssertFalse(value.draft.text.contains("Member one's words"))
         XCTAssertTrue(value.appendTranscript("Member two's words", botId: "bot", scope: value.scope))
+    }
+
+    /// A chat that was still opening for member one reads nothing more once member two has one open: member two's
+    /// chat was opened by its own read. Member one's unsaved draft made the open wait for the draft first.
+    func testAChatStillOpeningForTheLastMemberReadsNothingForTheNext() async throws {
+        let server = NativeMockServer(signIn: true), value = try store(server); defer { clean(server, value); forgetSignIn(server) }
+        // The unsaved copy is on the device only, so opening reads the draft without saving it first.
+        value.persistDraft(); value.draftReady = false
+        let draft = "/api/bots/bot/draft"; server.holdNext(draft)
+        let opening = Task { await value.select("bot") }
+        try await server.waitForHeld(draft)
+        XCTAssertEqual(server.requests.last { $0.url?.path == draft }?.httpMethod, "GET")
+        try await expireSoon(value)
+        server.user = "two"; await value.signIn(); value.suspend()
+        XCTAssertEqual(value.selectedBotId, "bot")
+        let reads = server.requestCount("/api/bots/bot/conversation")
+        server.release(draft); await opening.value
+        XCTAssertEqual(server.requestCount("/api/bots/bot/conversation"), reads)
+    }
+
+    /// A bootstrap answers as another member while the poll renews the sign-in. What the notification extension staged
+    /// for the last one goes, and the poll goes on for the new one.
+    func testABootstrapAnsweringAsAnotherMemberClearsThePrefetchAndKeepsPolling() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("prefetch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staged) }
+        let one = NotificationActions.accountMarker("one"), renew = "/api/auth/native/renew", key = DeviceDefaults.expiry(server.origin)
+        value.prefetchRoot = staged
+        NotificationPrefetchStore.writeConfig(NotificationPrefetchConfig(origin: server.origin.absoluteString, account: one), root: staged)
+        NotificationPrefetchStore.save(PrefetchedConversation(botId: "bot", account: one, fetchedAt: Date(), etag: nil, payload: server.conversationData()), root: staged)
+        XCTAssertEqual(NotificationPrefetchStore.readAll(account: one, root: staged).count, 1)
+        UserDefaults.standard.set(ServerDate.string(Date().addingTimeInterval(24 * 3600)), forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        server.holdNext(renew)
+        value.startPolling()
+        try await server.waitForHeld(renew)
+        server.user = "two"; await value.refreshBootstrap()
+        XCTAssertEqual(value.bootstrap?.user.id, "two")
+        XCTAssertEqual(NotificationPrefetchStore.readConfig(root: staged)?.account, NotificationActions.accountMarker("two"))
+        XCTAssertEqual(NotificationPrefetchStore.readAll(account: one, root: staged).map(\.botId), [])
+        let reads = server.requestCount("/api/bootstrap")
+        server.release(renew)
+        try await until { server.requestCount("/api/bootstrap") > reads }
+        XCTAssertNotNil(value.pollTask)
+    }
+
+    /// The same member signing in again while a chat opens still gets its conversation, and no draft error.
+    func testAChatStillOpeningWhenTheSameMemberSignsInAgainStillLoads() async throws {
+        let server = NativeMockServer(signIn: true), value = try store(server); defer { clean(server, value); forgetSignIn(server) }
+        value.draft.dirty = false; value.persistDraft()
+        let draft = "/api/bots/bot/draft", conversation = "/api/bots/bot/conversation"
+        server.holdNext(draft); server.holdNext(conversation)
+        let opening = Task { await value.select("bot") }
+        try await server.waitForHeld(draft); try await server.waitForHeld(conversation)
+        try await expireSoon(value)
+        // Not polling yet, so nothing reads the draft or the conversation again and clears an error first.
+        value.suspended = true
+        await value.signIn()
+        server.release(draft); server.release(conversation); await opening.value
+        XCTAssertNil(value.error, "A read its sign-in ended is no failure to report"); XCTAssertNil(value.conversation)
+        value.suspended = false; value.startPolling()
+        try await until { value.conversation?.botId == "bot" }
+    }
+
+    /// The same member signing in again ends a download with its client. Each view waiting for it loads again on the
+    /// new one, and a view that left the screen does not.
+    func testAnImageLoadingWhenTheSameMemberSignsInAgainLoadsOnTheNewClient() async throws {
+        let server = NativeMockServer(signIn: true), value = try store(server); defer { clean(server, value); forgetSignIn(server) }
+        let path = "/api/files/image-\(UUID().uuidString)"; server.holdNext(path)
+        let views = [Task { try await AuthenticatedImage.load(path, value) }, Task { try await AuthenticatedImage.load(path, value) }]
+        let left = Task { try await AuthenticatedImage.load(path, value) }
+        try await server.waitForHeld(path)
+        try await until { AuthenticatedImage.waiting(path, value) == 3 }
+        left.cancel()
+        try await expireSoon(value)
+        await value.signIn()
+        server.release(path)
+        for view in views { let image = try await view.value; XCTAssertNotNil(image) }
+        do { _ = try await left.value; XCTFail("A view that left loads nothing") } catch { XCTAssertTrue(error is CancellationError, "\(error)") }
+        XCTAssertEqual(server.requests.filter { $0.url?.path == path }.map { $0.value(forHTTPHeaderField: "Authorization") ?? "none" },
+                       ["Bearer synthetic-native-session", "Bearer replacement-session"])
+    }
+
+    /// Another member's sign-in ends it for good: member one's file is not asked for under member two's token.
+    func testAnImageLoadingWhenAnotherMemberSignsInIsNotLoadedForThem() async throws {
+        let server = NativeMockServer(signIn: true), value = try store(server); defer { clean(server, value); forgetSignIn(server) }
+        let path = "/api/files/image-\(UUID().uuidString)"; server.holdNext(path)
+        let view = Task { try await AuthenticatedImage.load(path, value) }
+        try await server.waitForHeld(path)
+        try await expireSoon(value)
+        server.user = "two"; await value.signIn()
+        server.release(path)
+        do { _ = try await view.value; XCTFail("Member one's picture must not load") } catch { XCTAssertTrue(error is CancellationError, "\(error)") }
+        XCTAssertEqual(server.requestCount(path), 1)
+    }
+
+    /// Two clients never share a download, so a load a sign-in ended is never the one a new view joins.
+    func testImageLoadsAreKeptApartByClient() async throws {
+        let loads = AuthenticatedImage.ImageLoads(), old = NSObject(), new = NSObject()
+        let (gate, finished) = AsyncStream.makeStream(of: Void.self)
+        let key = "client:\(UUID().uuidString)" as NSString
+        var fetches = 0
+        let first = Task { try await loads.image(key, client: ObjectIdentifier(old)) { fetches += 1; for await _ in gate { break }; throw CancellationError() } }
+        try await until { fetches == 1 }
+        let second = Task { try await loads.image(key, client: ObjectIdentifier(new)) { fetches += 1; return NativeMockServer.png } }
+        let apart = try await eventually(timeout: .seconds(3)) { fetches == 2 }
+        XCTAssertTrue(apart, "The second load joined the first client's")
+        // Opened before waiting for either, so one that joined the other ends with it.
+        finished.yield(); finished.finish()
+        _ = try? await first.value
+        let image = try? await second.value
+        XCTAssertNotNil(image ?? nil)
     }
 }

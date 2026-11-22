@@ -24,32 +24,50 @@ struct AuthenticatedImage: View {
       image = nil
       failed = false
       do {
-        guard let api = store?.api, !path.isEmpty else {
-          failed = true
-          return
-        }
         // All images, including portraits, use the authenticated file API.
-        guard path.hasPrefix("/api/files/") else {
+        guard let store, store.api != nil, path.hasPrefix("/api/files/") else {
           failed = true
           return
         }
-        let path = path
-        let loaded = try await Self.loads.image(key) { try await api.data(path: path) }
+        let loaded = try await Self.load(path, store)
         guard !Task.isCancelled else { return }
         image = loaded
         failed = loaded == nil
       } catch is CancellationError {} catch { failed = true }
     }
   }
+  /// Downloads an image for the account it starts under. The same member signing in again ends the download with
+  /// its client, so it starts over on the new one. Leaving the screen, or another account, ends it for good.
+  static func load(_ path: String, _ store: AppStore) async throws -> UIImage? {
+    let key = cacheKey(path, store)
+    while let api = store.api {
+      do {
+        let image = try await loads.image(key, client: ObjectIdentifier(api)) { try await api.data(path: path) }
+        // Decoding runs off the main actor, so the account can change after the download has ended.
+        guard cacheKey(path, store) == key else { throw CancellationError() }
+        return image
+      } catch is CancellationError {
+        guard !Task.isCancelled, store.api !== api, cacheKey(path, store) == key else { throw CancellationError() }
+      }
+    }
+    throw CancellationError()
+  }
+  /// The views waiting for this image on the current client.
+  static func waiting(_ path: String, _ store: AppStore) -> Int {
+    store.api.map { loads.waiting(cacheKey(path, store), client: ObjectIdentifier($0)) } ?? 0
+  }
   /// One download and decode per image at a time: the same picture in a reply and the file
   /// list, or a row scrolled back in, waits for the load already running.
   private static let loads = ImageLoads()
   @MainActor final class ImageLoads {
     private struct Load { var task: Task<UIImage?, Error>; var waiters = 1; var abandoned = 0 }
-    /// Keyed by the cache key's text: a String crosses into the cancellation handler, an NSString does not.
-    private var running: [String: Load] = [:]
-    func image(_ cacheKey: NSString, fetch: @escaping @MainActor () async throws -> Data) async throws -> UIImage? {
-      let key = cacheKey as String
+    /// The cache key's text, since a String crosses into the cancellation handler and an NSString does not, and the
+    /// client: each has its own loads, so one a sign-in ended is never joined.
+    private struct Key: Hashable, Sendable { var text: String; var client: ObjectIdentifier? }
+    private var running: [Key: Load] = [:]
+    func waiting(_ cacheKey: NSString, client: ObjectIdentifier?) -> Int { running[Key(text: cacheKey as String, client: client)]?.waiters ?? 0 }
+    func image(_ cacheKey: NSString, client: ObjectIdentifier? = nil, fetch: @escaping @MainActor () async throws -> Data) async throws -> UIImage? {
+      let key = Key(text: cacheKey as String, client: client)
       // A load every view abandoned is ending; a new view starts its own.
       if let load = running[key], !load.task.isCancelled {
         running[key]?.waiters += 1
@@ -61,25 +79,25 @@ struct AuthenticatedImage: View {
         // Decoding a camera photo takes tens of milliseconds, so it stays off the main actor.
         let image = await Task.detached(priority: .userInitiated) { AuthenticatedImage.downsampled(data) }.value
         if let image, let cgImage = image.cgImage {
-          AuthenticatedImage.cache.setObject(image, forKey: key as NSString, cost: cgImage.bytesPerRow * cgImage.height)
+          AuthenticatedImage.cache.setObject(image, forKey: key.text as NSString, cost: cgImage.bytesPerRow * cgImage.height)
         }
         return image
       }
       running[key] = Load(task: task)
       return try await wait(key, task)
     }
-    private func wait(_ key: String, _ task: Task<UIImage?, Error>) async throws -> UIImage? {
+    private func wait(_ key: Key, _ task: Task<UIImage?, Error>) async throws -> UIImage? {
       defer { leave(key, task) }
       return try await withTaskCancellationHandler { try await task.value } onCancel: {
         Task { @MainActor in self.abandon(key, task) }
       }
     }
-    private func leave(_ key: String, _ task: Task<UIImage?, Error>) {
+    private func leave(_ key: Key, _ task: Task<UIImage?, Error>) {
       guard let load = running[key], load.task == task else { return }
       if load.waiters > 1 { running[key]?.waiters -= 1 } else { running[key] = nil }
     }
     /// Views that scrolled away stop the download, unless another view still waits for it.
-    private func abandon(_ key: String, _ task: Task<UIImage?, Error>) {
+    private func abandon(_ key: Key, _ task: Task<UIImage?, Error>) {
       guard running[key]?.task == task else { return }
       running[key]?.abandoned += 1
       if let load = running[key], load.abandoned >= load.waiters { task.cancel() }

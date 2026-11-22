@@ -44,9 +44,12 @@ extension AppStore {
         if pendingOpen == nil, selectedBotId != nil, !deviceOffline, !suspended, !sessionExpired {
           requestConversationRefresh()
         }
+        let started = api
         await refreshBootstrap()
         await pendingOpen?.value
-        if api?.token != nil { startPolling() }
+        // A sign-in meanwhile polls for itself, and a poll already running goes on for an account the bootstrap
+        // changed to. One with no poll yet starts here.
+        if let api, api.token != nil, api === started || pollTask == nil { startPolling() }
       } else {
         try await ensureAuthConfig()
       }
@@ -135,7 +138,10 @@ extension AppStore {
         // session here, which also releases this device's push registration for them.
         await revokeSession(api)
         guard generation == authGeneration, self.api === api else { return }
-        try SecureToken.save(result.token, host: api.baseURL.absoluteString)
+        // Before the new token is saved, which the notification extension reads: its process must never pair it
+        // with the last member's config.
+        clearNotificationPrefetch()
+        try saveToken(result.token, api.baseURL.absoluteString)
         leaveAccount(nextToken: result.token)
       } else {
         try SecureToken.save(result.token, host: api.baseURL.absoluteString)
