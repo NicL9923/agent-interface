@@ -252,11 +252,7 @@ struct ApprovalDecisionView: View {
           Button(label("denied", nil, "Decline", "Declining…")) { decide("denied") }.buttonStyle(.bordered)
             .accessibilityIdentifier("approvalDecline")
           if scoped && approval.offers("always") {
-            Menu {
-              Button("Always allow…") { confirmingAlways = true }
-            } label: {
-              Image(systemName: "ellipsis").frame(width: 44, height: 44)
-            }.accessibilityLabel("More choices").accessibilityIdentifier("approvalMore")
+            ApprovalMoreChoices { confirmingAlways = true }.frame(width: 44, height: 44)
           }
         }
       }.controlSize(.large).disabled(decision != nil || !store.connected || !store.supports(.approvals))
@@ -323,6 +319,33 @@ struct ApprovalDecisionView: View {
         await store.refreshConversation()
       } catch { if session == store.scope { decision = nil; scope = nil; store.buzz(.failed); store.report(error) } }
     }
+  }
+}
+
+/// The approval card's More choices menu, as a UIKit button. The card renders about every 1.5 seconds,
+/// with each poll. SwiftUI rebuilds an open `Menu` on such a render. When that lands between touch down
+/// and touch up it replaces the row under the finger, so the tap is lost and the menu stays open. An
+/// equatable SwiftUI view did not prevent it. UIKit keeps the menu it was made with, so
+/// `updateUIView` must never set `menu`.
+private struct ApprovalMoreChoices: UIViewRepresentable {
+  var alwaysAllow: () -> Void
+  @MainActor final class Coordinator { var alwaysAllow: () -> Void = {} }
+  func makeCoordinator() -> Coordinator { Coordinator() }
+  func makeUIView(context: Context) -> UIButton {
+    let button = UIButton(type: .system)
+    button.setImage(UIImage(systemName: "ellipsis"), for: .normal)
+    button.setPreferredSymbolConfiguration(UIImage.SymbolConfiguration(textStyle: .body), forImageIn: .normal)
+    button.adjustsImageSizeForAccessibilityContentSizeCategory = true
+    button.showsMenuAsPrimaryAction = true
+    let coordinator = context.coordinator
+    button.menu = UIMenu(children: [UIAction(title: "Always allow…") { _ in coordinator.alwaysAllow() }])
+    button.accessibilityLabel = "More choices"
+    button.accessibilityIdentifier = "approvalMore"
+    return button
+  }
+  func updateUIView(_ button: UIButton, context: Context) {
+    context.coordinator.alwaysAllow = alwaysAllow
+    if button.isEnabled != context.environment.isEnabled { button.isEnabled = context.environment.isEnabled }
   }
 }
 
