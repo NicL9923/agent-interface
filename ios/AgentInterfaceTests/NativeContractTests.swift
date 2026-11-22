@@ -3890,13 +3890,13 @@ extension NativeContractTests {
     /// A reading position queued at the switch is refused the same way.
     func testAReadingPositionQueuedAtTheSwitchIsNotSentForTheNextMember() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        value.markRead("message-one")
+        let queued = try XCTUnwrap(value.markRead("message-one"))
         try switchToMemberTwoNow(value, server)
-        value.markRead("message-two")
-        let path = "/api/bots/bot/read-position"
-        try await until { server.requestCount(path) > 0 }
-        XCTAssertEqual(server.requests.filter { $0.url?.path == path }.map { $0.value(forHTTPHeaderField: "Authorization") ?? "none" },
-                       ["Bearer replacement-session"])
+        await queued.value
+        XCTAssertEqual(server.requestCount("/api/bots/bot/read-position"), 0)
+        let next = try XCTUnwrap(value.markRead("message-two"))
+        await next.value
+        XCTAssertEqual(server.requestCount("/api/bots/bot/read-position"), 1, "Member two's own position still goes out")
     }
 
     /// The same member signing in again cuts off an upload on its way. Its file stays, ready for Retry, which

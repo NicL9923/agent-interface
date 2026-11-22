@@ -71,11 +71,12 @@ extension AppStore {
       let _: EmptyResponse? = try? await api.write("/bots/\(APIClient.component(botId))/presence", report, method: "PUT")
     }
   }
-  func markRead(_ messageId: String?) {
-    guard let id = selectedBotId, let api else { return }
+  /// The returned task ends once the position was saved or refused.
+  @discardableResult func markRead(_ messageId: String?) -> Task<Void, Never>? {
+    guard let id = selectedBotId, let api else { return nil }
     let position = ReadPosition(messageId: messageId)
     // A reading position is a hint, so a failed save stays quiet, as on the web.
-    Task {
+    return Task {
       let _: ReadPosition? = try? await api.write(
         "/bots/\(APIClient.component(id))/read-position", position, method: "PUT")
     }
