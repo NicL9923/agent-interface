@@ -36,4 +36,7 @@ Each line was broken by hand in `.agents/tools/validate-ios.sh`, the two new tes
 
 - `python3 tests/validate_ios_test.py`: 9 tests passed on Linux, with a fake lock that accepts the two scopes
   and fails on any other call.
+- `python3 tests/ios_validation_test.py`: 29 tests passed on Linux. Its own fake lock passed every argument to
+  `exec`, so the first push failed 33 assertions in CI. I had run only the other test file. The fake now takes
+  the two scopes.
 - Not run: the helper against the real lock on the Mac mini. The new lock is not deployed at the time of writing.
