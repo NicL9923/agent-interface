@@ -1688,7 +1688,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         offlineLibraryRoot offlineSavedAt offlineWriteDelay offlineWriter openComputer openRequests openTerminal openedFile
         openingBotId outageDeadline outagePause outageTimer ownRows ownSends pending pendings pollTask preferenceSaves
         preferencesDraft preferencesFailureMessage preferencesNotice preferencesSaveFailed preferencesSaving prefetchAgain
-        prefetchRun prefetchTask presenceBeat presenceReports presenceScope queuedChoices queuedPreferences readFailedFor
+        prefetchRoot prefetchRun prefetchTask presenceBeat presenceReports presenceScope queuedChoices queuedPreferences readFailedFor
         readFailures readHere readRetry readRetryPause receipt receipts recentChats removeDeliveredChats renewalAttemptedAt
         replyAnnouncement replyFiles replyWatch requestedWindow restoredRosterAt restoring resyncPause retryAttempt
         retryCheckDelays retryCheckKey retryChecks revokeWait rosterFromCache rosterTask routineResult scheduledDraftSave

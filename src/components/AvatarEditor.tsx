@@ -1,7 +1,6 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import {
-  avatarShapes,
-  everydayFamilies,
+  avatarShapeGroups,
   type Accessory,
   type ActivityState,
   type Avatar as AvatarConfig,
@@ -11,10 +10,9 @@ import {
 import { Avatar, avatarColors, defaultAvatar, stateLabels } from "./Avatar";
 import "./avatar-editor.css";
 import { Icon } from "./Icon";
-import { seasonalAvatar, seasonalChoices } from "./character-avatars";
+import { isSeasonal, seasonalColors, shapeGroups, shapeLabel } from "./avatar-shapes";
 
 type DrawnAvatar = Exclude<AvatarConfig, { mode: "portrait" }>;
-type Family = Extract<AvatarConfig, { mode: "mascot" }>["family"];
 
 const eyeStyles: Eyes[] = ["oval", "round", "visor", "spark"];
 const accessories: Accessory[] = ["none", "hat", "glasses"];
@@ -27,8 +25,7 @@ const previewStates: ActivityState[] = [
   "done",
 ];
 const modes = [
-  ["geometric", "Geometric"],
-  ["mascot", "Mascot"],
+  ["geometric", "Character"],
   ["portrait", "Portrait"],
 ] as const;
 const accessoryNames: Record<Accessory, string> = {
@@ -87,26 +84,20 @@ export function AvatarEditor({
   const id = useId();
   const [preview, setPreview] = useState<ActivityState>("idle");
   const drawn = avatar.mode === "portrait" ? null : avatar;
-  // Switching styles keeps every earlier choice: the drawn character's colors and
-  // eyes, the last shape and character, and a portrait chosen before.
+  // Switching styles keeps every earlier choice: the drawn character as it was, and a
+  // portrait chosen before.
   const lastDrawn = useRef<DrawnAvatar>(drawn ?? defaultAvatar);
-  const lastShape = useRef<AvatarShape>(drawn?.mode === "geometric" ? drawn.shape : "blob");
-  const lastFamily = useRef<Family>(drawn?.mode === "mascot" ? drawn.family : "bear");
   const lastPortrait = useRef(avatar.mode === "portrait" ? avatar : null);
   if (drawn) lastDrawn.current = drawn;
-  if (drawn?.mode === "geometric") lastShape.current = drawn.shape;
-  if (drawn?.mode === "mascot") lastFamily.current = drawn.family;
   if (avatar.mode === "portrait" && avatar.src) lastPortrait.current = avatar;
   const switchMode = (mode: AvatarConfig["mode"]) => {
     if (mode === avatar.mode) return;
-    const { color, eyes, accessory, eyeWidth, eyeHeight, eyeSpacing } = lastDrawn.current;
-    const shared = { color, eyes, accessory, eyeWidth, eyeHeight, eyeSpacing };
-    if (mode === "geometric") onChange({ ...shared, mode, shape: lastShape.current });
-    else if (mode === "mascot") onChange({ ...shared, mode, family: lastFamily.current });
+    if (mode === "geometric") onChange(lastDrawn.current);
     else onChange(lastPortrait.current ?? { mode: "portrait", src: "", origin: "uploaded" });
   };
-  const update = (patch: Partial<DrawnAvatar>) =>
-    drawn && onChange({ ...drawn, ...patch } as DrawnAvatar);
+  const update = (patch: Partial<DrawnAvatar>) => drawn && onChange({ ...drawn, ...patch });
+  // A seasonal shape arrives in its own color; every other shape keeps the one already chosen.
+  const tint = (shape: AvatarShape) => (isSeasonal(shape) ? { color: seasonalColors[shape] } : {});
   return (
     <div className={`avatar-editor${compactPreview ? " avatar-editor--compact" : ""}`}>
       <div className="avatar-stage">
@@ -176,69 +167,33 @@ export function AvatarEditor({
       </fieldset>
       {drawn ? (
         <>
-          {drawn.mode === "geometric" ? (
-            <fieldset className="choice-group">
-              <legend>Shape</legend>
-              <div className="choice-grid">
-                {avatarShapes.map((shape) => (
-                  <Choice
-                    key={shape}
-                    group={`${id}-shape`}
-                    label={title(shape)}
-                    checked={drawn.shape === shape}
-                    onSelect={() => update({ shape })}
-                  >
-                    <Avatar
-                      avatar={{ ...drawn, shape, accessory: "none" }}
-                      size={44}
-                      reducedMotion
-                    />
-                  </Choice>
-                ))}
+          <fieldset className="choice-group">
+            <legend>Shape</legend>
+            {shapeGroups.map((group) => (
+              <div key={group.id} role="group" aria-labelledby={`${id}-${group.id}`}>
+                <p className="choice-category" id={`${id}-${group.id}`}>
+                  {group.label}
+                </p>
+                <div className="choice-grid">
+                  {avatarShapeGroups[group.id].map((shape: AvatarShape) => (
+                    <Choice
+                      key={shape}
+                      group={`${id}-shape`}
+                      label={shapeLabel(shape)}
+                      checked={drawn.shape === shape}
+                      onSelect={() => update({ shape, ...tint(shape) })}
+                    >
+                      <Avatar
+                        avatar={{ ...drawn, shape, ...tint(shape), accessory: "none" }}
+                        size={44}
+                        reducedMotion
+                      />
+                    </Choice>
+                  ))}
+                </div>
               </div>
-            </fieldset>
-          ) : (
-            <fieldset className="choice-group">
-              <legend>Character</legend>
-              <div className="choice-grid">
-                {everydayFamilies.map((family) => (
-                  <Choice
-                    key={family}
-                    group={`${id}-family`}
-                    label={title(family)}
-                    checked={drawn.family === family}
-                    onSelect={() => update({ family })}
-                  >
-                    <Avatar
-                      avatar={{ ...drawn, family, accessory: "none" }}
-                      size={44}
-                      reducedMotion
-                    />
-                  </Choice>
-                ))}
-              </div>
-              <p className="choice-category">Seasonal</p>
-              <div className="choice-grid">
-                {seasonalChoices.map(({ family, label }) => (
-                  <Choice
-                    key={family}
-                    group={`${id}-family`}
-                    label={label}
-                    checked={drawn.family === family}
-                    onSelect={() =>
-                      update({
-                        ...seasonalAvatar(family),
-                        eyes: drawn.eyes,
-                        accessory: drawn.accessory,
-                      })
-                    }
-                  >
-                    <Avatar avatar={seasonalAvatar(family)} size={44} reducedMotion />
-                  </Choice>
-                ))}
-              </div>
-            </fieldset>
-          )}
+            ))}
+          </fieldset>
           <fieldset className="choice-group">
             <legend>Color</legend>
             <div className="swatches">

@@ -2368,8 +2368,8 @@ describe("live work", () => {
       {
         ...original[0],
         avatar: {
-          mode: "mascot",
-          family: "fox",
+          mode: "geometric",
+          shape: "fox",
           color: "#C46F2C",
           eyes: "round",
           accessory: "none",

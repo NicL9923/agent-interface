@@ -643,12 +643,12 @@ describe("Hermes adapter trust and recovery boundary", () => {
     await runtime.listBots();
     const before = reads();
     await runtime.setAvatar!("shared", {
-      mode: "mascot",
-      family: "cactus",
-      color: "#4a7",
+      mode: "geometric",
+      shape: "cactus",
+      color: "#44aa77",
       eyes: "round",
       accessory: "none",
-    } as never);
+    });
     await runtime.listBots();
     // setAvatar reads the roster once itself; the listing after it reads again instead of reusing.
     expect(reads()).toBe(before + 2);
@@ -656,12 +656,12 @@ describe("Hermes adapter trust and recovery boundary", () => {
     await runtime.listBots();
     await expect(
       runtime.setAvatar!("shared", {
-        mode: "mascot",
-        family: "bear",
-        color: "#4a7",
+        mode: "geometric",
+        shape: "bear",
+        color: "#44aa77",
         eyes: "round",
         accessory: "none",
-      } as never),
+      }),
     ).rejects.toThrow("changed on another client");
     const failed = reads();
     await runtime.listBots();

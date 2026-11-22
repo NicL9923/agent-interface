@@ -28,9 +28,14 @@ struct SecureToken {
     ]
     var item: CFTypeRef?
     guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-      let data = item as? Data
+      let data = item as? Data,
+      let token = String(data: data, encoding: .utf8)
     else { return nil }
-    return String(data: data, encoding: .utf8)
+    // Keep the notification extension's shared Keychain copy in sync for existing sign-ins after upgrade.
+    if PrefetchKeychain.read(host: host) != token {
+      PrefetchKeychain.save(token, host: host)
+    }
+    return token
   }
   static func save(_ token: String?, host: String) throws {
     let query: [String: Any] = [
@@ -38,12 +43,14 @@ struct SecureToken {
       kSecAttrAccount as String: host,
     ]
     SecItemDelete(query as CFDictionary)
+    PrefetchKeychain.save(token, host: host)
     guard let token else { return }
     var value = query
     value[kSecValueData as String] = Data(token.utf8)
     value[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     let status = SecItemAdd(value as CFDictionary, nil)
     guard status == errSecSuccess else {
+      PrefetchKeychain.save(nil, host: host)
       throw APIError(
         message: "The sign-in token could not be saved in Keychain (\(status)).", status: 0)
     }

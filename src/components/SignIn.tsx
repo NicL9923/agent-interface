@@ -13,7 +13,7 @@ export type AuthConfig = { localDevAuth: boolean; googleClientId?: string };
 
 const trio = [
   { mode: "geometric", shape: "blob", color: "#1084FE", eyes: "oval", accessory: "none" },
-  { mode: "mascot", family: "bear", color: "#FF9800", eyes: "round", accessory: "none" },
+  { mode: "geometric", shape: "sprout", color: "#1FBF68", eyes: "oval", accessory: "none" },
   { mode: "geometric", shape: "triangle", color: "#FF309B", eyes: "oval", accessory: "none" },
 ] as const;
 /** A small household of assistants, so the first screen shows who is waiting. */

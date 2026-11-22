@@ -622,7 +622,7 @@ struct BotSettingsView: View {
     if store.supports(.uploads) {
       return store.supports(.portraitGeneration) ? "Upload or generate a portrait before saving." : "Upload a portrait before saving."
     }
-    return store.supports(.portraitGeneration) ? "Generate a portrait before saving." : "Portraits are unavailable. Choose Geometric or Mascot."
+    return store.supports(.portraitGeneration) ? "Generate a portrait before saving." : "Portraits are unavailable. Choose Character."
   }
   private var avatarPreview: some View {
     Section {
@@ -634,8 +634,7 @@ struct BotSettingsView: View {
     Group {
       Section {
         Picker("Style", selection: Binding(get: { avatar.mode }, set: { switchAvatarMode($0) })) {
-          Text("Geometric").tag(AvatarMode.geometric)
-          Text("Mascot").tag(AvatarMode.mascot)
+          Text("Character").tag(AvatarMode.geometric)
           if bot != nil { Text("Portrait").tag(AvatarMode.portrait) }
         }.pickerStyle(.segmented).accessibilityIdentifier("avatarStyle")
       } header: { settingsHeader(bot == nil ? "Style" : "Avatar") } footer: {
@@ -668,17 +667,15 @@ struct BotSettingsView: View {
           unavailable(.portraitGeneration)
         } header: { settingsHeader("Generate a portrait") }
       } else {
-        if avatar.mode == .geometric {
+        // A seasonal shape arrives in its own color, and its tile previews it in that color.
+        ForEach(AvatarCatalog.groups, id: \.id) { group in
           Section {
             AvatarTiles(
-              group: "shape", options: AvatarConfig.shapes.map { ($0, $0.rawValue.capitalized) },
+              group: "shape", options: group.shapes.map { ($0, $0.label) },
               selected: avatar.shape ?? .blob,
-              preview: { var a = avatar; a.shape = $0; a.accessory = .plain; return a },
-              select: { avatar.shape = $0 })
-          } header: { settingsHeader("Shape") }
-        } else {
-          Section { characterTiles(AvatarConfig.everydayFamilies) } header: { settingsHeader("Character") }
-          Section { characterTiles(AvatarConfig.seasonalFamilies) } header: { settingsHeader("Seasonal") }
+              preview: { var a = avatar.showingShape($0); a.accessory = .plain; return a },
+              select: { avatar = avatar.selectingShape($0) })
+          } header: { settingsHeader(group.label) }
         }
         Section { colorSwatches } header: { settingsHeader("Color") }
         Section {
@@ -719,13 +716,6 @@ struct BotSettingsView: View {
       Button(progress.label("changes", idle: "Retry saving avatar")) { saveChanges() }
         .disabled(busy || !store.householdReachable || portraitMissing).accessibilityIdentifier("retryAvatar")
     }
-  }
-  private func characterTiles(_ families: [(id: AvatarFamily, label: String)]) -> some View {
-    AvatarTiles(
-      group: "family", options: families.map { ($0.id, $0.label) },
-      selected: avatar.family ?? .sprout,
-      preview: { var a = avatar.selectingFamily($0); a.accessory = .plain; return a },
-      select: { avatar = avatar.selectingFamily($0) })
   }
   private var colorSwatches: some View {
     let custom = !AvatarConfig.colors.contains { $0.lowercased() == (avatar.color ?? "#1084FE").lowercased() }
@@ -781,8 +771,7 @@ struct BotSettingsView: View {
     }
     var next = lastDrawn
     next.mode = mode
-    if mode == .geometric { next.shape = lastDrawn.shape ?? .blob }
-    if mode == .mascot { next.family = lastDrawn.family ?? .bear }
+    next.shape = lastDrawn.shape ?? .blob
     avatar = next
   }
 
@@ -1164,9 +1153,7 @@ struct BotSettingsView: View {
     }
   }
   private func putAvatar(_ id: String, _ api: APIClient, _ avatar: AvatarConfig) async throws {
-    var value = avatar
-    if value.mode == .mascot { value.family = value.family ?? .sprout }
-    let _: AvatarConfig = try await api.write("/bots/\(APIClient.component(id))/avatar", value, method: "PUT")
+    let _: AvatarConfig = try await api.write("/bots/\(APIClient.component(id))/avatar", avatar, method: "PUT")
   }
   private func generatePortrait() {
     portraitPromptFocused = false

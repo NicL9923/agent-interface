@@ -139,8 +139,8 @@ const bots = [
     shared: false,
     ownerId: "local-one",
     avatar: {
-      mode: "mascot",
-      family: "fox",
+      mode: "geometric",
+      shape: "fox",
       color: "#FF9800",
       eyes: "round",
       accessory: "hat",

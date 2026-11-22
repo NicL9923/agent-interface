@@ -234,7 +234,7 @@ describe("one Save changes", () => {
       { id: "web", name: "Web search", description: "", enabled: true },
     ]);
     await act(async () =>
-      container.querySelector<HTMLInputElement>('input[type="radio"]:not(:checked)')!.click(),
+      container.querySelector<HTMLInputElement>('input[name$="-shape"]:not(:checked)')!.click(),
     );
     await editInstructions("New instructions");
     await act(async () => checkbox("Web search").click());
@@ -640,7 +640,7 @@ describe("closing with unsaved edits", () => {
 
   it("treats an unsaved avatar change as an edit until it is saved", async () => {
     await act(async () =>
-      container.querySelector<HTMLInputElement>('input[type="radio"]:not(:checked)')!.click(),
+      container.querySelector<HTMLInputElement>('input[name$="-shape"]:not(:checked)')!.click(),
     );
     await escape();
     expect(container.textContent).toContain("Discard your unsaved changes?");
@@ -1135,7 +1135,7 @@ describe("creating an assistant", () => {
   });
   const toRole = async (name = "Ranch hand") => {
     await type(name);
-    await choose("Mascot");
+    await choose("Cactus");
     await act(async () => button("Next: role and model")!.click());
   };
 
@@ -1160,7 +1160,7 @@ describe("creating an assistant", () => {
     expect(container.querySelector<HTMLInputElement>("#create-name")!.value).toBe("Ranch hand");
     expect(
       Array.from(container.querySelectorAll("label"))
-        .find((item) => item.textContent?.trim() === "Mascot")!
+        .find((item) => item.textContent?.trim() === "Cactus")!
         .querySelector("input")!.checked,
     ).toBe(true);
   });
@@ -1176,7 +1176,7 @@ describe("creating an assistant", () => {
       ["/bots/ranch-hand/avatar", "PUT"],
     ]);
     expect(vi.mocked(write).mock.calls[0][1]).toMatchObject({ name: "Ranch hand", model: "test" });
-    expect(vi.mocked(write).mock.calls[1][1]).toMatchObject({ mode: "mascot" });
+    expect(vi.mocked(write).mock.calls[1][1]).toMatchObject({ mode: "geometric", shape: "cactus" });
     expect(onClose).toHaveBeenCalledTimes(1);
     // The new assistant's chat opens, rather than leaving the person where they were.
     expect(onCreated).toHaveBeenCalledWith("ranch-hand");
@@ -1228,7 +1228,7 @@ describe("creating an assistant", () => {
     expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots")).toHaveLength(1);
     expect(vi.mocked(write).mock.lastCall).toEqual([
       "/bots/ranch-hand/avatar",
-      expect.objectContaining({ mode: "mascot" }),
+      expect.objectContaining({ mode: "geometric", shape: "cactus" }),
       "PUT",
     ]);
     expect(container.querySelector(".avatar-failure")).toBeNull();
@@ -1355,7 +1355,7 @@ describe("existing assistant portraits", () => {
     expect(write).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Uploads unavailable.");
     expect(container.textContent).toContain("Generation unavailable.");
-    expect(container.textContent).toContain("Choose Geometric or Mascot.");
+    expect(container.textContent).toContain("Portraits are unavailable. Choose Character.");
   });
   it("blocks a description over the server limit while keeping it editable", async () => {
     await typeInto(promptField(), "x".repeat(2001));

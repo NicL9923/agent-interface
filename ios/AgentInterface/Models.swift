@@ -35,7 +35,6 @@ enum ActivityState: String, Codable, CaseIterable {
 struct AvatarConfig: Codable, Equatable {
   var mode = AvatarMode.geometric
   var shape: AvatarShape? = .blob
-  var family: AvatarFamily? = nil
   var color: String? = "#1084FE"
   var eyes: AvatarEyes? = .oval
   var accessory: AvatarAccessory? = .plain
@@ -45,47 +44,74 @@ struct AvatarConfig: Codable, Equatable {
   var src: String? = nil
   var origin: String? = nil
   static let shapes = AvatarShape.all
-  static let everydayFamilies: [(id: AvatarFamily, label: String)] = [
-    (.bear, "Bear"), (.fox, "Fox"), (.sprout, "Sprout"), (.panda, "Panda"),
-    (.raccoon, "Raccoon"), (.owl, "Owl"), (.cactus, "Cactus"), (.dinosaur, "Dinosaur"),
-  ]
-  /// Listed under their own "Seasonal" heading, in calendar order from spring, like the web editor.
-  static let seasonalFamilies: [(id: AvatarFamily, label: String)] = [
-    (.leprechaun, "Leprechaun"), (.bunny, "Easter Bunny"), (.eagle, "Bald Eagle"),
-    (.pumpkin, "Pumpkin"), (.bat, "Bat"), (.ghost, "Ghost"), (.turkey, "Turkey"),
-    (.santa, "Santa"), (.rudolph, "Rudolph"), (.snowman, "Snowman"),
-  ]
-  static var families: [(id: AvatarFamily, label: String)] { everydayFamilies + seasonalFamilies }
-  static let seasonalColors: [AvatarFamily: String] = [
-    .leprechaun: "#F2B08B", .bunny: "#F5E9D8", .eagle: "#F7F3EA", .pumpkin: "#FF9800",
-    .bat: "#5E4B8B", .ghost: "#F2EEF8", .turkey: "#97683D", .santa: "#F2B08B",
-    .rudolph: "#97683D", .snowman: "#F4F8FB",
-  ]
-  /// Bear, fox and sprout are drawn by AvatarArtwork itself; every later mascot is a character.
-  static let characterFamilies: [AvatarFamily] = families.map(\.id).filter {
-    ![.bear, .fox, .sprout].contains($0)
-  }
-  /// The character a mascot avatar draws, if its family is one.
-  var character: AvatarFamily? {
-    guard mode == .mascot, let family, Self.characterFamilies.contains(family) else { return nil }
-    return family
-  }
-  /// The outline this avatar morphs to. An unknown shape draws as the blob, an unknown or
-  /// plain mascot as the shared mascot head.
-  var body: AvatarBody {
-    if mode == .geometric { return .shape(shape ?? .blob) }
-    return character.map(AvatarBody.character) ?? .mascot
-  }
-  func selectingFamily(_ family: AvatarFamily) -> AvatarConfig {
+  /// The outline this avatar draws and morphs to. A shape this build does not know, and a mode it
+  /// does not know, draw as the blob.
+  var drawnShape: AvatarShape { mode == .geometric ? shape ?? .blob : .blob }
+  /// This avatar as `shape`'s picker tile shows it: a seasonal shape in its own color, every
+  /// other shape in the color already chosen.
+  func showingShape(_ shape: AvatarShape) -> AvatarConfig {
     var next = self
-    next.family = family
-    if let color = Self.seasonalColors[family] { next.color = color }
+    next.shape = shape
+    if let color = AvatarCatalog.seasonalColors[shape] { next.color = color }
     return next
+  }
+  /// This avatar with `shape` picked. Picking the shape it already has changes nothing, as a second
+  /// click on a checked radio does on the web, so a recolored pumpkin stays recolored.
+  func selectingShape(_ shape: AvatarShape) -> AvatarConfig {
+    shape == self.shape ? self : showingShape(shape)
   }
   static let colors = [
     "#1084FE", "#FF6700", "#00BCA6", "#FF263C", "#FF309B", "#9159FE", "#FF9800", "#97683D",
     "#292929",
   ]
+}
+extension AvatarConfig {
+  private enum CodingKeys: String, CodingKey {
+    case mode, shape, color, eyes, accessory, eyeWidth, eyeHeight, eyeSpacing, src, origin
+    /// Only a retired mascot carries it, and only decoding reads it.
+    case family
+  }
+  /// Decodes an avatar as this build draws it. Mascots were retired in November 2026, but an older
+  /// server, the offline cache and saved rosters still hold them. Like `currentAvatar` in
+  /// src/shared/avatar-legacy.ts, a mascot becomes the shape that took its place and keeps its
+  /// color, eyes, accessory and eye tuning; a seasonal mascot's fixed face color becomes its
+  /// shape's. Its family is dropped, so the rest of the app only sees characters and portraits.
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    mode = try values.decode(AvatarMode.self, forKey: .mode)
+    let mascot = mode.rawValue == "mascot"
+    // A mascot's shape is its family's, so whatever an older build stored there is never read: a
+    // malformed one must not fail the bot, the roster and the offline library that carry it.
+    shape = try mascot ? nil : values.decodeIfPresent(AvatarShape.self, forKey: .shape)
+    color = try values.decodeIfPresent(String.self, forKey: .color)
+    eyes = try values.decodeIfPresent(AvatarEyes.self, forKey: .eyes)
+    accessory = try values.decodeIfPresent(AvatarAccessory.self, forKey: .accessory)
+    eyeWidth = try values.decodeIfPresent(Double.self, forKey: .eyeWidth)
+    eyeHeight = try values.decodeIfPresent(Double.self, forKey: .eyeHeight)
+    eyeSpacing = try values.decodeIfPresent(Double.self, forKey: .eyeSpacing)
+    src = try values.decodeIfPresent(String.self, forKey: .src)
+    origin = try values.decodeIfPresent(String.self, forKey: .origin)
+    guard mascot else { return }
+    let family = (try? values.decodeIfPresent(String.self, forKey: .family)) ?? nil
+    // A family no build ever had drew as the plain mascot head; the plain shape is the blob.
+    let known = family.flatMap { AvatarCatalog.legacyMascots[$0] } ?? (shape: AvatarShape.blob, was: nil, now: nil)
+    mode = .geometric
+    shape = known.shape
+    if let color, let was = known.was, color.lowercased() == was.lowercased() { self.color = known.now }
+  }
+  func encode(to encoder: Encoder) throws {
+    var values = encoder.container(keyedBy: CodingKeys.self)
+    try values.encode(mode, forKey: .mode)
+    try values.encodeIfPresent(shape, forKey: .shape)
+    try values.encodeIfPresent(color, forKey: .color)
+    try values.encodeIfPresent(eyes, forKey: .eyes)
+    try values.encodeIfPresent(accessory, forKey: .accessory)
+    try values.encodeIfPresent(eyeWidth, forKey: .eyeWidth)
+    try values.encodeIfPresent(eyeHeight, forKey: .eyeHeight)
+    try values.encodeIfPresent(eyeSpacing, forKey: .eyeSpacing)
+    try values.encodeIfPresent(src, forKey: .src)
+    try values.encodeIfPresent(origin, forKey: .origin)
+  }
 }
 struct Member: Codable, Identifiable, Equatable {
   var id: String

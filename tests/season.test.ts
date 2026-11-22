@@ -4,10 +4,10 @@ import type { Bot } from "../src/shared/types";
 
 const on = (year: number, month: number, day: number) =>
   seasonOn(new Date(year, month - 1, day, 12));
-const mascot = (id: string, family: string) =>
+const shaped = (id: string, shape: string) =>
   ({
     id,
-    avatar: { mode: "mascot", family, color: "#fff", eyes: "round", accessory: "none" },
+    avatar: { mode: "geometric", shape, color: "#ffffff", eyes: "round", accessory: "none" },
   }) as Bot;
 
 it("finds Western Easter Sunday", () => {
@@ -48,14 +48,32 @@ it("gives each holiday window its season and leaves the rest of the year plain",
   expect(on(2026, 8, 15)).toBeNull();
 });
 
-it("lets a pinned seasonal character bring its season only between calendar seasons", () => {
-  const pinned = [mascot("plain", "bear"), mascot("frosty", "snowman")];
+it("lets a pinned seasonal shape bring its season only between calendar seasons", () => {
+  const pinned = [shaped("plain", "bear"), shaped("frosty", "snowman")];
   expect(homeSeason(new Date(2026, 7, 15), pinned)).toBe("winter");
   expect(homeSeason(new Date(2026, 10, 6), pinned)).toBe("harvest");
-  expect(homeSeason(new Date(2026, 7, 15), [mascot("plain", "bear")])).toBeNull();
+  expect(homeSeason(new Date(2026, 7, 15), [shaped("plain", "bear")])).toBeNull();
   expect(
     homeSeason(new Date(2026, 7, 15), [
       { id: "photo", avatar: { mode: "portrait", src: "", origin: "uploaded" } } as Bot,
     ]),
   ).toBeNull();
+});
+
+it("gives each seasonal shape its season and leaves holiday-looking everyday shapes plain", () => {
+  const season = (shape: string) => homeSeason(new Date(2026, 7, 15), [shaped("one", shape)]);
+  expect(["pumpkin", "bat", "turkey", "santa-hat", "reindeer", "snowman"].map(season)).toEqual([
+    "spooky",
+    "spooky",
+    "harvest",
+    "winter",
+    "winter",
+    "winter",
+  ]);
+  // A ghost, a star, a bunny or a clover is an everyday pick, so it must not turn home seasonal
+  // all year. Nor does a shape this release has never heard of, nor the name of a property every
+  // object inherits, which Hermes metadata could hold.
+  expect(
+    ["ghost", "star", "bunny", "clover", "witch-hat", "tesseract", "constructor"].map(season),
+  ).toEqual(Array(7).fill(null));
 });

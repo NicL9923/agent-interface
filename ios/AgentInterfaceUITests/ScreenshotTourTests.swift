@@ -543,7 +543,9 @@ import CryptoKit
       revealFormControl(element, in: form, app: XCUIApplication(), up: up)
       return
     }
-    for _ in 0..<10 {
+    // Creation carries the whole shape picker, 54 tiles, between the name and the bottom Next.
+    let attempts = form.identifier == "assistantCreationForm" ? 30 : 10
+    for _ in 0..<attempts {
       if element.hasFrame && element.frame.minY >= form.frame.minY + 12 && element.frame.maxY <= form.frame.maxY - 12 { return }
       let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: up ? 0.8 : 0.3))
       let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: up ? 0.3 : 0.8))
@@ -2949,7 +2951,7 @@ import CryptoKit
         mode("Portrait"); reveal(app.buttons["Generate portrait"])
         XCTAssertFalse(app.buttons["Upload portrait"].isEnabled)
         XCTAssertFalse(app.buttons["Generate portrait"].isEnabled)
-        if stage == "after" { XCTAssertTrue(app.staticTexts["Portraits are unavailable. Choose Geometric or Mascot."].exists) }
+        if stage == "after" { XCTAssertTrue(app.staticTexts["Portraits are unavailable. Choose Character."].exists) }
         try capture("avatar-portrait-unavailable"); app.terminate(); continue
       }
       top(); try capture(name + "-geo-top")
@@ -2973,10 +2975,9 @@ import CryptoKit
         }
         app.terminate(); continue
       }
-      mode("Mascot")
-      let pumpkin = app.buttons["avatarTile.family.pumpkin"]; reveal(pumpkin); pumpkin.tapWhenReady()
+      let pumpkin = app.buttons["avatarTile.shape.pumpkin"]; reveal(pumpkin); pumpkin.tapWhenReady()
       XCTAssertTrue(pumpkin.wait(until: "selected == true"))
-      top(); preview("blocked"); try capture("avatar-mascot-seasonal")
+      top(); preview("blocked"); try capture("avatar-seasonal")
       if stage == "after" { preview("idle") }
       let swatch = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Color #")).firstMatch
       reveal(swatch); print("DESIGN_AVATAR_SWATCH \(swatch.frame.width) \(swatch.frame.height)")
@@ -3252,6 +3253,71 @@ import CryptoKit
     }
   }
 
+  /// Home with an assistant of each kind of shape, including a white mug that needs help, whose
+  /// exclamation mark keeps the light body's soft edge.
+  func testVariedRosterHome() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the roster.")
+    for theme in ["light", "dark"] {
+      let app = launch(environment: ["AGENT_INTERFACE_UI_ROSTER": "varied", "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      goToAssistantList(app)
+      XCTAssertTrue(app.buttons["bot.coffee"].waitForExistence(timeout: 5))
+      try capture("01b-home-roster-\(theme)")
+      app.terminate()
+    }
+  }
+
+  /// The avatar editor's shape groups and the Debug specimen's groups, for review.
+  func testAvatarShapesReview() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the shapes.")
+    let app = launch()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+    // Drags `scroller` until `element` sits just below `top`, so its group's heading shows above it.
+    func bring(_ element: XCUIElement, in scroller: XCUIElement, below top: () -> CGFloat) {
+      for _ in 0..<40 {
+        let target = top() + 56
+        if element.exists && element.hasFrame && abs(element.frame.minY - target) <= 40 { return }
+        let shift = element.exists && element.hasFrame ? element.frame.minY - target : 260
+        let distance = max(-260, min(260, shift))
+        let start = scroller.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.62))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -distance)),
+          withVelocity: .slow, thenHoldForDuration: 0.3)
+      }
+      XCTAssertTrue(element.exists, "\(element) came into view")
+    }
+    app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Profile")
+    let form = app.collectionViews["settings.profile"]
+    XCTAssertTrue(form.waitForExistence(timeout: 5))
+    let bar = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
+    let belowBar = { bar.exists ? bar.frame.maxY : form.frame.minY }
+    for (tile, name) in [("blob", "classic"), ("cloud", "objects"), ("ghost", "creatures"), ("pumpkin", "seasonal")] {
+      bring(app.buttons["avatarTile.shape.\(tile)"], in: form, below: belowBar)
+      try capture("20-avatar-shapes-\(name)")
+    }
+    app.buttons["Close"].tapWhenReady()
+    if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
+    goToAssistantList(app)
+    openPreferences(app)
+    openPreferencesLink(app, "Avatar specimen")
+    XCTAssertTrue(app.switches["Reduced motion"].waitForExistence(timeout: 5))
+    let scroller = app.scrollViews.firstMatch
+    let belowNav = { app.navigationBars.firstMatch.frame.maxY }
+    bring(app.descendants(matching: .any)["avatarMatrix"], in: scroller, below: belowNav)
+    try capture("21-specimen-matrix")
+    for (group, first) in [("classic", "blob"), ("objects", "cloud"), ("creatures", "ghost")] {
+      bring(app.buttons["specimenShape.\(first)"], in: scroller, below: belowNav)
+      try capture("22-specimen-\(group)")
+      // Home shows a blocked assistant's state in words, so the white mug's edged exclamation mark
+      // is checked in the specimen's state grid, which shows the tapped shape.
+      if group == "objects" { app.buttons["specimenShape.mug"].tapWhenReady() }
+    }
+    for _ in 0..<12 where !app.switches["Reduced motion"].canTap { scroller.swipeDown() }
+    try capture("23-specimen-white-mug-states")
+    app.swipeUp()
+    try capture("23b-specimen-white-mug-states")
+  }
+
   func testScreenshotTour() throws {
     try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the tour.")
     var app = launch()
@@ -3312,10 +3378,11 @@ import CryptoKit
     try capture("04b-avatar-editor-tiles")
     scrollUntilHittable(app, app.buttons["Save avatar"])
     try capture("05-avatar-editor-controls")
-    scrollUntilHittable(app, app.buttons["Mascot"], up: false)
-    app.buttons["Mascot"].tap()
-    XCTAssertTrue(app.buttons["avatarTile.family.bear"].waitForExistence(timeout: 5))
-    try capture("05b-avatar-editor-mascot")
+    // The shape picker's later groups, under their headings.
+    scrollUntilHittable(app, app.buttons["avatarTile.shape.cloud"], up: false)
+    try capture("05b-avatar-editor-objects")
+    scrollUntilHittable(app, app.buttons["avatarTile.shape.snowman"])
+    try capture("05c-avatar-editor-creatures-seasonal")
     app.buttons["Close"].tap()
     if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
 
@@ -3337,12 +3404,12 @@ import CryptoKit
     try capture("09-specimen-geometric")
     app.swipeUp()
     try capture("10-specimen-shapes")
-    app.swipeDown()
-    app.buttons["Mascot"].tap()
-    try capture("11-specimen-mascot")
+    scrollUntilHittable(app, app.buttons["specimenShape.snowman"])
+    try capture("11-specimen-groups")
+    for _ in 0..<6 where !app.buttons["Portrait"].canTap { app.swipeDown() }
     app.buttons["Portrait"].tap()
     try capture("12-specimen-portrait")
-    app.buttons["Geometric"].tap()
+    app.buttons["Character"].tap()
     app.switches["Reduced motion"].tap()
     try capture("13-specimen-reduced-motion")
     let matrix = app.descendants(matching: .any)["avatarMatrix"]

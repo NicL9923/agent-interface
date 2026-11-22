@@ -47,6 +47,7 @@ import type {
   IntegrationConnection,
   IntegrationFlow,
 } from "./integrations.js";
+import type { LegacyMascotAvatar } from "./avatar-legacy.js";
 import type { UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "./upgrades.js";
 import type { AddVaultLogin, ProfileVault, SecureRequestAnswer, VaultResponse } from "./vault.js";
 import type { RoutineRunPage } from "./routine-runs.js";
@@ -374,7 +375,8 @@ export interface ApiRoutes {
   "GET /bots/:id": { response: Bot };
   "PATCH /bots/:id": { body: BotSaveRequest; response: Bot };
   "DELETE /bots/:id": { response: Ok };
-  "PUT /bots/:id/avatar": { body: Avatar; response: Avatar };
+  /** A client from before mascots were retired may still send one; the answer is the shape it became. */
+  "PUT /bots/:id/avatar": { body: Avatar | LegacyMascotAvatar; response: Avatar };
   "PUT /bots/:id/voice": { body: { voice: TalkVoice }; response: { voice: TalkVoice } };
   /** A Realtime credential for live Talk with this assistant. Never cached. */
   "POST /bots/:id/talk/session": { response: TalkSession };

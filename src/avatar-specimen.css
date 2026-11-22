@@ -105,6 +105,17 @@ label {
 .spec-shapes span {
   font-size: 12px;
 }
+.spec-wall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 16px 0 28px;
+}
+h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 24px 0 0;
+}
 .spec-swatch {
   height: 34px;
   width: 34px;

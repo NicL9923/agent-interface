@@ -26,6 +26,7 @@ import {
 import { messageOrigin, withMessageOrigins, wireOrigin } from "../shared/message-origin.js";
 import { excerpt } from "../shared/event-copy.js";
 import { markdownPlain } from "../shared/plain-text.js";
+import { currentAvatar } from "../shared/avatar-legacy.js";
 import { isTalkVoice } from "../shared/voice.js";
 import { recommendedOption } from "../shared/recommended.js";
 import type { ApprovalChoice } from "../shared/types.js";
@@ -309,7 +310,7 @@ export function bot(row: Wire, activity: ActivityState, detail?: Wire): Bot {
     model: row.model ?? detail?.model?.default ?? "Inherited",
     provider: row.provider ?? detail?.model?.provider,
     shared: meta.shared ?? true,
-    avatar: meta.avatar,
+    avatar: currentAvatar(meta.avatar),
     ...(isTalkVoice(meta.voice) ? { voice: meta.voice } : {}),
     enabledTools: enabled(detail?.toolsets),
     enabledSkills: enabled(detail?.skills),

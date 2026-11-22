@@ -14,6 +14,7 @@ extension AppStore {
       if api == nil { api = makeClient(try ConnectionAddress.parse(host)) }
       error = nil
       if api?.token != nil {
+        var pendingOpen: Task<Void, Never>?
         if bootstrap == nil, let api, let url = offlineURL,
           let expiry = UserDefaults.standard.string(forKey: DeviceDefaults.expiry(api.baseURL)),
           let expires = ServerDate.parse(expiry), expires > Date(),
@@ -36,8 +37,15 @@ extension AppStore {
             draft = cachedDraft ?? Draft()
             draftReady = cachedDraft != nil
           }
+          absorbPrefetchedConversations()
+          pendingOpen = onBootstrapReady?()
+        }
+        // Refresh the restored conversation concurrently with bootstrap instead of waiting behind it.
+        if pendingOpen == nil, selectedBotId != nil, !deviceOffline, !suspended, !sessionExpired {
+          requestConversationRefresh()
         }
         await refreshBootstrap()
+        await pendingOpen?.value
         if api?.token != nil { startPolling() }
       } else {
         try await ensureAuthConfig()
@@ -47,12 +55,17 @@ extension AppStore {
   /// Retries a launch that could not reach the server. Called when the app returns to the foreground.
   func resume() async {
     suspended = false
+    absorbPrefetchedConversations()
     // A chat whose read failed waits for no retry: returning reads it at once. The poll leaves it alone.
     if chatReadWaits, !deviceOffline, !sessionExpired { requestConversationRefresh() }
     // The network may have changed while the app was away.
     if !sessionExpired { api?.checkRoutes(force: true) }
     if bootstrap != nil {
-      if !sessionExpired { startPolling() }
+      if !sessionExpired {
+        // Refresh the open conversation alongside bootstrap rather than waiting behind it.
+        if followedBotId != nil, !chatReadWaits, !deviceOffline { requestConversationRefresh() }
+        startPolling()
+      }
     } else if api != nil, !sessionExpired {
       await restore()
     }
@@ -231,6 +244,7 @@ extension AppStore {
       }
       guard self.api === api else { return false }
       clearOfflineLibrary()
+      clearNotificationPrefetch()
       try? SecureToken.save(nil, host: api.baseURL.absoluteString)
       UserDefaults.standard.removeObject(forKey: DeviceDefaults.signedInScope)
       replaceClient(token: nil)
@@ -246,11 +260,12 @@ extension AppStore {
     resetAccountContent()
     return true
   }
-  /// Leaves the signed-in account for another member's: drops its offline copy, keeps the open draft on
-  /// this device under that account's name, hands the server a new client signed in with `nextToken`,
+  /// Leaves the signed-in account for another member's: drops its offline copy and the conversations the
+  /// notification extension fetched for it, keeps the open draft on this device under that account's name, hands the server a new client signed in with `nextToken`,
   /// then clears what the account owns.
   func leaveAccount(nextToken: String?) {
     clearOfflineLibrary()
+    clearNotificationPrefetch()
     persistDraft()
     replaceClient(token: nextToken)
     resetAccountContent()

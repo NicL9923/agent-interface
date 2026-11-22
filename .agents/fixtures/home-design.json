@@ -34,8 +34,8 @@
       "provider": "openrouter",
       "activity": "idle",
       "avatar": {
-        "mode": "mascot",
-        "family": "bear",
+        "mode": "geometric",
+        "shape": "bear",
         "color": "#FF9800",
         "eyes": "round",
         "accessory": "none"
@@ -53,8 +53,8 @@
       "provider": "openrouter",
       "activity": "thinking",
       "avatar": {
-        "mode": "mascot",
-        "family": "sprout",
+        "mode": "geometric",
+        "shape": "sprout",
         "color": "#00BCA6",
         "eyes": "oval",
         "accessory": "hat"
@@ -110,8 +110,8 @@
       "provider": "openrouter",
       "activity": "done",
       "avatar": {
-        "mode": "mascot",
-        "family": "fox",
+        "mode": "geometric",
+        "shape": "fox",
         "color": "#FF6700",
         "eyes": "oval",
         "accessory": "none"
