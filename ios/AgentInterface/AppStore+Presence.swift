@@ -11,6 +11,8 @@ extension AppStore {
     let before = followedBotId
     let count = (conversationScreens[botId] ?? 0) + (shown ? 1 : -1)
     conversationScreens[botId] = count > 0 ? count : nil
+    // The chat's own loss is timed only while it is on screen.
+    if followedBotId != before { updateActivity() }
     followChanged(from: before)
   }
   func followChanged(from before: String?) {

@@ -177,6 +177,8 @@ struct ComposerView: View {
         .contentShape(Circle())
     }.buttonStyle(.plain).disabled(!enabled)
       .accessibilityLabel(stopVisible ? "Stop response" : store.active ? "Send guidance" : "Send message")
+      // The web's tooltip: why Send or Stop waits for the connection, said where VoiceOver is.
+      .accessibilityHint(store.connectionReason ?? "")
       .accessibilityIdentifier("sendMessage")
   }
   @ViewBuilder private var footnotes: some View {
@@ -272,7 +274,7 @@ struct ComposerView: View {
     Task {
       defer { stopping = false }
       do {
-        try await store.perform("/bots/\(APIClient.component(bot.id))/stop", [String: String]())
+        guard try await store.stopWork(bot.id) else { return }
         await store.refreshConversation()
       } catch { store.buzz(.failed); store.report(error) }
     }

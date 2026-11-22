@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Bootstrap, Preferences, PreferencesPatch } from "../shared/types";
+import type { Bootstrap, Bot, Preferences, PreferencesPatch } from "../shared/types";
 import {
   AccountChanged,
   ApiError,
@@ -54,6 +54,8 @@ type SessionEvents = {
   onPreferencesRefused(message: string): void;
   /** The open assistant left this person's roster, as when another member made it personal. */
   onBotGone(botId: string): void;
+  /** The roster this device saved for `userId`, if any, for a first bootstrap that knows none. */
+  savedRoster?(userId: string): Bot[] | undefined;
 };
 /**
  * Dispatched on window when this person's group catalog may have changed: the household stream's
@@ -66,10 +68,62 @@ export const GROUP_FALLBACK_POLL_MS = 5 * 60_000;
 /** Until the server has sent a `groups` notice, it may be one that never does, so poll as before. */
 export const GROUP_UNNOTIFIED_POLL_MS = 30_000;
 const groupsChanged = () => window.dispatchEvent(new Event(GROUPS_EVENT));
+/**
+ * How long after the first stale roster in a row the page keeps showing what each assistant was doing.
+ * Longer than a bootstrap's retries take, so a roster read that failed once never shows; short enough
+ * that an assistant is not shown working long after nobody can tell. It is judged as each bootstrap
+ * answers, and those come at least every 45 seconds while the roster is stale, so the latest an
+ * activity is dropped is about 75 seconds after the roster went stale.
+ */
+export const ROSTER_CARRY_MS = 30_000;
+/**
+ * Whether the server could list only its last roster, not a fresh one: while Hermes is down, and after a
+ * roster read that failed with Hermes connected. It marks such rows `disconnected`, and says when it has
+ * no roster at all (`rosterUnknown`).
+ */
+const staleRoster = (next: Bootstrap) =>
+  next.rosterUnknown === true || next.bots.some((bot) => bot.activity === "disconnected");
+/** Whether a bootstrap says anything about who is on the roster (see `Bootstrap.rosterUnknown`). */
+const knowsRoster = (next: Bootstrap) => next.connection.connected && next.rosterUnknown !== true;
+/**
+ * The roster a bootstrap brings, for the member the page already shows. Who is on it is always the
+ * server's word: it filters even its last roster for each member, so an assistant made private goes at
+ * once. What each assistant is doing is the server's word only when it knows. A stale row says nothing
+ * changed, so while `carry` holds the row keeps the activity it had here; whether the app shows a loss,
+ * and when, is `useOutage`'s business. A bootstrap that knows no roster, because Hermes is down and it
+ * lists no one or because the server has had no roster yet, keeps the rows as they were; the first one
+ * for a member keeps the roster this device saved for them.
+ */
+function rosterFrom(
+  next: Bootstrap,
+  previous: Bootstrap | null,
+  carry: boolean,
+  saved: Bot[] | undefined,
+) {
+  if (previous?.user.id !== next.user.id)
+    return next.rosterUnknown === true && saved ? saved : next.bots;
+  // An older server does not say; an empty roster while Hermes is down is its sign.
+  if (next.rosterUnknown ?? (!next.connection.connected && !next.bots.length)) return previous.bots;
+  if (!carry) return next.bots;
+  const before = new Map(previous.bots.map((bot) => [bot.id, bot.activity]));
+  return next.bots.map((bot) =>
+    bot.activity === "disconnected" && before.has(bot.id)
+      ? { ...bot, activity: before.get(bot.id)! }
+      : bot,
+  );
+}
 /** A bootstrap this recent already answers a focus or visibility change, such as alt-tabbing back. */
 const FRESH_MS = 5_000;
 /** How often bootstrap is read while the household stream is live, for changes it does not announce. */
 export const BOOTSTRAP_FALLBACK_MS = 5 * 60_000;
+/**
+ * How long after each bootstrap in a row that failed, found Hermes down or brought a stale roster the
+ * next one is read, so a loss that is already over clears in a second or two, whether or not the stream
+ * says so. After the
+ * last wait the 45-second poll takes over. A hidden page, an offline device and sign-in skip a retry;
+ * being shown, back online or signed in reads anyway.
+ */
+export const BOOTSTRAP_RETRY_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
 /**
  * One account generation's session (see account-epoch.ts): the app mounts it again for every
  * transition, so it holds only one account. `start` is "signed-out" after a sign-out this browser
@@ -85,6 +139,8 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   const [groupsNotifiedFor, setGroupsNotifiedFor] = useState<string | null>(null);
   const [botId, setBotId] = useState(() => new URLSearchParams(location.search).get("bot") || "");
   const [disconnected, setDisconnected] = useState(false);
+  /** Whether a bootstrap on this page has found Hermes connected: a loss after that may be a blip, one before it is just the state. */
+  const [everConnected, setEverConnected] = useState(false);
   const [appUnavailable, setAppUnavailable] = useState(false);
   const [offline, setOffline] = useState(() => navigator.onLine === false);
   const [checkingConnection, setCheckingConnection] = useState(false);
@@ -93,12 +149,21 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   /** The account this generation drew, set as an answer is applied, before it renders. */
   const drawn = useRef<string | undefined>(undefined);
   const lastSuccess = useRef(0);
+  /** When the roster first came back stale since the last fresh one, and whether the last one applied carried activity; see ROSTER_CARRY_MS. */
+  const staleSince = useRef<number | undefined>(undefined);
+  const carried = useRef(true);
   const bootRef = useRef(boot);
   bootRef.current = boot;
   const botIdRef = useRef(botId);
   botIdRef.current = botId;
   const authRef = useRef(auth);
   authRef.current = auth;
+  // Bootstraps in a row that did not find Hermes connected, and the read the latest one set for later.
+  const misses = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const retryLater = useRef(() => {});
+  // Whether this session is on the page. A read can be answered after it is gone, and sets nothing then.
+  const mounted = useRef(true);
   const refresh = useCallback((): Promise<Bootstrap | null> => {
     if (bootstrapRequest.current) return bootstrapRequest.current;
     // A sign-out made without the server reads nothing as that account; the server's session ends first.
@@ -117,14 +182,19 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
         drawn.current = next.user.id;
         // A chat read beside this bootstrap counts only if it was made for the account signed in now.
         settleLinkedChat(next.user.id);
-        // A bootstrap that found Hermes down, like a failed one, is no reason to hold back the next look.
-        lastSuccess.current = next.connection.connected ? Date.now() : 0;
+        // A bootstrap that found Hermes down or its roster stale, like a failed one, is no reason to hold
+        // back the next look, and is read again soon (see BOOTSTRAP_RETRY_MS).
+        const answered = Date.now();
+        const well = next.connection.connected && !staleRoster(next);
+        staleSince.current = staleRoster(next) ? (staleSince.current ?? answered) : undefined;
+        const carry = answered - (staleSince.current ?? answered) < ROSTER_CARRY_MS;
+        lastSuccess.current = well ? answered : 0;
         if (!initialDestination.current) {
           initialDestination.current = true;
           handlers.current.onFirstBootstrap(next);
         }
         setCsrf(next.csrfToken ?? "");
-        if (next.connection.connected)
+        if (knowsRoster(next))
           rememberChats(
             next.user.id,
             next.bots.map((bot) => bot.id),
@@ -133,19 +203,21 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
         const stalePreferences = !preferences.current?.fresh(marked);
         // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
         // A read whose preferences were held back is not remembered, so the next one reconciles them.
-        const unchanged = lastBootstrap.current === next;
+        // The same stale roster reads differently once it is no longer carried.
+        const unchanged = lastBootstrap.current === next && carried.current === carry;
         lastBootstrap.current = stalePreferences ? null : next;
+        carried.current = carry;
         setBoot((previous) =>
           unchanged && previous
             ? previous
             : {
                 ...next,
-                bots:
-                  !next.connection.connected &&
-                  !next.bots.length &&
-                  previous?.user.id === next.user.id
-                    ? previous.bots
-                    : next.bots,
+                bots: rosterFrom(
+                  next,
+                  previous,
+                  carry,
+                  handlers.current.savedRoster?.(next.user.id),
+                ),
                 preferences:
                   stalePreferences && previous?.user.id === next.user.id
                     ? previous.preferences
@@ -155,11 +227,16 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
         setAuth(false);
         setAppUnavailable(false);
         setDisconnected(!next.connection.connected);
+        if (next.connection.connected) setEverConnected(true);
+        if (well) {
+          misses.current = 0;
+          clearTimeout(retryTimer.current);
+        } else retryLater.current();
         const open = botIdRef.current;
-        if (next.connection.connected && open && !next.bots.some((bot) => bot.id === open))
+        if (knowsRoster(next) && open && !next.bots.some((bot) => bot.id === open))
           handlers.current.onBotGone(open);
         setBotId((previous) => {
-          if (!next.connection.connected) return previous;
+          if (!knowsRoster(next)) return previous;
           if (next.bots.some((bot) => bot.id === previous)) return previous;
           return (
             next.bots.find((bot) => bot.id === next.preferences.defaultBotId)?.id ||
@@ -180,6 +257,7 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
           lastSuccess.current = 0;
           setDisconnected(true);
           setAppUnavailable(true);
+          retryLater.current();
         }
         return null;
       }
@@ -190,6 +268,17 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     });
     return request;
   }, []);
+  retryLater.current = () => {
+    clearTimeout(retryTimer.current);
+    if (!mounted.current) return;
+    const wait = BOOTSTRAP_RETRY_MS[misses.current++];
+    if (wait === undefined) return;
+    retryTimer.current = setTimeout(() => {
+      if (authRef.current || document.visibilityState === "hidden" || navigator.onLine === false)
+        return;
+      void refresh();
+    }, wait);
+  };
   const reconnect = useCallback(async () => {
     if (checkingConnection) return;
     setCheckingConnection(true);
@@ -206,6 +295,7 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     }
   }, [checkingConnection, refresh]);
   useEffect(() => {
+    mounted.current = true;
     // A link that names a chat reads it while bootstrap runs, not after.
     if (start === "bootstrap") {
       prefetchLinkedChat();
@@ -237,7 +327,9 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     window.addEventListener("focus", returned);
     document.addEventListener("visibilitychange", returned);
     return () => {
+      mounted.current = false;
       clearInterval(id);
+      clearTimeout(retryTimer.current);
       window.removeEventListener("online", online);
       window.removeEventListener("offline", lost);
       window.removeEventListener("focus", returned);
@@ -318,6 +410,7 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     botId,
     setBotId,
     disconnected,
+    everConnected,
     appUnavailable,
     offline,
     checkingConnection,

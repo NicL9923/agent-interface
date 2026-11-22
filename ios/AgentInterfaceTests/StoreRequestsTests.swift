@@ -81,4 +81,36 @@ final class StoreRequestsTests: XCTestCase {
     XCTAssertEqual(writes, 1, "A queued button task cannot start after its view closes")
   }
 
+  /// Round 2, finding 6: a group write tapped just before the connection dropped still saved its pending
+  /// request and posted. A write that needs the household checks it as it starts, before its first step.
+  func testAHouseholdWriteChecksTheConnectionAsItStartsAndOneChatsFailureIsNotIt() async throws {
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = client("only")
+    store.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: Data(#"{"user":{"id":"one","name":"One","email":"one@example.test"},"household":[],"preferences":{"presentation":"simple","theme":"system","favorites":[],"sections":[],"followBots":[]},"bots":[{"id":"ranch","name":"Ranch","model":"m","shared":true,"activity":"idle"}],"capabilities":{},"connection":{"connected":true}}"#.utf8))
+    store.selectedBotId = "ranch"
+    var error: String?
+    let binding = Binding(get: { error }, set: { error = $0 })
+    var started = 0
+    let losses: [(String, (AppStore) -> Void, (AppStore) -> Void)] = [
+      ("offline", { $0.deviceOffline = true }, { $0.deviceOffline = false }),
+      ("the app", { $0.appUnavailable = true }, { $0.appUnavailable = false }),
+    ]
+    for (name, lose, restore) in losses {
+      lose(store)
+      let value: Int? = await store.run(error: binding, household: true, failure: { _ in "mapped" }) { _ in started += 1; return 1 }
+      XCTAssertNil(value)
+      XCTAssertEqual(started, 0, "Nothing starts, so nothing is saved as pending, with \(name) lost")
+      XCTAssertEqual(error, AppStore.waitingForConnection, "The reason, not the write's own failure wording")
+      error = nil
+      restore(store)
+    }
+    store.readFailedFor = "ranch"
+    XCTAssertFalse(store.connected)
+    let value: Int? = await store.run(error: binding, household: true) { _ in started += 1; return 2 }
+    XCTAssertEqual(value, 2, "One chat's failed read says nothing about the household")
+    store.deviceOffline = true
+    let unchecked: Int? = await store.run(error: binding) { _ in started += 1; return 3 }
+    XCTAssertEqual(unchecked, 3, "A read, such as a room's poll, is not checked")
+  }
 }

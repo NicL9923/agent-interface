@@ -240,11 +240,14 @@ extension Data {
     request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
     return request
   }
-  private static func unreachable(_ error: Error) -> Error {
+  /// Only a write has a draft and a sent message to reassure about; a read just needs another try,
+  /// as the web's client says it.
+  static func unreachable(_ error: Error, read: Bool) -> Error {
     if error is CancellationError || (error as? URLError)?.code == .cancelled { return CancellationError() }
     return APIError(
-      message:
-        "Can't reach the app server. Your draft is kept; sent messages will be checked before retrying.",
+      message: read
+        ? "Can't reach the app server. We'll reconnect automatically."
+        : "Can't reach the app server. Your draft is kept; sent messages will be checked before retrying.",
       status: 503, code: "CONNECTION_UNAVAILABLE")
   }
   /// A direct route's listener refused the request before handling it; see docs/native-api.md.
@@ -281,7 +284,7 @@ extension Data {
           path: path, method: method, body: body, contentType: contentType,
           authenticated: authenticated, conditional: conditional)
       }
-      throw Self.unreachable(error)
+      throw Self.unreachable(error, read: method == "GET")
     }
     guard let response = response as? HTTPURLResponse else {
       throw APIError(message: "The server returned an invalid response.", status: 502)
@@ -506,7 +509,7 @@ extension Data {
       if let route, token == sentToken, directRouteFailed(route, error: error, unsent: pinning?.refused == true, method: "POST") {
         return try await sendUpload(botId: botId, name: name, mime: mime, data: data, progress: progress)
       }
-      throw Self.unreachable(error)
+      throw Self.unreachable(error, read: false)
     }
     guard let response = response as? HTTPURLResponse else {
       throw APIError(message: "The server returned an invalid response.", status: 502)

@@ -278,12 +278,9 @@
   }
   .status-dock .connection-panel.compact {
     max-height: 30dvh;
-    padding: 10px 14px;
+    padding: 8px 8px 8px 14px;
     border: 1px solid var(--line);
     border-radius: 12px;
-  }
-  .status-dock .connection-panel.compact .connection-actions {
-    margin: 6px 0 2px;
   }
   .status-dock .interruption-review {
     font-size: 0.875rem;

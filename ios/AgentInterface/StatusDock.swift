@@ -69,19 +69,12 @@ struct StatusDock: View {
   @Environment(\.colorScheme) private var scheme
   @Environment(\.dynamicTypeSize) private var typeSize
   @State private var checkingConnection = false
-  private let reachability = NetworkReachability.shared
 
-  /// The chat's connection card, as it showed above the transcript: not for a chat still showing
-  /// its saved copy while home is live, which says so itself.
-  private var connectionLost: Bool {
-    !(store.offlineSavedAt != nil && store.householdConnected && !reachability.offline)
-      && store.connectionLost(offline: reachability.offline) && store.bootstrap != nil
-  }
   private var decisions: Int {
     (store.conversation?.attention?.count ?? 0) + (store.conversation?.approvals.filter { $0.status == "pending" }.count ?? 0)
   }
   var body: some View {
-    let items = DockItem.items(connectionLost: connectionLost, uncertain: store.pending != nil && !store.sending,
+    let items = DockItem.items(connectionLost: store.connectionCardShown, uncertain: store.pending != nil && !store.sending,
       receiptStatus: store.receipt?.status, receiptMessage: store.receipt?.message, receiptTurn: store.receipt?.turn,
       interrupted: store.activity == .interrupted, decisions: decisions, holdsText: store.holdsText(for: botId))
     if !items.isEmpty {
@@ -104,14 +97,18 @@ struct StatusDock: View {
           discardConfirm = true
         }.font(.caption).accessibilityIdentifier("discardUnconfirmedSend")
       }.modifier(DockCard())
+    // The transcript scrolls under the dock, so text in the attention color sits on the dock's card, where it keeps
+    // 4.5:1, rather than on whatever message passes beneath it.
     case .rejected(let message):
       Text(message).font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(DockCard())
     case .notAdmitted(let message):
       Text(message).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("sendNotAdmitted")
     case .interruptedSubmission:
       Text("This submission was interrupted. Review its last actions before trying again.")
         .font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(DockCard())
     case .interruptionReview:
       Toggle("I've reviewed the task's last actions.", isOn: Bindable(store).interruptionReviewed)
         .toggleStyle(CheckboxStyle()).font(.subheadline).fixedSize(horizontal: false, vertical: true)
@@ -134,32 +131,51 @@ struct StatusDock: View {
         .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
     }
   }
-  /// The compact connection card the web shows while Hermes is unreachable.
+  /// The connection notice above the composer, as the web's compact `ConnectionPanel`. While the loss
+  /// may still end on its own it is one line, because the app is already retrying and there is
+  /// nothing to do; once it lasts, or when it needs a person, it names the reason and adds the retry
+  /// and, for the app and Hermes, the details. It is not announced itself: the store tells VoiceOver
+  /// once per change.
   private var connectionCard: some View {
     let connection = store.bootstrap?.connection
-    let copy = ConnectionCopy.compact(code: connection?.code, appUnavailable: store.appUnavailable, offline: reachability.offline)
+    let copy = store.connectionCopy(hasDraft: store.hasDraft)
+    let offline = store.deviceOffline
+    let chatOnly = !store.appOutage.shown
     return VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 8) {
-        Image(systemName: reachability.offline ? "wifi.slash" : "arrow.triangle.2.circlepath").foregroundStyle(Palette.attention)
-          .accessibilityHidden(true)
-        Text(copy.title).font(.subheadline.bold())
+        if offline || copy.setup {
+          Image(systemName: offline ? "wifi.slash" : "exclamationmark.triangle").foregroundStyle(Palette.attention)
+            .accessibilityHidden(true)
+        } else {
+          ProgressView().controlSize(.small).accessibilityHidden(true)
+        }
+        Text(copy.title).font(.subheadline.bold()).accessibilityIdentifier("connectionTitle")
       }
-      Text(copy.detail).font(.caption).foregroundStyle(.secondary)
-      Button(checkingConnection ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now") {
-        checkingConnection = true
-        Task { await store.reconnect(); checkingConnection = false }
-      }.font(.caption).buttonStyle(.bordered).disabled(checkingConnection || reachability.offline).padding(.vertical, 2)
-      DisclosureGroup(copy.setup ? "Set up this installation" : "Connection details") {
-        VStack(alignment: .leading, spacing: 8) {
-          if let address = connection?.address { Text("Hermes address: \(address)").textSelection(.enabled) }
-          if let detail = connection?.detail, !detail.isEmpty { Text(detail) }
-          if let last = connection?.lastConnectedAt, !When.format(last).isEmpty { Text("Last connected \(When.format(last, inline: true)).") }
-          if copy.setup {
-            Text("On the computer running WildBots, open its project folder and run `npm run setup`. Setup keeps the connection token on that computer. Restart this app after saving; everyone else can simply sign in.")
-          }
-          Text("For a read-only connection check on that computer, run `npm run doctor`.")
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
-      }.font(.caption).foregroundStyle(.secondary)
+      if let detail = copy.detail {
+        Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("connectionDetail")
+        if !offline {
+          Button(checkingConnection ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now") {
+            checkingConnection = true
+            Task { await store.reconnect(); checkingConnection = false }
+          }.font(.caption).buttonStyle(.bordered).disabled(checkingConnection).padding(.vertical, 2)
+            .accessibilityIdentifier("reconnectNow")
+        }
+        // The details are Hermes's, so they stay out of a notice about the network or one chat.
+        if !offline && !chatOnly {
+          DisclosureGroup(copy.setup ? "Set up this installation" : "Connection details") {
+            VStack(alignment: .leading, spacing: 8) {
+              if let address = connection?.address { Text("Hermes address: \(address)").textSelection(.enabled) }
+              if let detail = connection?.detail, !detail.isEmpty { Text(detail) }
+              if let last = connection?.lastConnectedAt, !When.format(last).isEmpty { Text("Last connected \(When.format(last, inline: true)).") }
+              if copy.setup {
+                Text("On the computer running WildBots, open its project folder and run `npm run setup`. Setup keeps the connection token on that computer. Restart this app after saving; everyone else can simply sign in.")
+              }
+              Text("For a read-only connection check on that computer, run `npm run doctor`.")
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
+          }.font(.caption).foregroundStyle(.secondary)
+        }
+      }
     }.modifier(DockCard())
       .accessibilityElement(children: .contain).accessibilityIdentifier("connectionCard")
   }

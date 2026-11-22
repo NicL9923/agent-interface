@@ -70,8 +70,8 @@ struct PreferencesView: View {
             HermesUpgradeView()
           } label: {
             settingsRow("Hermes and updates", icon: "arrow.triangle.2.circlepath",
-              detail: store.connected ? "Connected" + (store.bootstrap?.connection.hermesLabel.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
-              status: store.connected ? Palette.accent : Palette.attention)
+              detail: store.householdReachable ? "Connected" + (store.bootstrap?.connection.hermesLabel.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
+              status: store.householdReachable ? Palette.accent : Palette.attention)
           }.accessibilityIdentifier("Hermes updates")
           // The desktop opens in the app; its screen has the terminal button. The terminal runs without
           // the desktop, so the row stays open while either works.
