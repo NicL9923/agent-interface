@@ -111,3 +111,52 @@ The merge commit skipped the pre-commit hook (`--no-verify`), which nothing call
 | Outages cleared first                    | Red: the two announcements, and an outage left lingering |
 | `unconfirmedDepartures` not cleared      | Red: named as left over                                  |
 | `perform` ignores the client it is given | Red: member one's step went out                          |
+
+## Review rounds 2 and 3
+
+Branch `t3/followups-ios-4`, from `2d610d71`. Round 2 read the fix round and held it. A second reading of the merge added two items. Round 3 read `42b32558`: merge, no blocker. Its should-fix items, its note and its test findings are in `04c90b86`, which no reviewer has read.
+
+| Item                               | Fix                                                                                                                                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reading position (2.1)             | `ReadPlace` holds the message, chat and client from when the person read that far. The pause and the leaving chat both save that place. The leaving chat used to read the store's current chat and client.                |
+| Image loads (2.2, 3.2, 3.3)        | A load its client ended starts over on the new client for the same account only. The account is checked again after decoding. Loads are keyed by text and client. The assistant settings detail loads again the same way. |
+| Registration promise (2.3)         | `docs/native-api.md` says what happens when the logout fails or is slow.                                                                                                                                                  |
+| Settings save (2.4)                | `householdSave` gives each step the client it started with. The test drives it, not the editor.                                                                                                                           |
+| Notification prefetch (merge)      | Cleared before the next member's token is saved, which the extension's process reads.                                                                                                                                     |
+| Chat still opening (merge)         | `select` stops when another chat or account opened meanwhile. It stops on `selectionGeneration`, so the same member signing in again still gets the conversation.                                                         |
+| Poll after an account change (3.1) | A pass that finds another account ends and the poll goes on. A poll that ends by itself clears its handle.                                                                                                                |
+
+`clearNotificationPrefetch()` in `leaveAccount` has no test of its own. `bootstrap = nil` clears the prefetch again through `publishWidgetSnapshot` and `syncNotificationPrefetch(nil)`, and the next `writeConfig` removes other accounts' files. With the line removed, the prefetch assertions of `testABootstrapAnsweringAsAnotherMemberClearsThePrefetchAndKeepsPolling` still passed. The clear before `saveToken` has its own red run.
+
+| Run                                                       | Commit     | Run   | Passed | Failed | Skipped |
+| --------------------------------------------------------- | ---------- | ----- | ------ | ------ | ------- |
+| Touched tests                                             | `42b32558` | 17    | 17     | 0      | 0       |
+| Broken copy                                               | `42b32558` | 12    | 2      | 10     | 0       |
+| Broken copy                                               | `04c90b86` | 4     | 0      | 4      | 0       |
+| Unit target, `SettingsPolishTests`, `TranscriptFlowTests` | `04c90b86` | 1,014 | 1,008  | 1      | 5       |
+| The failed test, three iterations                         | `04c90b86` | 3     | 2      | 1      | 0       |
+
+All on an iPhone 18 Pro Max simulator made for this round, iOS 27.0, Xcode 27.2 (27B52). The first two requests, on `68c623b8`, did not compile: one closure took `ConversationView`'s modifier chain past the type checker.
+
+Red on `42b32558`:
+
+| Test                                                                      | Broken line                                                       |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `testAReadingPositionWaitsForAPauseInItsOwnChatAndSignIn`                 | `markRead` uses the current chat and client                       |
+| `testADraftSaveQueuedAtTheSwitchIsNotSentForTheNextMember`                | `saveDraft` ignores its client                                    |
+| `testTheLaterStepsOfASettingsSaveStopWhenAnotherMemberSignsIn`            | `HouseholdSave.perform` drops its client                          |
+| `testASaveLeftFromTheLastAccountNeverHoldsBackTheNextAccountsPreferences` | a save settles in the current count                               |
+| `testAnotherMembersSignInEndsTheLastMembersSessionFirst`                  | the new token is set before the logout                            |
+| `testAnotherMembersSignInKeepsNothingOfTheLastMember`                     | no clear before `saveToken`                                       |
+| `testAChatStillOpeningForTheLastMemberReadsNothingForTheNext`             | no guard in `select`                                              |
+| `testAnImageLoadingWhenTheSameMemberSignsInAgainLoadsOnTheNewClient`      | the account check inverted                                        |
+| `testAnImageLoadingWhenAnotherMemberSignsInIsNotLoadedForThem`            | the account check inverted                                        |
+| `testImageLoadsAreKeptApartByClient`                                      | client dropped from the key. It hung for its 10 minute allowance. |
+
+Two passed. `testAReadingPositionQueuedAtTheSwitchIsNotSentForTheNextMember` guards `retire()`, which was not broken here. `testAChatStillOpeningWhenTheSameMemberSignsInAgainStillLoads` could not see the draft error, because a conversation read cleared it. It now holds that read.
+
+Red on `04c90b86`: the bootstrap test (the pass ends the poll; it timed out after 10 seconds), the same-member opening test (the draft error shows), the same-member image test, and `testImageLoadsAreKeptApartByClient`, now in bounded time.
+
+Not seen failing: the account check after decoding, which no test can hold, the `restore` guard, and the settings detail load.
+
+`testACancelledReadThatDisplacedTheRetrySetsItAgain` is flaky. It failed once in the unit target and in one of three iterations, stalled for 20 seconds each time, and counted the timed-out read as a third failure. `refreshConversation` is unchanged since `2d610d71`, where it passed. Whether this round makes it likelier is not known.
