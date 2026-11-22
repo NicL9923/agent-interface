@@ -17,7 +17,8 @@ import {
 } from "./app/view";
 import { depthOf, leaveAccountEntries, startsAtHome, useBackNavigation } from "./app/history-nav";
 import type { Panel, View } from "./app/view";
-import { chatStream, STREAM_NOTICE_MS, useStreamsDown } from "./app/stream-health";
+import { chatStream, STREAM_NOTICE_MS, useStreamsDown, useStreamsLive } from "./app/stream-health";
+import { useOutage } from "./app/outage";
 import {
   GROUP_FALLBACK_POLL_MS,
   GROUP_UNNOTIFIED_POLL_MS,
@@ -25,7 +26,11 @@ import {
   useSession,
 } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
-import { useConversation } from "./app/use-conversation";
+import {
+  CHECKING_CONNECTION,
+  useConversation,
+  WAITING_FOR_CONNECTION,
+} from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
 import { useDeviceActivity } from "./app/use-device-activity";
 import { useSubmission } from "./app/use-submission";
@@ -56,12 +61,14 @@ import { OPEN_CHAT_EVENT } from "./components/AgentExchange";
 import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
+import type { EditPreferences } from "./app/use-preference-edits";
+import type { Refusal } from "./app/SaveRefusal";
 import { useShortcuts } from "./app/shortcuts";
 import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph";
 import { tintProps } from "./app/bot-tint";
 import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
-import { ConnectionAnnouncer, ConnectionPanel } from "./components/ConnectionPanel";
+import { ConnectionAnnouncer, ConnectionPanel, needsSetup } from "./components/ConnectionPanel";
 import { DecisionsNotice, reviewFirstDecision, StatusDock, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
@@ -227,14 +234,29 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       onFirstBootstrap: (next) => {
         if (!chosenEarly.current && startsOnToday(next.preferences)) setView("today");
       },
-      onError: setError,
+      // A refused or lost preferences save has already left the screen; say so wherever the person is,
+      // in place of any "done" notice it would contradict.
+      onPreferencesRefused: (message) => {
+        setSaveRefusal({ message, id: ++refusalCount.current });
+        toast.show(message);
+      },
       onBotGone: gone,
+      savedRoster: (user) => (saved?.user === user ? savedHome(saved).bots : undefined),
     },
     start,
   );
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
   const toast = useToast(session.auth ? undefined : userId);
+  /** Why the last preferences save was refused, for the open sheet; a new edit or closing it clears it. */
+  const [saveRefusal, setSaveRefusal] = useState<Refusal | null>(null);
+  const refusalCount = useRef(0);
+  const editPreferences: EditPreferences = useStableCallback(
+    (...[edit, chosen]: Parameters<EditPreferences>) => {
+      setSaveRefusal(null);
+      return session.editPreferences(edit, chosen);
+    },
+  );
   const syncUrl = useUrlSync(view, panel, botId, userId, roomId);
   // Home lists the household's group chats beside its assistants. The catalog carries each room's
   // newest message, so one read serves every row; no room's log is read from here. The household
@@ -304,7 +326,6 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   } = useDraft({ botId, userId, identityEpoch, setError });
   const {
     conversation,
-    disconnected: conversationDisconnected,
     readFailed: conversationReadFailed,
     reply,
     reviewed,
@@ -339,10 +360,56 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     conversation && conversation.botId === shownBotId ? conversation.messages : undefined,
   );
   const readThrough = useReadThrough(userId, shownBotId, shownBotId ? shownLatest : undefined);
-  // A failed conversation read refuses anything that needs the connection at once (`connectionLost`),
-  // but the chat shows it is disconnected (`connectionShown`) only once the connection is really down.
-  const connectionLost = session.disconnected || conversationReadFailed || offline;
-  const connectionShown = session.disconnected || conversationDisconnected || offline;
+  // Live updates stopped for long enough to matter: the household stream or this chat's has been down for
+  // STREAM_NOTICE_MS without a break. The polls stand in meanwhile, so the notice is a quiet one.
+  const liveStreams = useMemo(() => ["household", ...(botId ? [chatStream(botId)] : [])], [botId]);
+  const liveDown = useStreamsDown(liveStreams, STREAM_NOTICE_MS);
+  const { live, scope: liveScope } = useStreamsLive(liveStreams);
+  // What is lost, as a fact: anything that needs the connection is refused from the first moment
+  // (`connectionLost`). What the app shows of it waits out a loss that may be a blip (see useOutage).
+  const appDown = session.disconnected || offline;
+  const connectionLost = appDown || conversationReadFailed;
+  // The app or Hermes is gone, or the device is offline: every assistant shows it. Nothing waits when
+  // there is nothing to wait out: a loss that needs a person, Hermes never reached from this page, or
+  // live updates already down for 20 seconds, whose notice is on screen and now has its reason.
+  const appOutage = useOutage(
+    appDown,
+    liveDown ||
+      !session.everConnected ||
+      (!offline && !appUnavailable && !!boot && needsSetup(boot.connection)),
+  );
+  // Today, Find and a group chat are not the assistant's chat. Its own failed reads are no news there
+  // and its draft is not on screen.
+  const inChat = view !== "find" && view !== "group" && view !== "today";
+  // The open chat's reads fail. While the app and Hermes answer, that chat alone shows it. The loss is
+  // that chat's, and is timed only while the chat is on screen, which on a phone it is not behind the
+  // home list: opening another chat or Today leaves it behind, which is not its end, and coming back
+  // to it starts its grace period again.
+  const chatOnScreen = inChat && !(mobile && railOpen);
+  const chatOutage = useOutage(
+    conversationReadFailed && chatOnScreen,
+    liveDown,
+    chatOnScreen ? botId : "",
+  );
+  // Stopped live updates, counted for the live region when their notice ends. They belong to the
+  // streams that stopped: opening another chat, or a stream closed and reopened for a new session,
+  // leaves them behind uncounted, and whether the rest are back is `live`'s to say. The notice itself
+  // follows `liveDown`, so it never stays out a minimum time it was not on screen for.
+  const liveOutage = useOutage(liveDown, true, liveScope);
+  const appShown = appOutage.shown;
+  const connectionShown = appShown || chatOutage.shown;
+  // Offline as the views say it, which is once the loss shows.
+  const offlineShown = offline && appShown;
+  // What the notice says of it, in the form it had while it lingers after the connection is back.
+  const lasting = appShown ? appOutage.lasting : chatOutage.lasting;
+  // What the live region says of it, which is the loss itself: a notice that only lingers is over.
+  const appLoss = appShown && !appOutage.lingering;
+  const lossSpoken = appLoss || (chatOutage.shown && !chatOutage.lingering);
+  // A chat's failed read may be the first sign the app or Hermes is gone, and only bootstrap can tell which.
+  const refreshNow = session.refresh;
+  useEffect(() => {
+    if (conversationReadFailed) void refreshNow();
+  }, [conversationReadFailed, refreshNow]);
   const { pending, receipt, sending, send, retry, discard } = useSubmission({
     botId,
     userId,
@@ -423,12 +490,14 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // At most one message is on its way; accepted ones read as ordinary messages.
   const outgoing = echoes.find((echo) => echo.status !== "accepted") ?? null;
   const theme = boot?.preferences.theme || "system";
+  // The next launch paints the theme the server confirmed, not one still on its way.
+  const confirmedTheme = session.confirmedPreferences?.theme || "system";
   useEffect(() => {
     // Until bootstrap answers, the theme public/boot.js applied from this device stays. Signed out, the system's.
     if (!userId && !session.auth) return;
     document.documentElement.dataset.theme = userId ? theme : "system";
-    if (userId) rememberTheme(userId, theme);
-  }, [theme, userId, session.auth]);
+    if (userId) rememberTheme(userId, confirmedTheme);
+  }, [theme, confirmedTheme, userId, session.auth]);
   // The connecting and sign-in screens that follow this account show the theme a signed-out page has.
   useEffect(
     () => () => {
@@ -525,9 +594,12 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   );
   // Home menu changes can be taken back for a few seconds, by the toast's Undo or Cmd+Z. The
   // toast belongs to whoever made the change; useToast drops it for anyone else.
+  // The change shows at once, so the toast says it at once; a refusal replaces the toast with its reason.
   const undoable = (change: UndoableEdit) => {
-    void session.editPreferences(change.apply, change.fields);
-    toast.show(change.message, () => void session.editPreferences(change.undo, change.fields));
+    toast.show(change.message, () => void editPreferences(change.undo, change.fields));
+    void editPreferences(change.apply, change.fields).then((result) => {
+      if (result === "unchanged" && change.unchanged) toast.show(change.unchanged);
+    });
   };
   const togglePin = useStableCallback((bot: Bot) => {
     if (boot) undoable(togglePinEdit(boot.preferences, bot.id, bot.name));
@@ -548,7 +620,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const chooseMainFromHome = useStableCallback(() => setChoosingMain(true));
   const dismissMainSuggestion = useStableCallback(
     () =>
-      void session.editPreferences(
+      void editPreferences(
         (value) => ({ ...value, mainSuggestionDismissed: true }),
         ["mainSuggestionDismissed"],
       ),
@@ -634,7 +706,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   });
   const setTheme = useStableCallback(
     (theme: Preferences["theme"]) =>
-      void session.editPreferences((preferences) => ({ ...preferences, theme }), ["theme"]),
+      void editPreferences((preferences) => ({ ...preferences, theme }), ["theme"]),
   );
   const showShortcuts = useStableCallback(() => setOverlay("shortcuts"));
   // Find in chat belongs to the transcript, which listens for this once the chat is on screen.
@@ -663,6 +735,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const [leaving] = useState(waitingOnClose<Destination>);
   /** A sheet with its own close closed; a notification waiting on that sheet opens now. */
   const sheetClosed = (kind: Panel["kind"]) => {
+    setSaveRefusal(null);
     const next = leaving.take(panelClose.current?.sheet, userId);
     closePanels(kind);
     if (next) goTo(next);
@@ -745,12 +818,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     (ownConversation?.attention?.length ?? 0) +
     (ownConversation?.approvals.filter((approval) => approval.status === "pending").length ?? 0);
   const checkingConnection = session.checkingConnection;
-  // Live updates stopped for long enough to matter: the household stream or this chat's has been down for
-  // STREAM_NOTICE_MS without a break. The polls stand in meanwhile, so the notice is a quiet one.
-  const liveDown = useStreamsDown(
-    useMemo(() => ["household", ...(botId ? [chatStream(botId)] : [])], [botId]),
-    STREAM_NOTICE_MS,
-  );
+  const hasDraft =
+    inChat && draft.botId === botId && (!!draft.text.trim() || draft.attachments.length > 0);
   // Notices from the rest of the app, rebuilt only when one of them changes.
   const dock = useMemo(() => {
     const items: DockItem[] = [];
@@ -766,7 +835,10 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             connection={boot.connection}
             offline={offline}
             appUnavailable={appUnavailable}
+            chatOnly={!appShown}
             liveOnly={!connectionShown}
+            lasting={lasting}
+            hasDraft={hasDraft}
             busy={checkingConnection}
             retry={reconnect}
           />
@@ -790,6 +862,9 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   }, [
     boot,
     connectionShown,
+    appShown,
+    lasting,
+    hasDraft,
     liveDown,
     offline,
     appUnavailable,
@@ -802,7 +877,6 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // Today, Find, a group chat and a chat with no assistant have no composer, so the same connection item
   // shows at the top of the view instead. A chat with no assistant shows its own full panel once the
   // connection is lost, so there it adds only the live-updates notice.
-  const inChat = view !== "find" && view !== "group" && view !== "today";
   const liveBot = boot?.bots.find((bot) => bot.id === botId);
   const viewDock = useMemo(
     () =>
@@ -846,11 +920,15 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     undo: () => toast.undo(),
   });
   useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0, boot?.user.id);
-  // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live roster.
-  const connected = !!boot?.connection.connected;
+  // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live
+  // roster, and one whose server knows none shows rows another tab may have saved over since.
+  const connected = !!boot?.connection.connected && boot.rosterUnknown !== true;
+  // It keeps the pins and sections the server confirmed, so a change still on its way is never drawn as saved.
+  const confirmedPreferences = session.confirmedPreferences;
   useEffect(() => {
-    if (boot && connected) rememberRoster(boot, catalog ? rooms : null);
-  }, [boot, connected, catalog, rooms]);
+    if (boot && connected && confirmedPreferences)
+      rememberRoster({ ...boot, preferences: confirmedPreferences }, catalog ? rooms : null);
+  }, [boot, confirmedPreferences, connected, catalog, rooms]);
   // Read for the account the sign-in hint names (see readSavedRoster), once per account generation:
   // every change of account, in this tab or another, mounts a new one (see App).
   const early = !boot && saved ? saved : null;
@@ -935,6 +1013,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           connection={{ connected: false }}
           offline={offline}
           appUnavailable={appUnavailable}
+          lasting
         />
         <Sidebar
           boot={earlyHome}
@@ -982,20 +1061,21 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     );
   if (!boot) return <Connecting unavailable={appUnavailable} retry={refreshSession} />;
   const selected = boot.bots.find((bot) => bot.id === botId);
-  const reported: ActivityState = connectionShown
-    ? "disconnected"
-    : conversation?.activity.state || selected?.activity || "idle";
+  const known: ActivityState = conversation?.activity.state || selected?.activity || "idle";
+  // What Stop and the message box act on: what Hermes reports, or nothing while a loss is on screen. A
+  // notice that only lingers after the connection is back is no loss, so the gates that read this,
+  // such as guidance an assistant cannot take, hold through that second.
+  const reported: ActivityState = connectionShown && connectionLost ? "disconnected" : known;
   // A message that starts a turn shows the assistant thinking from the moment it is sent; Hermes's
   // report takes over the same row. Stop and the message box follow only what Hermes reports. The row's bounds
   // are read from the clock here, so a render never paints a bound that passed while another chat was open.
-  const state: ActivityState =
-    !connectionShown &&
-    conversation?.botId === botId &&
-    awaitingTurn(echoes, conversation, Date.now())
-      ? "thinking"
-      : reported;
+  const sent = conversation?.botId === botId && awaitingTurn(echoes, conversation, Date.now());
+  // The list of assistants shows the app's own loss, which it is told apart; the open chat shows its own too.
+  const listed: ActivityState = sent ? "thinking" : known;
+  const state: ActivityState = connectionShown ? "disconnected" : listed;
   const active = ["thinking", "working", "waiting", "blocked"].includes(reported);
-  const showActivity = state !== "idle" && state !== "done";
+  // The row says what the assistant is doing. A lost connection is the notice's news, not the assistant's.
+  const showActivity = state !== "idle" && state !== "done" && state !== "disconnected";
   const avatarState = state === "done" ? "idle" : state;
   const open = openPanel;
   const detailsBot =
@@ -1004,11 +1084,18 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   return (
     <div className="app-shell">
       <ConnectionAnnouncer
-        shown={connectionShown || liveDown}
+        shown={lossSpoken || liveDown}
+        recoveries={appOutage.recoveries + chatOutage.recoveries}
+        liveRecoveries={liveOutage.recoveries}
+        live={live}
+        liveScope={liveScope}
         connection={boot.connection}
         offline={offline}
         appUnavailable={appUnavailable}
-        liveOnly={!connectionShown}
+        chatOnly={!appLoss}
+        liveOnly={!lossSpoken}
+        lasting={appLoss ? appOutage.lasting : chatOutage.lasting}
+        hasDraft={hasDraft}
       />
       <Sidebar
         boot={boot}
@@ -1017,9 +1104,9 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         readThrough={readThrough}
         groups={homeGroups}
         view={view}
-        state={state}
-        connectionLost={connectionShown}
-        offline={offline}
+        state={listed}
+        connectionLost={appShown}
+        offline={offlineShown}
         mobile={mobile}
         open={railOpen}
         update={update}
@@ -1043,7 +1130,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         data-own-bubble={boot.preferences.ownBubble === "solid" ? "solid" : undefined}
       >
         <ChatHeader
-          offline={offline}
+          offline={offlineShown}
           view={view}
           boot={boot}
           selected={selected}
@@ -1111,7 +1198,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
               avatarState={avatarState}
               connectionLost={connectionLost}
               connectionShown={connectionShown}
-              offline={offline}
+              offline={offlineShown}
               appUnavailable={appUnavailable}
               checkingConnection={session.checkingConnection}
               reconnect={session.reconnect}
@@ -1195,7 +1282,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
               selectBot(botId);
               setPanel({ kind: "routine", botId, routineId });
             }}
-            editPreferences={session.editPreferences}
+            editPreferences={editPreferences}
+            saveRefusal={saveRefusal}
             onSaved={() => void session.refresh()}
             onCreated={(id) =>
               void session.refresh().then((next) => {
@@ -1214,19 +1302,23 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             avatarState={
               detailsBot.id === botId
                 ? avatarState
-                : connectionShown
+                : appShown
                   ? "disconnected"
                   : detailsBot.activity
             }
             conversation={conversation}
             connectionLost={connectionLost}
             startNewSection={panel.newSection}
-            editPreferences={session.editPreferences}
+            editPreferences={editPreferences}
+            saveRefusal={saveRefusal}
             onFind={findInChat}
             onMain={setMain}
             onCheckIns={setCheckIns}
             onSettings={(bot) => open({ kind: "settings", bot })}
-            onClose={() => closePanels("details")}
+            onClose={() => {
+              setSaveRefusal(null);
+              closePanels("details");
+            }}
           />
         </Loading>
       )}
@@ -1289,9 +1381,10 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           <PreferencesDialog
             destination={panel.destination}
             boot={boot}
-            connectionLost={connectionShown}
-            offline={offline}
-            editPreferences={session.editPreferences}
+            connectionLost={appShown}
+            offline={offlineShown}
+            editPreferences={editPreferences}
+            saveRefusal={saveRefusal}
             notifications={notifications}
             installEvent={installEvent}
             notice={notice}
@@ -1325,7 +1418,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           }
           shownBotId={shownBotId}
           readThrough={readThrough}
-          connectionLost={connectionShown}
+          connectionLost={appShown}
           onClose={closeOverlay}
           onSelectBot={(id) => {
             setPanel(null);
@@ -1362,6 +1455,13 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           key={`${stopQuestion.run}`}
           name={liveBot.name}
           renewed={stopQuestion.renewed}
+          unavailable={
+            connectionLost
+              ? connectionShown
+                ? WAITING_FOR_CONNECTION
+                : CHECKING_CONNECTION
+              : undefined
+          }
           onStop={confirmStop}
           onClose={closeOverlay}
         />

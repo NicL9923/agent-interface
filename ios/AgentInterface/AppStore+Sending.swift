@@ -3,7 +3,9 @@ import SwiftUI
 // Sending messages and settling unconfirmed sends by their receipts.
 extension AppStore {
   func send(reviewedUncertain: Bool = false) async {
-    guard let api, let id = selectedBotId, !sending else { return }
+    // Rechecked here, not only by the button: retrying an uncertain send skips `canSend`, and a tap can
+    // land as the connection goes.
+    guard let api, let id = selectedBotId, !sending, connected else { return }
     let submission: PendingSubmission
     if reviewedUncertain, var old = pendings[id] {
       old.reviewedUncertain = true
@@ -54,6 +56,13 @@ extension AppStore {
       }
     }
     await refreshConversation()
+  }
+  /// Stops the open assistant's work, and answers whether a stop was sent. Rechecked here, not only by
+  /// the button: a Stop confirmed in a dialog, or tapped as the connection goes, must not post after a loss.
+  func stopWork(_ botId: String) async throws -> Bool {
+    guard selectedBotId == botId, connected else { return false }
+    try await perform("/bots/\(APIClient.component(botId))/stop", [String: String](), gate: .openChat)
+    return true
   }
   /// Asks the server about every assistant's unconfirmed send, not only the open one, so a
   /// message that arrived clears that assistant's draft before it is opened again.

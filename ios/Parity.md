@@ -125,6 +125,62 @@ The [cancelled login-save review](evidence/native-vault-add-cancel-phone-review.
 shows a fixture that saves before losing its response: the form clears and blocks
 another Save, then dismissal refreshes metadata to reveal the stored login.
 
+## Connection states
+
+The native app follows the web's connection states of November 19. The record is
+[the November 19 ledger entry](../docs/ledger/20261120T040000Z-connection-states.md), whose iOS
+section lists the tests and mutants.
+
+- A lost connection waits 3 seconds before it shows, says one line, "Reconnecting…" or
+  "Connecting…", until it lasts 10 seconds, then names what is down with Reconnect now and, for the
+  app and Hermes, the details. A notice stays at least 1 second. Send and Stop are refused from the
+  first moment. `Outage` in `ConnectionOutage.swift` is the web's `useOutage`, and
+  `AppStore+Outage.swift` times the household's loss and the open chat's.
+- The notice and the full panel use the web's copy table (`ConnectionCopy.of`) and mention a draft
+  only when the message box holds words or files.
+- One chat's failed read stays in that chat: only its notice and header avatar show it, it asks
+  bootstrap once what is down, and it is read again after 1, 2, 4, 8, 16 and then every 30 seconds,
+  not while the app is in the background, the device is offline or the chat is off screen. The poll
+  leaves it to that retry. Opening it, returning to the app, coming back online, pull to refresh and
+  Reconnect now read it at once. Reads nobody asked for, from the poll, a stream notice or a retry,
+  are checked as each request sets out and wait for the network and the foreground. Group chats,
+  making a group, a room's settings, an assistant's settings and Settings follow the household, not
+  that chat.
+- Who is listed is the server's word even from its cache, as the web's `rosterFrom` takes it. A
+  roster from that cache, while Hermes is down or after its roster read failed, can be stale either
+  way, so an assistant it leaves out loses nothing: its open chat stays on screen on its last row, as
+  the web keeps it behind its notice, with its saved chat, which a relaunch reopens, its recording,
+  text waiting for its draft, its read mark, uploads, delivered notifications and its place on the
+  widgets, in Spotlight and Siri and among the notification pictures. A connected roster that leaves
+  it out closes its chat, saving the draft, and clears all of those, the delivered notifications only
+  for the account it left. A row the roster keeps carries its activity for 30 seconds from the first
+  stale roster.
+- A bootstrap with `rosterUnknown`, empty or holding the last connection's rows, is no roster, as on
+  the web: the rows stay as they were and nothing is saved or written to the widgets from it. From an
+  older server that omits the field, a roster that lists nobody while Hermes is down means the same.
+- A disconnected avatar has no badge and a lighter dim that eases over 400 ms. Home captions no
+  assistant with the loss; the header's status pill says it once. The chat's activity row is hidden
+  while the loss shows, and a chat that never loaded says so.
+
+Differences that remain, and why:
+
+- Native has no "Live updates are delayed" notice, because it has no notice for a stopped change
+  stream at all: once the chat's stream has been silent for 60 seconds, the poll reads the chat on
+  every 1.5-second pass.
+- A disabled button has no tooltip on a touch screen, so Send's reason is its VoiceOver hint. The
+  web's Stop has no confirmation; native's Cmd+. asks first, and that question closes when stopping
+  becomes unavailable. That leaves the web's state, Stop disabled with its reason as the hint,
+  instead of a dialog that could offer only Cancel. The stop itself checks the connection again.
+- VoiceOver hears each change as one announcement, including "Connected again.", rather than from a
+  live region that empties after 5 seconds.
+- After failed bootstraps the poll waits 1, 2, 4, 8, 16, then 30 seconds; the web stops its retries
+  at 16 and falls back to a 45-second poll. While Hermes is down and bootstrap answers, native reads
+  bootstrap on every 1.5-second pass, as it did before.
+- A cold launch shows the roster saved on the device before any household read answers. That wait
+  is a grace period like any other; only a loss found by a read that answered shows at once.
+- The web needs a "due" step because a React render and its effects can see different moments.
+  Native changes run on the main actor one at a time, so it has none.
+
 ## Native platform choices
 
 Device permission and Live Activities belong to iOS Settings; the in-app switch

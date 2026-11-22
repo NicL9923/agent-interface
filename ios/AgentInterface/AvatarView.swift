@@ -1643,10 +1643,22 @@ struct AvatarView: View {
   private func still(_ state: ActivityState) -> Bool {
     reduceMotion || !visible || portrait || AvatarMotion.frozenStates.contains(state)
   }
-  private var showsBadge: Bool {
-    portrait
-      ? ![.idle, .thinking, .working].contains(state)
-      : [.done, .failed, .disconnected, .interrupted, .unknown].contains(state)
+  /// A lost connection is the app's state, said once by the connection notice: its assistants
+  /// only dim, without a badge, as on the web.
+  private var showsBadge: Bool { Self.badged(state, portrait: portrait) }
+  static func badged(_ state: ActivityState, portrait: Bool) -> Bool {
+    state != .disconnected
+      && (portrait
+        ? ![.idle, .thinking, .working].contains(state)
+        : [.done, .failed, .interrupted, .unknown].contains(state))
+  }
+  /// How much the avatar is quieted: a lost connection lightly, a stopped or unknown state more.
+  static func dim(_ state: ActivityState) -> (saturation: Double, opacity: Double) {
+    switch state {
+    case .disconnected: (0.45, 0.9)
+    case .interrupted, .unknown: (0.25, 0.88)
+    default: (1, 1)
+    }
   }
 
   var body: some View {
@@ -1661,7 +1673,9 @@ struct AvatarView: View {
     .frame(width: size, height: size)
     .animation(
       reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.55), value: state)
-    .saturation(frozen ? 0.25 : 1).opacity(frozen ? 0.88 : 1)
+    .saturation(Self.dim(state).saturation).opacity(Self.dim(state).opacity)
+    // Losing and regaining the connection eases in and out over 400 ms, as the web's filter does.
+    .animation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.4), value: state == .disconnected)
     .accessibilityElement(children: .ignore).accessibilityAddTraits(.isImage)
     .accessibilityLabel("\(name): \(state.label)")
     .onAppear { visible = true }
@@ -1811,7 +1825,7 @@ struct AvatarView: View {
   private var badgeSymbol: String {
     switch state {
     case .done: "checkmark"
-    case .disconnected, .unknown: "questionmark"
+    case .unknown: "questionmark"
     case .interrupted, .waiting: "pause.fill"
     default: "exclamationmark"
     }

@@ -1,17 +1,21 @@
 // @vitest-environment jsdom
 import { act, createElement, Profiler } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { preferenceServer } from "./helpers/preference-server";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
 import { ShortcutsDialog } from "../src/app/ShortcutsDialog";
-import { api, uploadFile, write } from "../src/client-api";
+import { api, ApiError, uploadFile, write } from "../src/client-api";
+import { applyMergePatch } from "../src/shared/merge-patch";
 import { defaultPreferences } from "../src/shared/types";
 import { submissionKey } from "../src/app/storage";
-import type { Bootstrap, Conversation } from "../src/shared/types";
+import { OUTAGE_GRACE_MS } from "../src/app/outage";
+import { CHECKING_CONNECTION } from "../src/app/use-conversation";
+import type { Bootstrap, Conversation, Preferences, PreferencesPatch } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import {
   advance,
+  click,
   mountRoot,
   renderedProps,
   reducedMotionOnly,
@@ -272,6 +276,36 @@ describe("keyboard shortcuts", () => {
         .click(),
     );
     expect(write).toHaveBeenCalledWith("/bots/shared/stop", { runId: "run" });
+  });
+
+  // The question can be open when the connection goes. Stop is refused from the first failed read
+  // everywhere else, so the answer to the question is refused too, and says why.
+  it("refuses a stop confirmed after a read failed while the question was open", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "run" } };
+    await render();
+    await key({ key: ".", ctrlKey: true });
+    const serve = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+      if (/^\/bots\/\w+\/conversation\?/.test(path)) throw new Error("Hermes is restarting.");
+      return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+    });
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(0);
+    const stopWork = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button'),
+    ].find((button) => button.textContent === "Stop work")!;
+    expect(stopWork.disabled).toBe(true);
+    // A disabled button is out of the tab order, so the reason is in the question itself: on screen,
+    // and part of what a screen reader reads as the dialog's description.
+    const dialog = document.body.querySelector('[role="alertdialog"]')!;
+    const description = dialog
+      .getAttribute("aria-describedby")!
+      .split(" ")
+      .map((id) => document.getElementById(id)!.textContent)
+      .join(" ");
+    expect(description).toContain(CHECKING_CONNECTION);
+    await act(async () => stopWork.click());
+    expect(write).not.toHaveBeenCalledWith("/bots/shared/stop", expect.anything());
   });
 
   it("stops the run Ctrl+. asked about, not one that began while the question was open", async () => {
@@ -573,9 +607,11 @@ describe("status dock", () => {
     );
   });
 
-  it("shows the connection notice above the composer while reconnecting", async () => {
+  it("shows the connection notice above the composer once a loss has lasted past its grace period", async () => {
     await render();
     await act(async () => window.dispatchEvent(new Event("offline")));
+    expect(mount.container.querySelector(".connection-panel")).toBeNull();
+    await advance(OUTAGE_GRACE_MS);
     const dock = mount.container.querySelector(".status-dock")!;
     expect(dock.querySelector(".connection-panel.compact")?.textContent).toContain(
       "You're offline",
@@ -990,5 +1026,216 @@ describe("composer", () => {
       mount.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.disabled,
     ).toBe(false);
     expect(localStorage.getItem(submissionKey("one", "shared"))).toBeNull();
+  });
+});
+
+// Every screen shows the preferences the queue builds on: the server's last answer with the saves still waiting
+// laid over it. Home, Settings and assistant details disagreeing is what let a person tap on something gone.
+describe("preferences while saves wait", () => {
+  /** Saves wait until the test lands or refuses them; a landed one merges as the server does. */
+  const holdSaves = () => {
+    let stored = boot.preferences;
+    const saves: { body: PreferencesPatch; land(): Promise<void>; refuse(): Promise<void> }[] = [];
+    vi.mocked(write).mockImplementation(<T>(path: string, value?: unknown) => {
+      if (path !== "/preferences") return Promise.resolve({} as T);
+      return new Promise<T>((resolve, reject) =>
+        saves.push({
+          body: value as PreferencesPatch,
+          land: () =>
+            act(async () => {
+              stored = applyMergePatch(stored, value) as Preferences;
+              resolve(stored as T);
+            }),
+          refuse: () =>
+            act(async () => {
+              reject(new ApiError("The server refused that change.", 400));
+            }),
+        }),
+      );
+    });
+    return { saves, stored: () => stored };
+  };
+  const tap = (target: Element) => act(async () => (target as HTMLElement).click());
+  const openSettings = async () => {
+    await tap(mount.container.querySelector(".home-account")!);
+    await tap(
+      [...document.body.querySelectorAll('[role="menuitem"]')].find(
+        (item) => item.textContent === "Settings",
+      )!,
+    );
+    await loaded();
+  };
+  const closeSettings = () => tap(document.body.querySelector('[aria-label="Close settings"]')!);
+  const settingsOrder = () =>
+    [...document.body.querySelectorAll(".section-row .row-label")].map((item) => item.textContent);
+  const menuFor = async (name: string) => {
+    await act(async () => {
+      await preloadBotMenu();
+    });
+    const row = [...mount.container.querySelectorAll<HTMLElement>(".bot-item")].find((item) =>
+      item.textContent?.includes(name),
+    )!;
+    await act(async () =>
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          clientX: 20,
+          clientY: 20,
+        }),
+      ),
+    );
+  };
+  const menuItem = (text: string) =>
+    [...document.body.querySelectorAll<HTMLElement>('.bot-menu [role="menuitem"]')].find(
+      (entry) => entry.textContent === text,
+    )!;
+  const toastText = () => document.body.querySelector(".toast")?.textContent ?? "";
+
+  it("stops offering a section whose deletion waits, and tells the person when the deletion is refused", async () => {
+    boot.preferences = {
+      ...boot.preferences,
+      sections: [
+        { id: "a", name: "Around the house", botIds: ["shared"] },
+        { id: "b", name: "Barn", botIds: [] },
+      ],
+    };
+    const held = holdSaves();
+    await render();
+    await openSettings();
+    await tap(document.body.querySelector('[data-opens="section:b"]')!);
+    await click("Delete section", document.body);
+    await click("Delete section", document.querySelector('[role="alertdialog"]')!);
+    await closeSettings();
+    await menuFor("Shared");
+    await tap(menuItem("Move to section"));
+    const offered = () =>
+      [...document.body.querySelectorAll('[role="menuitemradio"]')].map((item) =>
+        item.textContent?.replace("✓", ""),
+      );
+    expect(offered()).toEqual(["None", "Around the house"]);
+    await key({ key: "Escape" });
+    await held.saves[0].refuse();
+    expect(toastText()).toContain("The server refused that change.");
+    expect(held.stored().sections.map((section) => section.name)).toEqual([
+      "Around the house",
+      "Barn",
+    ]);
+  });
+
+  it("opens Settings on the order a waiting reorder will save, and saves what it previews", async () => {
+    boot.preferences = {
+      ...boot.preferences,
+      sections: ["A", "B", "C"].map((id) => ({ id, name: id, botIds: [] })),
+    };
+    const held = holdSaves();
+    await render();
+    await openSettings();
+    await tap(document.body.querySelector('[aria-label="Move B up"]')!);
+    await closeSettings();
+    await openSettings();
+    expect(settingsOrder()).toEqual(["B", "A", "C"]);
+    await tap(document.body.querySelector('[aria-label="Move C up"]')!);
+    expect(settingsOrder()).toEqual(["B", "C", "A"]);
+    await held.saves[0].land();
+    await held.saves[1].land();
+    expect(held.stored().sections.map((section) => section.id)).toEqual(["B", "C", "A"]);
+    expect(settingsOrder()).toEqual(["B", "C", "A"]);
+  });
+
+  it("shows a pin from Home in the assistant's details while it saves, so it is never pinned twice", async () => {
+    const held = holdSaves();
+    await render();
+    await menuFor("Shared");
+    await tap(menuItem("Pin to top"));
+    await tap(mount.container.querySelector(".chat-identity")!);
+    await loaded();
+    const pin = document.body.querySelector<HTMLButtonElement>(
+      ".bot-details-action[aria-pressed]",
+    )!;
+    expect([pin.textContent, pin.getAttribute("aria-pressed")]).toEqual(["Unpin", "true"]);
+    await held.saves[0].land();
+    expect(held.stored().favorites).toEqual(["kitchen", "shared"]);
+  });
+
+  it("takes back a refused pin queued behind another save, and says so instead of claiming it", async () => {
+    const held = holdSaves();
+    await render();
+    await key({ key: "k", ctrlKey: true });
+    await typeInto(paletteInput(), "dark");
+    await key({ key: "Enter" }, paletteInput());
+    await menuFor("Shared");
+    await tap(menuItem("Pin to top"));
+    await held.saves[0].land();
+    await held.saves[1].refuse();
+    expect(toastText()).toContain("The server refused that change.");
+    expect(toastText()).not.toContain("Pinned Shared");
+    const pinned = [...mount.container.querySelectorAll(".pinned-bot")].map(
+      (item) => item.textContent,
+    );
+    expect(pinned.some((text) => text?.includes("Shared"))).toBe(false);
+    expect(held.stored().favorites).toEqual(["kitchen"]);
+  });
+
+  it("says inside Settings and inside an assistant's details when a change made there is refused", async () => {
+    boot.preferences = {
+      ...boot.preferences,
+      sections: ["A", "B"].map((id) => ({ id, name: id, botIds: [] })),
+    };
+    const held = holdSaves();
+    await render();
+    await openSettings();
+    await tap(document.body.querySelector('[aria-label="Move B up"]')!);
+    await held.saves[0].refuse();
+    const alert = (sheet: string) =>
+      document.body.querySelector(`${sheet} [role="alert"]`)?.textContent ?? "";
+    expect(alert(".settings-sheet")).toBe(
+      "Your change didn't save. The server refused that change.",
+    );
+    expect(settingsOrder()).toEqual(["A", "B"]);
+    await closeSettings();
+    await tap(mount.container.querySelector(".chat-identity")!);
+    await loaded();
+    await tap(document.body.querySelector(".bot-details-action[aria-pressed]")!);
+    await held.saves[1].refuse();
+    expect(alert(".bot-details")).toBe("Your change didn't save. The server refused that change.");
+  });
+
+  // A quiet hours switch sits far down Settings, so its refusal at the top of the sheet would be out of view.
+  it("brings a refusal inside Settings into view", async () => {
+    const scrolled = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: function (this: HTMLElement) {
+        scrolled(this);
+      },
+    });
+    onTestFinished(() => {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    });
+    boot.preferences = {
+      ...boot.preferences,
+      sections: ["A", "B"].map((id) => ({ id, name: id, botIds: [] })),
+    };
+    const held = holdSaves();
+    await render();
+    await openSettings();
+    await tap(document.body.querySelector('[aria-label="Move B up"]')!);
+    await held.saves[0].refuse();
+    expect(scrolled).toHaveBeenCalledWith(
+      document.body.querySelector('.settings-sheet [role="alert"]'),
+    );
+  });
+
+  it("says when a theme change from the palette is refused", async () => {
+    const held = holdSaves();
+    await render();
+    await key({ key: "k", ctrlKey: true });
+    await typeInto(paletteInput(), "dark");
+    await key({ key: "Enter" }, paletteInput());
+    await held.saves[0].refuse();
+    expect(toastText()).toContain("The server refused that change.");
+    expect(held.stored().theme).toBe("system");
   });
 });

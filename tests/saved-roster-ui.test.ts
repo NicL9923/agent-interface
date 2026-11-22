@@ -10,7 +10,9 @@ import type { GroupCatalog } from "../src/shared/collaboration";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { browserLocks } from "./helpers/web-locks";
-import { advance, button, mountRoot, stubMatchMedia } from "./ui-harness";
+import { advance, button, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
+import { preloadBotMenu } from "../src/app/BotMenu";
+import { applyMergePatch } from "../src/shared/merge-patch";
 import { mockOf } from "./helpers/mock-of";
 
 // The whole app, through the real client API, against a fake server at fetch; browser storage is
@@ -367,6 +369,36 @@ describe("the home this device saved", () => {
     expect(savedRoster()).toBeNull();
   });
 
+  // Hermes connected, but the server has had no roster from it yet. Its empty list is no word that every
+  // assistant is gone, so the saved home stays on the page and on the device, and the hint keeps its chats.
+  it("stays, on the page and the device, through a first bootstrap whose server knows no roster", async () => {
+    store(signInHintKey, hintFor("one"));
+    store(savedRosterKey, savedOne);
+    await open();
+    expect(showsSavedHome()).toBe(true);
+    await answer("GET /bootstrap?roster=lean", 200, { ...one, bots: [], rosterUnknown: true });
+    expect(showsSavedHome()).toBe(true);
+    expect(order()).toEqual(["Home", "Ranch Hand", "Trail Cook", "Supper plans"]);
+    expect(savedRoster()).toEqual(savedOne);
+    expect(JSON.parse(localStorage.getItem(signInHintKey)!).bots).toEqual([
+      "home",
+      "ranch",
+      "trail",
+    ]);
+  });
+
+  // Another tab saved a newer home after this one drew its copy, as when an assistant was made private.
+  // A bootstrap that knows no roster has nothing to say about that, so the newer copy stays.
+  it("is not written back over a newer copy by a bootstrap whose server knows no roster", async () => {
+    store(signInHintKey, hintFor("one"));
+    store(savedRosterKey, savedOne);
+    await open();
+    const newer = { ...savedOne, bots: savedOne.bots.filter((bot) => bot.id !== "trail") };
+    store(savedRosterKey, newer);
+    await answer("GET /bootstrap?roster=lean", 200, { ...one, bots: [], rosterUnknown: true });
+    expect(savedRoster()).toEqual(newer);
+  });
+
   it("draws none of what a copy should not hold, even when one holds it", async () => {
     store(signInHintKey, hintFor("one"));
     store(savedRosterKey, {
@@ -637,7 +669,7 @@ describe("using the saved home before bootstrap answers", () => {
     await open();
     await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
     expect(railText()).toContain("Can't connect");
-    expect(announced()).toContain("Reconnecting to the app");
+    expect(announced()).toContain("Can't reach the app");
     expect(mainLandmark()?.textContent).toContain("Can't reach the app right now");
     await act(async () => button("Try again").click());
     await answer("GET /bootstrap?roster=lean", 200, one);
@@ -1305,5 +1337,74 @@ describe("signing out from the saved home when the app cannot be reached", () =>
     signedInAsOne();
     await open();
     expect(container.textContent).not.toContain("Sign out of this device");
+  });
+});
+
+// A later launch draws this copy before bootstrap answers, so it must hold only what the server confirmed.
+describe("the saved home while preference saves wait", () => {
+  it("keeps the server's confirmed pins and theme, not the changes still on their way", async () => {
+    for (const [method, open] of [
+      ["showModal", true],
+      ["close", false],
+    ] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, method, {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.open = open;
+        },
+      });
+    store(signInHintKey, hintFor("one"));
+    await open();
+    await answer("GET /bootstrap?roster=lean", 200, one);
+    await answer("GET /groups", 200, catalog);
+    let stored = one.preferences;
+    const saves: (() => Promise<void>)[] = [];
+    const served = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init = {}) => {
+      // The client sends every request with a string URL and a JSON string body.
+      const url = new URL(input as string, location.origin);
+      if (init.method !== "PATCH" || url.pathname !== "/api/preferences")
+        return served(input, init);
+      calls.push("PATCH /preferences");
+      return new Promise<Response>((resolve) =>
+        saves.push(async () => {
+          stored = applyMergePatch(stored, JSON.parse(init.body as string)) as typeof stored;
+          await act(async () => resolve(respond(200, stored)));
+          await advance(0);
+        }),
+      );
+    });
+    const key = (init: KeyboardEventInit, target: EventTarget = document.body) =>
+      act(async () =>
+        target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init })),
+      );
+    await key({ key: "k", ctrlKey: true });
+    const search = document.querySelector<HTMLInputElement>("dialog.command-palette input")!;
+    await typeInto(search, "light");
+    await key({ key: "Enter" }, search);
+    await act(async () => {
+      await preloadBotMenu();
+    });
+    await act(async () =>
+      row("Ranch Hand").dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      ),
+    );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+        .find((item) => item.textContent === "Pin to top")!
+        .click(),
+    );
+    const savedTheme = () =>
+      (JSON.parse(localStorage.getItem(savedThemeKey) ?? "null") as { theme?: string })?.theme;
+    const pins = () => (savedRoster() as { order: { favorites: string[] } }).order.favorites;
+    // Both changes show at once; neither is saved for the next launch until the server confirms it.
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(rail()!.querySelectorAll(".pinned-name")[1]?.textContent).toContain("Ranch Hand");
+    expect([savedTheme(), pins()]).toEqual(["dark", ["home"]]);
+    await saves[0]();
+    expect([savedTheme(), pins()]).toEqual(["light", ["home"]]);
+    await saves[1]();
+    expect([savedTheme(), pins()]).toEqual(["light", ["home", "ranch"]]);
   });
 });

@@ -45,7 +45,8 @@ jobs:
     name: Browser smoke (${{ matrix.project }})
     runs-on: ubuntu-latest
     # Playwright's image carries both browsers and their system libraries, so nothing comes from a package mirror.
-    # Its version must match the installed @playwright/test, and tests/workflows.test.ts fails when it does not.
+    # tests/workflows.test.ts fails unless its version is the installed @playwright/test and its digest is the one
+    # .github/playwright-image-digests.json records for that version.
     # User 1001 is the runner's own, so the checkout stays writable by the runner after the job.
     container:
       image: mcr.microsoft.com/playwright:v1.65.0-noble@sha256:9beb546099e11f52d62e505537914870e01a67e0e6b00ae41da4775324e73dbe # v1.65.0-noble

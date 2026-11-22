@@ -609,19 +609,41 @@ changed while the stream was reconnecting shows with the reconnect's read, and a
 in bootstrap reloads the open chat and reconnects its stream. A stream counts as live only on data
 after its opening ping, never on connecting alone. Today, chat presence and device activity keep their
 own intervals. When the household stream or the open chat's has been down for 20 seconds, the
-connection notice says live updates are reconnecting, above the composer in a chat and at the top of
+connection notice says live updates are delayed, above the composer in a chat and at the top of
 Today, Find and group chats. It clears once the stream is live again. A screen reader hears each
-connection change once, from one status region the whole app shares; the sidebar's Offline chip and the
-notice show the state without announcing it again.
+connection change once, from one status region the whole app shares, and hears once that the
+connection is back, and that live updates are, which it says only when every stream the notice watches
+has heard from the server again; the sidebar's chip and the notice show the state without announcing
+it again.
 
-One failed conversation read
-is not an outage: a chat shows it is disconnected after a second failure in a row, or
-3 seconds without a successful read, and at once when the browser is offline or the
-server answers that Hermes is unavailable. The next successful read clears it. From the
-first failure, actions that need the connection are refused: Send, Stop, the model
-picker, approvals, reply cards, and saving or listening to a reply. Until the chat shows
-it is disconnected, a refused Send or Stop says the connection is being checked, and a
-send refused from the keyboard says so in the composer's status line. A failure belongs
+A lost connection is not shown the moment it is noticed. The web app waits 3 seconds, which covers a
+deploy's restart, a network handoff and a phone waking before its radio does, and most losses never
+show. That holds for every kind: a failed conversation read, a failed bootstrap, a bootstrap that
+finds Hermes down, and the browser going offline. From the first moment, actions that need the
+connection are refused: Send, Stop, the model picker, approvals, reply cards, and saving or listening
+to a reply. Until the loss shows, a refused Send or Stop says the connection is being checked, and a
+send refused from the keyboard says so in the composer's status line. Three cases skip the wait
+because there is nothing to wait out: a connection that needs setup or repair, Hermes never reached
+since the page opened, and live updates already down for 20 seconds.
+
+Once shown, the notice above the composer is one line, "Reconnecting…", with no button, because the
+app is already retrying. After 10 seconds it names what is down (the app, Hermes, or this chat alone)
+and adds Reconnect now and the connection details. It says a draft is kept only when the message box
+holds one. Assistants dim without a badge, and the sidebar says it once beside the account button. A
+chat whose own reads fail while bootstrap still finds Hermes connected shows the loss in that chat
+alone, not in the list of assistants; a failed read asks bootstrap at once which it is, and opening
+another chat leaves that loss behind. A notice stays at least 1 second from when it was drawn, so one
+that is answered as it appears does not flash. The live region announces a loss when the connection
+changes, not when a draft does.
+
+A failed conversation read is retried after 1, 2, 4, 8 and 16 seconds, then every 30. A bootstrap that
+failed, found Hermes down or brought a stale roster is retried after 1, 2, 4, 8 and 16 seconds, then by
+the 45-second poll. The server marks a roster stale by listing its rows as disconnected, while Hermes is
+down or after a roster read that failed; the list of assistants then keeps what each was doing for up
+to 30 seconds from the first stale roster, and takes who is on it from the server at once. A server
+with no roster from its current Hermes connection says so with bootstrap's `rosterUnknown`, and the
+list, the open chat and the saved home stay as they were.
+A hidden page or an offline device skips these and reads when shown or back online. A failure belongs
 to its chat, so it refuses nothing once that chat is closed or gone. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
@@ -1008,9 +1030,11 @@ without WebKit's system libraries, such as Fedora, run the WebKit project in Pla
 instead; `.agents/tools/check-all` does this on its own:
 `podman run --rm --security-opt label=disable --userns=keep-id --ipc=host -v "$PWD:$PWD" -w "$PWD" -e HOME=/tmp mcr.microsoft.com/playwright:v1.65.0-noble npx playwright test --project=webkit`.
 The image version is the installed `@playwright/test`. A test that routes requests with
-`page.route` or `context.route` must set `test.use({ serviceWorkers: "block" })`: WebKit sends a
+`page.route` or `context.route` must set `test.use({ serviceWorkers: "block" })`, or pass
+`serviceWorkers: "block"` to a context it makes with `browser.newContext`: WebKit sends a
 worker-controlled page's requests past the routes, and `e2e/fixtures.ts` makes such a route fail
-at once in both browsers. The accessibility spec
+at once in both browsers, in fixtures as in tests. Specs import `test` and `expect` from
+`e2e/fixtures.ts`; lint refuses value imports from Playwright's test package anywhere else in `e2e/`. The accessibility spec
 scans home, a chat with a reply, Settings, assistant details and Today at phone and desktop sizes in
 light and dark. It fails on serious and critical axe WCAG 2.2 AA violations. `e2e/server.ts`
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,

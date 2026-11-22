@@ -9,10 +9,14 @@ struct OfflineLibrary: Codable {
   var conversations: [String: Conversation]
   var selected: String?
   var capturedAt: [String: Date]
+  /// Assistants a cached roster left out, on their last rows (`AppStore.unconfirmedDepartures`), so a
+  /// launch keeps their chats until a connected roster says they left. A library from before omits it.
+  var departed: [String: Bot]?
   init(savedAt: Date, bootstrap: Bootstrap, conversations: [String: Conversation], selected: String? = nil,
-       capturedAt: [String: Date]? = nil) {
+       capturedAt: [String: Date]? = nil, departed: [String: Bot]? = nil) {
     self.savedAt = savedAt; self.bootstrap = bootstrap; self.conversations = conversations; self.selected = selected
     self.capturedAt = capturedAt ?? conversations.mapValues { _ in savedAt }
+    self.departed = departed
   }
   static let maximumBytes = 2 * 1024 * 1024
   static let maximumChats = 5
@@ -53,12 +57,14 @@ struct OfflineLibrary: Codable {
   func encoded() -> Data? {
     var copy = self
     let live = bootstrap
+    func saved(_ bot: Bot) -> Bot {
+      Bot(id: bot.id, name: bot.name, description: bot.description, model: bot.model,
+        provider: bot.provider, shared: bot.shared, ownerId: bot.ownerId, avatar: bot.avatar,
+        sessionId: bot.sessionId, activity: .disconnected, lastMessage: bot.lastMessage)
+    }
     copy.bootstrap = Bootstrap(user: live.user, household: [], preferences: live.preferences,
-      bots: live.bots.map { bot in
-        Bot(id: bot.id, name: bot.name, description: bot.description, model: bot.model,
-          provider: bot.provider, shared: bot.shared, ownerId: bot.ownerId, avatar: bot.avatar,
-          sessionId: bot.sessionId, activity: .disconnected, lastMessage: bot.lastMessage)
-      }, capabilities: [:], connection: RuntimeStatus(connected: false), nativeApp: live.nativeApp)
+      bots: live.bots.map(saved), capabilities: [:], connection: RuntimeStatus(connected: false), nativeApp: live.nativeApp)
+    copy.departed = departed?.mapValues(saved)
     copy.conversations = copy.conversations.mapValues(Self.conversation)
     copy.conversations = copy.conversations.filter { id, _ in
       copy.capturedAt[id].map { Date().timeIntervalSince($0) < 7 * 24 * 3600 } ?? false

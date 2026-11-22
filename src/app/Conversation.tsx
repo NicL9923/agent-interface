@@ -135,7 +135,7 @@ export const Conversation = memo(function Conversation({
   avatarState: ActivityState;
   /** A read just failed, or the connection is down: actions that need it are refused. */
   connectionLost: boolean;
-  /** The connection is down, as the chat shows it. It follows `connectionLost` after a grace period; see useConversation. */
+  /** The connection is down, as the chat shows it. It follows `connectionLost` after a grace period; see useOutage. */
   connectionShown: boolean;
   offline: boolean;
   appUnavailable: boolean;
@@ -457,6 +457,20 @@ export const Conversation = memo(function Conversation({
                   </div>
                 ) : !conversation && !connectionShown ? (
                   <HistorySkeleton />
+                ) : !conversation ? (
+                  // Never read, so not known to be empty: the notice above the composer says why and retries.
+                  <div className="empty-state">
+                    <Avatar
+                      avatar={selected.avatar}
+                      state="disconnected"
+                      size={112}
+                      name={selected.name}
+                      offline={offline}
+                      reducedMotion
+                    />
+                    <h2>This conversation hasn't loaded yet</h2>
+                    <p>It will show here as soon as the connection is back.</p>
+                  </div>
                 ) : blocks.length || runs.length ? (
                   <>
                     <HistoryEdge

@@ -25,7 +25,12 @@ import { formatBytes } from "../shared/uploads";
 import { clearDecline, useDeclined } from "./decline-handoff";
 import { imeKey } from "./ime";
 import { sendsOnKey, useEnterSends } from "./enter-key";
-import { CHECKING_CONNECTION, NOT_SENT_CHECKING, WAITING_FOR_CONNECTION } from "./use-conversation";
+import {
+  CHECKING_CONNECTION,
+  NOT_SENT_CHECKING,
+  WAITING_FOR_CONNECTION,
+  WAITING_WITH_DRAFT,
+} from "./use-conversation";
 
 /**
  * Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. Each names the run the
@@ -406,6 +411,11 @@ export const Composer = memo(function Composer({
       ? WAITING_FOR_CONNECTION
       : CHECKING_CONNECTION
     : undefined;
+  // Send has something to reassure about only when the message box holds words or files.
+  const sendReason =
+    connectionShown && connectionLost && (draft.text.trim() || draft.attachments.length)
+      ? WAITING_WITH_DRAFT
+      : connectionReason;
   // A send refused during the grace period says so where the person is looking. Once the chat shows it
   // is disconnected, the dock's connection notice explains, so the line steps aside for it.
   const refusedForConnection = () => {
@@ -781,7 +791,7 @@ export const Composer = memo(function Composer({
             aria-label={active ? "Send guidance" : "Send message"}
             onMouseDown={keepFocus}
             aria-busy={submitting}
-            title={connectionReason}
+            title={sendReason}
             disabled={
               !draftReady ||
               pending !== null ||

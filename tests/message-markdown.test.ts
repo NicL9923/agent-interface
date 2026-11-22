@@ -14,8 +14,28 @@ import {
   sameBlock,
   streamingBlocks,
 } from "../src/components/MessageMarkdown";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 import { HOLD_LIMIT, streamingHoldBack } from "../src/components/streaming-hold-back";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
+
+type MdastNode = {
+  type: string;
+  children?: MdastNode[];
+  position?: { start: { line: number } };
+};
+/** Whether `markdown` holds a table whose header row is the last line of `upTo`, as React Markdown's parser reads it. */
+function headedAt(markdown: string, upTo: string) {
+  const row = upTo.split(/\r\n|\r|\n/).length - 1;
+  const headed = (node: MdastNode): boolean =>
+    node.type === "table"
+      ? node.children?.[0]?.position?.start.line === row
+      : !!node.children?.some(headed);
+  return headed(
+    fromMarkdown(markdown, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }),
+  );
+}
 
 let container: HTMLDivElement;
 let root: Root;
@@ -500,11 +520,17 @@ describe("streaming Markdown", () => {
       const text = `See [docs][a] and [x][a b], note[^a].\n\nIntro.\n\n${body}`;
       const live = await renderAs(StreamingMarkdown, text);
       if (live === (await renderAs(MessageMarkdown, text))) continue;
-      // A last line that may be a table header waits live for its delimiter row; the rest shows as saved.
-      const header = /(?<=^|\n)\|[^\n]*\n$/.exec(text);
-      const before = header && text.slice(0, header.index);
-      if (before === null || live !== (await renderAs(MessageMarkdown, before)))
-        diverged.push(text);
+      // The one difference allowed: what the hold-back held of the last block is the reply's whole last line, it
+      // starts with a pipe as every header the hold-back holds does, and the parser reads it as a table's header
+      // row once a delimiter row of some width follows it.
+      const last = streamingBlocks(text)?.at(-1) ?? text;
+      const held = last.slice(streamingHoldBack(last).length);
+      const before = text.slice(0, text.length - held.length);
+      const header =
+        before.endsWith("\n") &&
+        /^ {0,3}\|[^\n]*\n$/.test(held) &&
+        [1, 2, 3, 4, 5, 6].some((cells) => headedAt(`${text}|${"-|".repeat(cells)}`, text));
+      if (!header || live !== (await renderAs(MessageMarkdown, before))) diverged.push(text);
     }
     expect(diverged).toEqual([]);
   }, 60_000);

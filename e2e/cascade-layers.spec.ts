@@ -1,6 +1,7 @@
 import type { CDPSession, Page, Route } from "@playwright/test";
 import { assistants, expect, signIn, test } from "./fixtures.js";
 import { SCREENS, type Screen } from "./screens.js";
+import { STATEFUL, type StatefulScreen } from "./cascade-screens.js";
 import { groupFixture, openGroup } from "./group-fixture.js";
 
 // The app's own stylesheets sit in the base, components and motion cascade layers, and the layers rank by name
@@ -10,6 +11,9 @@ import { groupFixture, openGroup } from "./group-fixture.js";
 // three layers' blocks unwrapped in place, which is how the same rules met before layers, and no computed value may
 // move. Chromium also reads every control hovered, focused from the keyboard and pressed, since most of these
 // rules are states: the base button hover beat any one-class background on a button before layers, and does not now.
+//
+// The screens in e2e/cascade-screens.ts are read in several states each, every state reached from the one before it in
+// the same page.
 //
 // When a value moves, find the two rules that set it (the failure names the element, property and both values) and put
 // the losing one in the winner's layer, beside it, so specificity decides again. Never fix it with !important.
@@ -223,39 +227,50 @@ const EXTRA: GuardScreen[] = [
   ],
 ];
 
-/** Replaces each stylesheet link with a style element of its rules, once, so the two cascades can be swapped in. */
+/**
+ * Replaces each stylesheet link with a style element of its rules, so the two cascades can be swapped in. A link a
+ * later step's lazy screen adds is replaced the same way at the next read, before anything is read.
+ */
 const prepare = (page: Page) =>
   page.evaluate((layered) => {
-    const links = [...document.querySelectorAll<HTMLLinkElement>("link[rel=stylesheet]")];
     const unwrap = (rules: CSSRuleList): string =>
       Array.from(rules, (rule) =>
         rule instanceof CSSLayerBlockRule && layered.includes(rule.name)
           ? unwrap(rule.cssRules)
           : rule.cssText,
       ).join("\n");
-    const sheets = links.map((link) => ({
-      layered: Array.from(link.sheet!.cssRules, (rule) => rule.cssText).join("\n"),
-      unlayered: unwrap(link.sheet!.cssRules),
-    }));
-    const styles = links.map((link, index) => {
-      const style = document.createElement("style");
-      // Filled before its link goes: a page left without its styles for a frame resizes everything the app observes,
-      // and WebKit reports the observers' pile-up as uncaught errors.
-      style.textContent = sheets[index]!.layered;
-      link.after(style);
-      link.disabled = true;
-      return style;
-    });
+    const adopted = new WeakSet<HTMLLinkElement>();
+    const sheets: { style: HTMLStyleElement; layered: string; unlayered: string }[] = [];
+    const adopt = () => {
+      for (const link of document.querySelectorAll<HTMLLinkElement>("link[rel=stylesheet]")) {
+        if (adopted.has(link)) continue;
+        // A sheet still loading would be read as built in both cascades, and pass whatever it holds.
+        if (!link.sheet) throw new Error(`${link.href} has not loaded`);
+        adopted.add(link);
+        const sheet = {
+          style: document.createElement("style"),
+          layered: Array.from(link.sheet.cssRules, (rule) => rule.cssText).join("\n"),
+          unlayered: unwrap(link.sheet.cssRules),
+        };
+        // Filled before its link goes: a page left without its styles for a frame resizes everything the app
+        // observes, and WebKit reports the observers' pile-up as uncaught errors.
+        sheet.style.textContent = sheet.layered;
+        link.after(sheet.style);
+        link.disabled = true;
+        sheets.push(sheet);
+      }
+    };
+    adopt();
     // A control still easing toward its hover color differs by when it was read.
     const still = document.head.appendChild(document.createElement("style"));
     still.textContent =
       "*, *::before, *::after { transition: none !important; animation: none !important; }";
+    still.disabled = true;
     Object.assign(window, {
       cascade: (cascade: "layered" | "unlayered", settled: boolean) => {
-        styles.forEach((style, index) => {
-          if (style.textContent !== sheets[index]![cascade])
-            style.textContent = sheets[index]![cascade];
-        });
+        adopt();
+        for (const sheet of sheets)
+          if (sheet.style.textContent !== sheet[cascade]) sheet.style.textContent = sheet[cascade];
         still.disabled = !settled;
       },
     });
@@ -270,19 +285,27 @@ const prepare = (page: Page) =>
 const compare = (page: Page, settled: boolean) =>
   page.evaluate((settled) => {
     const swap = (window as unknown as { cascade: (c: string, s: boolean) => void }).cascade;
+    // Every computed style lists the same properties, so the ones compared are chosen once.
+    const all = getComputedStyle(document.body);
+    const names = Array.from({ length: all.length }, (_, index) => all[index]!).filter(
+      (property) =>
+        !property.startsWith("--") && /^(transition|animation)/.test(property) !== settled,
+    );
+    // Each element and drawn pseudo-element's values, in the order of `names`, and joined, so an element that did
+    // not move costs one string comparison.
+    type Values = { values: string[]; joined: string };
     const read = (cascade: string) => {
       swap(cascade, settled);
-      const found = new Map<string, string>();
+      const found = new Map<string, Values>();
       const walk = (element: Element, path: string) => {
         for (const pseudo of [null, "::before", "::after"]) {
           const style = getComputedStyle(element, pseudo);
           if (pseudo && ["none", "normal", ""].includes(style.content)) continue;
-          for (const property of style)
-            if (!property.startsWith("--") && /^(transition|animation)/.test(property) !== settled)
-              found.set(
-                `${path}${pseudo ?? ""} ${property}`,
-                style.getPropertyValue(property).replace(/url\("#[^"]*"\)/g, "url(#id)"),
-              );
+          const values = names.map((property) => {
+            const value = style.getPropertyValue(property);
+            return value.includes('url("#') ? value.replace(/url\("#[^"]*"\)/g, "url(#id)") : value;
+          });
+          found.set(`${path}${pseudo ?? ""}`, { values, joined: values.join("\u0001") });
         }
         [...element.children]
           .filter((child) => !["SCRIPT", "STYLE", "LINK"].includes(child.tagName))
@@ -298,20 +321,32 @@ const compare = (page: Page, settled: boolean) =>
     };
     const layered = read("layered");
     const unlayered = read("unlayered");
-    // Both reads' keys: generated content that only one cascade draws leaves its keys out of the other.
-    let moved = [...new Set([...layered.keys(), ...unlayered.keys()])].filter(
-      (key) => layered.get(key) !== unlayered.get(key),
-    );
+    type Move = { element: string; at: number };
+    const moved: Move[] = [];
+    // Both reads' elements: generated content that only one cascade draws is missing from the other.
+    for (const element of new Set([...layered.keys(), ...unlayered.keys()])) {
+      const a = layered.get(element),
+        b = unlayered.get(element);
+      if (a?.joined === b?.joined) continue;
+      names.forEach((_, at) => {
+        if (a?.values[at] !== b?.values[at]) moved.push({ element, at });
+      });
+    }
+    let settledMoves = moved;
     if (moved.length) {
       const again = read("layered");
-      moved = moved.filter((key) => again.get(key) === layered.get(key));
+      settledMoves = moved.filter(
+        ({ element, at }) => again.get(element)?.values[at] === layered.get(element)?.values[at],
+      );
     }
     swap("layered", true);
-    const shown = (value: string | undefined) => value ?? "(not drawn)";
+    const shown = (read: Map<string, Values>, { element, at }: Move) =>
+      read.get(element)?.values[at] ?? "(not drawn)";
     return {
-      count: layered.size,
-      moved: moved.map(
-        (key) => `${key} ${shown(layered.get(key))} -> ${shown(unlayered.get(key))} without layers`,
+      count: layered.size * names.length,
+      moved: settledMoves.map(
+        (move) =>
+          `${move.element} ${names[move.at]} ${shown(layered, move)} -> ${shown(unlayered, move)} without layers`,
       ),
     };
   }, settled);
@@ -368,8 +403,21 @@ for (const view of VIEWS) {
       hasTouch: "touch" in view,
       isMobile: "touch" in view,
     });
-    for (const [name, reach, before] of [...SCREENS, ...EXTRA] as GuardScreen[]) {
-      test(`${name} reads the same without cascade layers`, async ({ page, browserName }) => {
+    const screens: StatefulScreen[] = [
+      ...([...SCREENS, ...EXTRA] as GuardScreen[]).map(([name, reach, before]) => ({
+        name,
+        before,
+        steps: [{ name: "", reach }],
+      })),
+      ...STATEFUL,
+    ];
+    for (const { name, before, steps, allowConsoleError: allowed = [] } of screens) {
+      test(`${name} reads the same without cascade layers`, async ({
+        page,
+        browserName,
+        allowConsoleError,
+      }) => {
+        allowConsoleError.push(...allowed);
         await page.emulateMedia({
           colorScheme: view.colorScheme,
           reducedMotion: view.reducedMotion,
@@ -377,18 +425,49 @@ for (const view of VIEWS) {
         await fixtures(page);
         await before?.(page);
         await signIn(page);
-        await reach(page);
-        await prepare(page);
         const cdp =
           browserName === "chromium" ? await page.context().newCDPSession(page) : undefined;
         if (cdp) await Promise.all([cdp.send("DOM.enable"), cdp.send("CSS.enable")]);
         const moved: string[] = [];
-        for (const state of cdp ? [null, "hover", "focus-visible", "active"] : [null]) {
-          if (cdp) await force(cdp, state);
-          for (const settled of state ? [true] : [true, false]) {
-            const read = await compare(page, settled);
-            expect(read.count, `${name} read nothing`).toBeGreaterThan(100);
-            moved.push(...read.moved.map((line) => `${state ?? "at rest"}: ${line}`));
+        let prepared = false;
+        // Each step builds on the one before it in the same page, which is read again after each.
+        for (const step of steps) {
+          if (prepared) {
+            if (cdp) await force(cdp, null);
+            // Motion back on, for a step that waits on a transition or an animation to end.
+            await page.evaluate(() =>
+              (window as unknown as { cascade: (c: string, s: boolean) => void }).cascade(
+                "layered",
+                false,
+              ),
+            );
+          }
+          await step.reach(page);
+          // The pointer leaves the control the step pressed last, which would otherwise read hovered at rest.
+          await page.mouse.move(0, 0);
+          if (!prepared) {
+            // A theme the member saved outranks the emulated scheme, and a light view read dark would pass unseen.
+            expect(
+              await page.evaluate(() => ({
+                theme: document.documentElement.dataset.theme,
+                dark: matchMedia("(prefers-color-scheme: dark)").matches,
+              })),
+              `${view.name} reads the scheme it emulates`,
+            ).toEqual({ theme: "system", dark: view.colorScheme === "dark" });
+            await prepare(page);
+          }
+          prepared = true;
+          const label = (state: string | null) =>
+            [step.name, state ?? "at rest"].filter(Boolean).join(", ");
+          const states =
+            cdp && step.states !== false ? [null, "hover", "focus-visible", "active"] : [null];
+          for (const state of states) {
+            if (cdp) await force(cdp, state);
+            for (const settled of state ? [true] : [true, false]) {
+              const read = await compare(page, settled);
+              expect(read.count, `${name} read nothing`).toBeGreaterThan(100);
+              moved.push(...read.moved.map((line) => `${label(state)}: ${line}`));
+            }
           }
         }
         expect(moved).toEqual([]);

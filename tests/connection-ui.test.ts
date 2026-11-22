@@ -4,7 +4,8 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { SignIn } from "../src/components/SignIn";
-import { api, cachedResponse, write } from "../src/client-api";
+import { api, ApiError, cachedResponse, write } from "../src/client-api";
+import { BOOTSTRAP_RETRY_MS } from "../src/app/use-session";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import {
@@ -556,10 +557,36 @@ describe("setup and recovery interface", () => {
     expect(
       container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled,
     ).toBe(true);
-    expect(container.textContent).toContain("Reconnecting to Hermes");
+    // Live updates had been down for 20 seconds, so nothing is left to wait out: the notice names what
+    // is down at once and, because the message box holds words, that they are kept.
+    const notice = container.querySelector('[aria-label="Hermes connection"]')!;
+    expect(notice.querySelector("h2")!.textContent).toBe("Hermes isn't answering");
+    expect(notice.querySelector("p")!.textContent).toContain("Your draft is kept.");
     expect(JSON.parse(localStorage.getItem("agent-interface:draft:one:shared")!).text).toBe(
       "My unsent draft",
     );
+  });
+
+  // Nothing is waited out when there is nothing to wait for. A grace period here would show the
+  // "create an assistant" welcome for three seconds first.
+  it("shows a household whose first bootstrap finds Hermes down at once, with its reason", async () => {
+    boot = { ...boot, bots: [], connection: { connected: false, code: "unreachable" } };
+    history.replaceState(null, "", "/");
+    await renderApp();
+    const notice = container.querySelector('[aria-label="Hermes connection"]')!;
+    expect(notice.querySelector("h2")!.textContent).toBe("Hermes isn't answering");
+    expect(button("Reconnect now", notice)).toBeDefined();
+    expect(container.textContent).not.toContain("A little less to carry.");
+  });
+
+  it("shows a connection that now needs a person at once, with the check it needs", async () => {
+    await renderApp();
+    expect(container.querySelector('[aria-label="Hermes connection"]')).toBeNull();
+    boot = { ...boot, connection: { connected: false, code: "unauthorized" } };
+    await act(async () => window.dispatchEvent(new Event("online")));
+    const notice = container.querySelector('[aria-label="Hermes connection"]')!;
+    expect(notice.querySelector("h2")!.textContent).toBe("Hermes didn't accept the connection");
+    expect(button("Check connection", notice)).toBeDefined();
   });
 
   it("coalesces a focus, visibility and online storm into one outstanding bootstrap read", async () => {
@@ -663,7 +690,8 @@ describe("setup and recovery interface", () => {
       await act(async () => window.dispatchEvent(new Event("online")));
       expect(reads()).toBe(initial + 1);
       failing = false;
-      await advance(1_000);
+      // Before the failed read's own retry, which would answer it first.
+      await advance(BOOTSTRAP_RETRY_MS[0] - 1);
       await returnTo();
       expect(reads()).toBe(initial + 2);
     });
@@ -676,9 +704,162 @@ describe("setup and recovery interface", () => {
       await act(async () => window.dispatchEvent(new Event("online")));
       expect(reads()).toBe(initial + 1);
       boot = healthy;
-      await advance(1_000);
+      await advance(BOOTSTRAP_RETRY_MS[0] - 1);
       await returnTo();
       expect(reads()).toBe(initial + 2);
+    });
+
+    // One failed bootstrap used to leave the app showing the loss until the stream reconnected or the
+    // 45-second poll came round, however soon the app answered again.
+    describe("after a loss", () => {
+      let failing: boolean;
+      const failable = () => {
+        const original = vi.mocked(api).getMockImplementation()!;
+        failing = false;
+        vi.mocked(api).mockImplementation(async <T>(path: string, init?: RequestInit) => {
+          if (path === "/bootstrap?roster=lean" && failing) throw new Error("network");
+          return (await original(path, init)) as T;
+        });
+      };
+      const online = () => act(async () => window.dispatchEvent(new Event("online")));
+
+      it("reads again 1, 2, 4, 8 and 16 seconds after failed reads in a row, then leaves it to the 45-second poll", async () => {
+        failable();
+        await renderApp();
+        const initial = reads();
+        failing = true;
+        await online();
+        let expected = initial + 1;
+        for (const wait of BOOTSTRAP_RETRY_MS) {
+          await advance(wait - 1);
+          expect(reads()).toBe(expected);
+          await advance(1);
+          expect(reads()).toBe(++expected);
+        }
+        // 31 seconds in: nothing more until the poll, 45 seconds after the page opened.
+        await advance(13_999);
+        expect(reads()).toBe(expected);
+        await advance(1);
+        expect(reads()).toBe(expected + 1);
+        // The poll's failed read sets no retry of its own.
+        await advance(BOOTSTRAP_RETRY_MS[0] + BOOTSTRAP_RETRY_MS[1]);
+        expect(reads()).toBe(expected + 1);
+      });
+
+      it("stops once a read finds Hermes connected, and starts the waits over for the next loss", async () => {
+        failable();
+        await renderApp();
+        const initial = reads();
+        failing = true;
+        await online();
+        failing = false;
+        await advance(BOOTSTRAP_RETRY_MS[0]);
+        expect(reads()).toBe(initial + 2);
+        await advance(BOOTSTRAP_RETRY_MS[1] + BOOTSTRAP_RETRY_MS[2]);
+        expect(reads()).toBe(initial + 2);
+        failing = true;
+        await online();
+        await advance(BOOTSTRAP_RETRY_MS[0]);
+        expect(reads()).toBe(initial + 4);
+      });
+
+      it("reads again after a bootstrap that answered but found Hermes down", async () => {
+        await renderApp();
+        const initial = reads();
+        boot = { ...boot, bots: [], connection: { connected: false, code: "unreachable" } };
+        await online();
+        await advance(BOOTSTRAP_RETRY_MS[0] - 1);
+        expect(reads()).toBe(initial + 1);
+        await advance(1);
+        expect(reads()).toBe(initial + 2);
+      });
+
+      // Hermes answers, but the server could not refresh its roster and says so by marking the rows.
+      it("reads again after a bootstrap whose roster the server could not refresh", async () => {
+        await renderApp();
+        const initial = reads();
+        boot = {
+          ...boot,
+          bots: boot.bots.map((bot) => ({ ...bot, activity: "disconnected" as const })),
+        };
+        await online();
+        await advance(BOOTSTRAP_RETRY_MS[0] - 1);
+        expect(reads()).toBe(initial + 1);
+        await advance(1);
+        expect(reads()).toBe(initial + 2);
+      });
+
+      // Being shown again or back online reads anyway, so a retry made meanwhile would only fail.
+      it.each([
+        [
+          "the device is offline",
+          () => vi.spyOn(navigator, "onLine", "get").mockReturnValue(false),
+        ],
+        [
+          "the page is hidden",
+          () => vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden"),
+        ],
+      ])("makes no retry while %s", async (_name, away) => {
+        failable();
+        await renderApp();
+        const initial = reads();
+        failing = true;
+        await online();
+        const spy = away();
+        await advance(BOOTSTRAP_RETRY_MS[0] + BOOTSTRAP_RETRY_MS[1]);
+        spy.mockRestore();
+        expect(reads()).toBe(initial + 1);
+      });
+
+      it("drops the retry it was waiting for when another read finds Hermes connected first", async () => {
+        failable();
+        await renderApp();
+        const initial = reads();
+        failing = true;
+        await online();
+        failing = false;
+        await advance(BOOTSTRAP_RETRY_MS[0] - 1);
+        await online();
+        expect(reads()).toBe(initial + 2);
+        await advance(BOOTSTRAP_RETRY_MS[0]);
+        expect(reads()).toBe(initial + 2);
+      });
+
+      // A read can be answered after the page that asked it is gone, as when the app is torn down mid-read.
+      it("sets no retry for a read that fails after the app is unmounted", async () => {
+        await renderApp();
+        const initial = reads();
+        let fail!: (error: Error) => void;
+        pendingBootstrap = new Promise<Bootstrap>((_resolve, reject) => {
+          fail = reject;
+        });
+        await online();
+        expect(reads()).toBe(initial + 1);
+        await act(async () => root.unmount());
+        pendingBootstrap = undefined;
+        await act(async () => fail(new Error("network")));
+        await advance(BOOTSTRAP_RETRY_MS[0] + BOOTSTRAP_RETRY_MS[1]);
+        expect(reads()).toBe(initial + 1);
+      });
+
+      // A page that never drew an account shows sign-in in place when its session is refused, so the
+      // retry an earlier failed read set is still pending then.
+      it("makes no retry once the sign-in page shows", async () => {
+        failable();
+        failing = true;
+        await renderApp();
+        expect(reads()).toBe(1);
+        failing = false;
+        const original = vi.mocked(api).getMockImplementation()!;
+        vi.mocked(api).mockImplementation(async <T>(path: string, init?: RequestInit) => {
+          if (path === "/bootstrap?roster=lean") throw new ApiError("Sign in to continue.", 401);
+          return (await original(path, init)) as T;
+        });
+        await online();
+        expect(reads()).toBe(2);
+        await advance(BOOTSTRAP_RETRY_MS[0] + BOOTSTRAP_RETRY_MS[1]);
+        expect(reads()).toBe(2);
+      });
     });
 
     it("still reads for a roster change the server announces, however recent the last read", async () => {

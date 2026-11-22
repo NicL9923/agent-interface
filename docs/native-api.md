@@ -425,6 +425,22 @@ routes retain full configuration for native build 5 and cached web bundles.
 Build 5 can decode missing fields, but its settings form treats them as empty
 and can erase saved configuration. It must receive the full default roster.
 
+While Hermes cannot be asked, bootstrap lists the server's last roster with
+every row marked `activity: "disconnected"` in the lean roster; the full roster's
+detail rows are not marked. Who is on that roster is the server's word: it is the
+newest roster a read on the current Hermes connection gave, filtered by this
+member's visibility, which is always current. An assistant added in Hermes since
+that read is missing until Hermes answers again. What each assistant is doing is
+not current.
+
+`rosterUnknown` is true when the server has no roster from its current Hermes
+connection: none since it started, or none since it reconnected, which may have
+reached another Hermes. `bots` then says nothing about who is on the roster,
+whether it is empty or holds the last connection's rows. Treat such a bootstrap as
+no roster: keep the rows already shown, the open chat and everything stored per
+assistant, and write no saved roster or widget from it. Absent means false; an
+older server sends an empty roster while Hermes is down in this case.
+
 `GET /api/events` is an authenticated household SSE stream. `event: roster`
 with `data: roster` means refresh bootstrap. It carries no assistant IDs or
 previews. The server evaluates the cheap roster at most once per second and
@@ -949,10 +965,10 @@ the person speaks over the voice.
 `PATCH /api/preferences` takes two kinds of body, and its `Content-Type` header says
 which. The server never infers the kind from the fields a body holds.
 
-| `Content-Type`                 | Kind                                        | A field the body leaves out                                                                                                                                                                                                                                    |
-| ------------------------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `application/merge-patch+json` | Partial save, a JSON Merge Patch (RFC 7396) | Keeps its saved value.                                                                                                                                                                                                                                         |
-| `application/json`             | Whole object, as released clients send      | Is cleared, except `modelFavorites`, `startPage`, `chatStyle`, `ownBubble`, `notifications`, `hiddenRoutineRuns` and `mainSuggestionDismissed`, which keep their saved values. `presentation`, `theme`, `favorites`, `sections` and `followBots` are required. |
+| `Content-Type`                 | Kind                                        | A field the body leaves out                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------ | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `application/merge-patch+json` | Partial save, a JSON Merge Patch (RFC 7396) | Keeps its saved value.                                                                                                                                                                                                                                                                                                                                                                                |
+| `application/json`             | Whole object, as released clients send      | Is cleared, except `modelFavorites`, `startPage`, `chatStyle`, `ownBubble`, `notifications`, `hiddenRoutineRuns` and `mainSuggestionDismissed`, which keep their saved values. `presentation`, `theme`, `favorites`, `sections` and `followBots` are required. `mainBotId` and `checkIns` keep their saved values whatever the body holds. A `modelFavorites` the body sends replaces the saved list. |
 
 A partial save follows these rules:
 
@@ -960,7 +976,11 @@ A partial save follows these rules:
   `followBots`, `hiddenRoutineRuns`) replaces the saved list whole, so send the full
   list. Two devices that change different fields from stale copies both keep their
   change. Two devices that change the same list each send their whole copy, and the
-  later save wins. That narrower overwrite is accepted.
+  later save wins. That narrower overwrite is accepted, and it can bring back an item
+  another device deleted: a device whose copy predates the deletion still offers the
+  item, and a change made there saves the list with the item in it again, such as a
+  deleted section returning with an assistant moved into it. Nothing on the server
+  refuses a list built on an older copy yet.
 - `null` clears `defaultBotId`, `startPage`, `chatStyle`, `ownBubble`, `notifications`,
   `hiddenRoutineRuns` or `mainSuggestionDismissed`. `null` for `presentation`, `theme`,
   `favorites`, `sections` or `followBots` answers 400 with the field in
@@ -971,25 +991,73 @@ A partial save follows these rules:
   `timezone`, a `batchMinutes` from 0 to 60, and both quiet times or neither, which
   differ. Otherwise the answer is 400 with `["notifications"]` or
   `["notifications", "<key>"]` in `details[].path`.
-- The server ignores `mainBotId`, `checkIns` and `modelFavorites`. They change only
-  through `PUT /api/preferences/main`, `PUT /api/preferences/check-ins` and
-  `PUT /api/preferences/models`. Both kinds of save ignore keys the server does not
-  know.
+- A partial save ignores `mainBotId`, `checkIns` and `modelFavorites`. Change them with
+  `PUT /api/preferences/main`, `PUT /api/preferences/check-ins` and
+  `PUT /api/preferences/models`. Both kinds of save drop a top-level key the server
+  does not know. An unknown key inside a `hiddenRoutineRuns` entry answers 400.
 - The body must be a JSON object. The server validates every value it holds as a whole
   save would, and any 400 saves nothing.
 - The answer is the whole `Preferences` as saved and as the caller may see them. Put it
   on screen.
-- Any other route answers 415 to `application/merge-patch+json`.
+- This is the only route that accepts `application/merge-patch+json`. Send it nowhere
+  else.
+- The merge patch parser refuses an empty body with 400 `FST_ERR_CTP_EMPTY_JSON_BODY`,
+  and malformed JSON or a `__proto__` or `constructor.prototype` key with 400
+  `FST_ERR_CTP_INVALID_JSON_BODY`.
 
-The client sends only the fields the person changed. The control the person used names
-the fields it set, and the client also sends any field whose value differs from the
-copy the edit was made on, a queued save's copy included. Values alone cannot show
-every change: the screen may hold another device's value while a save still waiting
-holds the one the person now picks. For `notifications`, send every key the new
-settings hold and `null` for each key the edit removed. Swift's synthesized `Codable`
-leaves a `nil` optional out, so encode a cleared field as an explicit JSON `null`.
-Never send a partial body as `application/json`: every server reads that as a whole
-object.
+The client sends only the fields the person changed, one save at a time:
+
+- **Every screen shows one copy:** the preferences the server last answered, with the
+  patches still waiting or in flight laid over them in order. Home, Settings, an
+  assistant's details and every other screen read that copy, so a tap always lands on
+  what the queue builds on. Do not keep a screen's own draft beside it.
+- **Build each patch once, when the person taps,** on that copy, and put the result on
+  screen at once. Do not run the edit again later. "Move this assistant to that
+  section", "append this pin" and "swap these two rows" give a different result on a
+  different list. An edit that finds nothing to change, such as a move into a section
+  that is no longer there, sends nothing and tells the person.
+- **Send the patch as it was built.** Never recompute it when its turn comes.
+- **Put each answer on screen** with the patches still waiting laid over it. It is the
+  new copy the next edit builds on.
+- **When a save is refused,** take its patch out of that overlay and tell the person
+  wherever they are, in place of any "done" notice it contradicts. Still send the
+  patches behind it as built. A later patch that names the same field carries the value
+  worked out for that later edit on a screen that showed the refused change. That value
+  may repeat the refused change, as a list edit built on it does, which is then refused
+  again if the value was invalid. It may instead replace it: picking Dark, then Light
+  while Dark waits, saves Light whatever happens to Dark. A later patch that names other
+  fields leaves the refused field as the server has it, so a refused Dark followed by a
+  chat style save ends at the server's Light theme with the new chat style.
+- **A lost answer** looks like a refusal to the client, but the server may have stored
+  the change. A later patch that names the same field saves the value worked out for
+  that later edit, which may repeat the lost change or replace it. One that names other
+  fields leaves the stored value alone, and its answer brings it back on screen.
+- **Drop the preferences of any bootstrap read that overlapped a save,** even one that
+  arrives after the queue has emptied. It may have been read before a save that has
+  since answered. Take the next read that started and finished with no save running.
+- **When the account changes or the person signs out,** drop the patches still waiting
+  without sending them, and ignore the answer to one in flight. That one may still be
+  stored for the account that sent it.
+- **The patch names a field** when the control the person used set it, and when its
+  value differs from the value the edit ran on. A pick can equal what the screen shows
+  while the control still showed the person's earlier copy, so the control's name is
+  what sends it.
+- **Retry is a new tap.** Run the same edit again on the copy the screen shows now and
+  queue its patch; do not resend the refused patch, which was built on an older copy.
+  The web client has no Retry button for these saves: the change leaves the screen, a
+  notice says why, and the person makes it again. A text field that saves when the
+  person leaves it, such as a section name, sends only what the person typed since it
+  last matched the screen. Until they type, it shows the screen's copy, so another
+  device's rename shows there and Back sends nothing. Once a rename is sent, the field
+  lets go of the text: if the rename is refused, the field shows the screen's name again
+  and nothing is sent until the person types again.
+
+A field the save names says everything about that field, whatever an older copy held.
+A named field the new value lacks goes as `null`. A named `notifications` goes with
+every key the new settings hold, and `null` for `quietStart` and `quietEnd` when they
+are off. Swift's synthesized `Codable` leaves a `nil` optional out, so encode each of
+these as an explicit JSON `null`. Never send a partial body as `application/json`:
+every server reads that as a whole object.
 
 Change the theme and clear the default assistant:
 
@@ -1013,8 +1081,9 @@ A server from before partial saves has no parser for `application/merge-patch+js
 answers 415 with `{"error":"Unsupported Media Type","code":"FST_ERR_CTP_INVALID_MEDIA_TYPE"}`
 and saves nothing. On a 415 from this route, read `GET /api/bootstrap`, apply the patch
 to its `preferences` by RFC 7396, drop `modelFavorites`, and send the result whole as
-`application/json`. Building on a copy read after the refusal keeps another device's
-newer values. That server still keeps the optional fields a whole save leaves out, so a
+`application/json`. This has the old stale-write window: a value another device saves
+between that read and the write is overwritten with the copy just read. That server
+still keeps the optional fields a whole save leaves out, so a
 cleared `startPage`, `chatStyle`, `ownBubble`, `notifications`,
 `hiddenRoutineRuns` or `mainSuggestionDismissed` stays saved there; a cleared
 `defaultBotId` is cleared. Any other failure is a failed save, as before. The web

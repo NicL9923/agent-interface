@@ -1207,6 +1207,7 @@ FAKE_NPM = """
             server.wait()
             sys.exit(130)
         signal.signal(signal.SIGINT, shut_down)
+    sys.stdout.write(step.get("early", "")); sys.stdout.flush()
     time.sleep(step.get("sleep", 0))
     sys.stdout.write(step.get("out", ""))
     with open(os.environ["FAKE_LOG"], "a") as log:
@@ -1254,10 +1255,11 @@ const child = spawnSync(process.env.FAKE_PROBE, [locks], { encoding: "utf8" });
 fs.writeFileSync(process.env.FAKE_REPORT, JSON.stringify({ npm: own, grandchild: JSON.parse(child.stdout) }));
 console.log("  4 passed (3s)");
 """
-# Podman or docker. `run` records its arguments, the lock descriptors it was given and whether the heavy slot was
+# Podman. `run` records its arguments, the lock descriptors it was given and whether the heavy slot was
 # held while it ran, then follows the plan's "container" step. With "server" it starts the container as a detached
 # process that listens on E2E_PORT, the way conmon keeps a container apart from the client, and on SIGINT the client
-# exits and leaves it running: the worst a real client does. Only `rm --force NAME` ends it.
+# exits and leaves it running: the worst a real client does. Only `rm --force --ignore --time 5 NAME` ends it, unless the
+# plan's "rm" step says to fail without removing it.
 FAKE_CONTAINER_RUNTIME = """
     import json, os, signal, subprocess, sys, time
     from pathlib import Path
@@ -1266,9 +1268,12 @@ FAKE_CONTAINER_RUNTIME = """
     def record(entry):
         with open(os.environ["FAKE_LOG"], "a") as log:
             log.write(json.dumps({**entry, "at": time.time()}) + "\\n")
-    if args[:2] == ["rm", "--force"] and len(args) == 3:
-        record({"call": f"{kind} rm", "name": args[2]})
-        pidfile = state / args[2]
+    if args[:5] == ["rm", "--force", "--ignore", "--time", "5"] and len(args) == 6:
+        record({"call": f"{kind} rm", "name": args[5]})
+        failure = json.load(open(os.environ["FAKE_PLAN"])).get("rm")
+        if failure:
+            print(failure["err"], file=sys.stderr); sys.exit(failure["rc"])
+        pidfile = state / args[5]
         if pidfile.exists():
             pid = int(pidfile.read_text())
             try:
@@ -1302,6 +1307,7 @@ FAKE_CONTAINER_RUNTIME = """
         server = subprocess.Popen([sys.executable, "-c", step["server_source"], os.environ["E2E_PORT"], step["server"]], start_new_session=True)
         (state / name).write_text(str(server.pid))
         signal.signal(signal.SIGINT, lambda *_: sys.exit(130))
+    sys.stdout.write(step.get("early", "")); sys.stdout.flush()
     time.sleep(step.get("sleep", 0))
     sys.stdout.write(step.get("out", ""))
     sys.exit(step.get("rc", 0))
@@ -1384,7 +1390,7 @@ class CommandTest(TempCase):
             import json, os, sys
             if sys.argv[1:3] != ["--input-type=module", "-e"] or len(sys.argv) != 4:
                 print("UNPLANNED node call: " + " ".join(sys.argv[1:]), file=sys.stderr); sys.exit(97)
-            if "webkit.launch()" in sys.argv[3]:
+            if "webkit.launch(" in sys.argv[3]:
                 message = os.environ.get("FAKE_WEBKIT")
                 print(json.dumps({{"ok": message is None, "message": message}})); sys.exit(0)
             print(json.dumps({{'ok': {ok!r}, 'version': {version!r}, 'range': '^24'}}))
@@ -2121,7 +2127,7 @@ class CommandTest(TempCase):
         )
         with mock.patch.object(check_all, "STOP_GRACE", 1.0):
             started = time.monotonic()
-            code, output = check_all.run_process(
+            code, output, _ = check_all.run_process(
                 [str(self.tmp / "stubborn")],
                 self.tmp,
                 dict(os.environ),
@@ -2186,7 +2192,7 @@ class CommandTest(TempCase):
         marker = self.tmp / "cleanup-marker"
         with mock.patch.object(check_all, "STOP_GRACE", 60.0):
             started = time.monotonic()
-            code, _ = check_all.run_process(
+            code, _, _ = check_all.run_process(
                 [str(self.tmp / "polite"), str(marker)],
                 self.tmp,
                 dict(os.environ),
@@ -2224,8 +2230,8 @@ class CommandTest(TempCase):
     # WebKit on a host that cannot start it.
 
     def without_webkit(self, runtime="podman"):
-        """A host where WebKit cannot start, with `runtime` (or no container runtime) on PATH, which is only the
-        fakes' directory. Returns the environment to run with."""
+        """A host where WebKit cannot start, with a fake `runtime` (or none) on PATH, which is only the fakes'
+        directory. Returns the environment to run with."""
         package = self.root / "node_modules/@playwright/test"
         package.mkdir(parents=True)
         (package / "package.json").write_text(
@@ -2287,7 +2293,9 @@ class CommandTest(TempCase):
             err.index("e2e:webkit (podman): started"),
         )
 
-    def test_each_half_fails_on_its_own_row_and_the_other_half_still_runs(self):
+    def test_both_halves_fail_on_their_own_rows_and_a_failed_half_does_not_stop_the_other(
+        self,
+    ):
         self.set_plan(
             {
                 **PASSING,
@@ -2295,39 +2303,145 @@ class CommandTest(TempCase):
                     "rc": 1,
                     "out": "  1 failed\n  2 passed (2s)\n",
                 },
-                "container": {"out": "  2 passed (2s)\n"},
+                "container": {"rc": 1, "out": "  2 failed\n  1 passed (2s)\n"},
             }
         )
         code, out, _ = self.run_main("--only", "e2e", **self.without_webkit())
         self.assertEqual(code, 1)
-        self.assertIn("FAIL", self.row(out, "e2e:chromium"))
         self.assertIn("1 failed", self.row(out, "e2e:chromium"))
-        self.assertIn("pass", self.row(out, "e2e:webkit (podman)"))
-        self.assertIn("FAILED: e2e:chromium (", out)
+        self.assertIn("2 failed", self.row(out, "e2e:webkit (podman)"))
+        for name in ("e2e:chromium", "e2e:webkit (podman)"):
+            self.assertIn("FAIL", self.row(out, name))
+        self.assertIn("FAILED: e2e:chromium, e2e:webkit (podman) (", out)
 
-    def test_docker_runs_the_container_as_this_user_when_podman_is_absent(self):
-        code, out, _ = self.run_main("--only", "e2e", **self.without_webkit("docker"))
-        self.assertEqual(code, 0)
-        args = next(
-            call["args"] for call in self.calls() if call["call"] == "docker run"
-        )
-        self.assertIn(f"--user {os.getuid()}:{os.getgid()}", " ".join(args))
-        self.assertNotIn("--userns=keep-id", args)
-        self.assertIn("docker rm", self.names())
-        self.assertIn("pass", self.row(out, "e2e:webkit (docker)"))
-
-    def test_webkit_that_cannot_start_and_no_container_runtime_refuse_before_anything_runs(
+    def test_webkit_that_cannot_start_and_no_podman_refuse_before_anything_runs_even_with_docker(
         self,
     ):
-        code, _, err = self.run_main("--py", "never", **self.without_webkit(None))
+        code, _, err = self.run_main("--py", "never", **self.without_webkit("docker"))
         self.assertEqual(code, 2)
         self.assertEqual(self.names(), [])
         self.assertIn(
-            "WebKit cannot start on this host: Host system is missing dependencies to run browsers. Neither",
+            "WebKit cannot start on this host: Host system is missing dependencies to run browsers. podman is not on PATH",
             err,
         )
-        self.assertIn("Neither podman nor docker is on PATH", err)
-        self.assertIn("install podman", err)
+        self.assertIn("Fix: install podman", err)
+
+    def test_a_container_podman_cannot_remove_neither_holds_a_stopped_run_nor_goes_unreported(
+        self,
+    ):
+        pidfile = self.tmp / "container.pid"
+        self.set_plan(
+            {
+                **PASSING,
+                "container": {
+                    "early": "Error: WebKit crashed before the summary\n",
+                    "sleep": 60,
+                    "server": str(pidfile),
+                    "server_source": SERVER,
+                },
+                "rm": {"rc": 125, "err": "Error: cannot remove container: device busy"},
+            }
+        )
+        self.addCleanup(
+            lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text()))
+        )
+        process = self.spawn(
+            "--only", "e2e", "--check-timeout", "1", **self.without_webkit()
+        )
+        # The container holds the output for 600 seconds, so only a run that gives up reading it after the grace
+        # returns within this deadline, which is generous so that a loaded machine cannot trip it.
+        out, err = process.communicate(timeout=240)
+        self.assertEqual(process.returncode, 1)
+        self.assertIn("TIMEOUT", self.row(out, "e2e:webkit (podman)"))
+        self.assertTrue(self.alive(int(pidfile.read_text())))
+        # What the check printed before the cutoff is in its saved log, not lost in a buffer.
+        (log,) = self.cache.glob("logs/*/e2e-webkit.log")
+        self.assertIn("Error: WebKit crashed before the summary", log.read_text())
+        run = next(
+            call["args"] for call in self.calls() if call["call"] == "podman run"
+        )
+        name = run[run.index("--name") + 1]
+        for text in (err, out):
+            self.assertIn(
+                f"could not remove the container {name} (podman rm exited 125: Error: cannot remove container: device busy)."
+                f" Remove it with: {self.bin / 'podman'} rm --force {name}",
+                text,
+            )
+
+    def exit_while_a_server_holds_the_output(self, rc):
+        """Run e2e on the host through a fake npm that prints a line and exits with `rc` while the web server it
+        started, in a session of its own, keeps the output pipe open for 600 seconds. Returns (out, err, server pid).
+        """
+        pidfile = self.tmp / "server.pid"
+        self.set_plan(
+            {
+                **PASSING,
+                "run test:e2e": {
+                    "rc": rc,
+                    "out": "Running 4 tests using 1 worker\n",
+                    "server": str(pidfile),
+                    "server_source": SERVER,
+                },
+            }
+        )
+        self.addCleanup(
+            lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text()))
+        )
+        process = self.spawn("--only", "e2e", "--check-timeout", "300")
+        # Only a run that stops reading after the grace returns within this deadline; it is generous for load.
+        out, err = process.communicate(timeout=240)
+        self.assertTrue(self.alive(int(pidfile.read_text())))
+        return out, err, int(pidfile.read_text())
+
+    def test_a_check_that_exits_while_another_process_holds_its_output_frees_its_locks_and_keeps_its_log(
+        self,
+    ):
+        out, err, _ = self.exit_while_a_server_holds_the_output(125)
+        self.assertIn("FAIL", self.row(out, "e2e"))
+        self.assertIn("output cut short", self.row(out, "e2e"))
+        self.assertIn("Running 4 tests using 1 worker", err)
+        (log,) = self.cache.glob("logs/*/e2e.log")
+        self.assertIn("Running 4 tests using 1 worker", log.read_text())
+        # The server still listens, but the run let go of its slot and both port locks when it returned.
+        port = int(self.calls()[0]["port"])
+        for name in ("heavy-0", f"e2e-port-{port}", f"e2e-port-{port + 1}"):
+            held = check_all.try_lock(self.cache / "locks" / f"{name}.lock")
+            self.assertIsNotNone(held, name)
+            held.release()
+
+    def test_a_passing_check_whose_summary_never_arrived_says_its_output_was_cut_short(
+        self,
+    ):
+        out, _, _ = self.exit_while_a_server_holds_the_output(0)
+        self.assertIn("pass", self.row(out, "e2e"))
+        self.assertTrue(
+            self.row(out, "e2e").endswith("output cut short: counts unknown"),
+            self.row(out, "e2e"),
+        )
+
+    def test_a_container_left_holding_the_output_after_its_client_exits_is_removed_and_read_to_the_end(
+        self,
+    ):
+        pidfile = self.tmp / "container.pid"
+        self.set_plan(
+            {
+                **PASSING,
+                "container": {
+                    "out": "  2 passed (2s)\n",
+                    "server": str(pidfile),
+                    "server_source": SERVER,
+                },
+            }
+        )
+        self.addCleanup(
+            lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text()))
+        )
+        process = self.spawn("--only", "e2e", **self.without_webkit())
+        out, _ = process.communicate(timeout=240)
+        self.assertEqual(process.returncode, 0)
+        # The stop a timeout would make removes the container, so its pipe closes and nothing was cut off.
+        self.assertTrue(self.row(out, "e2e:webkit (podman)").endswith("  2 tests"), out)
+        self.assertFalse(self.alive(int(pidfile.read_text())))
 
     def start_container_with_server(self, *argv):
         """Run e2e on a host without WebKit, where the container step starts a detached container that listens on
@@ -2383,12 +2497,12 @@ class CommandTest(TempCase):
 class WebKitProbeTest(TempCase):
     """The launch check against a fake node, and how its answer reads in a message."""
 
-    def probe(self, body, timeout=10):
+    def probe(self, body, timeout=10, grace=5):
         bin_dir = self.tmp / "bin"
         bin_dir.mkdir(exist_ok=True)
         script(bin_dir / "node", body)
         return check_all.webkit_failure(
-            self.tmp, {"PATH": str(bin_dir)}, timeout=timeout
+            self.tmp, {"PATH": str(bin_dir)}, timeout=timeout, grace=grace
         )
 
     def test_a_browser_that_starts_is_no_failure(self):
@@ -2405,6 +2519,105 @@ class WebKitProbeTest(TempCase):
     def test_a_check_that_crashes_counts_as_a_failure_with_its_error(self):
         body = "import sys; print(\"Cannot find package '@playwright/test'\", file=sys.stderr); sys.exit(1)"
         self.assertIn("Cannot find package '@playwright/test'", self.probe(body))
+
+    def test_a_probe_whose_node_exits_leaves_nothing_in_its_group(self):
+        pidfile = self.tmp / "child.pid"
+        body = f"""
+            import json, subprocess, sys
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            open({str(pidfile)!r}, "w").write(str(child.pid))
+            print(json.dumps({{"ok": True, "message": None}}))
+        """
+        self.assertIsNone(self.probe(body, grace=0.5))
+        self.assert_gone(pidfile)
+
+    def test_the_real_probe_ends_a_browser_paused_at_launch_and_answers_at_once(self):
+        """The probe script itself under the real Node and Playwright, with a browser that stops itself as it starts.
+        Stopping Node's group cannot reach it, so Playwright's launch timeout must end it, and Node must exit once it
+        has answered rather than linger."""
+        loads = shutil.which("node") and subprocess.run(
+            ["node", "--input-type=module", "-e", "await import('@playwright/test')"],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        )
+        if not loads or loads.returncode:
+            self.skipTest("needs node and an installed @playwright/test (npm ci)")
+        pidfile, browser = self.tmp / "browser.pid", self.tmp / "webkit"
+        browser.write_text(f"#!/bin/sh\necho $$ > {pidfile}\nkill -STOP $$\n")
+        browser.chmod(0o700)
+        launch = (
+            f"webkit.launch({{ timeout: {check_all.WEBKIT_LAUNCH_TIMEOUT * 1000} }})"
+        )
+        self.assertIn(
+            launch,
+            check_all.WEBKIT_PROBE,
+            "the probe no longer passes Playwright a launch timeout",
+        )
+        script = check_all.WEBKIT_PROBE.replace(
+            launch,
+            f"webkit.launch({{ timeout: 2000, executablePath: {json.dumps(str(browser))} }})",
+        )
+        started = time.monotonic()
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            check=False,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        took = time.monotonic() - started
+        answer = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertFalse(answer["ok"])
+        self.assertIn("Timeout 2000ms exceeded", answer["message"])
+        # Without the exit Node stays about 30 seconds after the timeout; 20 leaves room for a loaded machine.
+        self.assertLess(took, 20)
+        self.assert_gone(pidfile)
+
+    def launcher(self, ignores_sigint):
+        """A node that starts a browser and hangs. The browser is in a group of its own, as Playwright starts it, and
+        Node kills it on SIGINT, as Playwright does, unless `ignores_sigint`, when a child in Node's own group
+        stands for what only a kill of the group ends. Returns (body, pidfile)."""
+        pidfile = self.tmp / "browser.pid"
+        body = f"""
+            import os, signal, subprocess, sys, time
+            browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session={not ignores_sigint})
+            open({str(pidfile)!r}, "w").write(str(browser.pid))
+            if {ignores_sigint}:
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+            else:
+                signal.signal(signal.SIGINT, lambda *_: (browser.kill(), browser.wait(), sys.exit(130)))
+            time.sleep(60)
+        """
+        return body, pidfile
+
+    def assert_gone(self, pidfile):
+        pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        os.kill(pid, signal.SIGKILL)
+        self.fail(f"the browser {pid} the probe launched outlived it")
+
+    def test_a_hung_probe_stops_the_browser_it_launched_in_its_own_group(self):
+        body, pidfile = self.launcher(ignores_sigint=False)
+        self.assertEqual(self.probe(body, timeout=0.5), "it did not start within 0.5s")
+        self.assertTrue(pidfile.exists())
+        self.assert_gone(pidfile)
+
+    def test_a_hung_probe_that_ignores_sigint_has_its_group_killed_after_the_grace(
+        self,
+    ):
+        body, pidfile = self.launcher(ignores_sigint=True)
+        self.assertEqual(
+            self.probe(body, timeout=0.5, grace=0.5), "it did not start within 0.5s"
+        )
+        self.assert_gone(pidfile)
 
     def test_a_launch_that_hangs_counts_as_a_failure(self):
         self.assertEqual(

@@ -2011,6 +2011,44 @@ describe("keys pressed inside the transcript", () => {
     await press(box, "ArrowUp");
     expect(await follows()).toBe(false);
   });
+
+  // The reviewer's case: a tool's output box contains overscroll, so at its top Chromium scrolls nothing.
+  it("does not hear Up at the top of a box that contains overscroll", async () => {
+    await openMenu();
+    const box = container.querySelector<HTMLElement>(".approval-command")!;
+    // As transcript.css styles a tool's output.
+    box.style.overflowY = "auto";
+    box.style.overscrollBehaviorY = "contain";
+    command.scrollHeight = 400;
+    await press(box, "ArrowUp");
+    expect(await follows()).toBe(true);
+  });
+
+  // The reviewer's case: the Always allow dialog sits inside the transcript in the page, yet it is modal,
+  // so the viewport scrolls with its keys and the transcript does not.
+  it("does not hear keys pressed in the Always allow dialog as scrolling", async () => {
+    for (const [name, open] of [
+      ["showModal", true],
+      ["close", false],
+    ] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, name, {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.open = open;
+        },
+      });
+    await openMenu();
+    await act(async () => buttonText("Always allow…")!.click());
+    const dialog = document.querySelector<HTMLDialogElement>(".always-allow-confirm")!;
+    expect(container.querySelector(".transcript")!.contains(dialog)).toBe(true);
+    // The browser's own style for a modal dialog, which jsdom does not apply.
+    dialog.style.position = "fixed";
+    const cancel = [...dialog.querySelectorAll("button")].find(
+      (button) => button.textContent === "Cancel",
+    )!;
+    await press(cancel, "ArrowUp");
+    expect(await follows()).toBe(true);
+  });
 });
 
 describe("a key a control inside the transcript handles", () => {
@@ -2223,6 +2261,47 @@ describe("send anchor", () => {
     await resize(400);
     expect(hook.endSpace.current!.style.height).toBe("176px");
     expect(top("mine")).toBe(24);
+  });
+
+  // Space presses a button and scrolls nothing, so the anchor a send set stays.
+  it("keeps this person's sent message near the top after Space presses a button in the transcript", async () => {
+    layout({ q: 400, a: 600, mine: 1800 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    const button = document.createElement("button");
+    container.querySelector(".transcript")!.append(button);
+    await act(async () =>
+      button.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
+      ),
+    );
+    await show([...conversation.messages, prompt("mine", "My new question")]);
+    expect(top("mine")).toBe(24);
+  });
+
+  // The reviewer's case: WebKit scrolls the transcript with Down from a tool's output box at its end, though the
+  // box contains overscroll, and Chromium does not. Ending the anchor leaves the reader where WebKit put them.
+  it("ends a send's anchor on Down from the end of a box that contains overscroll", async () => {
+    layout({ q: 400, a: 600, mine: 1800 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    const output = document.createElement("pre");
+    output.tabIndex = 0;
+    // As transcript.css styles a tool's output.
+    output.style.overflowY = "auto";
+    output.style.overscrollBehaviorY = "contain";
+    container.querySelector(".transcript")!.append(output);
+    // At the end of its 2600 px, in its 400 px.
+    output.scrollTop = 2200;
+    await act(async () =>
+      output.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+      ),
+    );
+    await show([...conversation.messages, prompt("mine", "My new question")]);
+    expect(top("mine")).not.toBe(24);
   });
 
   it("keeps this person's sent message near the top when another member posts after it", async () => {

@@ -140,6 +140,55 @@ import XCTest
     XCTAssertNil(WidgetSnapshotStore.read(from: url))
   }
 
+  private final class RecordedIndex: SpotlightIndexing {
+    var calls: [String] = []
+    func index(_ records: [SpotlightRecord]) { calls.append("index " + records.map(\.id).joined(separator: ",")) }
+    func delete(ids: [String]) { calls.append("delete " + ids.joined(separator: ",")) }
+    func deleteAll() { calls.append("deleteAll") }
+  }
+  /// Round 3, findings 1 and 3: a roster from the server's cache can be stale either way, so an assistant it
+  /// leaves out stays on the widgets, in Spotlight and Siri and among the notification pictures. Round 2 pruned
+  /// them and kept the snapshot's age, so an older background read could put the assistant back. A connected
+  /// roster prunes them with a new snapshot, whose age a background read that began earlier never overwrites
+  /// (`testAReadThatFinishesAfterANewerSnapshotLeavesItAlone`).
+  func testACachedRosterLeavesTheSystemSurfacesWholeAndAConnectedOnePrunesThem() throws {
+    let url = temporarySnapshotURL()
+    let store = AppStore()
+    store.widgetSnapshotURL = url
+    let suite = "spotlight-test-" + UUID().uuidString
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+    let index = RecordedIndex()
+    store.spotlight = AssistantSpotlight(index: index, defaults: defaults)
+    let root = url.deletingLastPathComponent().appendingPathComponent("senders", isDirectory: true)
+    var avatars = SenderAvatars(root: root) { avatar, _ in Data((avatar.color ?? "").utf8) }
+    avatars.forget = { _ in }
+    store.senderAvatars = avatars
+    store.api = APIClient(baseURL: URL(string: "https://one.example.test")!)
+    store.bootstrap = try bootstrap()
+    let written = try XCTUnwrap(WidgetSnapshotStore.read(from: url))
+    let account = NotificationActions.accountMarker("one")
+    let picture = try XCTUnwrap(NotificationSenders.avatarURL(account: account, botId: "kitchen", root: root))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: picture.path))
+    // Hermes is down and the server's cached roster lists only Garden.
+    var down = try bootstrap(connected: false)
+    down.bots = down.bots.filter { $0.id == "garden" }
+    down.bots[0].activity = .disconnected
+    index.calls = []
+    store.bootstrap = down
+    XCTAssertEqual(WidgetSnapshotStore.read(from: url), written, "The widgets keep Kitchen, with the snapshot's real age")
+    XCTAssertEqual(index.calls, [], "Spotlight and Siri's names keep it")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: picture.path), "Its notification picture stays")
+    // Hermes answers without Kitchen: that is the word.
+    var up = try bootstrap()
+    up.bots = up.bots.filter { $0.id == "garden" }
+    store.bootstrap = up
+    let pruned = try XCTUnwrap(WidgetSnapshotStore.read(from: url))
+    XCTAssertEqual(pruned.assistants.map(\.id), ["garden"])
+    XCTAssertEqual(index.calls, ["delete kitchen", "index "])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: picture.path))
+  }
+
   func testLiveActivityInstallationIdsStayStableWithinAnAccountAndSeparateAccounts() {
     let first = "test-one-\(UUID().uuidString)", second = "test-two-\(UUID().uuidString)"
     defer {

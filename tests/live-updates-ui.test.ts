@@ -11,6 +11,7 @@ import {
 } from "../src/shared/types";
 import type { GroupCatalog, GroupRoom } from "../src/shared/collaboration";
 import { GROUP_FALLBACK_POLL_MS } from "../src/app/use-session";
+import { OUTAGE_GRACE_MS, OUTAGE_LASTING_MS } from "../src/app/outage";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, type Mount } from "./ui-harness";
 
@@ -183,11 +184,22 @@ const live = async () => {
   await advance(10_000);
   await pinging(1_000);
 };
+/** Takes the device offline and waits out the grace period every loss gets before it shows. */
 const goOffline = async () => {
   Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });
   await act(async () => window.dispatchEvent(new Event("offline")));
-  await advance(20);
+  await advance(OUTAGE_GRACE_MS);
 };
+
+/** Opening a chat reports the person there, and leaving one saves their place: both are answered. */
+const servePresence = () =>
+  vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown, method = "POST") => {
+    if (method === "PUT" && /^\/bots\/(shared|other)\/(presence|read-position)$/.test(path))
+      return body as T;
+    if (method === "PUT" && path === "/devices/activity") return {} as T;
+    unexpected.push(`${method} ${path}`);
+    throw new Error(`This test serves no ${method} ${path}`);
+  });
 
 describe("live updates and the connection notice", () => {
   it("shows one quiet notice 20 seconds into an outage, keeps it through the stream being replaced, and clears it once the stream is back", async () => {
@@ -197,22 +209,26 @@ describe("live updates and the connection notice", () => {
     await pinging(19_000, cut);
     expect(panels()).toEqual([]);
     await pinging(1_000, cut);
-    expect(notice()).toEqual(["Reconnecting live updates"]);
+    expect(notice()).toEqual(["Live updates are delayed"]);
     // The drop was closed and retried within 2 seconds; that replacement has not connected, so the outage goes on.
     await pinging(10_000, cut);
     expect(
       FakeEventSource.created.filter((url) => url.startsWith("/api/events?ping")),
     ).toHaveLength(2);
-    expect(notice()).toEqual(["Reconnecting live updates"]);
+    expect(notice()).toEqual(["Live updates are delayed"]);
     // Connecting alone, or its greeting, is not live: the stream is back once it pings again an interval later.
     await act(async () => {
       household().connect();
       household().emit("ping", "10");
     });
     await advance(20);
-    expect(notice()).toEqual(["Reconnecting live updates"]);
+    expect(notice()).toEqual(["Live updates are delayed"]);
     await pinging(11_000);
     expect(panels()).toEqual([]);
+    // Someone who heard that live updates stopped hears that they are back.
+    expect(container.querySelector("[data-connection-announcer]")!.textContent).toBe(
+      "Live updates are back.",
+    );
   });
 
   it("never shows for a brief drop", async () => {
@@ -248,7 +264,7 @@ describe("live updates and the connection notice", () => {
     expect(conversationReads(), "the 30-second poll stands in").toBeGreaterThanOrEqual(
       connected + 2,
     );
-    expect(notice()).toEqual(["Reconnecting live updates"]);
+    expect(notice()).toEqual(["Live updates are delayed"]);
   });
 
   it("reloads and rebinds the open chat when bootstrap names a new canonical session, which Hermes announces only on the roster", async () => {
@@ -330,7 +346,235 @@ describe("live updates and the connection notice", () => {
     const cut = household();
     await act(async () => cut.drop());
     await pinging(21_000, cut);
-    expect(notice()).toEqual(["Reconnecting live updates"]);
+    expect(notice()).toEqual(["Live updates are delayed"]);
+  });
+
+  // Today is not the assistant's chat: that chat's own failed reads are no news there, and neither is
+  // its draft, which is not on screen.
+  it("says nothing on Today about the open chat's failed reads, or about its draft when offline", async () => {
+    boot.preferences = { ...boot.preferences, startPage: "today" };
+    draft = { text: "Buy feed", attachments: [], revision: 1, reason: "edit", sentRevision: 0 };
+    await live();
+    const serve = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+      if (path.startsWith("/bots/shared/conversation?")) throw new Error("Hermes is restarting.");
+      return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+    });
+    const failed = reads((path) => path.startsWith("/bots/shared/conversation?"));
+    await act(async () => chat().emit("message", "change"));
+    await pinging(OUTAGE_LASTING_MS);
+    expect(
+      reads((path) => path.startsWith("/bots/shared/conversation?")),
+      "the chat's reads did fail meanwhile",
+    ).toBeGreaterThan(failed);
+    expect(panels()).toEqual([]);
+    await goOffline();
+    expect(notice()).toEqual(["You're offline"]);
+    expect(panels()[0]!.textContent).not.toMatch(/draft/i);
+  });
+
+  // Live updates are back when every stream the notice watches has heard from the server again. One
+  // stream returning while the other is still down, and not yet down long enough to show, is not that;
+  // the other one returning is.
+  it("announces the return of live updates once the stream still down is back too", async () => {
+    await live();
+    const announced = () => container.querySelector("[data-connection-announcer]")!.textContent;
+    const house = household();
+    await act(async () => house.drop());
+    await pinging(15_000);
+    await act(async () => chat().drop());
+    await pinging(6_000);
+    expect(notice()).toEqual(["Live updates are delayed"]);
+    // The household stream's replacement connects and, 5 seconds on, proves itself.
+    await act(async () => {
+      household().connect();
+      household().emit("ping", "10");
+    });
+    await advance(5_500);
+    await act(async () => household().emit("ping", "10"));
+    await advance(20);
+    expect(panels()).toEqual([]);
+    expect(announced()).toBe("");
+    // The chat stream's replacement proves itself too, 17 seconds into its outage: never shown.
+    await act(async () => {
+      chat().connect();
+      chat().emit("ping", "10");
+    });
+    await advance(5_500);
+    await act(async () => chat().emit("ping", "10"));
+    await advance(20);
+    expect(announced()).toBe("Live updates are back.");
+  });
+
+  // The loss's own notice stood where the live-updates one would have. Both end together, so the
+  // live-updates notice has never been on screen and does not appear now to stay out a minimum time.
+  it("shows no live-updates notice once a loss that covered it and the streams come back together", async () => {
+    await live();
+    const healthy = boot;
+    const cut = household();
+    boot = { ...boot, connection: { connected: false, code: "unreachable" } };
+    await act(async () => cut.drop());
+    await act(async () => window.dispatchEvent(new Event("online")));
+    await pinging(13_000, cut);
+    const back = household();
+    await act(async () => {
+      back.connect();
+      back.emit("ping", "10");
+    });
+    await pinging(7_000, back);
+    expect(notice()).toEqual(["Hermes isn't answering"]);
+    await advance(100);
+    // One roster notice proves the stream and brings a bootstrap that finds Hermes connected.
+    boot = healthy;
+    await act(async () => back.emit("roster", "roster"));
+    await advance(20);
+    expect(panels()).toEqual([]);
+  });
+
+  // One chat's stream is down; the person opens another chat, whose stream is not. The first chat's
+  // stream did not come back, so nothing says it did.
+  it("announces no return of live updates when the chat whose stream is down is left for another", async () => {
+    const serve = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+      if (path.startsWith("/bots/other/conversation?"))
+        return { ...conversation, botId: "other", draft: null } as T;
+      if (path === "/bots/other/draft") return null as T;
+      if (path === "/bots/other/routine-runs") return { runs: [], unavailable: [] } as T;
+      return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+    });
+    servePresence();
+    await live();
+    const cut = chat();
+    await act(async () => cut.drop());
+    await pinging(21_000, cut);
+    expect(notice()).toEqual(["Live updates are delayed"]);
+    const other = [
+      ...container.querySelectorAll<HTMLElement>('[aria-label="Assistants"] button'),
+    ].find((item) => item.textContent?.includes("Other"))!;
+    await act(async () => other.click());
+    await advance(20);
+    expect(panels()).toEqual([]);
+    const announced = () => container.querySelector("[data-connection-announcer]")!.textContent;
+    expect(announced()).toBe("");
+    // The other chat's own stream proving itself is not the first one coming back either.
+    const next = chat();
+    expect(next).not.toBe(cut);
+    await act(async () => {
+      next.connect();
+      next.emit("ping", "10");
+    });
+    await advance(5_500);
+    await act(async () => next.emit("ping", "10"));
+    await advance(20);
+    expect(announced()).toBe("");
+  });
+
+  // Live updates came back for the household while the chat's stream was still down. A new canonical
+  // session then replaces that stream in one go, and the replacement proving itself is not the stream
+  // that was down coming back.
+  it("announces no return of live updates when the stream still down is replaced for a new session", async () => {
+    boot = { ...boot, bots: [{ ...boot.bots[0], sessionId: "session-one" }, boot.bots[1]] };
+    await live();
+    const announced = () => container.querySelector("[data-connection-announcer]")!.textContent;
+    await act(async () => household().drop());
+    await pinging(15_000);
+    const down = chat();
+    await act(async () => down.drop());
+    await pinging(6_000);
+    expect(notice()).toEqual(["Live updates are delayed"]);
+    await act(async () => {
+      household().connect();
+      household().emit("ping", "10");
+    });
+    await advance(5_500);
+    await act(async () => household().emit("ping", "10"));
+    await advance(20);
+    expect(panels()).toEqual([]);
+    conversation = { ...conversation, sessionId: "session-two" };
+    boot = { ...boot, bots: [{ ...boot.bots[0], sessionId: "session-two" }, boot.bots[1]] };
+    await act(async () => household().emit("roster", "roster"));
+    await advance(20);
+    const replacement = chat();
+    expect(replacement).not.toBe(down);
+    await pinging(3_000, replacement);
+    await act(async () => {
+      replacement.connect();
+      replacement.emit("ping", "10");
+    });
+    await advance(5_500);
+    await act(async () => replacement.emit("ping", "10"));
+    await advance(20);
+    expect(announced()).toBe("");
+  });
+
+  describe("a chat whose own reads fail", () => {
+    const failReads = () => {
+      const serve = vi.mocked(api).getMockImplementation()!;
+      vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+        if (path.startsWith("/bots/shared/conversation?")) throw new Error("Hermes is restarting.");
+        return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+      });
+      return () => vi.mocked(api).mockImplementation(serve);
+    };
+    const listed = (name: string) =>
+      [...container.querySelectorAll<HTMLElement>('[aria-label="Assistants"] button')].find(
+        (item) => item.textContent?.includes(name),
+      )!;
+    const announced = () => container.querySelector("[data-connection-announcer]")!.textContent;
+
+    // Leaving for Today takes the chat's notice off the screen. Nothing came back.
+    it("announces no recovery when the person leaves it for Today", async () => {
+      await live();
+      failReads();
+      await act(async () => chat().emit("message", "change"));
+      await pinging(OUTAGE_GRACE_MS);
+      expect(notice()).toEqual(["Reconnecting…"]);
+      await act(async () => listed("Today").click());
+      await advance(20);
+      expect(container.querySelector(".chat-header-today")).not.toBeNull();
+      expect(panels()).toEqual([]);
+      expect(announced()).toBe("");
+    });
+
+    // A phone's home list covers the chat behind it, which is still the open chat. Its failed reads
+    // are no more on screen there than behind Today.
+    it("says nothing on a phone's home list, and waits out a grace period when the chat is opened", async () => {
+      stubMatchMedia((query) => query === "(max-width: 620px)");
+      servePresence();
+      await live();
+      expect(container.querySelector("main[inert]")).not.toBeNull();
+      failReads();
+      await act(async () => chat().emit("message", "change"));
+      await pinging(OUTAGE_LASTING_MS);
+      expect(announced()).toBe("");
+      await act(async () => listed("Shared").click());
+      await advance(20);
+      expect(container.querySelector("main[inert]")).toBeNull();
+      expect(panels()).toEqual([]);
+      await pinging(OUTAGE_GRACE_MS);
+      expect(notice()).toEqual(["Reconnecting…"]);
+    });
+
+    // Its notice was never on screen while Today was, so opening the chat is when its loss can first
+    // show, after the grace period every loss gets. A read that succeeds inside it shows nothing.
+    it("waits out a grace period when it is opened after failing behind Today", async () => {
+      boot.preferences = { ...boot.preferences, startPage: "today" };
+      await live();
+      const restore = failReads();
+      await act(async () => chat().emit("message", "change"));
+      await pinging(OUTAGE_LASTING_MS);
+      await act(async () => listed("Shared").click());
+      await advance(20);
+      expect(container.querySelector("textarea")).not.toBeNull();
+      expect(panels()).toEqual([]);
+      await pinging(OUTAGE_GRACE_MS - 1_000);
+      expect(panels()).toEqual([]);
+      restore();
+      await act(async () => chat().emit("message", "change"));
+      await pinging(OUTAGE_GRACE_MS);
+      expect(panels()).toEqual([]);
+      expect(announced()).toBe("");
+    });
   });
 
   it("reads bootstrap every 5 minutes while the household stream is live, and every 45 seconds while it is down", async () => {
@@ -450,7 +694,7 @@ describe("the connection live region", () => {
     await act(async () => cut.drop());
     await pinging(21_000, cut);
     expect(regions()).toEqual([region]);
-    expect(region!.textContent).toContain("Reconnecting live updates");
+    expect(region!.textContent).toContain("Live updates are delayed");
     await goOffline();
     expect(regions()).toEqual([region]);
     expect(region!.textContent).toContain("You're offline");

@@ -1,6 +1,7 @@
 import { Dialog } from "../components/ui/dialog";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { SaveRefusal, type Refusal } from "./SaveRefusal";
 import { NativeSelect } from "../components/ui/native-select";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
@@ -27,7 +28,7 @@ import {
 } from "./preferences-editing";
 import type { Section } from "./preferences-editing";
 import { PREFERENCE_FIELDS, type PreferenceField } from "./preference-queue";
-import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
+import type { EditPreferences } from "./use-preference-edits";
 import "./home.css";
 import { SettingsConfirmation } from "../components/SettingsConfirmation";
 import { MacSettings } from "./MacSettings";
@@ -46,6 +47,7 @@ export function PreferencesDialog({
   connectionLost,
   offline,
   editPreferences,
+  saveRefusal,
   notifications,
   installEvent,
   notice,
@@ -63,7 +65,9 @@ export function PreferencesDialog({
   destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" };
   connectionLost: boolean;
   offline: boolean;
-  editPreferences: (edit: PreferenceEdit, chosen: readonly PreferenceField[]) => Promise<void>;
+  editPreferences: EditPreferences;
+  /** Why the last preferences save was refused; its change has already left the screen. */
+  saveRefusal?: Refusal | null;
   notifications: ReturnType<typeof useDeviceNotifications>;
   installEvent: InstallEvent | null;
   notice: string;
@@ -77,7 +81,9 @@ export function PreferencesDialog({
   /** Where this sheet offers its own close to the app. See close-request.ts. */
   closer?: RefObject<SheetClose | null>;
 }) {
-  const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
+  const prefs = boot.preferences;
+  // The edit shows at once; a refusal reaches the person through `saveRefusal`.
+  const commit = (...args: Parameters<EditPreferences>) => void editPreferences(...args);
   const finePointer = useFinePointer();
   const bots = boot.bots;
   // A control's update names the fields it set, so its save carries them whatever the queue holds.
@@ -196,6 +202,7 @@ export function PreferencesDialog({
         </h2>
       </header>
       <div className="sheet-body" ref={body}>
+        <SaveRefusal refusal={saveRefusal} />
         {shown.kind === "following" ? (
           <FollowingPage preferences={prefs} bots={bots} commit={commit} />
         ) : shown.kind === "section" ? (
@@ -784,13 +791,20 @@ function SectionPage({
   beforeLeave: RefObject<(() => boolean) | null>;
   onDeleted: () => void;
 }) {
-  const [name, setName] = useState(section.name);
+  // What the person typed since the field was last in step with the screen, or null. An untouched field shows
+  // the screen's name, so another tab's rename shows here, and a sent rename lets go of its text: if it is
+  // refused, the field goes back to the name the screen holds, and Back does not send it again.
+  const [typed, setTyped] = useState<string | null>(null);
+  const name = typed ?? section.name;
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const field = useRef<HTMLInputElement>(null);
-  const changed = name.trim().replace(/\s+/g, " ") !== section.name;
+  const changed = typed !== null && typed.trim().replace(/\s+/g, " ") !== section.name;
   const saveName = () => {
-    if (!changed) return true;
+    if (!changed) {
+      setTyped(null);
+      return true;
+    }
     const checked = checkSectionName(preferences, name, section.id);
     if ("error" in checked) {
       setError(checked.error);
@@ -798,7 +812,7 @@ function SectionPage({
       return false;
     }
     commit((value) => renameSection(value, section.id, checked.name), ["sections"]);
-    setName(checked.name);
+    setTyped(null);
     return true;
   };
   useEffect(() => {
@@ -823,7 +837,7 @@ function SectionPage({
           maxLength={100}
           value={name}
           onChange={(event) => {
-            setName(event.target.value);
+            setTyped(event.target.value);
             setError("");
           }}
         />
@@ -844,7 +858,7 @@ function SectionPage({
           <Button
             type="button"
             onClick={() => {
-              setName(section.name);
+              setTyped(null);
               setError("");
               field.current?.focus();
             }}

@@ -110,7 +110,9 @@ extension AppStore {
   private func drainAdditions() async {
     repeat {
       additionsAgain = false
-      guard let scope, let bots = bootstrap?.bots else { return }
+      guard let scope, bootstrap != nil else { return }
+      // Text waiting for an assistant a cached roster left out waits on; a connected roster's removal drops it.
+      let bots = knownBots
       let early = earlyAdditions.filter { $0.scope == scope }
       earlyAdditions = []
       var held = savedAdditions() + early

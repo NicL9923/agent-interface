@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api, ApiError, write } from "../src/client-api";
 import { COPY_HANDOFF_MS, ECHO_PATIENCE, SENDING_ROW_MS } from "../src/app/sent-echo";
+import { OUTAGE_GRACE_MS } from "../src/app/outage";
 import { draftKey, localRead, type Draft } from "../src/app/storage";
 import { defaultPreferences } from "../src/shared/types";
 import type {
@@ -426,7 +427,9 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     expect(row()).toBeNull();
   });
 
-  it("shows the chat disconnected, not thinking, when the connection drops while a message is on its way", async () => {
+  // A loss is waited out before anything on screen says it. Once it shows, the notice above the
+  // message box says it and the row, which is the assistant's, goes: it does not claim thinking.
+  it("stops saying the assistant is thinking once a loss shows while a message is on its way", async () => {
     await open();
     await send();
     expect(status()).toBe("Shared is thinking...");
@@ -434,8 +437,13 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await act(async () => {
       window.dispatchEvent(new Event("offline"));
     });
-    expect(row()?.className).toContain("state-disconnected");
-    expect(status()).toBeNull();
+    await advance(OUTAGE_GRACE_MS - 1);
+    expect(status()).toBe("Shared is thinking...");
+    await advance(1);
+    expect(row()).toBeNull();
+    expect(container.querySelector('[aria-label="Hermes connection"] h2')?.textContent).toBe(
+      "You're offline",
+    );
   });
 
   it("goes after the echo's patience when an accepted message never starts a turn, as a typed stop phrase does from an older add-on", async () => {
