@@ -324,6 +324,11 @@ import XCTest
       let device = app.frame.width > 700 ? "ipad" : app.frame.width < 380 ? "iphone-small" : "iphone"
       // The latest message, the quote holding nested lists, is on screen.
       try capture("group-\(device)-\(name)-end")
+      // At the largest size the quote scrolls off above the message's last line, so its top is captured too.
+      if name.contains("large") {
+        app.staticTexts["Gates"].revealInGroup(app)
+        try capture("group-\(device)-\(name)-quote")
+      }
       // The tree gives VoiceOver's reading order and labels.
       try app.debugDescription.write(to: directory.appendingPathComponent("group-\(device)-\(name)-tree.txt"), atomically: true, encoding: .utf8)
       app.staticTexts["What should we cook on Sunday?"].revealInGroup(app)
