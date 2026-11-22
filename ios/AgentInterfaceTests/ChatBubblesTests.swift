@@ -207,7 +207,7 @@ final class ChatBubblesTests: XCTestCase {
   private static let avatarColors = AvatarConfig.colors + ["#1084FE", "#FF6700", "#00BCA6", "#FF263C", "#FF309B", "#9159FE", "#FF9800", "#97683D", "#292929"]
   /// Every text color that can sit in a reply bubble or the person's tinted bubble reads at 4.5:1 on its fill
   /// in both appearances; a task's empty box, a graphic, at 3:1. A palette change that lowers one fails here.
-  func testTextInsideABubbleKeepsItsContrastInBothAppearances() {
+  @MainActor func testTextInsideABubbleKeepsItsContrastInBothAppearances() {
     let light = Contrast.resolved(Palette.replyBubble, dark: false), dark = Contrast.resolved(Palette.replyBubble, dark: true)
     XCTAssertGreaterThan(abs(light.r - dark.r), 0.5, "The reply fill resolves per appearance")
     for isDark in [false, true] {
@@ -223,6 +223,7 @@ final class ChatBubblesTests: XCTestCase {
         // A group message in the person's bubble is Markdown.
         ("a link in the person's group message", Palette.accent, person, 4.5),
         ("a quote in the person's group message", Palette.quote, person, 4.5),
+        ("a quote's bar in the person's group message", MarkdownBlockView.quoteBar(on: .tint), person, 3),
         ("a checked box in the person's group message", Palette.accent, person, 3),
       ]
       for (name, text, fill, minimum) in pairs {
@@ -323,8 +324,8 @@ final class ChatBubblesTests: XCTestCase {
     for isDark in [false, true] {
       let green = Contrast.resolved(Color(hex: fill), dark: isDark), white = Contrast.resolved(Color.white, dark: isDark)
       XCTAssertGreaterThanOrEqual(Contrast.ratio(white, green), 4.5, "Text, links, inline code, quotes and checked boxes are white")
-      let bar = Contrast.over(white, green, opacity: MarkdownBlockView.solidQuoteBar)
-      XCTAssertGreaterThanOrEqual(Contrast.ratio(bar, green), 3, "A quote's bar at \(MarkdownBlockView.solidQuoteBar)")
+      let bar = Contrast.over(Contrast.resolved(MarkdownBlockView.quoteBar(on: .solid), dark: isDark), green)
+      XCTAssertGreaterThanOrEqual(Contrast.ratio(bar, green), 3, "A quote's bar")
       let surface = Contrast.resolved(Palette.surface(isDark ? .dark : .light), dark: isDark)
       let edge = try XCTUnwrap(PersonBubbles.border(solid: true, increasedContrast: true))
       XCTAssertGreaterThanOrEqual(Contrast.ratio(Contrast.resolved(edge, dark: isDark), surface), 3, "Increase Contrast's edge")
