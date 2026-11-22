@@ -206,7 +206,8 @@ import XCTest
     // A routine's post reads as the routine, not as a household member.
     let routine = speaker(app, "Morning brief")
     XCTAssertTrue(routine.waitForExistence(timeout: 5), app.debugDescription)
-    XCTAssertTrue(routine.label.contains("Routine"), routine.label)
+    // The tag's own words: "Routine failed" holds "Routine" too.
+    XCTAssertTrue(routine.label.components(separatedBy: ", ").contains("Routine"), routine.label)
     try capture("06a-group-activity")
     app.buttons["groupSettings"].tapWhenReady()
     let purpose = app.descendants(matching: .any).matching(identifier: "groupPurpose").firstMatch
