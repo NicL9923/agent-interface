@@ -73,14 +73,34 @@ extension AppStore {
       let _: EmptyResponse? = try? await api.write("/bots/\(APIClient.component(botId))/presence", report, method: "PUT")
     }
   }
-  /// The returned task ends once the position was saved or refused.
-  @discardableResult func markRead(_ messageId: String?) -> Task<Void, Never>? {
-    guard let id = selectedBotId, let api else { return nil }
-    let position = ReadPosition(messageId: messageId)
+  /// Where the person has read to in `botId`'s chat, with the client it was read under. Nil unless that chat is
+  /// the one open now, so a message and a client from two accounts, or two chats, never meet in one place.
+  func readPlace(_ messageId: String, in botId: String) -> ReadPlace? {
+    guard let api, selectedBotId == botId, conversation?.botId == botId else { return nil }
+    return ReadPlace(messageId: messageId, botId: botId, client: api)
+  }
+  /// Saves a place in its own chat, through its own client, whatever is open or signed in by now. The task ends
+  /// once the position was saved or refused.
+  @discardableResult func markRead(_ place: ReadPlace) -> Task<Void, Never> {
     // A reading position is a hint, so a failed save stays quiet, as on the web.
-    return Task {
-      let _: ReadPosition? = try? await api.write(
-        "/bots/\(APIClient.component(id))/read-position", position, method: "PUT")
+    Task {
+      let _: ReadPosition? = try? await place.client.write(
+        "/bots/\(APIClient.component(place.botId))/read-position", ReadPosition(messageId: place.messageId), method: "PUT")
     }
   }
+  /// `markRead` once the reader pauses. Cancelling it while it waits saves nothing.
+  func markReadSoon(_ place: ReadPlace) -> Task<Void, Never> {
+    Task {
+      try? await readPause(.milliseconds(350))
+      guard !Task.isCancelled else { return }
+      await markRead(place).value
+    }
+  }
+}
+
+/// How far a person read in one chat, and the sign-in they read it under.
+struct ReadPlace {
+  var messageId: String
+  var botId: String
+  var client: APIClient
 }

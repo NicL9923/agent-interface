@@ -574,11 +574,14 @@ after warning that the server-side session remains valid until it expires.
 
 When another member signs in on a device that still holds the last member's
 token, as in the minute before that sign-in expires, the app sends this logout
-with the last member's token first, waiting at most five seconds, so their
-session and device registration end before the new token is used. Each sign-in
-then gets its own client. Requests started under the last one are dropped, and
-an answer still on its way, including a `session_expired` 401 or a logout's
-reply, does not touch the new session.
+with the last member's token first. That ends their session and device
+registration. The app waits at most five seconds. If the logout fails or takes
+longer, the sign-in goes ahead, and the server ends that session and its
+registration when the session expires. Until then the new member's own
+registration gets a 409 and is asked again. Each sign-in then gets its own
+client. Requests started under the last one are dropped, and an answer still on
+its way, including a `session_expired` 401 or a logout's reply, does not touch
+the new session.
 
 ## Direct routes
 

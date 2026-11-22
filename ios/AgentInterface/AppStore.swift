@@ -473,6 +473,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// quiet about it and marks it read there, as the web does.
   @ObservationIgnored var viewingBotId: String?
   @ObservationIgnored var presenceBeat: Task<Void, Never>?
+  /// Saves another member's token as they sign in. Tests watch the moment.
+  @ObservationIgnored var saveToken: (String, String) throws -> Void = { try SecureToken.save($0, host: $1) }
+  /// How long reading settles before its position is saved. Tests substitute a wait they control.
+  @ObservationIgnored var readPause: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   /// The account scope the chat on screen was opened under; presence goes out only while it is current.
   @ObservationIgnored var presenceScope: String?
   @ObservationIgnored var presenceReports: Task<Void, Never>?
@@ -544,6 +548,20 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// settings and anything else not aimed at the open chat need only the household (`householdReachable`),
   /// so one chat's failed read never refuses them.
   enum WriteGate { case openChat, household }
+  /// A save of several steps, all through the client it started with. A sign-in between two steps retires that
+  /// client, so the rest of the save stops instead of going out under the next account.
+  @MainActor struct HouseholdSave {
+    fileprivate let store: AppStore
+    let api: APIClient
+    /// A step that also needs the household, checked as it goes out.
+    func perform<V: Encodable>(_ path: String, _ value: V, method: String) async throws {
+      try await store.perform(path, value, method: method, gate: .household, via: api)
+    }
+  }
+  func householdSave(_ steps: (HouseholdSave) async throws -> Void) async throws {
+    guard let api else { return }
+    try await steps(HouseholdSave(store: self, api: api))
+  }
   /// Every write in the open chat and in an assistant's settings. It checks its gate again as it posts, so
   /// one confirmed after the connection it needs went down, as from an alert left open, is refused instead
   /// of sent.

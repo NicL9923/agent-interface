@@ -42,6 +42,8 @@ struct ConversationView: View {
   @State private var visibleMessage: String?
   @State private var openedBot: String?
   @State private var readSaveTask: Task<Void, Never>?
+  /// The last place read here, for saving as the chat leaves the screen, when another may already be open.
+  @State private var lastReadPlace: ReadPlace?
   @State private var latestTrigger = 0
   @State private var viewportHeight: CGFloat = 0
   /// The message box floating over the transcript's bottom, which the transcript keeps room for.
@@ -405,7 +407,8 @@ struct ConversationView: View {
       }
       .onDisappear {
         readSaveTask?.cancel()
-        if let id = readPosition { store.markRead(id) }
+        // Read off this chat while it is still the open one, or kept from when it last was.
+        if let place = readPlace ?? lastReadPlace { store.markRead(place) }
       }
     }
   }
@@ -684,14 +687,12 @@ struct ConversationView: View {
     if following { return messages.last?.id }
     return visibleMessage.flatMap { id in messages.contains { $0.id == id } ? id : nil }
   }
+  private var readPlace: ReadPlace? { readPosition.flatMap { store.readPlace($0, in: bot.id) } }
   private func saveReadPosition() {
     readSaveTask?.cancel()
-    guard visible, placed, let id = readPosition else { return }
-    readSaveTask = Task {
-      try? await Task.sleep(for: .milliseconds(350))
-      guard !Task.isCancelled else { return }
-      store.markRead(id)
-    }
+    guard visible, placed, let place = readPlace else { return }
+    lastReadPlace = place
+    readSaveTask = store.markReadSoon(place)
   }
   /// The tool the working avatar can hold, as the web picks it: the latest running call while connected.
   /// Beside it, one live line for the running turn: the current tool's receipt and, in Advanced

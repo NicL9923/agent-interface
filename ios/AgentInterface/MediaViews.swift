@@ -24,32 +24,42 @@ struct AuthenticatedImage: View {
       image = nil
       failed = false
       do {
-        guard let api = store?.api, !path.isEmpty else {
-          failed = true
-          return
-        }
         // All images, including portraits, use the authenticated file API.
-        guard path.hasPrefix("/api/files/") else {
+        guard let store, store.api != nil, path.hasPrefix("/api/files/") else {
           failed = true
           return
         }
-        let path = path
-        let loaded = try await Self.loads.image(key) { try await api.data(path: path) }
+        let loaded = try await Self.load(path, store)
         guard !Task.isCancelled else { return }
         image = loaded
         failed = loaded == nil
       } catch is CancellationError {} catch { failed = true }
     }
   }
+  /// Downloads an image for the account it starts under. The same member signing in again ends the download with
+  /// its client, so it starts over on the new one. Leaving the screen, or another account, ends it for good.
+  static func load(_ path: String, _ store: AppStore) async throws -> UIImage? {
+    let key = cacheKey(path, store)
+    while let api = store.api {
+      do {
+        return try await loads.image(key, client: ObjectIdentifier(api)) { try await api.data(path: path) }
+      } catch is CancellationError {
+        guard !Task.isCancelled, store.api !== api, cacheKey(path, store) == key else { throw CancellationError() }
+      }
+    }
+    throw CancellationError()
+  }
   /// One download and decode per image at a time: the same picture in a reply and the file
   /// list, or a row scrolled back in, waits for the load already running.
   private static let loads = ImageLoads()
   @MainActor final class ImageLoads {
     private struct Load { var task: Task<UIImage?, Error>; var waiters = 1; var abandoned = 0 }
-    /// Keyed by the cache key's text: a String crosses into the cancellation handler, an NSString does not.
+    /// Keyed by the cache key's text: a String crosses into the cancellation handler, an NSString does not. Each
+    /// client has its own loads, so one a sign-in ended is never joined.
     private var running: [String: Load] = [:]
-    func image(_ cacheKey: NSString, fetch: @escaping @MainActor () async throws -> Data) async throws -> UIImage? {
-      let key = cacheKey as String
+    func image(_ cacheKey: NSString, client: ObjectIdentifier? = nil, fetch: @escaping @MainActor () async throws -> Data) async throws -> UIImage? {
+      let cached = cacheKey as String
+      let key = cached + (client.map { "|\($0.hashValue)" } ?? "")
       // A load every view abandoned is ending; a new view starts its own.
       if let load = running[key], !load.task.isCancelled {
         running[key]?.waiters += 1
@@ -61,7 +71,7 @@ struct AuthenticatedImage: View {
         // Decoding a camera photo takes tens of milliseconds, so it stays off the main actor.
         let image = await Task.detached(priority: .userInitiated) { AuthenticatedImage.downsampled(data) }.value
         if let image, let cgImage = image.cgImage {
-          AuthenticatedImage.cache.setObject(image, forKey: key as NSString, cost: cgImage.bytesPerRow * cgImage.height)
+          AuthenticatedImage.cache.setObject(image, forKey: cached as NSString, cost: cgImage.bytesPerRow * cgImage.height)
         }
         return image
       }

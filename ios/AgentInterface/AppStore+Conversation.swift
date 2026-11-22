@@ -65,13 +65,17 @@ extension AppStore {
         if Self.missing(error) { await self.leave(id); return }
         self.draftReady = cached != nil
         // The web's wording. Polls keep reading the draft with the conversation.
-        if cached?.dirty != true { self.report(APIError(message: "Your saved draft could not be loaded. Retrying. \(error.localizedDescription)", status: 0)) }
+        // The same member signing in again ended the read with its client, which is no failure to report.
+        if cached?.dirty != true, !(error is CancellationError) { self.report(APIError(message: "Your saved draft could not be loaded. Retrying. \(error.localizedDescription)", status: 0)) }
       }
     }
     await withTaskCancellationHandler {
       // An unsaved edit may start its save as the draft loads, and the conversation must see that
       // save finished, not in flight. That case, being rare, keeps the draft strictly first.
       if cached?.dirty == true { await draftLoad.value }
+      // Another chat, or another account, opened meanwhile and reads for itself. The same member signing in
+      // again keeps this chat open, and reads it on the new client.
+      guard selectedGeneration == selectionGeneration else { return }
       await refreshConversation(after: draftLoad, automatic: session)
       await draftLoad.value
     } onCancel: { draftLoad.cancel() }

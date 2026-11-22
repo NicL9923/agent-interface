@@ -157,7 +157,8 @@ struct BotSettingsView: View {
     routinePresentations(NavigationStack(path: $path) {
       editor.navigationDestination(for: SettingsRoute.self) { destination($0) }
     })
-    .task { await loadDetail() }
+    // A sign-in ends a load with its client, so the next one starts over, as for the tabs below.
+    .task(id: store.api.map(ObjectIdentifier.init)) { await loadDetail() }
     .onChange(of: path) { _, _ in
       // A message belongs to the screen that produced it, so it does not follow you to another page.
       if keepMessages { keepMessages = false } else { error = nil; notice = nil }
@@ -1083,46 +1084,46 @@ struct BotSettingsView: View {
     personalConfirmed = personal
     let retryingCreatedAvatar = avatarFailure != nil
     action(progressKey: "changes") {
-      guard let bot, let api = store.api else { return }
-      var patched = false
-      var refresh = false
-      do {
-        if form != savedForm {
-          let sent = form
-          var value = sent
-          value.confirmModel = confirmed
-          if personal { value.confirmPrivate = true }
-          if mainCleared { value.confirmMainCleared = true }
-          let _: Bot = try await api.write("/bots/\(APIClient.component(bot.id))", value, method: "PATCH")
-          savedForm = sent
-          patched = true
-          refresh = true
+      guard let bot else { return }
+      try await store.householdSave { save in
+        var patched = false
+        var refresh = false
+        do {
+          if form != savedForm {
+            let sent = form
+            var value = sent
+            value.confirmModel = confirmed
+            if personal { value.confirmPrivate = true }
+            if mainCleared { value.confirmMainCleared = true }
+            let _: Bot = try await save.api.write("/bots/\(APIClient.component(bot.id))", value, method: "PATCH")
+            savedForm = sent
+            patched = true
+            refresh = true
+          }
+          if avatar != savedAvatar || avatarFailure != nil {
+            let sent = avatar
+            try await putAvatar(bot.id, save.api, sent)
+            savedAvatar = sent
+            avatarFailure = nil
+            refresh = true
+          }
+          for kind in CatalogKind.allCases where capabilityDirty(kind) {
+            let ids = selectedIds(kind)
+            try await save.perform("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT")
+            savedCapabilities[kind] = Set(ids)
+          }
+        } catch {
+          // Sharing may have ended it being main before Hermes refused; the error carries what was saved.
+          store.applySavedPreferences(from: error)
+          if refresh { await store.refreshBootstrap() }
+          throw error
         }
-        if avatar != savedAvatar || avatarFailure != nil {
-          let sent = avatar
-          try await putAvatar(bot.id, api, sent)
-          savedAvatar = sent
-          avatarFailure = nil
-          refresh = true
-        }
-        for kind in CatalogKind.allCases where capabilityDirty(kind) {
-          let ids = selectedIds(kind)
-          // Through the client this save started on, like the steps before it: a sign-in since then
-          // retired it, so the rest of the save stops instead of going out under the next account.
-          try await store.perform("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT", gate: .household, via: api)
-          savedCapabilities[kind] = Set(ids)
-        }
-      } catch {
-        // Sharing may have ended it being main before Hermes refused; the error carries what was saved.
-        store.applySavedPreferences(from: error)
         if refresh { await store.refreshBootstrap() }
-        throw error
+        notice = settingsSavedNotice(patched: patched, shared: savedForm.shared)
+        // A retried avatar from creation finishes the job the Create button started, unless
+        // other edits made meanwhile still need saving.
+        if retryingCreatedAvatar && !dirty { closeSheet() }
       }
-      if refresh { await store.refreshBootstrap() }
-      notice = settingsSavedNotice(patched: patched, shared: savedForm.shared)
-      // A retried avatar from creation finishes the job the Create button started, unless
-      // other edits made meanwhile still need saving.
-      if retryingCreatedAvatar && !dirty { closeSheet() }
     }
   }
   /// Creates the assistant, then saves the look chosen on the first step. The server takes the
