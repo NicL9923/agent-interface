@@ -242,7 +242,8 @@ struct MarkdownBlockView: View {
   var block: MarkdownBlock
   var listDepth: Int
   @Environment(\.markdownSettled) private var settled
-  @Environment(\.markdownOnSolid) private var onSolid
+  @Environment(\.markdownGround) private var ground
+  private var onSolid: Bool { ground == .solid }
   var body: some View {
     switch block {
     case .paragraph(let text):
@@ -253,10 +254,10 @@ struct MarkdownBlockView: View {
     case .code(let language, let text):
       MarkdownCodeBlock(code: text, language: language)
     case .quote(let blocks):
-      // On a solid fill the quote keeps the bubble's white text, beside a bar of white at 75%, 4.17:1 on the group's green.
+      // On a solid fill the quote keeps the bubble's white text.
       AnyView(MarkdownBlocksView(blocks: blocks, listDepth: listDepth)).foregroundStyle(onSolid ? Color.white : Palette.quote)
         .padding(.leading, 14)
-        .overlay(alignment: .leading) { Rectangle().fill(onSolid ? Color.white.opacity(Self.solidQuoteBar) : Palette.line).frame(width: 3) }
+        .overlay(alignment: .leading) { Rectangle().fill(Self.quoteBar(on: ground)).frame(width: 3) }
     case .list(let list):
       MarkdownListView(list: list, depth: listDepth)
     case .rule:
@@ -275,8 +276,15 @@ struct MarkdownBlockView: View {
     for run in text.runs where run.link != nil { value[run.range].underlineStyle = .single }
     return value
   }
-  /// The opacity of a quote's bar on a solid fill: half white reached only 2.74:1 on the group's green.
-  static let solidQuoteBar = 0.75
+  /// A quote's bar. In the person's bubble it is the mark that says these words are quoted, so it reaches 3:1 there:
+  /// `Palette.line` reached 1.16:1 on the tint in light and 1.25:1 in dark, and half white 2.74:1 on the group's green.
+  static func quoteBar(on ground: MarkdownGround) -> Color {
+    switch ground {
+    case .page: Palette.line
+    case .tint: Palette.bubbleSecondary
+    case .solid: .white.opacity(0.75)
+    }
+  }
   /// The web's sizes: h1 1.4em, h2 1.2em, and h3 to h6 1.05em, all semibold.
   static func headingFont(_ level: Int) -> Font {
     switch level {
@@ -289,7 +297,8 @@ struct MarkdownBlockView: View {
 struct MarkdownListView: View {
   var list: MarkdownList
   var depth: Int
-  @Environment(\.markdownOnSolid) private var onSolid
+  @Environment(\.markdownGround) private var ground
+  private var onSolid: Bool { ground == .solid }
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in

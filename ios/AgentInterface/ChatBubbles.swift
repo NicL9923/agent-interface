@@ -180,7 +180,16 @@ enum ReplyBubbles {
 }
 
 private struct ChatBubblesKey: EnvironmentKey { static let defaultValue = false }
-private struct MarkdownOnSolidKey: EnvironmentKey { static let defaultValue = false }
+/// What Markdown sits on, for the few marks that need another color there.
+enum MarkdownGround {
+  /// The transcript, a row or a reply bubble.
+  case page
+  /// The person's tinted bubble.
+  case tint
+  /// The person's solid bubble, under white text.
+  case solid
+}
+private struct MarkdownGroundKey: EnvironmentKey { static let defaultValue = MarkdownGround.page }
 private struct OwnBubbleFillKey: EnvironmentKey { static let defaultValue: Color? = nil }
 extension EnvironmentValues {
   /// Whether the open chat shows the assistant's prose in bubbles: the person's `chatStyle`.
@@ -188,11 +197,11 @@ extension EnvironmentValues {
     get { self[ChatBubblesKey.self] }
     set { self[ChatBubblesKey.self] = newValue }
   }
-  /// Whether Markdown sits on a solid bubble's fill under white text, so a quote's text and bar and a checked box,
-  /// which have colors of their own elsewhere, take white to keep their contrast.
-  var markdownOnSolid: Bool {
-    get { self[MarkdownOnSolidKey.self] }
-    set { self[MarkdownOnSolidKey.self] = newValue }
+  /// What the Markdown below sits on. On a solid fill a quote, a link and a task's box, which have colors of their own
+  /// elsewhere, take white; on the person's tint a quote's bar darkens, since `Palette.line` nearly matches the fill.
+  var markdownGround: MarkdownGround {
+    get { self[MarkdownGroundKey.self] }
+    set { self[MarkdownGroundKey.self] = newValue }
   }
   /// The solid fill for the person's own messages, or nil for the tinted look.
   var ownBubbleFill: Color? {
@@ -324,10 +333,11 @@ struct PersonBubble<Content: View>: View {
     layout {
       Group {
         if let solid {
-          // Markdown in the bubble draws its quotes and checked boxes in white too; see `markdownOnSolid`.
-          content().foregroundStyle(.white, .white).tint(.white).environment(\.markdownOnSolid, true).background(solid, in: shape)
+          // Markdown in the bubble draws its quotes, links and boxes for the fill too; see `markdownGround`.
+          content().foregroundStyle(.white, .white).tint(.white).environment(\.markdownGround, .solid).background(solid, in: shape)
         } else {
-          content().foregroundStyle(Color.primary, Palette.bubbleSecondary).background(Palette.user(scheme), in: shape)
+          content().foregroundStyle(Color.primary, Palette.bubbleSecondary).environment(\.markdownGround, .tint)
+            .background(Palette.user(scheme), in: shape)
         }
       }
       .overlay {

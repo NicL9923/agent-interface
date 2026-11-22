@@ -1139,7 +1139,9 @@ holds both of its layouts. In `"bubbles"`:
   right before the message, and at an accessibility text size it puts the time under the
   name.
 - Every message, a person's included, is laid out by the reply rules above: each run of
-  prose in a bubble capped at 600 pt, every other block at the column's width.
+  prose in a bubble, every other block at the column's width. The web caps the bubble at
+  600 pt. The iOS app does so only in regular width, as on a full-screen iPad; in compact
+  width the column is the limit. The person's own bubble has its own limits, below.
 - Everyone else's bubbles, assistants, other household members and routine posts alike,
   sit at the leading edge with the reply bubble's fill, padding and corners.
 - The person's own bubbles sit at the trailing edge, in the `--user` fill with the reply
@@ -1151,6 +1153,8 @@ holds both of its layouts. In `"bubbles"`:
   message, and 4 pt at the trailing bottom corner of the message's last bubble. A table
   or code block of theirs keeps the column's width like anyone else's. Their "In thread
   with" line and Reply in thread button sit at the trailing edge too.
+  The bar beside a quote in the tinted bubble takes the bubble's secondary text color on
+  iOS, 4.89:1 in light and 5.57:1 in dark. The web draws it in `--line`.
 - Rows lose the divider and the own-row wash, and take 10 pt of padding above and below
   and 12 pt at the sides. The selected reply keeps its accent wash, outline and leading
   bar; the iOS app draws the wash and bar without an outline, as its Classic row does.
