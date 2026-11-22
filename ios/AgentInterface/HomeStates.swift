@@ -23,6 +23,10 @@ extension AppStore {
   /// `connected`, a chat still showing its saved copy does not count, so home goes live as
   /// soon as the roster does, even when the last chat opened has not been reopened yet.
   var householdConnected: Bool { bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired }
+  /// The household can take a write now: `householdConnected`, with a network. What gates the household's
+  /// own controls, such as a group room's Send and Stop, which one assistant's failed chat read says
+  /// nothing about. `connected` adds the open chat's own state.
+  var householdReachable: Bool { householdConnected && !deviceOffline }
   func householdConnectionLost(offline: Bool) -> Bool { offline || (!householdConnected && !sessionExpired) }
   /// Why a new assistant cannot be created now, or nil when it can.
   var assistantSetupBlock: String? {
@@ -153,19 +157,22 @@ struct HermesConnectionPanel: View {
   var busy: Bool
   var retry: () -> Void
   @State private var copied = false
-  private var copy: ConnectionCopy { ConnectionCopy.compact(code: connection?.code, appUnavailable: appUnavailable, offline: offline) }
+  /// The full panel stands in for a whole view, so it always says everything.
+  private var copy: ConnectionCopy { .of(connection: connection, offline: offline, appUnavailable: appUnavailable, lasting: true) }
   var body: some View {
     VStack(spacing: 16) {
       AvatarView(avatar: AvatarConfig(), state: .disconnected, size: 84, name: "Assistant", forceReducedMotion: true).accessibilityHidden(true)
       VStack(spacing: 8) {
         Text("Your household workspace").font(.caption.weight(.semibold)).tracking(1.1).textCase(.uppercase).foregroundStyle(Palette.muted)
         Text(copy.title).font(.title2.bold()).multilineTextAlignment(.center)
-        Text(copy.detail).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        if let detail = copy.detail { Text(detail).foregroundStyle(.secondary).multilineTextAlignment(.center) }
       }
       if copy.setup { steps }
-      Button(action: retry) {
-        Text(busy ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now").frame(maxWidth: 260)
-      }.buttonStyle(.accentProminent).controlSize(.large).disabled(busy || offline).accessibilityIdentifier("reconnectNow")
+      if !offline {
+        Button(action: retry) {
+          Text(busy ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now").frame(maxWidth: 260)
+        }.buttonStyle(.accentProminent).controlSize(.large).disabled(busy).accessibilityIdentifier("reconnectNow")
+      }
       details
     }.frame(maxWidth: 520).frame(maxWidth: .infinity).accessibilityElement(children: .contain).accessibilityLabel("Hermes connection")
       .accessibilityIdentifier("connectionPanel")
@@ -215,14 +222,14 @@ struct HermesConnectionPanel: View {
 struct HomeEmptyDetail: View {
   var create: () -> Void
   @Environment(AppStore.self) private var store
-  private let reachability = NetworkReachability.shared
   @Environment(\.colorScheme) private var scheme
   @State private var checking = false
   var body: some View {
     ScrollView {
       Group {
-        if store.householdConnectionLost(offline: reachability.offline) {
-          HermesConnectionPanel(connection: store.bootstrap?.connection, offline: reachability.offline,
+        // Shown once the household's loss is, as the notice is.
+        if store.appOutage.shown {
+          HermesConnectionPanel(connection: store.bootstrap?.connection, offline: store.deviceOffline,
             appUnavailable: store.appUnavailable, busy: checking) {
               checking = true
               Task { await store.reconnect(); checking = false }

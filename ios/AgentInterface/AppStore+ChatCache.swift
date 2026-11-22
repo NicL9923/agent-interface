@@ -8,12 +8,15 @@ extension AppStore {
     return OfflineLibrary.url(origin: api.baseURL.absoluteString, token: token, root: offlineLibraryRoot)
   }
   func saveOfflineLibrary(immediately: Bool = false) {
-    guard !sessionExpired, offlineSavedAt == nil, let bootstrap, let url = offlineURL else { return }
-    let allowed = Set(bootstrap.bots.map(\.id))
+    // An unknown roster says nothing to save; the last good library stays.
+    guard !sessionExpired, offlineSavedAt == nil, let bootstrap, bootstrap.rosterUnknown != true, let url = offlineURL else { return }
+    // An assistant a cached roster left out keeps its saved chat, and its row for the next launch.
+    let allowed = Set(knownBots.map(\.id))
     let ids = Array(recentChats.filter { allowed.contains($0) }.suffix(OfflineLibrary.maximumChats))
     let chats = conversationCache.filter { ids.contains($0.key) }
     let snapshot = OfflineLibrary(savedAt: Date(), bootstrap: bootstrap, conversations: chats,
-      selected: selectedBotId, capturedAt: conversationCapturedAt)
+      selected: selectedBotId, capturedAt: conversationCapturedAt,
+      departed: unconfirmedDepartures.isEmpty ? nil : unconfirmedDepartures)
     offlineWriter.replace(snapshot, at: url, immediately: immediately)
   }
   func clearOfflineLibrary(includingVoice: Bool = true) {
@@ -23,8 +26,15 @@ extension AppStore {
     offlineSavedAt = nil
     restoredRosterAt = nil
   }
+  /// Where the composer records for this assistant. A change ends the recording, so it stays the same for
+  /// one a cached roster left out, and goes when a connected roster says it left.
   func voiceRecordingURL(botId: String) -> URL? {
-    guard !sessionExpired, bootstrap?.bots.contains(where: { $0.id == botId }) == true else { return nil }
+    guard !sessionExpired, knownBot(botId) != nil else { return nil }
+    return voiceClipURL(botId: botId)
+  }
+  /// Where an assistant's recording is kept, listed or not, so one a cached roster left out is still
+  /// deleted when a connected roster says it left.
+  func voiceClipURL(botId: String) -> URL? {
     let name = SHA256.hash(data: Data(botId.utf8)).map { String(format: "%02x", $0) }.joined()
     return offlineURL.map { $0.deletingPathExtension().appendingPathExtension(name + ".m4a") }
   }

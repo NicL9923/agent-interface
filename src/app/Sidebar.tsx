@@ -308,7 +308,7 @@ export const Sidebar = memo(function Sidebar({
         {(saved || connectionLost) && (
           <span className="home-sync">
             <Icon
-              name="spinner"
+              name={offline ? "offline" : "spinner"}
               size={16}
               className={offline || (saved && connectionLost) ? undefined : "spin"}
             />
@@ -425,7 +425,9 @@ export const Sidebar = memo(function Sidebar({
           <ul className="home-pinned" aria-label="Pinned assistants">
             {pinned.map((bot) => {
               const botState = activity(bot);
-              const showActivity = botState !== "idle" && botState !== "done";
+              // A lost connection is said once, in the header; the pinned assistants only dim.
+              const showActivity =
+                botState !== "idle" && botState !== "done" && botState !== "disconnected";
               return (
                 <li key={bot.id}>
                   <BotMenu
@@ -468,7 +470,7 @@ export const Sidebar = memo(function Sidebar({
                         <small
                           className={`pinned-activity${showActivity ? ` bot-activity state-${botState}` : ""}`}
                         >
-                          {showActivity ? (offline ? "Offline" : stateLabels[botState]) : null}
+                          {showActivity ? stateLabels[botState] : null}
                         </small>
                       </span>
                     </Button>

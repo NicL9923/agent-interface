@@ -8,10 +8,15 @@ extension AppStore {
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
         guard let self, await self.pollOnce() else { return }
-        let seconds = self.failures == 0 ? 1.5 : min(30, pow(2, Double(min(self.failures, 5))))
-        try? await Task.sleep(for: .seconds(seconds))
+        try? await Task.sleep(for: Self.pollDelay(failures: self.failures))
       }
     }
+  }
+  /// The wait before the next pass: short while all is well, and after failed bootstraps the same
+  /// waits as a failed conversation read, so a loss that is already over clears inside the grace
+  /// period. The first retry is a second after the failure.
+  nonisolated static func pollDelay(failures: Int) -> Duration {
+    failures == 0 ? .milliseconds(1_500) : ReadRetry.delay(after: failures)
   }
   /// One pass of the poll loop. Returns false once the sign-in is expiring, which ends polling.
   func pollOnce() async -> Bool {
@@ -36,7 +41,8 @@ extension AppStore {
     watchRoster()
     watchConversation()
     await refreshBootstrap(ifDue: true)
-    if followedBotId != nil, conversationDue { await refreshConversation() }
+    // The bootstrap may have waited long enough for the app to leave or the network to drop.
+    if followedBotId != nil, conversationDue, !chatReadWaits { await refreshConversation(automatic: currentGeneration) }
     await reconcilePending()
     // Files added while the connection was down start once it returns, as on the web.
     if connected, !uploads.uploading, uploads.items.contains(where: { $0.status == .queued }) {
@@ -187,17 +193,29 @@ extension AppStore {
       conversationCache[patch.botId] = value
     }
   }
-  /// One refresh at a time; a notice during one asks for one more after it.
+  /// One refresh at a time; a notice during one asks for one more after it. Each read is checked as
+  /// it sets out, not when it was asked for, so one queued just before a loss or a suspension stays home.
+  /// One more is checked against the session that asked for it: a refresh still running from the account
+  /// before a switch reads for the new one when the new one asked, and never for the old one.
   func requestConversationRefresh() {
-    if conversationRefreshing { conversationRefreshAgain = true; return }
+    let session = generation
+    if conversationRefreshing { conversationRefreshAgain = session; return }
     conversationRefreshing = true
     Task {
-      repeat {
-        conversationRefreshAgain = false
-        await refreshConversation()
-      } while conversationRefreshAgain
+      var asked: UUID? = session
+      while let next = asked {
+        conversationRefreshAgain = nil
+        await refreshConversation(automatic: next)
+        asked = conversationRefreshAgain
+      }
       conversationRefreshing = false
     }
+  }
+  /// A conversation read nobody asked for, from the poll, a stream notice or a retry, goes out only in
+  /// the foreground, with a network, in the session it was asked for. Opening a chat, pull to refresh
+  /// and Reconnect now read anyway.
+  func automaticReadAllowed(in session: UUID) -> Bool {
+    !Task.isCancelled && !suspended && !deviceOffline && generation == session && api?.token != nil && !sessionExpired
   }
   func suspend() {
     suspended = true
@@ -231,32 +249,66 @@ extension AppStore {
       pollSucceeded(.roster)
       // The body applied last time, unchanged: nothing to decode, merge or publish to views.
       guard var value = response.value ?? bootstrap else { return }
+      defer { updateActivity() }
       var applied = false
+      // A roster from the server's cache: Hermes is down, or its roster read failed. The server's cache can
+      // be stale either way, as when a read a change overtook never updated it. An unchanged body is the
+      // roster applied last, whose rows may carry what they were doing.
+      let cached = response.value?.servedFromCache ?? rosterFromCache
       if response.value != nil {
-        if let previous = bootstrap, previous.user.id == value.user.id, !value.connection.connected {
-          value.bots = previous.bots
-        }
-        if let previous = bootstrap, previous.user.id == value.user.id, value.connection.connected,
-          Set(previous.bots.map(\.id)) != Set(value.bots.map(\.id)) {
-          let removed = Set(previous.bots.map(\.id)).subtracting(value.bots.map(\.id))
-          if !removed.isEmpty {
-            clearOfflineLibrary(includingVoice: false)
-            for id in removed {
-              conversationCache[id] = nil; cachedChats.remove(id); conversationCapturedAt[id] = nil
-              if let clip = voiceRecordingURL(botId: id) { try? FileManager.default.removeItem(at: clip) }
-            }
-            recentChats.removeAll { removed.contains($0) }
-            // Recheck redacted references without destroying the open view or its scroll anchor.
-            conversationRefreshedAt = nil
+        // Assistants a connected roster says left this person's roster.
+        var removed: Set<String> = []
+        // The web's `rosterFrom`. Who is listed is the server's word even from its cache: it filters its
+        // last roster for each member. A bootstrap that knows no roster keeps the rows as they were, whatever it
+        // lists: the server has none from its current Hermes connection, or, from an older server that does
+        // not say, Hermes is down and it lists no one.
+        if let previous = bootstrap, previous.user.id == value.user.id {
+          let carried = carryActivity(value.bots, from: previous.bots)
+          let knowsNoRoster = value.rosterUnknown ?? (!value.connection.connected && value.bots.isEmpty)
+          value.bots = knowsNoRoster ? previous.bots : carried
+          let listed = Set(value.bots.map(\.id))
+          if cached {
+            // Left out of a cached roster is not proof of leaving: each keeps its last row, and nothing of it
+            // is cleared, until a connected roster says so.
+            for bot in previous.bots where !listed.contains(bot.id) { unconfirmedDepartures[bot.id] = bot }
+          } else {
+            removed = Set(previous.bots.map(\.id)).union(unconfirmedDepartures.keys).subtracting(listed)
+            unconfirmedDepartures = [:]
           }
+        } else {
+          staleRosterSince = nil
+          unconfirmedDepartures = [:]
+        }
+        if !removed.isEmpty {
+          removeDeliveredChats(removed, NotificationActions.accountMarker(value.user.id))
+          clearOfflineLibrary(includingVoice: false)
+          for id in removed {
+            conversationCache[id] = nil; cachedChats.remove(id); conversationCapturedAt[id] = nil
+            if let clip = voiceClipURL(botId: id) { try? FileManager.default.removeItem(at: clip) }
+          }
+          recentChats.removeAll { removed.contains($0) }
+          // Recheck redacted references without destroying the open view or its scroll anchor.
+          conversationRefreshedAt = nil
         }
         if let previous = bootstrap, previous.user.id != value.user.id { leaveAccount() }
+        // After any account change above, which starts the outages over.
+        bootstrapAnswered = true
+        if value.connection.connected { everConnected = true }
+        // The answer and the app's availability change as one. Assigned apart, a bootstrap answering
+        // past a grace period whose timer has not run yet would show the loss it ends, then say it is over.
+        activityHeld = true
+        if appUnavailable { appUnavailable = false }
+        // Before the roster is applied, which publishes it to the widgets.
+        rosterFromCache = cached
         // A preferences save that overlapped this read may be newer than its copy, so the saved one stays.
-        // The read's tag is not kept then, so the next read applies its preferences even when unchanged.
         let stalePreferences = !preferenceSaves.fresh(preferencesMark)
         if stalePreferences, let previous = bootstrap { value.preferences = previous.preferences }
         if bootstrap != value { bootstrap = value; applied = true }
-        appliedBootstrapTag = stalePreferences ? nil : response.etag
+        activityHeld = false
+        updateActivity()
+        // A stale roster is read whole each time, so the end of its carry is judged on it. A read whose
+        // preferences were set aside keeps no tag either, so the next read applies them even when unchanged.
+        appliedBootstrapTag = stalePreferences || staleRosterSince != nil ? nil : response.etag
       }
       // Publishing follows a changed roster; an unchanged one still renews the widgets' freshness.
       if !applied { publishWidgetSnapshot() }
@@ -268,21 +320,49 @@ extension AppStore {
       failures = 0
       saveOfflineLibrary()
       loadPendings(value.bots)
-      if let open = selectedBotId, value.connection.connected, !value.bots.contains(where: { $0.id == open }) {
+      // A chat off a connected roster leaves, as its assistant did; leaving drops any read on its way. One a
+      // cached roster leaves out stays open on its last row, as the web keeps it behind its notice.
+      if let open = selectedBotId, !cached, !value.bots.contains(where: { $0.id == open }) {
         await leave(open)
-      } else if !stayHome, selectedBotId == nil || !value.bots.contains(where: { $0.id == selectedBotId }) {
+      } else if !stayHome, selectedBotId == nil, automaticReadAllowed(in: generation) {
+        // Opening a chat nobody tapped reads it, so not while the app is away or offline; the next
+        // bootstrap that answers then chooses.
         let last: String? = read(key(.selected))
         let next =
           value.bots.first { $0.id == last }?.id ?? value.bots.first {
             $0.id == value.preferences.defaultBotId
           }?.id ?? value.bots.first?.id
-        await select(next, navigate: false)
+        await select(next, navigate: false, automatic: generation)
       }
     } catch is CancellationError {} catch {
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
       failures += 1
+      bootstrapAnswered = true
       appUnavailable = true
+      updateActivity()
       reportPoll(error, .roster)
+    }
+  }
+  /// How long after the first stale roster in a row each row keeps what its assistant was doing,
+  /// as the web's `ROSTER_CARRY_MS`. With Hermes connected, the server marks rows `disconnected`
+  /// when it could list only its last roster, as after a roster read that failed. Longer than a
+  /// bootstrap's retries take, so one stale roster never dims anyone; short enough that an
+  /// assistant is not shown working long after nobody can tell.
+  static let rosterCarry: Duration = .seconds(30)
+  /// The roster a connected bootstrap brings. Who is on it is the server's word. What each assistant
+  /// is doing is the server's word only when it knows: a stale row keeps the activity it had here
+  /// while `rosterCarry` holds, and whether the app shows a loss is the outages' business.
+  func carryActivity(_ next: [Bot], from previous: [Bot]) -> [Bot] {
+    guard next.contains(where: { $0.activity == .disconnected }) else { staleRosterSince = nil; return next }
+    let since = staleRosterSince ?? now()
+    staleRosterSince = since
+    guard now() - since < Self.rosterCarry else { return next }
+    let before = Dictionary(previous.map { ($0.id, $0.activity) }, uniquingKeysWith: { first, _ in first })
+    return next.map { bot in
+      guard bot.activity == .disconnected, let activity = before[bot.id] else { return bot }
+      var kept = bot
+      kept.activity = activity
+      return kept
     }
   }
   func reconnect() async {

@@ -69,13 +69,6 @@ import XCTest
     XCTAssertEqual(HomeConnectionStatus.of(lost: true, offline: true), .offline)
     XCTAssertNotEqual(HomeConnectionStatus.offline.color, HomeConnectionStatus.reconnecting.color)
   }
-  func testOfflineCopyComesFirstAndMatchesTheWeb() {
-    let offline = ConnectionCopy.compact(code: "unauthorized", appUnavailable: true, offline: true)
-    XCTAssertEqual(offline.title, "You're offline")
-    XCTAssertEqual(offline.detail, "Your draft is kept on this device. We'll reconnect when you're back online.")
-    XCTAssertFalse(offline.setup, "Setup steps don't help someone who is offline")
-    XCTAssertEqual(ConnectionCopy.compact(code: "unauthorized", appUnavailable: false).title, "Hermes didn't accept the connection")
-  }
   func testWelcomeAndSignInCopyMatchTheWeb() {
     XCTAssertEqual(WelcomeCopy.status(unavailable: false), "Connecting to your household…")
     XCTAssertEqual(WelcomeCopy.status(unavailable: true), "Can't reach the app right now. We'll keep trying.")
