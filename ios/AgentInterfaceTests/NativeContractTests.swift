@@ -4817,6 +4817,20 @@ extension NativeContractTests {
         XCTAssertEqual(Set(server.draftSaves().map(\.text)), ["Member two's words"], "Member one's draft is not among them")
     }
 
+    /// A later step of the assistant settings save passes the client the save started with, so a switch between
+    /// two steps refuses it, though the household is reachable and the gate lets it through.
+    func testALaterStepOfASaveGoesThroughTheClientItStartedWith() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let started = value.api, path = "/api/bots/bot/skills"
+        try switchToMemberTwoNow(value, server)
+        XCTAssertTrue(value.householdReachable)
+        do {
+            try await value.perform("/bots/bot/skills", ["ids": ["one"]], method: "PUT", gate: .household, via: started)
+            XCTFail("Member one's step must not go out")
+        } catch { XCTAssertTrue(error is CancellationError, "\(error)") }
+        XCTAssertEqual(server.requestCount(path), 0)
+    }
+
     /// A reading position queued at the switch is refused the same way.
     func testAReadingPositionQueuedAtTheSwitchIsNotSentForTheNextMember() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
