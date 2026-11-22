@@ -2,6 +2,7 @@ import type { AutomationRequester } from "../shared/automation.js";
 import { Conflict } from "../shared/errors.js";
 import type { ExperienceRequester } from "../shared/experience.js";
 import type { Runtime } from "../shared/types.js";
+import { isUnknownRoster, unknownRoster } from "./unknown-roster.js";
 
 /** The runtime ID Hermes is registered under. Its event cursor is the one stored before cursors were kept per runtime. */
 export const hermesRuntimeId = "hermes";
@@ -163,11 +164,14 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
     },
     capabilities: async (...args) => on(args[0]).capabilities(...args),
     canonicalSubmit: async (...args) => (await on(args[0]).canonicalSubmit?.(...args)) === true,
-    listBots: async () =>
-      fanOut(
-        (runtime) => runtime.listBots(),
-        (bot) => bot.id,
-      ),
+    listBots: async () => {
+      const lists = await Promise.all(
+        ids.map(async (id) => [id, await byId(id).listBots()] as const),
+      );
+      const rows = lists.flatMap(([id, bots]) => mine(id, bots, (bot) => bot.id));
+      // A runtime with no roster yet leaves the whole answer saying nothing about who is on it.
+      return lists.some(([, bots]) => isUnknownRoster(bots)) ? unknownRoster(rows) : rows;
+    },
     botDetail: async (botId) => member(botId, "botDetail")(botId),
     watchRoster: (changed) => subscribe((runtime) => runtime.watchRoster?.(changed)),
     // A new assistant is created on the default runtime.

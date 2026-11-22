@@ -71,15 +71,29 @@ else:
     sys.exit("Unexpected xcrun call: " + repr(args))
 """
 
-# Execute the wrapped command without touching the host's lock.
+# Execute the wrapped command without touching the host's lock. It accepts the lock's two scopes and nothing else,
+# and records the scope of each ownership check and each request.
 FAKE_HEAVY_LOCK = r"""#!/usr/bin/env python3
 import json, os, sys
-if sys.argv[1:] == ["--check-held"]:
-    sys.exit(0 if os.environ.get("FAKE_LOCK_HELD") == "1" else 1)
+args = sys.argv[1:]
+check = args[:1] == ["--check-held"]
+if check:
+    args = args[1:]
+scope = []
+if args[:1] == ["--sim"]:
+    scope, args = args[:2], args[2:]
+elif args[:1] == ["--build"]:
+    scope, args = args[:1], args[1:]
+if (check and args) or (not check and args[:1] != ["bash"]):
+    print("Unexpected mac-heavy-lock call: " + repr(sys.argv[1:]), file=sys.stderr)
+    sys.exit(99)
 with open(os.environ["FAKE_LOG"], "a") as log:
-    log.write(json.dumps({"tool": "mac-heavy-lock", "argv": sys.argv[1:]}) + "\n")
+    tool = "mac-heavy-lock-check" if check else "mac-heavy-lock"
+    log.write(json.dumps({"tool": tool, "argv": scope}) + "\n")
+if check:
+    sys.exit(0 if os.environ.get("FAKE_LOCK_HELD") == "1" else 1)
 os.environ["FAKE_LOCK_HELD"] = "1"
-os.execvp(sys.argv[1], sys.argv[1:])
+os.execvp(args[0], args)
 """
 
 
@@ -354,6 +368,43 @@ class ValidateIosTests(unittest.TestCase):
             if entry["argv"] == ["simctl", "shutdown", SIMULATOR]
         )
         self.assertGreater(shutdown_index, test_index)
+
+    def test_the_lock_is_asked_for_what_the_run_uses(self):
+        # A test names its simulator and a build marks itself build-only, so each can share the Mac. A live run
+        # binds a fixed port, so it asks for the whole Mac by declaring nothing.
+        for operation, scope in [
+            ("test", ["--sim", SIMULATOR]),
+            ("build", ["--build"]),
+            ("live", []),
+        ]:
+            with self.subTest(operation=operation):
+                self.log.unlink(missing_ok=True)
+                result = self.run_script(operation)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.calls("mac-heavy-lock"), [scope])
+                # The ownership check before the request and the one after re-entry ask about the same scope.
+                # A check with a narrower or wider scope would let the run start under a hold that does not cover it.
+                checks = self.calls("mac-heavy-lock-check")
+                self.assertEqual([check for check in checks if check != scope], [])
+                self.assertGreaterEqual(len(checks), 2)
+
+    def test_a_run_that_boots_other_devices_asks_for_the_whole_mac(self):
+        # Parallel testing clones the simulator and another destination adds one. The lock cannot hold devices
+        # the helper did not name, so these runs declare nothing. Turning parallel testing off keeps the scope.
+        for options, scope in [
+            (["-parallel-testing-enabled", "yes"], []),
+            (["-parallel-testing-worker-count", "2"], []),
+            (["-destination", "platform=iOS Simulator,name=iPad"], []),
+            (["-parallel-testing-enabled", "NO"], ["--sim", SIMULATOR]),
+        ]:
+            with self.subTest(options=options):
+                self.log.unlink(missing_ok=True)
+                result = self.run_script("test", *options)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.calls("mac-heavy-lock"), [scope])
+                self.assertEqual(
+                    [c for c in self.calls("mac-heavy-lock-check") if c != scope], []
+                )
 
     def test_failed_test_stage_still_shuts_down_the_simulator(self):
         # A failing test stage must also leave its simulator stopped.

@@ -15,16 +15,18 @@ extension WidgetSnapshot {
   }
 }
 extension AppStore {
-  /// Called whenever bootstrap changes. Signing out removes the snapshot; an outage keeps the
-  /// last good one so widgets show its real age instead of refreshing stale states. Spotlight,
-  /// Siri's assistant names and notification sender pictures follow the snapshot, so they leave with it.
+  /// Called whenever bootstrap changes. Signing out removes the snapshot. A roster from the server's cache,
+  /// while Hermes is down or after its roster read failed, keeps the last good snapshot whole, with its real
+  /// age: that roster can be stale either way, so an assistant it leaves out may not have left. A connected
+  /// roster replaces the snapshot with a newer `generatedAt`, which a background read that started earlier
+  /// cannot overwrite. Spotlight, Siri's assistant names and notification sender pictures follow it.
   func publishWidgetSnapshot(at now: Date = Date()) {
     let next: WidgetSnapshot?
     if let bootstrap {
       guard let scope else { return }
-      if !bootstrap.connection.connected {
-        // An outage preserves only this account's snapshot. Signing in as somebody else
-        // must clear the previous person's names and previews even while Hermes is down.
+      if !bootstrap.connection.connected || rosterFromCache {
+        // Only this account's snapshot is kept. Signing in as somebody else must clear the previous
+        // person's names and previews even while Hermes is down.
         if WidgetSnapshotStore.read(from: widgetSnapshotURL)?.scope != scope {
           if WidgetSnapshotStore.write(nil, to: widgetSnapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
           syncSystemSearch(nil)

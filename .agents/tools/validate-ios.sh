@@ -29,17 +29,35 @@ if python3 "$state_tool" eligible "$operation" ${request_options[@]+"${request_o
   can_reuse=1
   if [[ ${IOS_VALIDATION_FRESH:-0} != 1 ]] && python3 "$state_tool" lookup "$inputs_before"; then exit 0; fi
 fi
-# The wrapper verifies real ancestor ownership, including an agent's outer
-# wrapper. Re-entry repeats the evidence check after waiting in the queue.
+# The machine lock shares the Mac with a job that says what it uses. A test confined to this simulator names it, and
+# a build boots nothing. A live run binds a fixed port, and parallel testing or another destination boots devices
+# this helper cannot name, so those runs keep the whole Mac.
+lock_scope=()
+case "$operation" in
+  test) lock_scope=(--sim "$simulator_id") ;;
+  build) lock_scope=(--build) ;;
+esac
+for ((i = 0; i < ${#request_options[@]}; i++)); do
+  case "${request_options[i]}" in
+    -destination | -parallel-testing-worker-count | -maximum-parallel-testing-workers \
+      | -maximum-concurrent-test-simulator-destinations)
+      lock_scope=() ;;
+    -parallel-testing-enabled)
+      parallel=$(printf '%s' "${request_options[i + 1]-}" | tr '[:lower:]' '[:upper:]')
+      [[ $parallel != YES ]] || lock_scope=() ;;
+  esac
+done
+# The wrapper verifies real ancestor ownership, including an agent's outer wrapper, and that the hold covers this
+# scope. Re-entry repeats the evidence check after waiting in the queue.
 heavy_lock="$HOME/.agents/tools/mac-heavy-lock.sh"
 held=0
-MAC_HEAVY_LOCK_TIMEOUT=0 "$heavy_lock" --check-held 2>/dev/null || held=$?
+MAC_HEAVY_LOCK_TIMEOUT=0 "$heavy_lock" --check-held ${lock_scope[@]+"${lock_scope[@]}"} 2>/dev/null || held=$?
 case "$held" in
-  0) ;;  # Verified ancestor ownership.
+  0) ;;  # Verified ancestor ownership that covers this scope.
   1)
-  exec "$heavy_lock" bash "$repo_dir/.agents/tools/validate-ios.sh" "$simulator_id" "$operation" ${request_options[@]+"${request_options[@]}"}
+  exec "$heavy_lock" ${lock_scope[@]+"${lock_scope[@]}"} bash "$repo_dir/.agents/tools/validate-ios.sh" "$simulator_id" "$operation" ${request_options[@]+"${request_options[@]}"}
     ;;
-  *) echo 'Update agent-memory before running this helper; the shared lock needs --check-held support.' >&2; exit 75 ;;
+  *) echo 'Update agent-memory before running this helper; the shared lock needs scoped --check-held support.' >&2; exit 75 ;;
 esac
 mkdir -p .private
 # A fresh attempt supersedes older evidence even when it fails.

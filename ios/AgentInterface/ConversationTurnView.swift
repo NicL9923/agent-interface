@@ -309,7 +309,7 @@ struct ApprovalDecisionView: View {
     if let reach = scope { body["scope"] = reach }
     Task {
       do {
-        try await store.perform(ApprovalDecision.path(botId: botId, approvalId: approval.id), body)
+        try await store.perform(ApprovalDecision.path(botId: botId, approvalId: approval.id), body, gate: .openChat)
         guard session == store.scope else { return }
         settled = true
         if value == "denied" {
