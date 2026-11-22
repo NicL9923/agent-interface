@@ -13,14 +13,15 @@ extension Preferences {
   }
 }
 
-/// Counts preference saves starting and settling, so a bootstrap read can tell whether one overlapped it,
-/// as the web's `preferenceQueue` does with `mark` and `fresh`. A read that did may hold preferences from
-/// before the save, so it keeps the saved ones.
-struct PreferenceSaveOrder {
+/// Counts one account's preference saves starting and settling, so a bootstrap read can tell whether one
+/// overlapped it, as the web's `preferenceQueue` does with `mark` and `fresh`. A read that did may hold
+/// preferences from before the save, so it keeps the saved ones. Each account gets a new one, and a save
+/// settles on the one it started on, so an old account's save never makes the next account's reads stale.
+@MainActor final class PreferenceSaveOrder {
   private var generation = 0
   private var saving = 0
-  mutating func start() { generation += 1; saving += 1 }
-  mutating func settle() { saving -= 1; generation += 1 }
+  func start() { generation += 1; saving += 1 }
+  func settle() { saving -= 1; generation += 1 }
   /// Taken when a read starts.
   var mark: Int { generation }
   /// Whether no save was running when the read started, or started or settled since.
@@ -31,8 +32,9 @@ struct PreferenceSaveOrder {
 extension AppStore {
   /// Every request that saves preferences goes through here, so bootstrap reads are ordered against it.
   func savingPreferences<T>(_ save: () async throws -> T) async throws -> T {
-    preferenceSaves.start()
-    defer { preferenceSaves.settle() }
+    let order = preferenceSaves
+    order.start()
+    defer { order.settle() }
     return try await save()
   }
   static let unsavedChoiceNotice = "This server cannot save that setting yet. Update WildBots on the server to use it."
@@ -93,6 +95,16 @@ extension AppStore {
   func resetPreferenceSaves() {
     queuedPreferences = nil; queuedChoices = []; preferencesDraft = nil; preferencesSaveFailed = false; preferencesFailureMessage = nil
     preferencesSaving = false; preferencesNotice = nil
+  }
+  /// Saves the starred models. Like every preferences save, it is ordered against bootstrap reads, so a
+  /// read that overlaps it keeps the saved stars instead of putting the older list back.
+  func saveModelFavorites(_ favorites: [ModelChoice], busy: Binding<Bool>? = nil, error: Binding<String?>) async {
+    let saved: ModelFavorites? = await run(busy: busy, error: error) { context in
+      try await self.savingPreferences {
+        try await context.api.write("/preferences/models", ModelFavorites(modelFavorites: favorites), method: "PUT")
+      }
+    }
+    if let saved { bootstrap?.preferences.modelFavorites = saved.modelFavorites }
   }
   func togglePin(_ id: String) async {
     guard var preferences = preferencesDraft ?? bootstrap?.preferences else { return }

@@ -1118,7 +1118,9 @@ struct BotSettingsView: View {
         }
         for kind in CatalogKind.allCases where capabilityDirty(kind) {
           let ids = selectedIds(kind)
-          try await store.perform("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT", gate: .household)
+          // Through the client this save started on, like the steps before it: a sign-in since then
+          // retired it, so the rest of the save stops instead of going out under the next account.
+          try await store.perform("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT", gate: .household, via: api)
           savedCapabilities[kind] = Set(ids)
         }
       } catch {

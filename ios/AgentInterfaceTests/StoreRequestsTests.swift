@@ -47,6 +47,20 @@ final class StoreRequestsTests: XCTestCase {
     XCTAssertNil(value)
     XCTAssertNil(error)
   }
+  func testTheSameMemberSigningInAgainEndsARequestInWordsTheViewCanShow() async {
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = client("only")
+    var error: String?
+    let binding = Binding(get: { error }, set: { error = $0 })
+    let value: Int? = await store.run(error: binding) { context in
+      store.replaceClient(token: nil)
+      let _: EmptyResponse = try await context.api.write("/anything", [String: String]())
+      return 4
+    }
+    XCTAssertNil(value)
+    XCTAssertEqual(error, AppStore.signInChanged)
+  }
   func testViewPredicateStopsMultiStepWorkAndPreventsStartingStaleWork() async {
     let store = AppStore()
     store.widgetSnapshotURL = nil

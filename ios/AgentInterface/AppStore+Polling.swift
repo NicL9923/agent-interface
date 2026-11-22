@@ -56,7 +56,7 @@ extension AppStore {
     pollTask = nil
     stopStream()
   }
-  private func stopStream() {
+  func stopStream() {
     rosterTask?.cancel()
     rosterTask = nil
     latestInflight = nil
@@ -241,7 +241,7 @@ extension AppStore {
     let currentGeneration = generation
     bootstrapReads += 1
     let bootstrapRead = bootstrapReads
-    let preferencesMark = preferenceSaves.mark
+    let preferenceOrder = preferenceSaves, preferencesMark = preferenceOrder.mark
     do {
       let response: (value: Bootstrap?, etag: String?) = try await api.changed("/bootstrap?roster=lean", since: appliedBootstrapTag)
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
@@ -290,7 +290,7 @@ extension AppStore {
           // Recheck redacted references without destroying the open view or its scroll anchor.
           conversationRefreshedAt = nil
         }
-        if let previous = bootstrap, previous.user.id != value.user.id { leaveAccount() }
+        if let previous = bootstrap, previous.user.id != value.user.id { leaveAccount(nextToken: api.token) }
         // After any account change above, which starts the outages over.
         bootstrapAnswered = true
         if value.connection.connected { everConnected = true }
@@ -301,7 +301,7 @@ extension AppStore {
         // Before the roster is applied, which publishes it to the widgets.
         rosterFromCache = cached
         // A preferences save that overlapped this read may be newer than its copy, so the saved one stays.
-        let stalePreferences = !preferenceSaves.fresh(preferencesMark)
+        let stalePreferences = preferenceOrder === preferenceSaves && !preferenceOrder.fresh(preferencesMark)
         if stalePreferences, let previous = bootstrap { value.preferences = previous.preferences }
         if bootstrap != value { bootstrap = value; applied = true }
         activityHeld = false
@@ -314,7 +314,7 @@ extension AppStore {
       if !applied { publishWidgetSnapshot() }
       restoredRosterAt = nil
       if offlineSavedAt != nil, !cachedChats.contains(selectedBotId ?? "") { offlineSavedAt = nil }
-      api.csrf = value.csrfToken
+      self.api?.csrf = value.csrfToken
       Task { await self.uploads.drain() }
       if appUnavailable { appUnavailable = false }
       failures = 0

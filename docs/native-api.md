@@ -572,6 +572,14 @@ because clearing only local storage cannot revoke the server session. When the
 server stays unreachable, the app lets the person clear the local session anyway
 after warning that the server-side session remains valid until it expires.
 
+When another member signs in on a device that still holds the last member's
+token, as in the minute before that sign-in expires, the app sends this logout
+with the last member's token first, waiting at most five seconds, so their
+session and device registration end before the new token is used. Each sign-in
+then gets its own client. Requests started under the last one are dropped, and
+an answer still on its way, including a `session_expired` 401 or a logout's
+reply, does not touch the new session.
+
 ## Direct routes
 
 A server can offer the app shorter paths to itself, such as its household LAN or
@@ -1268,7 +1276,8 @@ binds the token to the current person, installation UUID, and native session.
 The token must contain 16 to 256 bytes encoded as hex. Do not assume a fixed
 Apple token length. Token rotation replaces the previous installation token.
 Cross-person ownership collisions return 409 until the former session signs out
-or removes that device. An unconfigured host returns an explicit 409 for
+or removes that device. The app asks again 65 seconds after such a 409, while
+the same account stays signed in. An unconfigured host returns an explicit 409 for
 registration/tests. Removal remains available if APNs configuration is removed.
 
 The server exclusively chooses the APNs environment. The device must not supply

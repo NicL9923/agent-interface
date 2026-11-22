@@ -146,6 +146,11 @@ final class AttachmentUploads {
       // No network replay: Retry uploads only this file and never sends the message.
       try await store.attachUploaded(file, botId: upload.botId) { self.forget(uploadId) }
     } catch is CancellationError {
+      // Removing a file drops its entry first. One still here was cut off, as when the same member signs in again,
+      // so it waits for Retry instead of showing as uploading for good.
+      guard currentGeneration == store.generation, let index = items.firstIndex(where: { $0.id == uploadId }) else { return }
+      items[index].status = .failed
+      items[index].error = api.retired ? AppStore.signInChanged : "This upload was interrupted. Retry it."
     } catch {
       guard currentGeneration == store.generation else { return }
       if let index = items.firstIndex(where: { $0.id == uploadId }) {

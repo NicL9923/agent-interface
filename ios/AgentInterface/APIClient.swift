@@ -123,6 +123,10 @@ extension Data {
   /// Tests replace the clock; they also supply their own session, which turns off path watching.
   var now: () -> Date = Date.init
   var watchesNetwork: Bool { !injectedSession }
+  /// Set when another sign-in replaces this client. A retired client sends nothing, and an answer it
+  /// was still waiting for ends as `CancellationError`, so work started under one account can neither
+  /// write as the next one nor change that account's state with an old answer.
+  private(set) var retired = false
   init(baseURL: URL, session: URLSession? = nil) {
     self.baseURL = baseURL
     if let session {
@@ -141,6 +145,42 @@ extension Data {
     }
     token = SecureToken.read(host: baseURL.absoluteString)
     directRoutes = Self.storedRoutes(for: baseURL)
+  }
+  /// The client for the next sign-in on this server: the same connection, routes and settings, with
+  /// `token` and nothing cached. The store retires this one as it installs that one.
+  private init(succeeding previous: APIClient, token: String?) {
+    baseURL = previous.baseURL
+    session = previous.session
+    injectedSession = previous.injectedSession
+    self.token = token
+    localCookieAuth = previous.localCookieAuth
+    now = previous.now
+    directRoutes = previous.directRoutes
+    routeCooldowns = previous.routeCooldowns
+  }
+  func successor(token: String?) -> APIClient { APIClient(succeeding: self, token: token) }
+  /// Ends this client's sign-in on this device: it forgets the token and stops checking routes, and
+  /// every request through it from now on, or still waiting for its answer, ends as cancelled.
+  func retire() {
+    retired = true
+    token = nil
+    csrf = nil
+    routeCheck?.cancel()
+    routeCheck = nil
+    pathWatch = nil
+  }
+  /// Runs one request for a caller. Nothing is sent through a retired client, and an answer or a
+  /// failure that arrives after retirement is dropped.
+  private func live<T>(_ work: () async throws -> T) async throws -> T {
+    guard !retired else { throw CancellationError() }
+    do {
+      let value = try await work()
+      guard !retired else { throw CancellationError() }
+      return value
+    } catch {
+      if retired { throw CancellationError() }
+      throw error
+    }
   }
   nonisolated static func component(_ value: String) -> String {
     value.addingPercentEncoding(
@@ -174,11 +214,14 @@ extension Data {
     path: String, method: String = "GET", body: Data? = nil, contentType: String? = nil,
     authenticated: Bool = true
   ) async throws -> Data {
-    try await exchange(
-      path: path, method: method, body: body, contentType: contentType,
-      authenticated: authenticated, conditional: method == "GET").data
+    try await live {
+      try await exchange(
+        path: path, method: method, body: body, contentType: contentType,
+        authenticated: authenticated, conditional: method == "GET").data
+    }
   }
   private func request(path: String, method: String, contentType: String?, authenticated: Bool, route: DirectRoute? = nil) throws -> URLRequest {
+    guard !retired else { throw CancellationError() }
     var request = URLRequest(url: try transportURL(path, on: route))
     // A direct route refuses cookies; it takes only the bearer.
     if route != nil { request.httpShouldHandleCookies = false }
@@ -297,6 +340,10 @@ extension Data {
   /// An open server event stream; read its `lines`. Anything but an open stream throws. A reader
   /// that stops before the stream ends cancels its `task`, so the connection closes with it.
   func events(_ path: String) async throws -> URLSession.AsyncBytes {
+    try await live { try await openEvents(path) }
+  }
+  private func openEvents(_ path: String) async throws -> URLSession.AsyncBytes {
+    guard !retired else { throw CancellationError() }
     let route = token != nil ? activeRoute : nil
     let sentToken = token
     let pinning = route.map { DirectTaskDelegate(pin: $0.certificateSha256) }
@@ -308,7 +355,7 @@ extension Data {
     let (bytes, response): (URLSession.AsyncBytes, URLResponse)
     do { (bytes, response) = try await streamSession.bytes(for: request, delegate: pinning) } catch {
       if let route, token == sentToken, directRouteFailed(route, error: error, unsent: pinning?.refused == true, method: "GET") {
-        return try await events(path)
+        return try await openEvents(path)
       }
       throw error
     }
@@ -320,7 +367,7 @@ extension Data {
       _ = directRouteFailed(route, unsent: true, method: "GET")
       // Reopened only for the account that asked; another sign-in opens its own stream.
       guard token == sentToken else { throw APIError(message: "The change stream is unavailable.", status: 403) }
-      return try await events(path)
+      return try await openEvents(path)
     }
     guard http?.statusCode == 200, http?.mimeType == "text/event-stream" else {
       bytes.task.cancel()
@@ -329,34 +376,42 @@ extension Data {
     return bytes
   }
   func get<T: Decodable & SendableMetatype>(_ path: String) async throws -> T {
-    let body = try await data(path: "/api" + path)
-    return try await Self.decoded(body, from: "/api" + path)
+    try await live {
+      let body = try await data(path: "/api" + path)
+      return try await Self.decoded(body, from: "/api" + path)
+    }
   }
   /// A poll read that skips decoding when the response is the body the caller last applied, named
   /// by its ETag, whether it came back as a 304 or in full. The value is nil then; otherwise it
   /// comes with the ETag to pass next time. A server without ETags always decodes.
   func changed<T: Decodable & SendableMetatype>(_ path: String, since applied: String?) async throws -> (value: T?, etag: String?) {
-    let response = try await exchange(
-      path: "/api" + path, method: "GET", body: nil, contentType: nil, authenticated: true, conditional: true)
-    if let applied, response.etag == applied { return (nil, applied) }
-    return (try await Self.decoded(response.data, from: "/api" + path), response.etag)
+    try await live {
+      let response = try await exchange(
+        path: "/api" + path, method: "GET", body: nil, contentType: nil, authenticated: true, conditional: true)
+      if let applied, response.etag == applied { return (nil, applied) }
+      return (try await Self.decoded(response.data, from: "/api" + path), response.etag)
+    }
   }
   func publicGet<T: Decodable & SendableMetatype>(_ path: String) async throws -> T {
-    try await Self.decoded(await data(path: "/api" + path, authenticated: false), from: "/api" + path)
+    try await live { try await Self.decoded(await data(path: "/api" + path, authenticated: false), from: "/api" + path) }
   }
   func publicWrite<T: Decodable & SendableMetatype, V: Encodable>(_ path: String, _ value: V) async throws -> T {
-    try await Self.decoded(
-      await data(
-        path: "/api" + path, method: "POST", body: JSONEncoder().encode(value),
-        contentType: "application/json", authenticated: false), from: "/api" + path)
+    try await live {
+      try await Self.decoded(
+        await data(
+          path: "/api" + path, method: "POST", body: JSONEncoder().encode(value),
+          contentType: "application/json", authenticated: false), from: "/api" + path)
+    }
   }
   func write<T: Decodable & SendableMetatype, V: Encodable>(_ path: String, _ value: V, method: String = "POST")
     async throws -> T
   {
-    try await Self.decoded(
-      await data(
-        path: "/api" + path, method: method, body: JSONEncoder().encode(value),
-        contentType: "application/json"), from: "/api" + path)
+    try await live {
+      try await Self.decoded(
+        await data(
+          path: "/api" + path, method: method, body: JSONEncoder().encode(value),
+          contentType: "application/json"), from: "/api" + path)
+    }
   }
   func delete(_ path: String) async throws {
     _ = try await data(path: "/api" + path, method: "DELETE")
@@ -407,6 +462,12 @@ extension Data {
     botId: String, name: String, mime: String, data: Data,
     progress: (@MainActor @Sendable (Double) -> Void)? = nil
   ) async throws -> FileRef {
+    try await live { try await sendUpload(botId: botId, name: name, mime: mime, data: data, progress: progress) }
+  }
+  private func sendUpload(
+    botId: String, name: String, mime: String, data: Data,
+    progress: (@MainActor @Sendable (Double) -> Void)?
+  ) async throws -> FileRef {
     guard UploadRules.mimeTypes.contains(mime) else {
       throw APIError(message: "Use \(UploadRules.kinds).", status: 415)
     }
@@ -446,7 +507,7 @@ extension Data {
         for: request, from: body, delegate: taskDelegate)
     } catch {
       if let route, token == sentToken, directRouteFailed(route, error: error, unsent: pinning?.refused == true, method: "POST") {
-        return try await upload(botId: botId, name: name, mime: mime, data: data, progress: progress)
+        return try await sendUpload(botId: botId, name: name, mime: mime, data: data, progress: progress)
       }
       throw Self.unreachable(error, read: false)
     }
@@ -456,7 +517,7 @@ extension Data {
     if let route, Self.refusedByRoute(response.statusCode, result) {
       _ = directRouteFailed(route, unsent: true, method: "POST")
       guard token == sentToken else { throw Self.failure(response.statusCode, result) }
-      return try await upload(botId: botId, name: name, mime: mime, data: data, progress: progress)
+      return try await sendUpload(botId: botId, name: name, mime: mime, data: data, progress: progress)
     }
     guard (200..<300).contains(response.statusCode) else { throw Self.failure(response.statusCode, result) }
     return try await Self.decoded(result, from: path)
