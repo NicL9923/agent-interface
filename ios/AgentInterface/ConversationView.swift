@@ -405,11 +405,7 @@ struct ConversationView: View {
       .onChange(of: store.replyAnnouncement) { _, reply in
         if visible, let reply, reply.botId == bot.id { AccessibilityNotification.Announcement("\(bot.name) replied: \(reply.text)").post() }
       }
-      .onDisappear {
-        readSaveTask?.cancel()
-        // Read off this chat while it is still the open one, or kept from when it last was.
-        if let place = readPlace ?? lastReadPlace { store.markRead(place) }
-      }
+      .onDisappear { saveReadPositionNow() }
     }
   }
   private func transcriptScroll(_ proxy: ScrollViewProxy) -> some View {
@@ -687,7 +683,16 @@ struct ConversationView: View {
     if following { return messages.last?.id }
     return visibleMessage.flatMap { id in messages.contains { $0.id == id } ? id : nil }
   }
-  private var readPlace: ReadPlace? { readPosition.flatMap { store.readPlace($0, in: bot.id) } }
+  private var readPlace: ReadPlace? {
+    guard let id = readPosition else { return nil }
+    return store.readPlace(id, in: bot.id)
+  }
+  /// As the chat leaves the screen: its place now while it is still the open chat, or the last one kept from then.
+  private func saveReadPositionNow() {
+    readSaveTask?.cancel()
+    guard let place = readPlace ?? lastReadPlace else { return }
+    store.markRead(place)
+  }
   private func saveReadPosition() {
     readSaveTask?.cancel()
     guard visible, placed, let place = readPlace else { return }
