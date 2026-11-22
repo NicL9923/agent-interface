@@ -82,7 +82,17 @@ class ValidationTests(unittest.TestCase):
             self.home / ".agents/tools/mac-heavy-lock.sh",
             """#!/bin/bash
 set -eu
-if [[ "$1" == --check-held ]]; then [[ "${TEST_HELD:-}" == 1 ]]; exit $?; fi
+check=0
+if [[ "$1" == --check-held ]]; then check=1; shift; fi
+# The scope validate-ios.sh declares: its own simulator for a test, the build slot for a build.
+case "${1:-}" in
+  --sim) shift 2 ;;
+  --build) shift ;;
+esac
+if [[ $check == 1 ]]; then
+  [[ $# == 0 ]] || { echo "unexpected --check-held arguments: $*" >&2; exit 99; }
+  [[ "${TEST_HELD:-}" == 1 ]]; exit $?
+fi
 printf 'queued\n' >> "$TEST_ROOT/queue.log"
 if [[ "${TEST_QUEUED_SOURCE_CHANGE:-}" == 1 ]]; then printf %s "${TEST_QUEUED_SOURCE_VALUE:-changed}" > "$TEST_ROOT/ios/Input.swift"; fi
 export TEST_HELD=1
