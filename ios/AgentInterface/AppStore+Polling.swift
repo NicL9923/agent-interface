@@ -221,8 +221,9 @@ extension AppStore {
     suspended = true
     cancelPrefetch()
     stopPolling()
-    // The next poll loop starts with a fresh bootstrap.
+    // The next poll loop starts with a fresh bootstrap and conversation read.
     bootstrapRefreshedAt = nil
+    conversationRefreshedAt = nil
     persistDraft()
     flushDraft(inBackground: true)
     saveOfflineLibrary(immediately: true)
@@ -283,6 +284,7 @@ extension AppStore {
           clearOfflineLibrary(includingVoice: false)
           for id in removed {
             conversationCache[id] = nil; cachedChats.remove(id); conversationCapturedAt[id] = nil
+            removePrefetchedConversation(id)
             if let clip = voiceClipURL(botId: id) { try? FileManager.default.removeItem(at: clip) }
           }
           recentChats.removeAll { removed.contains($0) }
@@ -291,6 +293,7 @@ extension AppStore {
         }
         if let previous = bootstrap, previous.user.id != value.user.id {
           clearOfflineLibrary()
+          clearNotificationPrefetch()
           persistDraft()
           resetAccountContent()
         }

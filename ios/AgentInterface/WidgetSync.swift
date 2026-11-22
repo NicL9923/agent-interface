@@ -32,6 +32,7 @@ extension AppStore {
           syncSystemSearch(nil)
           syncSenderAvatars(nil)
         }
+        clearOtherAccountPrefetch(bootstrap)
         return
       }
       next = WidgetSnapshot(bootstrap: bootstrap, scope: scope, at: now)
@@ -41,6 +42,7 @@ extension AppStore {
     if WidgetSnapshotStore.write(next, to: widgetSnapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
     syncSystemSearch(next)
     syncSenderAvatars(next == nil ? nil : bootstrap)
+    syncNotificationPrefetch(next == nil ? nil : bootstrap)
   }
   private func syncSystemSearch(_ snapshot: WidgetSnapshot?) {
     if spotlight?.sync(snapshot) == true { WildBotsShortcuts.updateAppShortcutParameters() }

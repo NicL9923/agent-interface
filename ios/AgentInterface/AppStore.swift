@@ -40,6 +40,13 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
   /// Assistant pictures for notifications in the App Group. Unit tests leave the App Group alone.
   @ObservationIgnored var senderAvatars: SenderAvatars? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? SenderAvatars(root: NotificationSenders.root) : nil
+  /// Conversation prefetch cache in the App Group shared with the notification service extension.
+  /// Unit tests leave the real App Group alone and inject a temporary directory.
+  @ObservationIgnored var prefetchRoot: URL? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? NotificationPrefetchStore.root : nil
+  /// Invoked when cold launch restores a cached bootstrap so a pending notification tap can open
+  /// its chat immediately in parallel with the live bootstrap read. Returns the navigation task
+  /// when a pending navigation took over, or `nil` when nothing was pending.
+  @ObservationIgnored var onBootstrapReady: (@MainActor () -> Task<Void, Never>?)?
   /// Text from Siri, a notification's Reply or the Share inbox waiting for its draft; see `DraftAdditions.swift`.
   var additions: [DraftAddition] = []
   @ObservationIgnored var earlyAdditions: [DraftAddition] = []
@@ -568,6 +575,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     self.error = error.localizedDescription
     if let apiError = error as? APIError, apiError.isSessionExpired {
       clearOfflineLibrary()
+      clearNotificationPrefetch()
       if let api { try? SecureToken.save(nil, host: api.baseURL.absoluteString) }
       api?.token = nil
       stopPolling()

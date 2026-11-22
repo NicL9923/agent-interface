@@ -8,6 +8,7 @@ extension AppStore {
     conversationCache[id] = nil
     conversationCapturedAt[id] = nil
     cachedChats.remove(id)
+    removePrefetchedConversation(id)
     saveOfflineLibrary()
     if deletedBotId == id { deletedBotId = nil } else { notice = "That assistant is no longer available to you." }
     error = nil
@@ -33,6 +34,7 @@ extension AppStore {
     conversationRefreshedAt = nil
     defer { if openingBotId == id { openingBotId = nil } }
     selectedBotId = id
+    if let id { absorbPrefetchedConversations(only: id) }
     if id != nil && navigate { conversationRequest = UUID() }
     conversation = id.flatMap { conversationCache[$0] }
     offlineSavedAt = id.flatMap { cachedChats.contains($0) ? conversationCapturedAt[$0] : nil } ?? restoredRosterAt
@@ -307,6 +309,7 @@ extension AppStore {
       conversationCache[expired] = nil; cachedChats.remove(expired)
     }
     if changed { saveOfflineLibrary() }
+    removePrefetchedConversation(id)
     // The conversation carries the saved draft, so a draft that failed to load has now loaded.
     clearDraftLoadFailure()
     // Polling also brings in a draft changed on another device, or a send made there, and
