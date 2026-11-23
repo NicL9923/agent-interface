@@ -77,3 +77,20 @@ export function assertCredentialPolicy(
       throw new InvalidInput("Choose where this subscription credential will be used.");
   }
 }
+
+/**
+ * Refuses a bot in a group chat its credential may not serve. A Hermes bot has no registry credential: Hermes
+ * owns its sign-in. A native bot without a credential cannot run at all, so it is refused too.
+ */
+export function assertGroupChatAllowed(
+  bot: Pick<ManagedBotRecord, "name" | "harness" | "ownerId" | "ownerOsUser" | "shared">,
+  credential:
+    | Pick<CredentialRecord, "kind" | "ownerId" | "allowedHarnesses" | "envVar" | "osUser">
+    | undefined,
+  multiUser: boolean,
+): void {
+  if (bot.harness === "hermes") return;
+  if (!credential)
+    throw new InvalidInput(`Choose a credential for ${bot.name} before adding it to a group chat.`);
+  assertCredentialPolicy(bot, credential, { kind: "group-chat", multiUser });
+}

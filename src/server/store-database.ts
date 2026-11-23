@@ -254,6 +254,37 @@ const additions = `
     last_mismatch_at INTEGER
   );
   -- END transcripts
+  -- BEGIN native_groups
+  -- Group chats among native assistants that WildBots runs itself, without Hermes. Member IDs are
+  -- a JSON array of managed bot IDs; a message's round is the bot turn that wrote it (0 for people).
+  CREATE TABLE IF NOT EXISTS native_group_rooms(
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    lead_bot_id TEXT NOT NULL,
+    member_bot_ids_json TEXT NOT NULL,
+    max_rounds INTEGER NOT NULL DEFAULT 4,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    archived_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS native_group_messages(
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    room_id TEXT NOT NULL REFERENCES native_group_rooms(id),
+    thread_id TEXT,
+    sender_kind TEXT NOT NULL CHECK(sender_kind IN ('human','bot','system')),
+    sender_id TEXT NOT NULL,
+    sender_name TEXT NOT NULL,
+    text TEXT NOT NULL,
+    mentions_json TEXT NOT NULL DEFAULT '[]',
+    round INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS native_group_rooms_created ON native_group_rooms(archived_at,created_at);
+  CREATE INDEX IF NOT EXISTS native_group_messages_room ON native_group_messages(room_id,thread_id,seq);
+  -- END native_groups
 `;
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {
