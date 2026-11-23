@@ -188,15 +188,25 @@ import XCTest
     XCTAssertTrue(failure.waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.staticTexts["Fixture avatar save failed"].exists, "The server's reason is shown too")
     // The sheet now edits the created assistant on its Profile, its chosen look intact.
-    XCTAssertTrue(app.navigationBars["Profile"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.navigationBars["Profile"].buttons["All settings"].exists)
+    let profile = app.navigationBars["Profile"]
+    XCTAssertTrue(profile.waitForExistence(timeout: 5))
+    XCTAssertTrue(profile.buttons["All settings"].exists)
     reveal(app, pebble, unsaved: true)
     XCTAssertTrue(pebble.isSelected)
     try capture("after-create-avatar-failed")
-    app.buttons["retryAvatar"].tap()
+    let retry = app.buttons["retryAvatar"]
+    reveal(app, retry, up: false, unsaved: true)
+    retry.tapWhenReady()
+    XCTAssertTrue(profile.waitForDisappearance(), "Saving the avatar dismisses the creation sheet")
     let created = app.buttons["bot.created-1"]
-    XCTAssertTrue(created.waitForExistence(timeout: 10), app.debugDescription)
     // Reopening shows what the server holds, so a retry that never sent the avatar fails here.
+    let home = app.scrollViews["assistantHome"]
+    XCTAssertTrue(home.waitUntilHittable(), app.debugDescription)
+    for _ in 0..<6 {
+      if created.canTap { break }
+      home.swipeUp()
+    }
+    XCTAssertTrue(created.waitUntilHittable(), app.debugDescription)
     created.tap()
     app.openAssistantSettings("Feed tracker")
     app.selectSettingsTab("Profile")
