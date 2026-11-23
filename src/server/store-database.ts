@@ -175,6 +175,21 @@ const additions = `
   CREATE INDEX IF NOT EXISTS approval_attribution_created ON approval_attribution(created_at);
   CREATE INDEX IF NOT EXISTS retry_claims_created ON retry_claims(created_at);
   CREATE INDEX IF NOT EXISTS submissions_created ON submissions(created_at);
+  -- BEGIN bot_secrets
+  CREATE TABLE IF NOT EXISTS bot_secrets(
+    id TEXT PRIMARY KEY NOT NULL,
+    scope_kind TEXT NOT NULL CHECK(scope_kind IN ('bot','owner','household')),
+    scope_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    iv BLOB NOT NULL,
+    tag BLOB NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(scope_kind,scope_id,name)
+  );
+  -- END bot_secrets
   -- BEGIN bot_queue
   CREATE TABLE IF NOT EXISTS bot_queue(
     id TEXT PRIMARY KEY NOT NULL,

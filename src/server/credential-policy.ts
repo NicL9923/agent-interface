@@ -12,6 +12,17 @@ export type CredentialUse =
   | { kind: "handoff"; sourceOwnerId?: string }
   | { kind: "routine"; destination: "personal" | "group" };
 
+export function assertBotHandoffAllowed(
+  target: ManagedBotRecord,
+  credential: CredentialRecord | undefined,
+  sourceOwnerId?: string,
+): void {
+  if (target.harness === "hermes") return;
+  if (!credential || credential.id !== target.credentialId)
+    throw new Conflict("This assistant's credential is unavailable.", "not_configured");
+  assertCredentialPolicy(target, credential, { kind: "handoff", sourceOwnerId });
+}
+
 export function assertCredentialConfiguration(
   credential: Pick<CredentialRecord, "kind" | "ownerId" | "allowedHarnesses" | "envVar">,
 ): void {

@@ -228,7 +228,11 @@ export class TranscriptRepository {
   search(
     botIds: readonly string[],
     query: string,
-    { limit, offset = 0 }: { limit: number; offset?: number },
+    {
+      limit,
+      offset = 0,
+      highlight = true,
+    }: { limit: number; offset?: number; highlight?: boolean },
   ): TranscriptSearchHit[] {
     if (!Number.isSafeInteger(limit) || limit < 1)
       throw new RangeError("Invalid transcript limit.");
@@ -240,12 +244,19 @@ export class TranscriptRepository {
     return this.db
       .prepare(
         `SELECT m.bot_id AS botId, m.message_id AS messageId, m.seq, m.role, m.created_at AS createdAt,
-          snippet(transcript_fts, -1, '[', ']', '…', 24) AS snippet
+          snippet(transcript_fts, -1, ?, ?, '…', 24) AS snippet
         FROM transcript_fts JOIN transcript_messages m ON m.row_id=transcript_fts.rowid
         WHERE transcript_fts MATCH ? AND m.bot_id IN (SELECT value FROM json_each(?))
         ORDER BY m.row_id DESC LIMIT ? OFFSET ?`,
       )
-      .all(match, JSON.stringify(botIds), limit, offset) as TranscriptSearchHit[];
+      .all(
+        highlight ? "[" : "",
+        highlight ? "]" : "",
+        match,
+        JSON.stringify(botIds),
+        limit,
+        offset,
+      ) as TranscriptSearchHit[];
   }
 
   latestPreview(botId: string): { messageId: string; text: string; at?: string } | undefined {
