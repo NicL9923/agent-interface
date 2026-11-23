@@ -228,8 +228,11 @@ Each step ships on its own and is accepted before the next.
    top-level set stays the default runtime's for older clients. The roster and the routine inventory stay up while
    some runtimes fail: they list what the others answered, plus the failed runtime's last roster as disconnected,
    and are marked partial (`src/server/unknown-roster.ts`). Every caller that reconciles, prunes or decides privacy
-   checks that mark before taking an absence as gone. Still for this step: where a bot's harness is stored, so
-   `runtimeOf` can read it. Roster availability during one runtime's outage is accepted when:
+   checks that mark before taking an absence as gone. A bot's harness is stored in its managed record, which
+   `runtimeOf` reads, and `runtimeForNew` sends a new bot to the runtime its harness names, so no native bot becomes
+   a Hermes profile. `composeServerRuntime` (`src/server/native-harness.ts`) builds this in `index.ts`, with the
+   WildBots MCP server and its memory and Mac tools, unless `WILDBOTS_HARNESS_ENABLED=false`. Roster availability
+   during one runtime's outage is accepted when:
    - `/bots` stays up when a second runtime that has never answered fails.
    - Reconciliation and privacy decisions never act on a partial roster: check-in and delivery pruning, main
      assistant reconciliation, upgrade busy checks, bot access and room visibility.

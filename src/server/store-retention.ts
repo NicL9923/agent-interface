@@ -5,6 +5,8 @@ import type { StoreDatabase } from "./store-database.js";
 import type { CheckInRepository } from "./store-check-ins.js";
 import type { QueueRepository } from "./store-queue.js";
 import type { TranscriptRepository } from "./store-transcripts.js";
+import type { MemorySkillsRepository } from "./store-memory.js";
+import type { NativeRoutineRepository } from "./store-native-routines.js";
 
 /** Removals that span every area: a deleted assistant's records, and rows past their retention. */
 export class RetentionRepository {
@@ -15,6 +17,8 @@ export class RetentionRepository {
     private readonly queue: QueueRepository,
     private readonly transcripts: TranscriptRepository,
     private readonly checkIns?: CheckInRepository,
+    private readonly memory?: Pick<MemorySkillsRepository, "forgetBot">,
+    private readonly nativeRoutines?: Pick<NativeRoutineRepository, "forgetBot">,
   ) {}
   private get db() {
     return this.database.db;
@@ -25,6 +29,10 @@ export class RetentionRepository {
   forgetBot(botId: string) {
     this.database.transaction(() => {
       this.transcripts.forgetBot(botId);
+      this.memory?.forgetBot(botId);
+      this.nativeRoutines?.forgetBot(botId);
+      // Secrets saved for this assistant alone; owner and household secrets serve others too.
+      this.db.prepare("DELETE FROM bot_secrets WHERE scope_kind='bot' AND scope_id=?").run(botId);
       const ids = (sql: string) =>
         (this.db.prepare(sql).all(botId, botId) as { id: string | null }[]).flatMap((row) =>
           row.id ? [row.id] : [],

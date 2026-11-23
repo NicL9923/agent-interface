@@ -11,10 +11,12 @@ import {
   reasoningLevels,
   serviceTiers,
   type Bot,
+  type BotInput,
   type RequireCapability,
   type Runtime,
 } from "../shared/types.js";
 import { unreadSince } from "../shared/unread.js";
+import { asksForNativeHarness } from "../shared/harness.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { assistantsUnavailable, notFound, visible, type Roster } from "./bot-access.js";
@@ -116,6 +118,14 @@ export class BotDirectory {
   }
 }
 
+/**
+ * A native harness records its personal assistant's owner itself, so it is told who that is. Hermes keeps
+ * ownership only in this app's presentation record and gets the input unchanged.
+ */
+function withOwner(input: BotInput, ownerId: string | undefined): BotInput & { ownerId?: string } {
+  return ownerId && asksForNativeHarness(input.harness) ? { ...input, ownerId } : input;
+}
+
 /** Creating, reading, changing and deleting assistants, with their avatar, inference, tools and skills. */
 export function installBotRoutes(
   app: FastifyInstance,
@@ -182,11 +192,19 @@ export function installBotRoutes(
       (req.query as { roster?: string }).roster === "lean",
     );
   });
-  // A new assistant is created on the default runtime.
+  // A new assistant is created on the runtime its harness names, or the default runtime.
   apiRoute(
     app,
     "POST /bots",
-    { before: () => requireCapability("botConfiguration", undefined), body: botSaveRequest },
+    {
+      // The default runtime configures its own new assistants. One on a native harness is the harness runtime's to
+      // refuse, so it can be created while Hermes is down.
+      before: async (req) => {
+        if (!asksForNativeHarness((req.body as { harness?: unknown } | undefined)?.harness))
+          await requireCapability("botConfiguration", undefined);
+      },
+      body: botSaveRequest,
+    },
     async (req, body) => {
       const { confirmPrivate: _, confirmMainCleared: __, ...input } = body;
       const next = { shared: input.shared, ownerId: input.shared ? undefined : signedIn(req).id };
@@ -207,7 +225,7 @@ export function installBotRoutes(
         const version = store.swapPresentation(id, prior, next);
         let bot;
         try {
-          bot = await runtime.saveBot(input);
+          bot = await runtime.saveBot(withOwner(input, next.ownerId));
         } catch (error) {
           // Hermes may have created the profile and then failed to remove it; it stays the creator's.
           if (error instanceof IncompleteCreationError) {
@@ -286,7 +304,7 @@ export function installBotRoutes(
           );
         // A failed save puts sharing back only if no later save has changed it since.
         try {
-          return await runtime.saveBot(input, id);
+          return await runtime.saveBot(withOwner(input, next.ownerId), id);
         } catch (error) {
           store.restorePresentation(id, version, previous);
           throw error;

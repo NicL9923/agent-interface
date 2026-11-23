@@ -4,6 +4,13 @@ export type NativeHarnessKind = (typeof NATIVE_HARNESS_KINDS)[number];
 export const HARNESS_KINDS = ["hermes", ...NATIVE_HARNESS_KINDS] as const;
 export type HarnessKind = (typeof HARNESS_KINDS)[number];
 
+/**
+ * True when a new assistant asks for any harness but Hermes, including one the server does not know, so it is
+ * never created as a Hermes profile.
+ */
+export const asksForNativeHarness = (harness: unknown) =>
+  typeof harness === "string" && harness.trim().toLowerCase() !== "hermes";
+
 export const CREDENTIAL_KINDS = ["subscription", "api_key"] as const;
 export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
 

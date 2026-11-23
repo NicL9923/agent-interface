@@ -1,7 +1,7 @@
 import type { AutomationRequester } from "../shared/automation.js";
 import { Conflict } from "../shared/errors.js";
 import type { ExperienceRequester } from "../shared/experience.js";
-import type { Bot, Runtime } from "../shared/types.js";
+import type { Bot, BotInput, Runtime } from "../shared/types.js";
 import { isUnknownRoster, partialAnswer, unknownRoster } from "./unknown-roster.js";
 
 /** The runtime ID Hermes is registered under. Its event cursor is the one stored before cursors were kept per runtime. */
@@ -18,6 +18,11 @@ export interface RuntimeRoutes {
   defaultRuntime: string;
   /** The ID of the runtime an assistant runs on. Undefined, or absent, means the default runtime. */
   runtimeOf?: (botId: string) => string | undefined;
+  /**
+   * The ID of the runtime that creates a new assistant, chosen from what it is asked to run on. Undefined, or
+   * absent, means the default runtime. It may throw to refuse a harness this server does not run.
+   */
+  runtimeForNew?: (input: BotInput) => string | undefined;
 }
 
 // Optional members a router offers only while a registered runtime has them, so `if (!runtime.x)` checks
@@ -66,7 +71,8 @@ void everyOptionalListed;
 
 /**
  * One `Runtime` over several, chosen per assistant. A call that names an assistant goes to the runtime that assistant
- * runs on. A call that names none goes to the default runtime, or to every runtime where the answer is a union:
+ * runs on. A new assistant goes to the runtime `runtimeForNew` picks from its harness. A call that names none goes
+ * to the default runtime, or to every runtime where the answer is a union:
  * the roster, routines, roster and turn watchers, a file's assistant, a receipt lookup without an assistant,
  * reconnecting and closing. Each runtime's events are read with its own cursor (`eventSources`).
  *
@@ -217,8 +223,12 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
     },
     botDetail: async (botId) => member(botId, "botDetail")(botId),
     watchRoster: (changed) => subscribe((runtime) => runtime.watchRoster?.(changed)),
-    // A new assistant is created on the default runtime.
-    saveBot: async (...args) => on(args[1]).saveBot(...args),
+    // A new assistant is created on the runtime its harness names, or the default runtime.
+    saveBot: async (...args) =>
+      (args[1] === undefined
+        ? byId(routes.runtimeForNew?.(args[0]) ?? routes.defaultRuntime)
+        : on(args[1])
+      ).saveBot(...args),
     deleteBot: async (id) => on(id).deleteBot(id),
     stop: async (...args) => on(args[0]).stop(...args),
     generatePortrait: async (...args) => on(args[0]).generatePortrait(...args),

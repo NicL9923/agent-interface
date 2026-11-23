@@ -994,7 +994,7 @@ export class MemorySkillsRepository {
 
   /** Removes everything this bot learned, its history and its settings, as when the bot is deleted. */
   forgetBot(botId: string) {
-    this.database.transaction(() => {
+    const forget = () => {
       for (const table of [
         "bot_memory_revisions",
         "bot_memory_entries",
@@ -1003,7 +1003,10 @@ export class MemorySkillsRepository {
         "bot_learning_settings",
       ])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
-    });
+    };
+    // Transactions do not nest, and the store's forgetBot runs this inside its own.
+    if (this.db.isTransaction) forget();
+    else this.database.transaction(forget);
   }
 
   // Writes

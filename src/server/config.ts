@@ -38,6 +38,12 @@ export interface Config {
   directRoutes?: DirectRoutesConfig;
   /** Shared with the Hermes add-on, which uses it to ask linked Macs to act. Unset turns Mac links off. */
   macLinkKey?: string;
+  /**
+   * Native agent harnesses (Codex, Claude Code, Grok, Pi) beside Hermes, with their workspaces and uploads under
+   * `workspaceRoot`. On unless WILDBOTS_HARNESS_ENABLED=false, and off for an in-memory database, which has no
+   * directory to keep them beside.
+   */
+  nativeHarness?: { workspaceRoot: string };
   /** The newest distributed iOS build and where to get it, for the app's update banner. */
   nativeApp?: { latestBuild: number; updateUrl: string };
   apns?: {
@@ -248,6 +254,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     config.directRoutes = { kinds: kinds as DirectRoutesConfig["kinds"], port, stateDirectory };
   } else if (env.DIRECT_PORT || env.DIRECT_TLS_DIR)
     throw new Error("DIRECT_PORT and DIRECT_TLS_DIR require DIRECT_ROUTES");
+  if (env.WILDBOTS_HARNESS_ENABLED && !["true", "false"].includes(env.WILDBOTS_HARNESS_ENABLED))
+    throw new Error("WILDBOTS_HARNESS_ENABLED must be true or false");
+  if (env.WILDBOTS_HARNESS_ENABLED !== "false" && config.database !== ":memory:")
+    config.nativeHarness = { workspaceRoot: join(dirname(config.database), "workspaces") };
   if (env.IOS_APP_LATEST_BUILD || env.IOS_APP_UPDATE_URL) {
     if (!env.IOS_APP_LATEST_BUILD || !env.IOS_APP_UPDATE_URL)
       throw new Error("IOS_APP_LATEST_BUILD and IOS_APP_UPDATE_URL must be supplied together");

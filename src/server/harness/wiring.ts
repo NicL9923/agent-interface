@@ -1,7 +1,9 @@
-import type { HarnessOption, Runtime } from "../../shared/types.js";
+import { InvalidInput } from "../../shared/errors.js";
+import type { BotInput, HarnessOption, Runtime } from "../../shared/types.js";
 import type { FileSigner } from "../hermes-files.js";
 import { createRuntimeRouter, hermesRuntimeId } from "../runtime-router.js";
 import type { Store } from "../store.js";
+import { asksForNativeHarness } from "../../shared/harness.js";
 import type { HarnessDriver, HarnessDriverId } from "./driver.js";
 import {
   createHarnessRuntime,
@@ -11,6 +13,16 @@ import {
 
 /** The router ID native harness bots run under. `ManagedBotRepository.runtimeIdForBot` returns it. */
 export const harnessRuntimeId = "harness";
+
+/**
+ * For a server running only Hermes: refuses a new assistant that asks for a native harness, which Hermes would
+ * otherwise create as one of its own profiles.
+ */
+export const hermesOnlyForNew = (input: BotInput): undefined => {
+  if (asksForNativeHarness(input.harness))
+    throw new InvalidInput("This server runs only Hermes assistants.");
+  return undefined;
+};
 
 /** How long one round of harness probes answers `/api/bootstrap` before the binaries run again. */
 export const HARNESS_PROBE_TTL_MS = 30_000;
@@ -74,6 +86,8 @@ export function createCompositeRuntime({
     runtimes: { [hermesRuntimeId]: hermes, [harnessRuntimeId]: harnessRuntime },
     defaultRuntime: hermesRuntimeId,
     runtimeOf: (botId) => store.managedBots.runtimeIdForBot(botId),
+    // An unknown harness goes to HarnessRuntime too, which refuses it, so it never becomes a Hermes profile.
+    runtimeForNew: (input) => (asksForNativeHarness(input.harness) ? harnessRuntimeId : undefined),
   });
 
   let cached: { at: number; options: HarnessOption[] } | undefined;

@@ -915,7 +915,8 @@ export function createHarnessRuntime({
         queueManagement: supported(true),
         approvals: supported(false),
         uploads: supported(configured),
-        generatedFiles: supported(false),
+        // `download` serves every file this runtime signed, so a chat can open its attachments.
+        generatedFiles: supported(!closed),
         botConfiguration: supported(registered.length > 0 && !closed),
         tools: supported(false),
         skills: supported(false),

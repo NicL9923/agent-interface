@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { Preferences, Runtime, RuntimeStatus } from "../shared/types.js";
+import type { HarnessOption, Preferences, Runtime, RuntimeStatus } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { visibleTo } from "./bot-access.js";
@@ -8,6 +8,7 @@ import { mainEligible } from "../shared/main-assistant.js";
 import type { BotDirectory } from "./bot-routes.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { httpError } from "./http-error.js";
+import { safeError } from "./logging.js";
 import type { RuntimeSnapshots } from "./runtime-snapshot.js";
 import { id, modelFavoriteList, preferences } from "./schemas.js";
 import type { Store } from "./store.js";
@@ -53,9 +54,11 @@ export function installBootstrapRoutes(
     upgrades: Pick<HermesUpgrades, "revisionDate">;
     directory: BotDirectory;
     snapshot: RuntimeSnapshots;
+    /** The native harnesses new assistants can use. Absent on a server running only Hermes. */
+    probeHarnesses?: () => Promise<HarnessOption[]>;
   },
 ) {
-  const { config, runtime, store, upgrades, directory, snapshot } = collaborators;
+  const { config, runtime, store, upgrades, directory, snapshot, probeHarnesses } = collaborators;
   // Someone else's private assistant leaves this person's lists, so their saved
   // preferences stop naming it too.
   const preferencesFor = (userId: string): Preferences => visiblePreferences(store, userId);
@@ -81,6 +84,13 @@ export function installBootstrapRoutes(
     formKey: store.formKey(signedIn(req).id),
     vapidPublicKey: config.vapidPublicKey || undefined,
     nativeApp: config.nativeApp,
+    // A probe round that fails leaves the list out, as from a server running only Hermes, rather than the bootstrap.
+    ...(probeHarnesses && {
+      harnesses: await probeHarnesses().catch((error: unknown) => {
+        req.log.warn({ error: safeError(error) }, "Native harness probes failed");
+        return undefined;
+      }),
+    }),
   }));
   apiRoute(app, "POST /connection/retry", {}, async () => {
     snapshot.invalidate();
