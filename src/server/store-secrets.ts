@@ -61,14 +61,18 @@ export class SecretRepository {
     private readonly database: Pick<StoreDatabase, "db" | "transaction">,
     {
       key = process.env.WILDBOTS_VAULT_KEY,
+      requireKey = false,
       headnetVault,
     }: {
+      /** High-entropy random key (not a low-entropy passphrase); required in production so backups stay encrypted. */
       key?: string;
+      /** When true, refuses to fall back to a database-stored key if `key` is unset. */
+      requireKey?: boolean;
       headnetVault?: HeadnetVaultClient;
     } = {},
   ) {
     this.headnetVault = headnetVault;
-    const loadKey = () => this.loadKey(key);
+    const loadKey = () => this.loadKey(key, requireKey);
     this.key = this.db.isTransaction ? loadKey() : database.transaction(loadKey);
   }
 
@@ -76,7 +80,7 @@ export class SecretRepository {
     return this.database.db;
   }
 
-  private loadKey(configured: string | undefined): Buffer {
+  private loadKey(configured: string | undefined, requireKey: boolean): Buffer {
     const read = (name: string) =>
       (
         this.db.prepare("SELECT value FROM metadata WHERE key=?").get(name) as
@@ -85,6 +89,10 @@ export class SecretRepository {
       )?.value;
     const insert = (name: string, value: string) =>
       this.db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)").run(name, value);
+    if (requireKey && configured === undefined)
+      throw new Error(
+        "WILDBOTS_VAULT_KEY is required so the vault key stays outside the database.",
+      );
     if (configured !== undefined && !configured.trim())
       throw new Error("WILDBOTS_VAULT_KEY must not be empty.");
     const saved = read(keyName);

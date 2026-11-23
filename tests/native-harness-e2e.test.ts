@@ -416,7 +416,15 @@ describe("native harnesses in the live server", () => {
 describe("native harness configuration", () => {
   it("keeps workspaces beside the database unless switched off or in memory, and rejects other values", () => {
     expect(loadConfig({ APP_DATABASE: "/srv/wildbots/app.sqlite" }).nativeHarness).toEqual({
-      workspaceRoot: "/srv/wildbots/workspaces",
+      workspaceRoot: "/srv/wildbots/harness",
+    });
+    expect(
+      loadConfig({
+        APP_DATABASE: "/srv/wildbots/app.sqlite",
+        WILDBOTS_WORKSPACE_ROOT: "/var/lib/wildbots/harness",
+      }).nativeHarness,
+    ).toEqual({
+      workspaceRoot: "/var/lib/wildbots/harness",
     });
     expect(
       loadConfig({ APP_DATABASE: "/srv/wildbots/app.sqlite", WILDBOTS_HARNESS_ENABLED: "false" })

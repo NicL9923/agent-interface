@@ -749,10 +749,48 @@ export class MemorySkillsRepository {
       return revisionFromRow(this.revisionRow(target, botId, revisionId)!, target);
     });
   }
+  private assertMemoryBudget(
+    botId: string,
+    beforeStatus: LearningItemStatus,
+    beforeLength: number,
+    afterStatus: LearningItemStatus,
+    afterLength: number,
+  ) {
+    const before = beforeStatus === "active" ? beforeLength : 0;
+    const after = afterStatus === "active" ? afterLength : 0;
+    const settings = this.settings(botId);
+    const total = this.activeMemoryChars(botId) - before + after;
+    if (after > before && total > settings.memoryCharBudget)
+      throw new Conflict(
+        `That would put memory over its ${settings.memoryCharBudget}-character budget; consolidate first.`,
+      );
+  }
+  private assertSkillBudget(
+    botId: string,
+    beforeStatus: LearningItemStatus,
+    afterStatus: LearningItemStatus,
+  ) {
+    const settings = this.settings(botId);
+    if (
+      beforeStatus !== "active" &&
+      afterStatus === "active" &&
+      this.activeSkillCount(botId) >= settings.skillCountBudget
+    )
+      throw new Conflict(
+        `This bot already has ${settings.skillCountBudget} skills, its budget; merge or retire one first.`,
+      );
+  }
   private applyMemory(row: RevisionRow, actor: string) {
     const entry = this.entryById(row.item_id);
     if (!entry || entry.version !== row.version - 1)
       throw new Conflict("This memory changed after the proposal was made. Review it again.");
+    this.assertMemoryBudget(
+      entry.botId,
+      entry.status,
+      entry.content.length,
+      row.next_status,
+      row.next_text.length,
+    );
     const now = this.now();
     this.db
       .prepare(
@@ -769,6 +807,7 @@ export class MemorySkillsRepository {
     const skill = this.skillById(row.item_id);
     if (!skill || skill.version !== row.version - 1)
       throw new Conflict("This skill changed after the proposal was made. Review it again.");
+    this.assertSkillBudget(skill.botId, skill.status, row.next_status);
     const now = this.now();
     this.db
       .prepare(
@@ -800,6 +839,17 @@ export class MemorySkillsRepository {
       const entry = this.entryById(row.item_id)!;
       const now = this.now();
       const id = `mrev_${randomUUID()}`;
+      const nextState =
+        row.previous_status === null
+          ? { content: entry.content, status: "retired" as const }
+          : { content: row.previous_text ?? "", status: row.previous_status };
+      this.assertMemoryBudget(
+        botId,
+        entry.status,
+        entry.content.length,
+        nextState.status,
+        nextState.content.length,
+      );
       this.insertMemoryRevision({
         id,
         entry,
@@ -807,10 +857,7 @@ export class MemorySkillsRepository {
         status: "applied",
         previous: { content: entry.content, status: entry.status },
         // An entry's first revision has no earlier state, so undoing it retires the entry.
-        next:
-          row.previous_status === null
-            ? { content: entry.content, status: "retired" }
-            : { content: row.previous_text ?? "", status: row.previous_status },
+        next: nextState,
         reason: `Undid: ${oneLine(row.reason, 200)}`,
         sourceTaskId: null,
         actor,
@@ -842,21 +889,23 @@ export class MemorySkillsRepository {
         body: skill.bodyMarkdown,
         status: skill.status,
       };
+      const nextState =
+        row.previous_status === null
+          ? { ...current, status: "retired" as const }
+          : {
+              title: row.previous_title ?? "",
+              description: row.previous_description ?? "",
+              body: row.previous_text ?? "",
+              status: row.previous_status,
+            };
+      this.assertSkillBudget(botId, skill.status, nextState.status);
       this.insertSkillRevision({
         id,
         skill,
         action: "undo",
         status: "applied",
         previous: current,
-        next:
-          row.previous_status === null
-            ? { ...current, status: "retired" }
-            : {
-                title: row.previous_title ?? "",
-                description: row.previous_description ?? "",
-                body: row.previous_text ?? "",
-                status: row.previous_status,
-              },
+        next: nextState,
         reason: `Undid: ${oneLine(row.reason, 200)}`,
         sourceTaskId: null,
         actor,

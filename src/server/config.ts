@@ -256,8 +256,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error("DIRECT_PORT and DIRECT_TLS_DIR require DIRECT_ROUTES");
   if (env.WILDBOTS_HARNESS_ENABLED && !["true", "false"].includes(env.WILDBOTS_HARNESS_ENABLED))
     throw new Error("WILDBOTS_HARNESS_ENABLED must be true or false");
-  if (env.WILDBOTS_HARNESS_ENABLED !== "false" && config.database !== ":memory:")
-    config.nativeHarness = { workspaceRoot: join(dirname(config.database), "workspaces") };
+  if (env.WILDBOTS_HARNESS_ENABLED !== "false" && config.database !== ":memory:") {
+    const root = env.WILDBOTS_WORKSPACE_ROOT?.trim();
+    config.nativeHarness = {
+      workspaceRoot: root || join(dirname(config.database), "harness"),
+    };
+  }
   if (env.IOS_APP_LATEST_BUILD || env.IOS_APP_UPDATE_URL) {
     if (!env.IOS_APP_LATEST_BUILD || !env.IOS_APP_UPDATE_URL)
       throw new Error("IOS_APP_LATEST_BUILD and IOS_APP_UPDATE_URL must be supplied together");

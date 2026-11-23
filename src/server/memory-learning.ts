@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { MemoryKind } from "../shared/memory.js";
 import {
   MEMORY_LIMITS,
+  screenText,
   type LearningSettings,
   type MemoryEntry,
   type MemoryOp,
@@ -543,14 +544,27 @@ export async function importHermesMemoryAndSkills(
     for (const rel of [`memories/${file}`, file]) {
       if (!(await lstat(join(root, rel)).catch(() => undefined))) continue;
       const text = await read(rel);
-      hermesEntries(text ?? "").forEach((content, index) =>
+      hermesEntries(text ?? "").forEach((content, index) => {
+        const entryPath = `${rel}#${index + 1}`;
+        if (content.length > MEMORY_LIMITS.entryChars) {
+          refused.push({
+            path: entryPath,
+            reason: `exceeds ${MEMORY_LIMITS.entryChars} characters`,
+          });
+          return;
+        }
+        const issue = screenText(content);
+        if (issue) {
+          refused.push({ path: entryPath, reason: issue });
+          return;
+        }
         entries.push({
           kind,
           key: `hermes-${kind}-${String(index + 1).padStart(3, "0")}`,
           content,
           reason: `Imported from Hermes ${rel}, entry ${index + 1}.`,
-        }),
-      );
+        });
+      });
       break;
     }
   }
@@ -572,6 +586,18 @@ export async function importHermesMemoryAndSkills(
         if (child.name !== "SKILL.md")
           notImported.push(`${rel}/${child.name}${child.isDirectory() ? "/" : ""}`);
       if (text === undefined) return;
+      if (text.length > MEMORY_LIMITS.skillBodyChars) {
+        refused.push({
+          path: `${rel}/SKILL.md`,
+          reason: `exceeds ${MEMORY_LIMITS.skillBodyChars} characters`,
+        });
+        return;
+      }
+      const skillIssue = screenText(text);
+      if (skillIssue) {
+        refused.push({ path: `${rel}/SKILL.md`, reason: skillIssue });
+        return;
+      }
       const directory = rel.split("/").at(-1)!;
       const metadata = skillMetadata(text, directory);
       let slug = metadata.slug;
