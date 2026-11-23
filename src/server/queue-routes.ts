@@ -33,6 +33,11 @@ export function installQueueRoutes(
     if (!(await roster.exists(req.params.id))) throw new NotFound(notFound.error, notFound.code);
   };
 
+  const withSnapshot = (botId: string, item: ReturnType<Store["queue"]["cancel"]>) => ({
+    ...item,
+    ...store.queue.snapshot(botId, {}),
+  });
+
   apiRoute(app, "GET /bots/:id/queue", { before: access }, async (req) => {
     visibleUser(req);
     return store.queue.snapshot(req.params.id, queueListQuery.parse(req.query));
@@ -45,9 +50,12 @@ export function installQueueRoutes(
     async (req, { text }) => {
       const user = visibleUser(req);
       const { id, itemId } = req.params;
-      return store.queue.edit(id, itemId, user.id, text, {
-        allowHousehold: store.presentation(id).shared !== false,
-      });
+      return withSnapshot(
+        id,
+        store.queue.edit(id, itemId, user.id, text, {
+          allowHousehold: store.presentation(id).shared !== false,
+        }),
+      );
     },
   );
 
@@ -57,10 +65,13 @@ export function installQueueRoutes(
     { before: access, body: queueReorderBody },
     async (req, body) => {
       visibleUser(req);
-      return store.queue.reorder(
+      return withSnapshot(
         req.params.id,
-        req.params.itemId,
-        "beforeItemId" in body ? body.beforeItemId : null,
+        store.queue.reorder(
+          req.params.id,
+          req.params.itemId,
+          "beforeItemId" in body ? body.beforeItemId : null,
+        ),
       );
     },
   );
@@ -68,11 +79,14 @@ export function installQueueRoutes(
   apiRoute(app, "POST /bots/:id/queue/:itemId/send-now", { before: access }, async (req) => {
     await requireCapability("chat", req.params.id);
     visibleUser(req);
-    return store.queue.promoteToSendNow(req.params.id, req.params.itemId);
+    return withSnapshot(
+      req.params.id,
+      store.queue.promoteToSendNow(req.params.id, req.params.itemId),
+    );
   });
 
   apiRoute(app, "DELETE /bots/:id/queue/:itemId", { before: access }, async (req) => {
     visibleUser(req);
-    return store.queue.cancel(req.params.id, req.params.itemId);
+    return withSnapshot(req.params.id, store.queue.cancel(req.params.id, req.params.itemId));
   });
 }

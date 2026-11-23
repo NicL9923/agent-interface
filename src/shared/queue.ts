@@ -62,7 +62,8 @@ export const queueReorderBody = z.union([
   z.strictObject({ toEnd: z.literal(true) }),
 ]);
 export type QueueReorderRequest = z.input<typeof queueReorderBody>;
-export type QueueEditResponse = QueueItem;
-export type QueueReorderResponse = QueueItem;
-export type QueueSendNowResponse = QueueItem;
-export type QueueCancelResponse = QueueItem;
+export type QueueMutationResponse = QueueItem & QueueListResponse;
+export type QueueEditResponse = QueueMutationResponse;
+export type QueueReorderResponse = QueueMutationResponse;
+export type QueueSendNowResponse = QueueMutationResponse;
+export type QueueCancelResponse = QueueMutationResponse;
