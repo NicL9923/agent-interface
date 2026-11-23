@@ -46,3 +46,8 @@ that follow.
 - `npm run typecheck && npm run lint && npm run format:check` passed.
 - `npx vitest run tests/harness-*.test.ts` passed, 192 tests in 8 files.
 - `npx vitest run tests/hermes-qualification.test.ts` passed, 5 tests.
+- `.agents/tools/check-all --keep-going` at `570da597` passed typecheck, lint, Ruff, all 4,510
+  Vitest tests in 245 files, the production build, and the 52 Python test files. Chromium passed
+  142 browser tests. All 142 WebKit tests failed at `browserType.launch` because this Fedora host
+  lacks `libicu74` and `libjpeg-turbo8`, the baseline recorded for the durable bot queue. This
+  change touches no client code, so WebKit was not rerun in the Playwright container.
