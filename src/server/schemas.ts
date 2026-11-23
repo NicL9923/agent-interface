@@ -45,6 +45,7 @@ export const botInput = z.object({
   instructions: z.string().max(50000),
   model: z.string().min(1).max(200),
   provider: z.string().min(1).max(200).optional(),
+  harness: z.string().min(1).max(64).optional(),
   enabledMcpServers: z.array(id).max(100).optional(),
   shared: z.boolean(),
   enabledTools: z.array(id).optional(),

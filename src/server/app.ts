@@ -10,8 +10,9 @@ import type { Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
 import { installBotAccess, redactAgents, visibleTo } from "./bot-access.js";
-import { BotDirectory, installBotRoutes } from "./bot-routes.js";
+import { installBotRoutes, BotDirectory } from "./bot-routes.js";
 import { installConversationRoutes } from "./conversation-routes.js";
+import { installQueueRoutes } from "./queue-routes.js";
 import { installPushRoutes } from "./push-routes.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
@@ -195,6 +196,7 @@ export async function createApp(
     streams,
     requireCapability,
   });
+  installQueueRoutes(app, { store, runtime, roster, requireCapability });
   installTalkRoutes(app, {
     runtime,
     store,

@@ -286,6 +286,7 @@ export interface BotInput {
   instructions: string;
   model: string;
   provider?: string;
+  harness?: string;
   enabledMcpServers?: string[];
   shared: boolean;
   enabledTools?: string[];
