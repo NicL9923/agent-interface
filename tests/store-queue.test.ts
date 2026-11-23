@@ -332,9 +332,14 @@ describe("queue routes", () => {
     const a = enqueue(queue, "First");
     const b = enqueue(queue, "Second");
     const c = enqueue(queue, "Third");
+    const wire = (entry: typeof a) => ({
+      ...entry,
+      attachments: entry.files,
+      createdAt: new Date(entry.createdAt).toISOString(),
+    });
     const listed = await app.inject({ url: queuePath(), headers: member });
     expect(listed.statusCode).toBe(200);
-    expect(listed.json()).toEqual({ items: [a, b, c], conversationVersion: 3 });
+    expect(listed.json()).toEqual({ items: [wire(a), wire(b), wire(c)], conversationVersion: 3 });
 
     const result = await app.inject({
       method: "PATCH",
@@ -413,7 +418,34 @@ describe("queue routes", () => {
     }
     const allowed = await app.inject({ url: queuePath("private"), headers: owner });
     expect(allowed.statusCode).toBe(200);
-    expect(allowed.json<QueueListResponse>().items).toEqual([item]);
+    expect(allowed.json<QueueListResponse>().items).toEqual([
+      { ...item, attachments: item.files, createdAt: new Date(item.createdAt).toISOString() },
+    ]);
+  });
+
+  it("omits running messages from the default queue route and serializes client attachments and ISO timestamps", async () => {
+    const { app, queue, member } = await setup();
+    const files = [{ id: "f1", name: "photo.png", mime: "image/png", size: 42 }];
+    const first = enqueue(queue, "Already running");
+    const waiting = enqueue(queue, "Waiting next", { files });
+    queue.claimNext("family", "run-1");
+
+    const response = await app.inject({ url: queuePath(), headers: member });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<QueueListResponse>();
+    expect(body.items.map((entry) => entry.id)).toEqual([waiting.id]);
+    expect(body.items[0]?.attachments).toEqual(files);
+    expect(body.items[0]?.createdAt).toBe(new Date(waiting.createdAt).toISOString());
+
+    const withSettled = await app.inject({
+      url: `${queuePath()}?includeSettled=true`,
+      headers: member,
+    });
+    expect(withSettled.statusCode).toBe(200);
+    expect(withSettled.json<QueueListResponse>().items.map((entry) => entry.id)).toEqual([
+      first.id,
+      waiting.id,
+    ]);
   });
 
   it("returns item-specific 404 and 409 responses and checks ownership on legacy personal assistants", async () => {

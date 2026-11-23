@@ -451,7 +451,7 @@ describe("managed bot repository", () => {
     const bots = open().managedBots;
     bots.upsertCredential(subscription);
     const archived = bots.upsertManagedBot({ ...personalBot, archivedAt: 35 });
-    bots.upsertCredential({ ...subscription, allowedHarnesses: ["claude"] });
+    bots.upsertCredential({ ...subscription, allowedHarnesses: ["claude-code"] });
     expectRefusal(
       () => bots.upsertManagedBot({ ...archived, archivedAt: undefined }),
       InvalidInput,

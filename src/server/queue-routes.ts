@@ -1,6 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { NotFound } from "../shared/errors.js";
-import { queueEditBody, queueListQuery, queueReorderBody } from "../shared/queue.js";
+import {
+  queueEditBody,
+  queueListQuery,
+  queueReorderBody,
+  type QueueItem,
+  type WireQueueItem,
+} from "../shared/queue.js";
 import type { RequireCapability, Runtime } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { Roster, notFound, visibleTo } from "./bot-access.js";
@@ -33,14 +39,29 @@ export function installQueueRoutes(
     if (!(await roster.exists(req.params.id))) throw new NotFound(notFound.error, notFound.code);
   };
 
-  const withSnapshot = (botId: string, item: ReturnType<Store["queue"]["cancel"]>) => ({
+  const wireItem = (item: QueueItem): WireQueueItem => ({
     ...item,
-    ...store.queue.snapshot(botId, {}),
+    attachments: item.files,
+    createdAt: new Date(item.createdAt).toISOString(),
+  });
+  const wireSnapshot = (botId: string, options: { includeSettled?: boolean } = {}) => {
+    const snap = store.queue.snapshot(botId, options);
+    const items = options.includeSettled
+      ? snap.items
+      : snap.items.filter((entry) => entry.status === "queued");
+    return {
+      conversationVersion: snap.conversationVersion,
+      items: items.map(wireItem),
+    };
+  };
+  const withSnapshot = (botId: string, item: QueueItem) => ({
+    ...wireItem(item),
+    ...wireSnapshot(botId),
   });
 
   apiRoute(app, "GET /bots/:id/queue", { before: access }, async (req) => {
     visibleUser(req);
-    return store.queue.snapshot(req.params.id, queueListQuery.parse(req.query));
+    return wireSnapshot(req.params.id, queueListQuery.parse(req.query));
   });
 
   apiRoute(

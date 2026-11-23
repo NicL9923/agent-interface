@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Conflict, InvalidInput, NotFound, submissionConflictMessage } from "../shared/errors.js";
-import type {
-  QueueItem,
-  QueueItemPriority,
-  QueueListRequest,
-  QueueListResponse,
-} from "../shared/queue.js";
+import type { QueueItem, QueueItemPriority, QueueListRequest } from "../shared/queue.js";
 import type { StoreDatabase } from "./store-database.js";
 
 export type EnqueueInput = Pick<
@@ -117,7 +112,10 @@ export class QueueRepository {
     ).map(queueItem);
   }
 
-  snapshot(botId: string, options: QueueListRequest): QueueListResponse {
+  snapshot(
+    botId: string,
+    options: QueueListRequest = {},
+  ): { items: QueueItem[]; conversationVersion: number } {
     return this.database.transaction(() => ({
       items: this.list(botId, options),
       conversationVersion: this.version(botId),

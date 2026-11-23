@@ -42,6 +42,11 @@ export interface QueueItem {
   error?: string;
 }
 
+export interface WireQueueItem extends Omit<QueueItem, "createdAt"> {
+  attachments: FileRef[];
+  createdAt: string;
+}
+
 export const queueListQuery = z.strictObject({
   includeSettled: z
     .enum(["true", "false"])
@@ -50,7 +55,7 @@ export const queueListQuery = z.strictObject({
 });
 export type QueueListRequest = z.output<typeof queueListQuery>;
 export interface QueueListResponse {
-  items: QueueItem[];
+  items: WireQueueItem[];
   conversationVersion: number;
 }
 
@@ -62,7 +67,7 @@ export const queueReorderBody = z.union([
   z.strictObject({ toEnd: z.literal(true) }),
 ]);
 export type QueueReorderRequest = z.input<typeof queueReorderBody>;
-export type QueueMutationResponse = QueueItem & QueueListResponse;
+export type QueueMutationResponse = WireQueueItem & QueueListResponse;
 export type QueueEditResponse = QueueMutationResponse;
 export type QueueReorderResponse = QueueMutationResponse;
 export type QueueSendNowResponse = QueueMutationResponse;

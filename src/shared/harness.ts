@@ -1,4 +1,4 @@
-export const NATIVE_HARNESS_KINDS = ["codex", "claude", "grok", "pi"] as const;
+export const NATIVE_HARNESS_KINDS = ["codex", "claude-code", "grok", "pi"] as const;
 export type NativeHarnessKind = (typeof NATIVE_HARNESS_KINDS)[number];
 
 export const HARNESS_KINDS = ["hermes", ...NATIVE_HARNESS_KINDS] as const;

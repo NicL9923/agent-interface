@@ -200,7 +200,7 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
         if (answer.ok) {
           const bots = mine(answer.id, answer.value, (bot) => bot.id).map((bot) => ({
             ...bot,
-            harness: answer.id,
+            harness: bot.harness ?? answer.id,
           }));
           // A runtime with no roster yet leaves the whole answer saying nothing about who is on it.
           if (isUnknownRoster(answer.value)) unknown = true;
