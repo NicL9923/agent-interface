@@ -24,5 +24,7 @@ Each command used `npx vitest run tests/store-queue.test.ts -t <test name>` with
 - A Bun 1.4.5 smoke run exercised queue admission, retry, claim, and crash recovery through `Store`.
 - `.agents/tools/check-all --keep-going --base 320740c3` passed typecheck, lint, Ruff, the production build, and the 52 Python test files. Chromium passed 142 tests. Fedora could not launch WebKit because the host lacks `libicu74` and `libjpeg-turbo8`.
 - The full Vitest run at `8fbcb17c` passed 4,293 tests and found one missing-module failure in the Hermes qualification inventory. Adding the queue modules fixed it. The queue, Hermes qualification, and app-probe suites then passed 19 tests together.
+- `.agents/tools/check-all --only test --base 320740c3` passed all 4,294 Vitest tests in 232 files at `32de7daa`.
+- `npm run test:e2e -- --project=webkit` in `mcr.microsoft.com/playwright:v1.65.0-noble` passed 137 tests, skipped 3, and failed 2. Both failures reproduced at `320740c3` in the same image. The offline smoke test at `e2e/smoke.spec.ts:40` reported the same failed asset requests in one of two baseline runs. The upright phone smoke test at `e2e/smoke.spec.ts:811` timed out waiting for `Fence check 24:` in all three baseline runs. The built client assets matched the base byte for byte.
 
 The HTTP tests register the queue routes on Fastify with production authentication, visibility, and error handling. The Phase 1 merge owns production registration, dispatch, and version bumps for events outside the queue.
