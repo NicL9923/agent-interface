@@ -150,7 +150,7 @@ async function setup({ disk = false } = {}) {
   store.user({ id: "sam", name: "Sam", email: "sam@example.net" });
   for (const [id, harness, vendor] of [
     ["codex-subscription", "codex", "openai"],
-    ["claude-subscription", "claude", "anthropic"],
+    ["claude-subscription", "claude-code", "anthropic"],
   ] as const) {
     store.managedBots.upsertCredential({
       id,
@@ -702,7 +702,7 @@ describe("native harness runtime", () => {
       available: false,
       reason: "The harness probe failed.",
     });
-    expect(store.managedBots.getManagedBot(writer.id)?.harness).toBe("claude");
+    expect(store.managedBots.getManagedBot(writer.id)?.harness).toBe("claude-code");
     expect(await runtime.botDetail(writer.id)).toMatchObject({
       harness: "claude-code",
       ownerId: "sam",

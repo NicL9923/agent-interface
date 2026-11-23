@@ -949,7 +949,7 @@ export function createHarnessRuntime({
       const driverId = normalizeHarnessId(input.harness ?? previous?.harness ?? registered[0]?.id);
       if (!driverId || driverId === "hermes" || !drivers[driverId])
         throw new InvalidInput("Choose a registered native harness.");
-      const harness: NativeHarnessKind = driverId === "claude-code" ? "claude" : driverId;
+      const harness: NativeHarnessKind = driverId;
       const ownerId = input.ownerId ?? store.presentation(botId).ownerId ?? previous?.ownerId ?? "";
       if (!input.shared && !ownerId)
         throw new InvalidInput("Choose an owner for this personal assistant.");
