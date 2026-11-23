@@ -124,13 +124,19 @@ export class HarnessSessionCoordinator<T extends { runId: string; promptSeq: num
     }
   }
 
+  async retireSession(botId: string) {
+    const slot = this.slots.get(botId);
+    if (!slot) return;
+    const disposal = this.dispose(botId, slot);
+    await Promise.all([Promise.allSettled([slot.opening]), disposal]);
+    this.prune(botId, slot);
+  }
+
   async closeBot(botId: string) {
     const slot = this.slots.get(botId);
     if (!slot) return;
     slot.active = undefined;
-    const disposal = this.dispose(botId, slot);
-    await Promise.all([Promise.allSettled([slot.opening]), disposal]);
-    this.prune(botId, slot);
+    await this.retireSession(botId);
   }
 
   async close() {

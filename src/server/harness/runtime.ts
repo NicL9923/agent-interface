@@ -673,9 +673,9 @@ export function createHarnessRuntime({
   async function failStart(turn: ActiveTurn) {
     if (active(turn.bot.id) !== turn || turn.stopping) return;
     turn.stopping = true;
+    const retired = coordinator.retireSession(turn.bot.id).catch(() => {});
     finish(turn, "failed", "The harness could not start the reply.");
-    // Mark the session unavailable synchronously before the drain microtask can open it again.
-    await coordinator.closeBot(turn.bot.id).catch(() => {});
+    await retired;
   }
 
   function drain(botId: string, reviewed = false): ActiveTurn | undefined {
@@ -1210,8 +1210,12 @@ export function createHarnessRuntime({
       try {
         await session?.interrupt(current.runId);
       } finally {
-        finish(current, "interrupted", "The reply was stopped.");
-        await coordinator.closeBot(botId);
+        // A session.closed event may have settled this run while interrupt was in flight.
+        if (active(botId) === current) {
+          const retired = coordinator.retireSession(botId);
+          finish(current, "interrupted", "The reply was stopped.");
+          await retired;
+        }
       }
     },
     watch(botId, listener) {

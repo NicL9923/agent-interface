@@ -26,6 +26,7 @@ class FakeSession implements HarnessSession {
   readonly answers: { requestId: string; answers: Record<string, string> }[] = [];
   readonly interrupts: (string | undefined)[] = [];
   closed = false;
+  beforeInterrupt?: () => Promise<void>;
 
   constructor(
     readonly id: string,
@@ -64,6 +65,7 @@ class FakeSession implements HarnessSession {
 
   async interrupt(turnId?: string) {
     this.interrupts.push(turnId);
+    await this.beforeInterrupt?.();
   }
 
   async close() {
@@ -442,6 +444,34 @@ describe("native harness runtime", () => {
       statusCode: 409,
       code: "nothing_to_stop",
     });
+  });
+
+  it("keeps a replacement turn open when a stop of the crashed session returns late", async () => {
+    const { runtime, planner, codex } = await setup();
+    const first = await runtime.submit(submission(planner.id, "first"));
+    const crashed = await nextSession(codex, first.runId);
+    let finishInterrupt!: () => void;
+    const interrupt = new Promise<void>((resolve) => {
+      finishInterrupt = resolve;
+    });
+    crashed.beforeInterrupt = () => interrupt;
+
+    const stopping = runtime.stop(planner.id, first.runId);
+    try {
+      crashed.emit({ type: "session.closed", unexpected: true });
+      const second = await runtime.submit({
+        ...submission(planner.id, "second"),
+        reviewedInterruption: true,
+      });
+      const replacement = await nextSession(codex, second.runId);
+      finishInterrupt();
+      await stopping;
+      expect(replacement.closed).toBe(false);
+      expect(runtime.inflight(planner.id)?.activity.runId).toBe(second.runId);
+    } finally {
+      finishInterrupt();
+      await stopping;
+    }
   });
 
   it("persists a driver crash, leaves the queue paused, and dispatches only unsent work after review", async () => {
