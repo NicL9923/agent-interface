@@ -8,7 +8,15 @@ import type { Routine, Runtime } from "../shared/types.js";
 import { mapLimit } from "./concurrency.js";
 import type { AutomationOverview, SearchHit, Starter, UsageSummary } from "../shared/discovery.js";
 import type { Store } from "./store.js";
-import { notFound, redactAgents, Roster, routineById, visibleBots } from "./bot-access.js";
+import {
+  assertNothingOmittedFor,
+  notFound,
+  redactAgents,
+  Roster,
+  routineById,
+  visibleBots,
+} from "./bot-access.js";
+import { isIncomplete } from "./unknown-roster.js";
 import { httpError } from "./http-error.js";
 import { snippetPlain } from "../shared/plain-text.js";
 import { id } from "./schemas.js";
@@ -257,7 +265,10 @@ export async function installDiscoveryRoutes(
     const bots = await visible(signedIn(req).id);
     const allowed = new Set(bots.map((bot) => bot.id));
     const all = await runtime.routines();
-    store.adoptLegacyRecipients(all);
+    // A list missing someone's routines because their runtime failed is refused, never shown as everything.
+    await assertNothingOmittedFor(all, runtime, store, signedIn(req).id);
+    // Adoption settles which assistants hold a legacy routine ID, so it waits for a list from every runtime.
+    if (!isIncomplete(all)) store.adoptLegacyRecipients(all);
     const routines = await routinesFor(
       runtime,
       store,

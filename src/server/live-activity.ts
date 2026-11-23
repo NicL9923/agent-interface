@@ -7,6 +7,7 @@ import type {
   Store,
 } from "./store.js";
 import { visible } from "./bot-access.js";
+import { mayOmit } from "./unknown-roster.js";
 import { FailureTracker, quietLog, type Log } from "./logging.js";
 import { ApnsError } from "./apns.js";
 
@@ -378,7 +379,19 @@ export class LiveActivities {
     const runs = new Map<string, string>();
     // Working assistants whose conversation could not be read, so whether they are this person's is unknown.
     const unread = new Set<string>();
-    for (const bot of roster) {
+    // A row whose assistant the roster leaves out only because its runtime did not answer is held as a
+    // disconnected assistant, as a disconnected Hermes's rows are, never dropped as if the work had gone.
+    const listed = new Set(roster.map((bot) => bot.id));
+    const unanswered = [...shown.values()]
+      .filter((row) => !listed.has(row.botId) && mayOmit(roster, row.botId))
+      .map((row): Bot => ({
+        id: row.botId,
+        name: row.name,
+        model: "",
+        shared: true,
+        activity: "disconnected",
+      }));
+    for (const bot of [...roster, ...unanswered]) {
       // Keep canonical IDs intact. An oversized ID cannot fit into a usable ActivityKit row.
       if (Buffer.byteLength(bot.id) > 256) continue;
       const presentation = this.store.presentation(bot.id);

@@ -208,6 +208,8 @@ export interface Capability {
 export type CapabilityKey =
   | "chat"
   | "steering"
+  /** Messages sent during a turn wait in a queue the person can see, reorder and cancel. */
+  | "queueManagement"
   | "approvals"
   | "uploads"
   | "generatedFiles"
@@ -254,6 +256,13 @@ export interface Bot {
    * A chat they have never opened is not marked, so a new member's home starts quiet.
    */
   unread?: boolean;
+  /** The ID of the runtime this assistant runs on, such as "hermes". Absent from an older server. */
+  harness?: string;
+  /**
+   * What this assistant's own runtime supports. Absent from an older server and for rows that name no
+   * runtime; use `Bootstrap.capabilities`, the default runtime's, then.
+   */
+  capabilities?: Capabilities;
 }
 /** The Hermes profile ID a new assistant gets from its name. */
 export const botIdFor = (name: string) =>

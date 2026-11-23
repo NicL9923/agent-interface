@@ -5,7 +5,8 @@ import { routineRoomId } from "../shared/collaboration.js";
 import type { RequireCapability, Runtime } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
-import { routineById, visibleTo, type Roster } from "./bot-access.js";
+import { assertNothingOmittedFor, routineById, visibleTo, type Roster } from "./bot-access.js";
+import { isIncomplete } from "./unknown-roster.js";
 import {
   assertDeliveryPrivate,
   assertMainOwnChat,
@@ -43,7 +44,10 @@ export function installRoutineRoutes(
     await requireCapability("routines", undefined);
     const userId = signedIn(req).id;
     const all = await runtime.routines();
-    store.adoptLegacyRecipients(all);
+    // A list missing someone's routines because their runtime failed is refused, never shown as everything.
+    await assertNothingOmittedFor(all, runtime, store, userId);
+    // Adoption settles which assistants hold a legacy routine ID, so it waits for a list from every runtime.
+    if (!isIncomplete(all)) store.adoptLegacyRecipients(all);
     return routinesFor(
       runtime,
       store,

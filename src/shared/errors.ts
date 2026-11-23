@@ -10,6 +10,8 @@ export type ErrorCode =
   // An approval or question already answered, by someone else or elsewhere, or one that expired.
   | "request_not_pending"
   | "assistants_changed"
+  // An assistant whose runtime did not answer, which a read would otherwise report gone.
+  | "assistants_unavailable"
   | "created_incomplete"
   | "draft_conflict"
   | "file_too_large"

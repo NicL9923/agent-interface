@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import type { Bootstrap, Runtime } from "../shared/types.js";
-import { isUnknownRoster } from "./unknown-roster.js";
+import type { Bootstrap, Bot, Capabilities, Runtime } from "../shared/types.js";
+import { isIncomplete, isUnknownRoster, sameMarks } from "./unknown-roster.js";
 import { routePattern } from "./route-path.js";
 
 /**
@@ -17,6 +17,56 @@ export type RuntimeSnapshot = Pick<Bootstrap, "bots" | "capabilities" | "connect
 /** A read's start, from `begin`, which decides whether it may still publish. */
 export type SnapshotRead = { startedAt: number; order: number };
 
+// Every capability unsupported, for a runtime whose own set cannot be read. Typed by key, so a new capability
+// fails to compile here until it is listed.
+const unavailable = { supported: false, reason: "This assistant's runtime is unavailable." };
+const runtimeUnavailable: Capabilities = {
+  chat: unavailable,
+  steering: unavailable,
+  queueManagement: unavailable,
+  approvals: unavailable,
+  uploads: unavailable,
+  generatedFiles: unavailable,
+  botConfiguration: unavailable,
+  tools: unavailable,
+  skills: unavailable,
+  routines: unavailable,
+  durableEvents: unavailable,
+  idempotency: unavailable,
+  imageGeneration: unavailable,
+  stop: unavailable,
+  portraitGeneration: unavailable,
+  avatarMetadata: unavailable,
+  liveVoice: unavailable,
+};
+
+/**
+ * The roster with each assistant's own runtime capabilities, read once per runtime, not once per assistant.
+ * Only rows that name their runtime (`harness`, set by the runtime router) get them; clients use the top-level
+ * capabilities for the rest. A runtime whose capabilities cannot be read reports every one unsupported, so no
+ * client offers what it may not do. The list keeps its roster marks.
+ */
+export async function withBotCapabilities(
+  runtime: Pick<Runtime, "capabilities">,
+  bots: Bot[],
+): Promise<Bot[]> {
+  const first = new Map<string, string>();
+  for (const bot of bots)
+    if (bot.harness && !first.has(bot.harness)) first.set(bot.harness, bot.id);
+  if (!first.size) return bots;
+  const read = new Map(
+    await Promise.all(
+      [...first].map(
+        async ([harness, botId]) =>
+          [harness, await runtime.capabilities(botId).catch(() => runtimeUnavailable)] as const,
+      ),
+    ),
+  );
+  return sameMarks(
+    bots,
+    bots.map((bot) => (bot.harness ? { ...bot, capabilities: read.get(bot.harness) } : bot)),
+  );
+}
 /** Runtime reads shared by every bootstrap and event stream. */
 export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabilities" | "status">) {
   let snapshotRead: Promise<RuntimeSnapshot> | undefined;
@@ -29,8 +79,9 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
   const begin = (): SnapshotRead => ({ startedAt: Date.now(), order: ++readsStarted });
   /**
    * Keeps a read only while the runtime is connected and answering, so an outage is never served
-   * from memory: Hermes reports a failed roster read as disconnected rows, and a lost socket as
-   * a disconnected status. Either replaces what was kept, so the outage shows at once.
+   * from memory: Hermes reports a failed roster read as disconnected rows, a lost socket as a
+   * disconnected status, and the router a failed runtime as a partial roster. Each replaces what
+   * was kept, so the outage shows at once.
    */
   const keep = (value: RuntimeSnapshot, { startedAt, order }: SnapshotRead) => {
     if (order < readPublished) return;
@@ -38,6 +89,7 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
     snapshotKept =
       value.connection.connected &&
       !value.rosterUnknown &&
+      !isIncomplete(value.bots) &&
       !value.bots.some((bot) => bot.activity === "disconnected")
         ? { value, at: startedAt }
         : undefined;
@@ -57,7 +109,11 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
     const began = begin();
     // Share only runtime reads, undecorated: presentation, identity, preferences and CSRF stay request-scoped.
     const reading: Promise<RuntimeSnapshot> = (async () => {
-      const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
+      const [listed, capabilities] = await Promise.all([
+        runtime.listBots(),
+        runtime.capabilities(),
+      ]);
+      const bots = await withBotCapabilities(runtime, listed);
       return {
         bots,
         capabilities,

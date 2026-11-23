@@ -142,6 +142,8 @@ enum CapabilityKey: String, CaseIterable {
   case avatarMetadata
   /// Live Talk: a spoken conversation through OpenAI's Realtime voice, on the web and in the app.
   case liveVoice
+  /// Messages sent during a turn wait in a queue the person can see, reorder and cancel.
+  case queueManagement
 }
 /// The bot settings tabs that load a catalog from the server; each is named for its capability.
 enum CatalogKind: String, CaseIterable {

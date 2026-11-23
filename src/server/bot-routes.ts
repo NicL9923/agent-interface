@@ -17,12 +17,14 @@ import {
 import { unreadSince } from "../shared/unread.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
-import { notFound, visible, type Roster } from "./bot-access.js";
+import { assistantsUnavailable, notFound, visible, type Roster } from "./bot-access.js";
 import { httpError } from "./http-error.js";
 import { assertRoutinesStayPrivate, serialDelivery } from "./routine-delivery.js";
 import { avatar, botSaveRequest, id } from "./schemas.js";
 import { TALK_VOICES } from "../shared/voice.js";
 import type { Store } from "./store.js";
+import { withBotCapabilities } from "./runtime-snapshot.js";
+import { mayOmit } from "./unknown-roster.js";
 import { endCheckInsBeforeSharing, type MainAssistants } from "./main-assistant.js";
 
 /** Marks a row unread when its latest message is newer than this person's last read of the chat. */
@@ -71,7 +73,9 @@ export class BotDirectory {
   /** The roster this person may see, lean or with each assistant's writable configuration. */
   async rosterFor(userId: string, bots: Bot[], nativeAvatar: boolean, lean: boolean) {
     const ids = new Set(bots.map((bot) => bot.id));
-    for (const id of this.details.keys()) if (!ids.has(id)) this.details.delete(id);
+    // An assistant whose runtime did not answer keeps its configuration for when it does.
+    for (const id of this.details.keys())
+      if (!ids.has(id) && !mayOmit(bots, id)) this.details.delete(id);
     const reads = this.store.chatReads(userId);
     const rows = bots
       .map((bot) => this.decorate(bot, nativeAvatar))
@@ -84,8 +88,18 @@ export class BotDirectory {
       rows.map(async (bot) => {
         if (!this.runtime.botDetail) return bot;
         try {
+          const detail = this.decorate(
+            this.remember(await this.runtime.botDetail(bot.id)),
+            nativeAvatar,
+          );
+          // The runtime's detail does not name itself; the roster row does.
+          const { harness, capabilities } = bot;
           return withUnread(
-            this.decorate(this.remember(await this.runtime.botDetail(bot.id)), nativeAvatar),
+            {
+              ...detail,
+              ...(harness ? { harness } : {}),
+              ...(capabilities ? { capabilities } : {}),
+            },
             reads.get(bot.id),
           );
         } catch (error) {
@@ -122,6 +136,14 @@ export function installBotRoutes(
   };
   const nativeAvatar = async (botId: string) =>
     (await runtime.capabilities(botId)).avatarMetadata.supported;
+  // The assistant's roster row. One its runtime did not answer for is unavailable, never reported gone.
+  const listed = async (botId: string) => {
+    const bots = await runtime.listBots();
+    const bot = bots.find((row) => row.id === botId);
+    if (bot) return bot;
+    if (mayOmit(bots, botId)) throw assistantsUnavailable();
+    throw httpError(404, "Bot not found");
+  };
   apiRoute(app, "GET /bots/:id/inference", {}, async (req) => {
     if (!runtime.inferenceSettings)
       throw httpError(409, "Hermes inference controls are unavailable.");
@@ -149,7 +171,10 @@ export function installBotRoutes(
     },
   );
   apiRoute(app, "GET /bots", {}, async (req) => {
-    const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
+    const [bots, capabilities] = await Promise.all([
+      runtime.listBots().then((listed) => withBotCapabilities(runtime, listed)),
+      runtime.capabilities(),
+    ]);
     return directory.rosterFor(
       signedIn(req).id,
       bots,
@@ -172,6 +197,8 @@ export function installBotRoutes(
       if (!id) throw new InvalidInput(assistantNameMessage, "assistant_name_invalid");
       if (await roster.has(id))
         throw httpError(409, "An assistant with this name already exists. Choose another name.");
+      // Its runtime did not answer, so an assistant may already have this name there.
+      if (roster.mayHold(id)) throw assistantsUnavailable();
       // A room may still list an earlier assistant with this ID, which the new one would open again.
       // Checked and created in one turn with the other changes that decide who reads routine posts.
       const bot = await serialDelivery(store, async () => {
@@ -287,8 +314,7 @@ export function installBotRoutes(
     return { ok: true };
   });
   apiRoute(app, "PUT /bots/:id/avatar", { body: avatar }, async (req, value) => {
-    const bot = (await runtime.listBots()).find((b) => b.id === req.params.id);
-    if (!bot) throw httpError(404, "Bot not found");
+    const bot = await listed(req.params.id);
     if ((await runtime.capabilities(bot.id)).avatarMetadata?.supported && runtime.setAvatar)
       await runtime.setAvatar(bot.id, value);
     store.saveAvatar(bot.id, value, bot.shared);
@@ -300,8 +326,7 @@ export function installBotRoutes(
     "PUT /bots/:id/voice",
     { body: z.object({ voice: z.enum(TALK_VOICES) }).strict() },
     async (req, { voice }) => {
-      const bot = (await runtime.listBots()).find((b) => b.id === req.params.id);
-      if (!bot) throw httpError(404, "Bot not found");
+      const bot = await listed(req.params.id);
       if ((await nativeAvatar(bot.id)) && runtime.setVoice) await runtime.setVoice(bot.id, voice);
       else store.saveVoice(bot.id, voice);
       return { voice };

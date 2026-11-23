@@ -25,6 +25,7 @@ import type {
 } from "../shared/upgrades.js";
 import type { Config } from "./config.js";
 import { httpError } from "./http-error.js";
+import { isPartialAnswer } from "./unknown-roster.js";
 
 type WorkerSettings = { python: string; workerConfig: string; stateDirectory: string };
 // The worker keeps its own log once it runs. Output from a start that fails before then lands in
@@ -558,7 +559,10 @@ export class HermesUpgrades {
       if (!status.connected) return ["Hermes connection unavailable"];
       // Another member's private assistant still blocks the update, as one unnamed entry however
       // many are busy. That entry shows some assistant is working, a documented privacy limit.
-      const busy = (await this.runtime.listBots()).filter((bot) =>
+      const bots = await this.runtime.listBots();
+      // A runtime that did not answer may have a busy assistant this roster leaves out.
+      if (isPartialAnswer(bots)) return ["Some assistants' activity unavailable"];
+      const busy = bots.filter((bot) =>
         ["thinking", "working", "waiting", "blocked"].includes(bot.activity),
       );
       const shown = busy.filter((bot) => this.visibleTo(bot.id, user.id)).map((bot) => bot.name);

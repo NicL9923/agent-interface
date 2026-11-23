@@ -189,11 +189,14 @@ Each step ships on its own and is accepted before the next.
    `runtimeOf` naming the bots that run on it. Routes ask the bot's own runtime for capabilities
    (`requireCapability(key, botId)` in `src/server/app.ts`), steering included, and each runtime's events resume
    from their own cursor (`src/server/store-events.ts`). While one runtime is down, its events wait without holding
-   up the others'. The roster and the routine inventory fail whole when any runtime fails, as they do with Hermes
-   alone, because callers reconcile, prune and decide privacy by what they leave out. Still for this step: where a
-   bot's harness is stored, so `runtimeOf` can read it; event IDs that cannot collide with Hermes's; per-bot
-   capabilities for clients, which still get the default runtime's set (`src/server/runtime-snapshot.ts`); and
-   roster availability during one runtime's outage. That last one is accepted when:
+   up the others'. Event IDs from any runtime but Hermes carry the runtime's ID as a prefix, so they cannot collide
+   with Hermes's numeric IDs, which stay as stored. Each roster row names its runtime (`Bot.harness`) and carries
+   that runtime's capabilities (`Bot.capabilities`), read once per runtime (`src/server/runtime-snapshot.ts`); the
+   top-level set stays the default runtime's for older clients. The roster and the routine inventory stay up while
+   some runtimes fail: they list what the others answered, plus the failed runtime's last roster as disconnected,
+   and are marked partial (`src/server/unknown-roster.ts`). Every caller that reconciles, prunes or decides privacy
+   checks that mark before taking an absence as gone. Still for this step: where a bot's harness is stored, so
+   `runtimeOf` can read it. Roster availability during one runtime's outage is accepted when:
    - `/bots` stays up when a second runtime that has never answered fails.
    - Reconciliation and privacy decisions never act on a partial roster: check-in and delivery pruning, main
      assistant reconciliation, upgrade busy checks, bot access and room visibility.
