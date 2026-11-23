@@ -842,7 +842,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
             except urllib.error.HTTPError as response:
                 response.close()
                 return
-            except urllib.error.URLError, OSError:
+            except (urllib.error.URLError, OSError):
                 if time.monotonic() >= deadline:
                     raise RuntimeError(
                         "The dashboard did not start listening in time"
@@ -1096,7 +1096,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         cannot be told apart from a restart later, so it gets no deadline either."""
         try:
             capabilities = self.rpc("capabilities")
-        except Answered, NotSent, Unanswered, ValueError:
+        except (Answered, NotSent, Unanswered, ValueError):
             return None, None
         if (
             not isinstance(capabilities, dict)
@@ -1117,7 +1117,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         proves nothing. A read that fails is not the same add-on."""
         try:
             capabilities = self.rpc("capabilities")
-        except Answered, NotSent, Unanswered, ValueError:
+        except (Answered, NotSent, Unanswered, ValueError):
             return False
         return (
             isinstance(capabilities, dict)
@@ -1152,7 +1152,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
                     return json.loads(private(path).read_text()) == {
                         "operationId": self.operation
                     }
-                except OSError, ValueError, RuntimeError:
+                except (OSError, ValueError, RuntimeError):
                     return False
             if time.monotonic() >= deadline:
                 return False

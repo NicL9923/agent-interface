@@ -711,7 +711,7 @@ def _hermes(module, name):
     """A Hermes helper that older revisions may not have, or None."""
     try:
         return getattr(__import__(module, fromlist=[name]), name)
-    except ImportError, AttributeError:
+    except (ImportError, AttributeError):
         return None
 
 

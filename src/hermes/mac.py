@@ -113,7 +113,7 @@ def post(base, key, body, timeout, opener=urllib.request.urlopen):
             "link_unreachable",
             f"The WildBots app server answered HTTP {error.code}. Try again shortly.",
         ) from None
-    except urllib.error.URLError, TimeoutError, OSError, ValueError:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         raise LinkError(
             "link_unreachable",
             "The WildBots app server did not answer. Whether the action ran is unknown; "
@@ -215,7 +215,7 @@ def handle(tool, args, opener=urllib.request.urlopen, environ=None, context=None
                     context["home"], invocation_id, result.get("value") or {}
                 ),
             }
-        except ValueError, OSError:
+        except (ValueError, OSError):
             return failure("failed", "The Mac sent an image that could not be saved.")
     return json.dumps(result)
 

@@ -103,7 +103,7 @@ def gateway_report(host, hermes_home, restart_after=0):
     try:
         result = host_access.ssh(host, command, timeout=180, check=False, capture=True)
         return json.loads(result.stdout) if result.returncode == 0 else None
-    except subprocess.SubprocessError, ValueError:
+    except (subprocess.SubprocessError, ValueError):
         return None
 
 

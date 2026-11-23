@@ -358,9 +358,9 @@ release. Skipped tests are reported separately; any unexpected failure blocks re
 typing the version and build the repository holds:
 
 ```sh
-node .agents/tools/publish-ios.mjs archive 1.0 29
-node .agents/tools/publish-ios.mjs upload 1.0 29
-node .agents/tools/publish-ios.mjs distribute 1.0 29
+node .agents/tools/publish-ios.mjs archive VERSION BUILD
+node .agents/tools/publish-ios.mjs upload VERSION BUILD
+node .agents/tools/publish-ios.mjs distribute VERSION BUILD
 ```
 
 `archive` refuses, before it reads credentials or calls Apple, unless the typed VERSION and

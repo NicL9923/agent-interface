@@ -266,7 +266,7 @@ def product_builds(live, ignored):
             continue
         try:
             receipt = json.loads((live / directory / PRODUCT_RECEIPT).read_text())
-        except OSError, ValueError:
+        except (OSError, ValueError):
             continue
         inputs = receipt.get("inputs") if isinstance(receipt, dict) else None
         if (
@@ -1008,7 +1008,7 @@ class Worker:
                     else completed
                 )
                 bucket.append((marker.stat().st_mtime_ns, stage))
-            except OSError, ValueError, RuntimeError:
+            except (OSError, ValueError, RuntimeError):
                 continue
         completed.sort(reverse=True)
         recoverable.sort(reverse=True)
@@ -1044,7 +1044,7 @@ class Worker:
         def note(text):
             try:
                 print("Interpreter path refresh: " + text, file=self.log, flush=True)
-            except OSError, ValueError:
+            except (OSError, ValueError):
                 pass
 
         try:
@@ -1232,7 +1232,7 @@ class Worker:
                     .astimezone(datetime.timezone.utc)
                     .isoformat()
                 )
-        except subprocess.SubprocessError, OSError, ValueError:
+        except (subprocess.SubprocessError, OSError, ValueError):
             pass
         return result
 

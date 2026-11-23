@@ -204,7 +204,7 @@ def wait_for(path, poll=0.2):
 def read_info(path):
     try:
         info = json.loads(path.read_text())
-    except OSError, ValueError:
+    except (OSError, ValueError):
         return None
     return info if isinstance(info, dict) else None
 
@@ -598,7 +598,7 @@ def webkit_failure(
     stop_group(process, grace)
     try:
         info = json.loads(stdout.strip().splitlines()[-1])
-    except IndexError, ValueError:
+    except (IndexError, ValueError):
         return f"the launch check failed: {(stderr or stdout).strip()[-300:]}"
     return None if info.get("ok") else first_sentence(str(info.get("message")))
 
@@ -874,7 +874,7 @@ OUTPUT_GRACE = 5.0
 def signal_group(pgid, number):
     try:
         os.killpg(pgid, number)
-    except ProcessLookupError, PermissionError:
+    except (ProcessLookupError, PermissionError):
         pass
 
 
@@ -1456,7 +1456,7 @@ def close_inherited_descriptors():
     """Close every descriptor above 2, so the locks this process opens next get the lowest numbers (3 and 4)."""
     try:
         highest = os.sysconf("SC_OPEN_MAX")
-    except ValueError, OSError:
+    except (ValueError, OSError):
         highest = 4096
     os.closerange(3, max(highest, 4096))
 
