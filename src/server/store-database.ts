@@ -339,6 +339,97 @@ const additions = `
   CREATE UNIQUE INDEX IF NOT EXISTS native_routine_single_flight ON native_routine_runs(routine_id) WHERE status='running';
   CREATE INDEX IF NOT EXISTS native_routine_run_history ON native_routine_runs(routine_id,started_at);
   -- END native_routines
+  -- BEGIN memory_skills
+  -- Each bot's memory entries and skills, versioned. A pending_review item has never been approved: its only
+  -- content is a pending proposal, and it is deleted when its last proposal is rejected.
+  CREATE TABLE IF NOT EXISTS bot_memory_entries(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('memory','user')),
+    key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source_task_id TEXT,
+    status TEXT NOT NULL CHECK(status IN ('active','pending_review','retired')),
+    version INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(bot_id,key)
+  );
+  -- Every change and every proposal, with the state before and after it. A pending row is a proposal for the
+  -- item's next version; it applies only while the item is still at the version before it. key is kept here
+  -- so a rejected proposal for a deleted pending_review entry still reads.
+  CREATE TABLE IF NOT EXISTS bot_memory_revisions(
+    id TEXT PRIMARY KEY NOT NULL,
+    entry_id TEXT NOT NULL,
+    bot_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('create','update','retire','restore','import','undo')),
+    status TEXT NOT NULL CHECK(status IN ('pending','applied','rejected')),
+    previous_content TEXT,
+    next_content TEXT NOT NULL,
+    previous_status TEXT,
+    next_status TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    source_task_id TEXT,
+    actor TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_by TEXT,
+    undoes TEXT,
+    undone_by TEXT
+  );
+  CREATE INDEX IF NOT EXISTS bot_memory_revisions_bot ON bot_memory_revisions(bot_id,created_at);
+  CREATE INDEX IF NOT EXISTS bot_memory_revisions_entry ON bot_memory_revisions(entry_id,status);
+  CREATE TABLE IF NOT EXISTS bot_skills(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    body_markdown TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('active','pending_review','retired')),
+    version INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(bot_id,slug)
+  );
+  CREATE TABLE IF NOT EXISTS bot_skill_revisions(
+    id TEXT PRIMARY KEY NOT NULL,
+    skill_id TEXT NOT NULL,
+    bot_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('create','update','retire','restore','import','undo')),
+    status TEXT NOT NULL CHECK(status IN ('pending','applied','rejected')),
+    previous_body TEXT,
+    next_body TEXT NOT NULL,
+    previous_title TEXT,
+    next_title TEXT NOT NULL,
+    previous_description TEXT,
+    next_description TEXT NOT NULL,
+    previous_status TEXT,
+    next_status TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    source_task_id TEXT,
+    actor TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_by TEXT,
+    undoes TEXT,
+    undone_by TEXT
+  );
+  CREATE INDEX IF NOT EXISTS bot_skill_revisions_bot ON bot_skill_revisions(bot_id,created_at);
+  CREATE INDEX IF NOT EXISTS bot_skill_revisions_skill ON bot_skill_revisions(skill_id,status);
+  -- A bot without a row here uses the defaults: review required, 12000 characters, 40 skills.
+  CREATE TABLE IF NOT EXISTS bot_learning_settings(
+    bot_id TEXT PRIMARY KEY NOT NULL,
+    auto_apply INTEGER NOT NULL DEFAULT 0 CHECK(auto_apply IN (0,1)),
+    memory_char_budget INTEGER NOT NULL DEFAULT 12000,
+    skill_count_budget INTEGER NOT NULL DEFAULT 40,
+    last_pruned_at INTEGER
+  );
+  -- END memory_skills
 `;
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {

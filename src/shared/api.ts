@@ -59,6 +59,13 @@ import type { EarlierFiles } from "./history.js";
 import type { LiveState } from "./live-activity.js";
 import type { TalkAnswer, TalkSession, TalkVoice, VoicePlayback } from "./voice.js";
 import type {
+  LearningSettingsUpdate,
+  MemoryDecision,
+  MemoryOverview,
+  MemoryRevisionList,
+  WireLearningSettings,
+} from "./memory.js";
+import type {
   QueueCancelResponse,
   QueueEditRequest,
   QueueEditResponse,
@@ -417,6 +424,18 @@ export interface ApiRoutes {
   };
   "POST /bots/:id/queue/:itemId/send-now": { response: QueueSendNowResponse };
   "DELETE /bots/:id/queue/:itemId": { response: QueueCancelResponse };
+  // BEGIN memory_skills
+  "GET /bots/:id/learning": { response: MemoryOverview };
+  "GET /bots/:id/learning/revisions": { response: MemoryRevisionList };
+  "PUT /bots/:id/learning/settings": {
+    body: LearningSettingsUpdate;
+    response: WireLearningSettings;
+  };
+  "POST /bots/:id/learning/proposals/:revisionId/approve": { response: MemoryDecision };
+  "POST /bots/:id/learning/proposals/:revisionId/reject": { response: MemoryDecision };
+  /** Reverses an applied revision, the latest one for its entry or skill, with a new revision. */
+  "POST /bots/:id/learning/revisions/:revisionId/undo": { response: MemoryDecision };
+  // END memory_skills
   "POST /bots/:id/steer": { body: MessageRequest; response: SubmissionReceipt };
   "GET /submissions/:id": { response: SubmissionReceipt };
   /** `answerFormat: "json"` says multi-select answers are JSON arrays; without it they are read as an older client's comma-joined picks. */
