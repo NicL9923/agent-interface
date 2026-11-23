@@ -291,8 +291,8 @@ import XCTest
     app = launch()
     openRanchSettings(app)
     app.selectSettingsTab("Access")
-    XCTAssertTrue(app.buttons["settingsPage.connections"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["settingsPage.logins"].exists)
+    XCTAssertTrue(app.buttons["settingsPage.logins"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["settingsPage.connections"].exists, "Access no longer lists the integrations manager")
     XCTAssertFalse(app.switches["mcpServer.existing-calendar"].exists)
   }
 

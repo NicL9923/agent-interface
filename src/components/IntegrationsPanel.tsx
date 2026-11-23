@@ -1,4 +1,3 @@
-import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
@@ -49,57 +48,6 @@ function authorizationUrl(value?: string) {
   } catch {
     return undefined;
   }
-}
-
-export function IntegrationsPanel({
-  bots,
-  accountScope,
-  onClose,
-}: {
-  bots: Bot[];
-  accountScope: string;
-  onClose: () => void;
-}) {
-  const [profile, setProfile] = useState(bots[0]?.id || "");
-  return (
-    <Dialog
-      className="integrations-panel"
-      aria-labelledby="integrations-title"
-      onCancel={onClose}
-      onClose={onClose}
-    >
-      <header>
-        <div>
-          <p className="eyebrow">Your household workspace</p>
-          <h2 id="integrations-title">Integrations</h2>
-        </div>
-        <Button className="icon-button" aria-label="Close integrations" onClick={onClose}>
-          <Icon name="close" />
-        </Button>
-      </header>
-      <p className="muted">
-        Each assistant has its own connections. Connecting an account for one assistant doesn't give
-        another assistant access.
-      </p>
-      {bots.length > 1 && (
-        <label className="integration-profile">
-          Connections for
-          <NativeSelect value={profile} onChange={(e) => setProfile(e.target.value)}>
-            {bots.map((bot) => (
-              <option key={bot.id} value={bot.id}>
-                {bot.name}
-              </option>
-            ))}
-          </NativeSelect>
-        </label>
-      )}
-      {profile ? (
-        <IntegrationList key={profile} profile={profile} bots={bots} accountScope={accountScope} />
-      ) : (
-        <p>Create an assistant before connecting its services.</p>
-      )}
-    </Dialog>
-  );
 }
 
 /**

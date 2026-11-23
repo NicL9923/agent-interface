@@ -13,6 +13,7 @@ import { NotificationSettings } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
 import { useFinePointer, type InstallEvent } from "./use-browser";
 import { hermesVersionLabel, revisionDate } from "./hermes-version";
+import { showsHermesUpdates } from "./harness";
 import {
   addSection,
   checkSectionName,
@@ -51,7 +52,6 @@ export function PreferencesDialog({
   onSignOut,
   signOutOnDeviceOnly = false,
   onComputer,
-  onIntegrations,
   onUpgrade,
   onShortcuts,
   closer,
@@ -68,7 +68,6 @@ export function PreferencesDialog({
   onSignOut: () => Promise<void>;
   signOutOnDeviceOnly?: boolean;
   onComputer: () => void;
-  onIntegrations: () => void;
   onUpgrade: () => void;
   onShortcuts: () => void;
   /** Where this sheet offers its own close to the app. See close-request.ts. */
@@ -77,6 +76,7 @@ export function PreferencesDialog({
   const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
   const finePointer = useFinePointer();
   const bots = boot.bots;
+  const hermesUpdates = showsHermesUpdates(boot);
   // A picker's update names the chat style choice it set, so its save carries that choice whatever the queue holds.
   const save = (update: Partial<Preferences>) =>
     commit(
@@ -225,37 +225,33 @@ export function PreferencesDialog({
             </div>
 
             <div className="settings-group">
-              <NavRow
-                icon="upgrade"
-                label="Hermes and updates"
-                onClick={onUpgrade}
-                detail={
-                  connectionLost
-                    ? offline
-                      ? "Offline"
-                      : "Reconnecting"
-                    : hermes
-                      ? `Connected · ${hermes}`
-                      : "Connected"
-                }
-                badge={
-                  <span
-                    className={`row-status${connectionLost ? " attention" : ""}`}
-                    aria-hidden="true"
-                  />
-                }
-              />
+              {hermesUpdates && (
+                <NavRow
+                  icon="upgrade"
+                  label="Hermes and updates"
+                  onClick={onUpgrade}
+                  detail={
+                    connectionLost
+                      ? offline
+                        ? "Offline"
+                        : "Reconnecting"
+                      : hermes
+                        ? `Connected · ${hermes}`
+                        : "Connected"
+                  }
+                  badge={
+                    <span
+                      className={`row-status${connectionLost ? " attention" : ""}`}
+                      aria-hidden="true"
+                    />
+                  }
+                />
+              )}
               <NavRow
                 icon="computer"
                 label="Computer"
                 detail="Shared desktop and terminal"
                 onClick={onComputer}
-              />
-              <NavRow
-                icon="plug"
-                label="Integrations"
-                detail="Accounts your assistants can use"
-                onClick={onIntegrations}
               />
             </div>
 
@@ -468,7 +464,7 @@ export function PreferencesDialog({
                 w.
               </span>
               <strong>WildBots</strong>
-              {hermes && <small>{hermes}</small>}
+              {hermesUpdates && hermes && <small>{hermes}</small>}
             </footer>
           </>
         )}

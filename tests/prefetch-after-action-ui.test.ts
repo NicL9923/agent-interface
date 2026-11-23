@@ -6,11 +6,9 @@ import { prefetchLinkedChat } from "../src/app/linked-chat";
 import { signInHintKey } from "../src/app/storage";
 import { useConversation } from "../src/app/use-conversation";
 import { useTalk } from "../src/app/use-talk";
-import { AutomationPanel } from "../src/components/AutomationPanel";
 import { TalkPanel } from "../src/components/TalkPanel";
-import type { AutomationOverview } from "../src/shared/automation";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, button, mountRoot, type Mount } from "./ui-harness";
+import { advance, mountRoot, type Mount } from "./ui-harness";
 import { bodyText } from "./helpers/wire-text";
 
 // Actions that submit work to a chat from outside its composer. The chat opens from the read its
@@ -31,19 +29,6 @@ const page = (text: string) => ({
   files: [],
   activity: { state: "idle" },
 });
-const overview = (): AutomationOverview => ({
-  botId: "ranch",
-  owner: "Hermes",
-  canManageTriggers: true,
-  goals: {
-    supported: true,
-    goal: { title: "Prepare the fall ranch plan", status: "paused", turnsUsed: 2, maxTurns: 20 },
-  },
-  tasks: { supported: true, items: [] },
-  triggers: { supported: true, platformEnabled: true, items: [] },
-  skills: { supported: true, approvalRequired: true, installed: [], pending: [] },
-});
-
 class FakePeer {
   connectionState = "new";
   ontrack: unknown = null;
@@ -179,34 +164,6 @@ const actions: [string, () => Promise<void>][] = [
           ),
       ).toBe(true);
       await act(async () => talk.end());
-    },
-  ],
-  [
-    "a goal resumed from the automation controls",
-    async () => {
-      routes["GET /api/bots/ranch/automation"] = overview;
-      routes["GET /api/routines"] = () => [];
-      let resumed: unknown;
-      routes["POST /api/bots/ranch/automation/goal/resume"] = (init) => {
-        resumed = JSON.parse(bodyText(init.body));
-        return {
-          ...overview(),
-          goals: { ...overview().goals, goal: { ...overview().goals.goal!, status: "active" } },
-        };
-      };
-      const panel = mountRoot();
-      await panel.render(
-        createElement(AutomationPanel, {
-          botId: "ranch",
-          bots: [
-            { id: "ranch", name: "Ranch Hand", model: "test", shared: true, activity: "idle" },
-          ],
-        }),
-      );
-      await advance(0);
-      await act(async () => button("Resume goal", panel.container).click());
-      await advance(0);
-      expect(resumed).toEqual({ requestId: expect.any(String) });
     },
   ],
 ];

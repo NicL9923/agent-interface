@@ -60,7 +60,6 @@ beforeEach(() => {
     onClose: vi.fn(),
     onSignOut: vi.fn(),
     onComputer: vi.fn(),
-    onIntegrations: vi.fn(),
     onUpgrade: vi.fn(),
     onShortcuts: vi.fn(),
   };
@@ -292,6 +291,36 @@ it("names Hermes by its commit date, or a short hash without one", async () => {
     `Hermes released ${date}`,
   );
   expect(container.textContent).toContain(`Connected · Hermes released ${date}`);
+});
+
+it("offers Hermes updates until a harness server's known roster has no Hermes assistant", async () => {
+  const hermesRow = () =>
+    Array.from(container.querySelectorAll(".settings-row")).find((row) =>
+      row.textContent?.startsWith("Hermes and updates"),
+    );
+  const onCodex = props.boot.bots.map((bot) => ({ ...bot, harness: "codex" }));
+  const harnesses = [{ id: "codex", available: true }];
+  // A server from before harnesses runs everything on Hermes, whatever its rows say.
+  props.boot = { ...props.boot, bots: onCodex };
+  await render();
+  expect(hermesRow()).toBeDefined();
+  expect(container.textContent).not.toContain("Integrations");
+  // One assistant still on Hermes keeps it.
+  props.boot = {
+    ...props.boot,
+    harnesses,
+    bots: onCodex.map((bot, index) => (index ? bot : { ...bot, harness: "hermes" })),
+  };
+  await render();
+  expect(hermesRow()).toBeDefined();
+  // An unknown roster, as during a Hermes outage, keeps the screen that restarts it.
+  props.boot = { ...props.boot, harnesses, bots: [], rosterUnknown: true };
+  await render();
+  expect(hermesRow()).toBeDefined();
+  props.boot = { ...props.boot, harnesses, bots: onCodex, rosterUnknown: false };
+  await render();
+  expect(hermesRow()).toBeUndefined();
+  expect(container.querySelector(".settings-footer small")).toBeNull();
 });
 
 describe("opened at the sign-out question", () => {

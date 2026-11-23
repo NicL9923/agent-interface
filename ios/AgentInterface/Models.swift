@@ -186,6 +186,12 @@ struct Bot: Codable, Identifiable, Equatable {
   var unread: Bool? = nil
   /// The Realtime voice it speaks with in live Talk. Unset means the default, marin. Older servers omit it.
   var voice: String? = nil
+  /// The agent harness it runs on, such as "codex" or "hermes". A server from before harnesses omits it,
+  /// and every bot there runs on Hermes; see `Harness.of`.
+  var harness: String? = nil
+  /// Capabilities that differ from the bootstrap's for this bot's harness, keyed by raw name like
+  /// `Bootstrap.capabilities`. Absent means the bootstrap's apply.
+  var capabilities: [String: Capability]? = nil
 }
 /// The newest message in an assistant's canonical conversation, for list and widget previews.
 struct LastMessage: Codable, Equatable {
@@ -205,6 +211,9 @@ struct BotInput: Encodable, Equatable {
   var confirmPrivate: Bool?
   /// Sent only after the person agrees that sharing their main assistant ends it being main.
   var confirmMainCleared: Bool?
+  /// The harness to run on. `init(bot:)` leaves it unset, so a save that does not choose one never
+  /// sends it; on a new server, sending it starts a fresh session. An older server ignores it.
+  var harness: String?
   init(bot: Bot? = nil, fallback: Bot? = nil) {
     name = bot?.name ?? ""
     description = bot?.description ?? ""
@@ -932,6 +941,8 @@ struct Bootstrap: Codable, Equatable {
   var formKey: String?
   /// Present when the host publishes the latest distributed iOS build.
   var nativeApp: NativeAppInfo?
+  /// The native harnesses new bots can use. A server that runs only Hermes omits it.
+  var harnesses: [HarnessOption]? = nil
 }
 extension Bootstrap {
   /// Whether `bots` is not a roster Hermes just gave: rows marked `disconnected` are the server's cache,

@@ -6,6 +6,7 @@ import { Button } from "../ui/button";
 import { SettingsConfirmation } from "../SettingsConfirmation";
 import { fire } from "../../app/fire";
 import { Status, useAutomation } from "./use-automation";
+import "../automation.css";
 
 function SkillDiffPreview({ text, id }: { text: string; id: string }) {
   const lines = (text || "No textual diff.").split("\n");

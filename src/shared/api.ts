@@ -50,6 +50,7 @@ import type {
 import type { UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "./upgrades.js";
 import type { AddVaultLogin, ProfileVault, SecureRequestAnswer, VaultResponse } from "./vault.js";
 import type { RoutineRunPage } from "./routine-runs.js";
+import type { BotQueue } from "./queue.js";
 import type { LinkedMacs } from "./mac.js";
 import type { ReplyCardState } from "./reply-cards.js";
 import type { Routine } from "./types.js";
@@ -372,6 +373,15 @@ export interface ApiRoutes {
   "PATCH /bots/:id": { body: BotSaveRequest; response: Bot };
   "DELETE /bots/:id": { response: Ok };
   "PUT /bots/:id/avatar": { body: Avatar; response: Avatar };
+  // --- Message queue: messages sent during a turn on a harness without native steering ---
+  "GET /bots/:id/queue": { response: BotQueue };
+  "PATCH /bots/:id/queue/:itemId": { body: { text: string }; response: BotQueue };
+  "POST /bots/:id/queue/:itemId/reorder": {
+    body: { beforeItemId: string | null };
+    response: BotQueue;
+  };
+  "POST /bots/:id/queue/:itemId/send-now": { response: BotQueue };
+  "DELETE /bots/:id/queue/:itemId": { response: BotQueue };
   "PUT /bots/:id/voice": { body: { voice: TalkVoice }; response: { voice: TalkVoice } };
   /** A Realtime credential for live Talk with this assistant. Never cached. */
   "POST /bots/:id/talk/session": { response: TalkSession };

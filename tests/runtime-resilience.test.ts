@@ -480,15 +480,15 @@ describe("routes over a partial roster", () => {
     const of = (id: string) => boot.bots.find((row: Bot) => row.id === id) as Bot;
     // The top-level set stays the default runtime's, for clients that read only it.
     expect(boot.capabilities.steering.supported).toBe(true);
-    expect([of("ranch").harness, of("ranch").capabilities?.steering.supported]).toEqual([
+    expect([of("ranch").harness, of("ranch").capabilities?.steering?.supported]).toEqual([
       hermesRuntimeId,
       true,
     ]);
     expect([
       of("barn").harness,
-      of("barn").capabilities?.steering.supported,
-      of("barn").capabilities?.queueManagement.supported,
-      of("silo").capabilities?.queueManagement.supported,
+      of("barn").capabilities?.steering?.supported,
+      of("barn").capabilities?.queueManagement?.supported,
+      of("silo").capabilities?.queueManagement?.supported,
     ]).toEqual(["codex", false, true, true]);
     // Two codex assistants, one read of codex's capabilities.
     expect(codexCapabilities).toHaveBeenCalledTimes(1);
@@ -500,7 +500,7 @@ describe("routes over a partial roster", () => {
     const headers = await localLogin(app, origin);
     const boot = (await app.inject({ url: "/api/bootstrap", headers })).json();
     const barn = boot.bots.find((row: Bot) => row.id === "barn") as Bot;
-    expect(Object.values(barn.capabilities!).every((value) => !value.supported)).toBe(true);
-    expect(barn.capabilities!.chat.reason).toBe("This assistant's runtime is unavailable.");
+    expect(Object.values(barn.capabilities!).every((value) => !value?.supported)).toBe(true);
+    expect(barn.capabilities!.chat?.reason).toBe("This assistant's runtime is unavailable.");
   });
 });

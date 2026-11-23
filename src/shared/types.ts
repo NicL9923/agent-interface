@@ -228,9 +228,25 @@ export type CapabilityKey =
 export type Capabilities = Record<CapabilityKey, Capability>;
 /** Refuses with a 409 unless the runtime of `botId`, or the default runtime for undefined, supports `key`. */
 export type RequireCapability = (key: CapabilityKey, botId: string | undefined) => Promise<void>;
+/** The agent harnesses a bot can run on, in picker order. Hermes is the runtime being retired. */
+export const harnessIds = ["codex", "claude-code", "grok", "pi", "hermes"] as const;
+export type HarnessId = (typeof harnessIds)[number];
+/** A harness the server can run bots on. An unavailable one carries the reason. */
+export interface HarnessOption {
+  id: string;
+  available: boolean;
+  reason?: string;
+}
 export interface Bot {
   id: string;
   name: string;
+  /**
+   * The agent harness this bot runs on, such as "codex" or "hermes". Absent from a server from
+   * before harnesses, where every bot runs on Hermes.
+   */
+  harness?: string;
+  /** Capabilities that differ from the bootstrap's for this bot's harness. Absent means the bootstrap's apply. */
+  capabilities?: Partial<Capabilities>;
   description?: string;
   instructions?: string;
   model: string;
@@ -256,13 +272,6 @@ export interface Bot {
    * A chat they have never opened is not marked, so a new member's home starts quiet.
    */
   unread?: boolean;
-  /** The ID of the runtime this assistant runs on, such as "hermes". Absent from an older server. */
-  harness?: string;
-  /**
-   * What this assistant's own runtime supports. Absent from an older server and for rows that name no
-   * runtime; use `Bootstrap.capabilities`, the default runtime's, then.
-   */
-  capabilities?: Capabilities;
 }
 /** The Hermes profile ID a new assistant gets from its name. */
 export const botIdFor = (name: string) =>
@@ -540,6 +549,8 @@ export interface Bootstrap {
   vapidPublicKey?: string;
   /** The newest distributed iOS build, when the host advertises one. */
   nativeApp?: { latestBuild: number; updateUrl: string };
+  /** The native harnesses new bots can use. Absent or empty from a server that runs only Hermes. */
+  harnesses?: HarnessOption[];
 }
 export interface Submission {
   reviewedInterruption?: boolean;

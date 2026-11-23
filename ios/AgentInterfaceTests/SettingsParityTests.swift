@@ -8,18 +8,60 @@ final class SettingsParityTests: XCTestCase {
     XCTAssertEqual(SettingsSection.profile.summary(shared: true, modelName: "x"), "Shared with your household")
     XCTAssertEqual(SettingsSection.profile.summary(shared: false, modelName: "x"), "Personal")
     XCTAssertEqual(SettingsSection.behavior.summary(shared: true, modelName: "Claude Sonnet"), "Claude Sonnet")
-    XCTAssertEqual(SettingsSection.access.summary(shared: true, modelName: ""), "Connections and logins")
-    XCTAssertEqual(SettingsSection.automation.summary(shared: true, modelName: ""), "Routines, goals, tasks and triggers")
+    XCTAssertEqual(SettingsSection.access.summary(shared: true, modelName: ""), "Logins and approvals")
+    XCTAssertEqual(SettingsSection.automation.summary(shared: true, modelName: ""), "Scheduled routines")
     XCTAssertEqual(SettingsSection.memory.summary(shared: true, modelName: ""), "What it remembers and learns")
   }
   func testFormerTabNamesOpenTheSectionThatHoldsTheirContent() {
     XCTAssertEqual(SettingsRoute.path(for: "Avatar"), [.section(.profile)])
     XCTAssertEqual(SettingsRoute.path(for: "Skills"), [.section(.behavior)])
     XCTAssertEqual(SettingsRoute.path(for: "Logins"), [.section(.access), .logins])
-    XCTAssertEqual(SettingsRoute.path(for: "Work"), [.section(.automation), .work])
+    XCTAssertNil(SettingsRoute.path(for: "Work"), "Goals, tasks and triggers are gone")
+    XCTAssertNil(SettingsRoute.path(for: "Connections"), "The integrations manager is gone")
     XCTAssertEqual(SettingsRoute.path(for: "Memory"), [.section(.memory), .memory])
     XCTAssertEqual(SettingsRoute.path(for: "Learning"), [.section(.memory), .learning])
     XCTAssertNil(SettingsRoute.path(for: "More"))
+  }
+  /// The same rules as `harnessChoices` in src/app/harness.ts.
+  func testHarnessChoicesOfferNativeHarnessesAndKeepHermesOnlyWhereItRuns() {
+    let ids = { (choices: [Harness.Choice]) in choices.map { "\($0.id)\($0.available ? "" : "-off")" } }
+    // A server from before harnesses advertises none, so Hermes is the only choice.
+    XCTAssertEqual(ids(Harness.choices(nil, saved: nil)), ["codex-off", "claude-code-off", "grok-off", "pi-off", "hermes"])
+    XCTAssertEqual(Harness.defaultChoice(nil), "hermes")
+    let advertised = [HarnessOption(id: "codex", available: true), HarnessOption(id: "grok", available: false, reason: "Sign in first."),
+      HarnessOption(id: "opencode", available: true)]
+    // A new bot never lands on Hermes once a native harness runs; an unknown advertised one is offered as named.
+    XCTAssertEqual(ids(Harness.choices(advertised, saved: nil)), ["codex", "claude-code-off", "grok-off", "pi-off", "opencode"])
+    XCTAssertEqual(Harness.defaultChoice(advertised), "codex")
+    XCTAssertEqual(Harness.choices(advertised, saved: nil).first { $0.id == "grok" }?.reason, "Sign in first.")
+    XCTAssertEqual(Harness.choices(advertised, saved: "hermes").last?.id, "hermes", "A Hermes bot keeps its current harness")
+    XCTAssertEqual(Harness.label("opencode"), "opencode")
+  }
+  func testBotsWithoutAHarnessRunOnHermesAndOnlyHarnessBotsGetTheQueue() {
+    var bot = Bot(id: "ranch", name: "Ranch", model: "m", shared: true, activity: .idle)
+    XCTAssertTrue(bot.runsOnHermes)
+    var boot = Bootstrap(user: Member(id: "one", name: "One", email: "one@example.test"), household: [], preferences: Preferences(),
+      bots: [], capabilities: ["queueManagement": Capability(supported: true)], connection: RuntimeStatus(connected: true))
+    XCTAssertFalse(boot.supportsQueue(bot), "Hermes never shows the queue")
+    bot.harness = "codex"
+    XCTAssertTrue(boot.supportsQueue(bot))
+    bot.capabilities = ["queueManagement": Capability(supported: false)]
+    XCTAssertFalse(boot.supportsQueue(bot), "The bot's own harness wins over the bootstrap")
+    // Hermes updates stay while the server predates harnesses, while the roster is unknown, and while any bot runs on Hermes.
+    XCTAssertTrue(boot.showsHermesUpdates)
+    boot.harnesses = [HarnessOption(id: "codex", available: true)]
+    XCTAssertFalse(boot.showsHermesUpdates)
+    boot.rosterUnknown = true
+    XCTAssertTrue(boot.showsHermesUpdates)
+    boot.rosterUnknown = false; boot.bots = [Bot(id: "old", name: "Old", model: "m", shared: true, activity: .idle)]
+    XCTAssertTrue(boot.showsHermesUpdates)
+  }
+  func testSavingWithoutChoosingAHarnessNeverSendsOne() throws {
+    var input = BotInput(bot: Bot(id: "ranch", name: "Ranch", model: "m", shared: true, activity: .idle, harness: "codex"))
+    let encoded = { (value: BotInput) in try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any] ?? [:] }
+    XCTAssertNil(try encoded(input)["harness"], "The composer's model picker saves through BotInput(bot:) and must not switch harnesses")
+    input.harness = "claude-code"
+    XCTAssertEqual(try encoded(input)["harness"] as? String, "claude-code")
   }
   func testMcpSwitchesListEveryServerOnceSortedAndToggleOnlyTheirOwn() {
     XCTAssertEqual(McpServerChoices.names(available: ["github", "calendar"], enabled: ["retired", "calendar"]), ["calendar", "github", "retired"],

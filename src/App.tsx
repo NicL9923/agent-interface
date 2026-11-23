@@ -82,7 +82,6 @@ import {
   GroupCreate,
   GroupRoomView,
   HermesUpgradePanel,
-  IntegrationsPanel,
   Loading,
   PreferencesDialog,
   RoutineResults,
@@ -1307,16 +1306,6 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           />
         </Loading>
       )}
-      {panel?.kind === "integrations" && (
-        <Loading>
-          <IntegrationsPanel
-            key={`integrations:${boot.user.id}`}
-            bots={boot.bots}
-            accountScope={boot.user.id}
-            onClose={() => closePanels("integrations")}
-          />
-        </Loading>
-      )}
       {computerLoaded && (
         <Loading>
           <ComputerPanel
@@ -1357,7 +1346,6 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             onSignOut={signOut}
             signOutOnDeviceOnly={!canChangeAccounts()}
             onComputer={() => open({ kind: "computer" })}
-            onIntegrations={() => open({ kind: "integrations" })}
             onUpgrade={() => open({ kind: "upgrade" })}
             onShortcuts={showShortcuts}
           />

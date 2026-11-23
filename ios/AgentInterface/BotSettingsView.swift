@@ -28,8 +28,8 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     switch self {
     case .profile: shared ? "Shared with your household" : "Personal"
     case .behavior: modelName
-    case .access: "Connections and logins"
-    case .automation: "Routines, goals, tasks and triggers"
+    case .access: "Logins and approvals"
+    case .automation: "Scheduled routines"
     case .memory: "What it remembers and learns"
     }
   }
@@ -38,14 +38,12 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 /// A page in the settings stack: one section, or a full list that a section opens.
 enum SettingsRoute: Hashable {
   case section(SettingsSection)
-  case connections, logins, approvals, work, memory, learning
+  case logins, approvals, memory, learning
   var title: String {
     switch self {
     case .section(let section): section.label
-    case .connections: "Connections"
     case .logins: "Logins"
     case .approvals: "Always-allowed commands"
-    case .work: "Work"
     case .memory: "Memory"
     case .learning: "Learning"
     }
@@ -56,11 +54,9 @@ enum SettingsRoute: Hashable {
     case "profile", "details", "avatar": [.section(.profile)]
     case "behavior", "tools", "skills": [.section(.behavior)]
     case "access": [.section(.access)]
-    case "connections": [.section(.access), .connections]
     case "logins": [.section(.access), .logins]
     case "approvals", "always-allowed commands": [.section(.access), .approvals]
     case "automation", "routines": [.section(.automation)]
-    case "work": [.section(.automation), .work]
     case "memory & learning", "memoryandlearning": [.section(.memory)]
     case "memory": [.section(.memory), .memory]
     case "learning": [.section(.memory), .learning]
@@ -266,7 +262,7 @@ struct BotSettingsView: View {
       .onAppear {
         guard !initialized else { return }
         initialized = true
-        form = BotInput(bot: bot, fallback: store.bootstrap?.bots.first)
+        form = loadedForm(bot)
         savedForm = form
         avatar = bot?.avatar ?? AvatarConfig()
         savedAvatar = avatar
@@ -281,6 +277,11 @@ struct BotSettingsView: View {
     let current = store.bootstrap?.bots.first { $0.id == bot?.id } ?? bot
     if let current, current.model == form.model, let name = current.modelName, !name.isEmpty { return name }
     return form.model
+  }
+  /// Simple view names the harness only once there is more than Hermes to tell apart.
+  private var behaviorSummary: String {
+    guard let saved = savedForm.harness, advanced || saved != Harness.hermes else { return modelName }
+    return "\(Harness.label(saved)) · \(modelName)"
   }
   private var sectionList: some View {
     List {
@@ -304,7 +305,7 @@ struct BotSettingsView: View {
             Label {
               VStack(alignment: .leading, spacing: 2) {
                 Text(section.label).foregroundStyle(Color.primary)
-                Text(section.summary(shared: form.shared, modelName: modelName))
+                Text(section.summary(shared: form.shared, modelName: behaviorSummary))
                   .font(.subheadline).foregroundStyle(Palette.muted).lineLimit(1)
               }
             } icon: { Image(systemName: section.systemImage).foregroundStyle(Palette.accent) }
@@ -335,11 +336,8 @@ struct BotSettingsView: View {
         case .section(.access): accessPage
         case .section(.automation): automationPage
         case .section(.memory): memoryAndLearningPage
-        case .connections: IntegrationsView(botId: bot.id)
         case .logins: VaultView(botId: bot.id)
         case .approvals: ApprovalSettingsView(botId: bot.id, botName: bot.name).id("approvals|\(store.scope ?? "")|\(bot.id)")
-        case .work:
-          HermesWorkView(botId: bot.id).id("work|\(store.scope ?? "")|\(bot.id)").id(store.api.map(ObjectIdentifier.init))
         case .memory:
           MemoryDrawer(botId: bot.id, onDirtyChange: { memoryDirty = $0 }, onSavingChange: { memorySaving = $0 })
             .onDisappear { memoryDirty = false; memorySaving = false }
@@ -396,6 +394,7 @@ struct BotSettingsView: View {
       Section { unavailable(.botConfiguration) }
       instructionsSection
       interactiveSection
+      harnessSection
       modelSection
       capabilities(.tools)
       capabilities(.skills)
@@ -410,7 +409,6 @@ struct BotSettingsView: View {
   private var accessPage: some View {
     Form {
       Section {
-        pageLink(.connections, detail: "Accounts and services this assistant can use", systemImage: "link")
         pageLink(.logins, detail: "Passwords saved for this assistant's profile", systemImage: "person.badge.key")
         pageLink(.approvals, detail: "Commands it runs without asking, and auto-review", systemImage: "checkmark.shield")
       }
@@ -420,9 +418,6 @@ struct BotSettingsView: View {
   private var automationPage: some View {
     Form {
       routineList.disabled(busy || !detailLoaded)
-      Section {
-        pageLink(.work, detail: "Goals, tasks and event triggers", systemImage: "checklist")
-      } header: { settingsHeader("Work") }
     }.householdListBackground().accessibilityIdentifier("settings.automation")
       .task(id: store.api.map(ObjectIdentifier.init)) { await loadRoutines() }
   }
@@ -448,7 +443,7 @@ struct BotSettingsView: View {
     let names = McpServerChoices.names(available: availableMcpServers, enabled: form.enabledMcpServers)
     Section {
       if names.isEmpty {
-        Text("No MCP servers are configured for this assistant. Add one under Connections.").foregroundStyle(Palette.muted)
+        Text("No MCP servers are configured for this assistant.").foregroundStyle(Palette.muted)
       }
       ForEach(names, id: \.self) { name in
         Toggle(name, isOn: Binding(
@@ -468,6 +463,7 @@ struct BotSettingsView: View {
     descriptionSection
     instructionsSection
     interactiveSection
+    harnessSection
     modelSection
     sharingSection
   }
@@ -479,6 +475,34 @@ struct BotSettingsView: View {
       }.disabled(busy || interactiveEnabled)
     } footer: {
       Text("Adds instructions for checklists, itineraries and calendar proposals. Save changes to apply them.").foregroundStyle(Palette.muted)
+    }
+  }
+  /// The harness that runs this assistant's turns. Simple view leaves it out while Hermes is the only
+  /// choice, as on a server from before harnesses. SwiftUI pickers cannot disable one option, so the
+  /// picker lists what can be chosen and the footer names the rest.
+  @ViewBuilder private var harnessSection: some View {
+    let saved = bot == nil ? nil : savedForm.harness
+    let choices = Harness.choices(store.bootstrap?.harnesses, saved: saved)
+    let available = choices.filter(\.available)
+    let notSetUp = choices.filter { !$0.available }
+    if advanced || available.count > 1 {
+      Section {
+        Picker("Harness", selection: Binding(
+          get: { form.harness ?? Harness.hermes },
+          set: { form.harness = $0; error = nil })) {
+          ForEach(available) { Text($0.label).tag($0.id) }
+        }.accessibilityIdentifier("harnessPicker")
+          .disabled(busy || !store.supports(.botConfiguration))
+      } header: { settingsHeader("Harness") } footer: {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(saved != nil && form.harness != saved
+            ? "Switching starts a fresh session on the new harness. The chat history stays."
+            : "The agent that runs this assistant's turns. Each harness offers its own models.")
+          if !notSetUp.isEmpty {
+            Text("Not set up yet: \(notSetUp.map(\.label).formatted(.list(type: .and))).")
+          }
+        }.foregroundStyle(Palette.muted)
+      }
     }
   }
   private var modelSection: some View {
@@ -1102,6 +1126,8 @@ struct BotSettingsView: View {
           let sent = form
           var value = sent
           value.confirmModel = confirmed
+          // On a new server, sending the harness starts a fresh session, so it goes only when it changed.
+          if sent.harness == savedForm.harness { value.harness = nil }
           if personal { value.confirmPrivate = true }
           if mainCleared { value.confirmMainCleared = true }
           let _: Bot = try await api.write("/bots/\(APIClient.component(bot.id))", value, method: "PATCH")
@@ -1227,12 +1253,18 @@ struct BotSettingsView: View {
     detailError = nil
     Task { await loadDetail() }
   }
+  /// The form for `bot`, or for a new assistant, with the harness it runs on or would start on.
+  private func loadedForm(_ bot: Bot?) -> BotInput {
+    var loaded = BotInput(bot: bot, fallback: store.bootstrap?.bots.first)
+    loaded.harness = bot.map(Harness.of) ?? Harness.defaultChoice(store.bootstrap?.harnesses)
+    return loaded
+  }
   private func loadDetail() async {
     guard let bot, let api = store.api, !detailLoaded else { return }
     do {
       let detail: Bot = try await api.get("/bots/\(APIClient.component(bot.id))")
       guard !Task.isCancelled else { return }
-      form = BotInput(bot: detail, fallback: store.bootstrap?.bots.first)
+      form = loadedForm(detail)
       savedForm = form
       availableMcpServers = detail.availableMcpServers ?? []
       detailLoaded = true

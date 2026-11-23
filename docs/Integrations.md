@@ -1,7 +1,9 @@
 # Integrations
 
-Open **Integrations** from the web sidebar or iOS Preferences. A bot's settings
-also include **Connections**, already scoped to its Hermes profile. The list
+The Integrations manager and each bot's **Connections** page were removed from the web
+and iOS clients as bots move to native harnesses. An assistant on Hermes can still ask
+for one connection in its chat; the request card embeds that connection's row, sign-in
+flow and setup. The rest of this guide describes that row and the services behind it. The list
 shows the credential owner, account when available, granted permissions and the
 last connection check. **Configured** means Hermes has saved configuration;
 **Connected** requires a successful check. A provider check does not prove a paid

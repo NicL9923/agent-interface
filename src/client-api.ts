@@ -666,3 +666,23 @@ export function uploadFile<T>(
     request.send(form);
   });
 }
+/**
+ * A bot's message queue, for harnesses that hold messages sent during a turn until the next one.
+ * Each change answers with the queue as it now stands. A 409 means the message already started.
+ */
+export const queueApi = {
+  read: (botId: string, signal?: AbortSignal) =>
+    request("GET /bots/:id/queue", { params: { id: botId }, signal }),
+  edit: (botId: string, itemId: string, text: string) =>
+    request("PATCH /bots/:id/queue/:itemId", { params: { id: botId, itemId }, body: { text } }),
+  /** Moves the message in front of `beforeItemId`, or to the end for null. */
+  reorder: (botId: string, itemId: string, beforeItemId: string | null) =>
+    request("POST /bots/:id/queue/:itemId/reorder", {
+      params: { id: botId, itemId },
+      body: { beforeItemId },
+    }),
+  sendNow: (botId: string, itemId: string) =>
+    request("POST /bots/:id/queue/:itemId/send-now", { params: { id: botId, itemId } }),
+  cancel: (botId: string, itemId: string) =>
+    request("DELETE /bots/:id/queue/:itemId", { params: { id: botId, itemId } }),
+};

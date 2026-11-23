@@ -7,7 +7,7 @@ import { BotSettings } from "../src/BotSettings";
 import { api, ApiError, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Bot } from "../src/shared/types";
-import { button, click, mountRoot, stubImmediateFrames, typeInto } from "./ui-harness";
+import { click, mountRoot, stubImmediateFrames, typeInto } from "./ui-harness";
 import { mockOf } from "./helpers/mock-of";
 
 // jsdom decodes no image and has no canvas, so the real resize and PNG encode cannot run; the upload and error paths around it do.
@@ -300,6 +300,75 @@ it("refuses to save an empty name from any section and takes you to it", async (
     "Give your assistant a name.",
   );
   expect(document.activeElement).toBe(container.querySelector("#assistant-name"));
+});
+
+describe("harness", () => {
+  const field = () => container.querySelector<HTMLSelectElement>("#assistant-harness");
+  const options = () =>
+    Array.from(field()!.options).map((option) => [option.value, option.disabled]);
+  const pick = (value: string) =>
+    act(async () => {
+      const select = field()!;
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  const native: Bootstrap = {
+    ...bootstrap,
+    harnesses: [
+      { id: "codex", available: true },
+      { id: "claude-code", available: true },
+      { id: "grok", available: false, reason: "Sign in to Grok on the server first." },
+    ],
+  };
+
+  it("stays out of Simple view while Hermes is the only choice, and Advanced shows why", async () => {
+    await click("Behavior");
+    expect(field()).toBeNull();
+    await render({
+      bootstrap: { ...bootstrap, preferences: { ...defaultPreferences, presentation: "advanced" } },
+    });
+    expect(options()).toEqual([
+      ["codex", true],
+      ["claude-code", true],
+      ["grok", true],
+      ["pi", true],
+      ["hermes", false],
+    ]);
+    expect(field()!.value).toBe("hermes");
+  });
+
+  it("keeps a Hermes assistant on Hermes and sends a harness only once it changes", async () => {
+    await render({ bootstrap: native });
+    await click("Behavior");
+    expect(options()).toEqual([
+      ["codex", false],
+      ["claude-code", false],
+      ["grok", true],
+      ["pi", true],
+      ["hermes", false],
+    ]);
+    expect(field()!.value).toBe("hermes");
+    await editInstructions("New instructions");
+    await click("Save changes");
+    expect(vi.mocked(write).mock.calls[0][1]).not.toHaveProperty("harness");
+    vi.mocked(write).mockClear();
+    await pick("claude-code");
+    expect(container.textContent).toContain("Switching starts a fresh session");
+    // The button still reads Saved from the first save.
+    await act(async () => saveButton().click());
+    expect(vi.mocked(write).mock.calls[0][1]).toMatchObject({ harness: "claude-code" });
+  });
+
+  it("starts a new assistant on the first available native harness, without Hermes", async () => {
+    await render({ bot: "new", bootstrap: native });
+    await typeInto(container.querySelector<HTMLInputElement>("#create-name")!, "Ranch hand");
+    await click("Next");
+    expect(options().map(([id]) => id)).toEqual(["codex", "claude-code", "grok", "pi"]);
+    expect(field()!.value).toBe("codex");
+    vi.mocked(write).mockResolvedValue({ ...bot, id: "ranch-hand", harness: "codex" });
+    await click("Create");
+    expect(vi.mocked(write).mock.calls[0]).toMatchObject(["/bots", { harness: "codex" }]);
+  });
 });
 
 describe("assistant deletion", () => {
@@ -848,8 +917,8 @@ describe("phone navigation", () => {
     ).toEqual([
       ["Profile", "Shared with your household"],
       ["Behavior", "test"],
-      ["Access", "Connections and logins"],
-      ["Automation", "Routines, goals, tasks and triggers"],
+      ["Access", "Logins and approvals"],
+      ["Automation", "Scheduled routines"],
       ["Memory & learning", "What it remembers and learns"],
     ]);
     expect(title().textContent).toBe("Shared");
@@ -1538,39 +1607,6 @@ describe("routines in Automation", () => {
     expect(editor().querySelectorAll(".routine-preview-control")).toHaveLength(1);
     expect(scroll).toHaveBeenCalledWith({ block: "start" });
     expect(write).not.toHaveBeenCalled();
-  });
-
-  it("shares one routine list with event triggers, so a new routine is ready for a trigger at once", async () => {
-    serve("/bots/shared/automation", {
-      owner: "Hermes",
-      canManageTriggers: true,
-      goals: { supported: false, goal: null },
-      tasks: { supported: false, items: [] },
-      triggers: { supported: true, items: [], platformEnabled: true },
-      skills: { supported: false, installed: [], pending: [], approvalRequired: false },
-    });
-    await click("Automation");
-    expect(paths().filter((path) => path === "/routines")).toHaveLength(1);
-    expect(container.textContent).toContain("Add a routine above first.");
-    expect(button("New event trigger").disabled).toBe(true);
-    await act(async () => container.querySelector<HTMLButtonElement>(".routine-preset")!.click());
-    const editor = container.querySelector(".routine-manager > form")!;
-    vi.mocked(write).mockResolvedValueOnce({ ...preview, schedule: "0 7 * * *" });
-    await act(async () => {
-      const field = editor.querySelector<HTMLInputElement>(".routine-schedule")!;
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-        field,
-        "0 7 * * *",
-      );
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await click("Preview schedule", editor);
-    vi.mocked(write).mockResolvedValueOnce({});
-    serve("/routines", [morning]);
-    await click("Add routine", editor);
-    expect(container.textContent).not.toContain("Add a routine above first.");
-    expect(button("New event trigger").disabled).toBe(false);
-    expect(paths().filter((path) => path === "/routines")).toHaveLength(2);
   });
 
   it("returns focus to the edited routine after saving the previewed schedule", async () => {

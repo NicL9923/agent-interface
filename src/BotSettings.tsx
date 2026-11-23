@@ -6,7 +6,8 @@ import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { stayAlso, useCloseRequest, type SheetClose } from "./app/close-request";
-import type { Avatar as AvatarConfig, Bootstrap, Bot, BotInput } from "./shared/types";
+import type { Avatar as AvatarConfig, Bootstrap, Bot } from "./shared/types";
+import { defaultHarness, harnessLabel, harnessOf, type BotForm } from "./app/harness";
 import { api, ApiError, request } from "./client-api";
 import { routeUrl, type ApiResponse } from "./shared/api";
 import { useAction } from "./app/use-action";
@@ -15,12 +16,11 @@ import { useResource } from "./app/use-resource";
 import { CatalogEditor } from "./components/CatalogEditor";
 import { SettingsConfirmation } from "./components/SettingsConfirmation";
 import { FormMessage } from "./components/ui/form-message";
-import { IntegrationList } from "./components/IntegrationsPanel";
 import { Icon } from "./components/Icon";
 import { defaultAvatar } from "./components/Avatar";
 import { AvatarEditor } from "./components/AvatarEditor";
 import { MemoryPanel } from "./components/MemoryPanel";
-import { AutomationPanel, LearningPanel, SkillLocks } from "./components/AutomationPanel";
+import { LearningPanel, SkillLocks } from "./components/automation/SkillsLearning";
 import { ApprovalSettingsPanel } from "./components/ApprovalSettingsPanel";
 import { VaultPanel } from "./components/VaultPanel";
 import { VoicePicker } from "./components/VoicePicker";
@@ -46,10 +46,14 @@ type SettingsTab = (typeof settingsSections)[number]["id"];
 type SettingsPlace = SettingsTab | "index";
 const sectionLabel = (id: SettingsTab) =>
   settingsSections.find((section) => section.id === id)!.label;
-/** A lean roster row lacks some fields, so each one has a safe default. A missing bot takes the first one's model. */
-function formFromBot(bot: Bot | null, fallback?: Bot): BotInput {
-  const modelSource = bot?.model ? bot : fallback;
+/**
+ * A lean roster row lacks some fields, so each one has a safe default. A missing bot takes the first
+ * one's model and the first harness the server offers.
+ */
+function formFromBot(bot: Bot | null, boot: Bootstrap): BotForm {
+  const modelSource = bot?.model ? bot : boot.bots[0];
   return {
+    harness: bot ? harnessOf(bot) : defaultHarness(boot),
     name: bot?.name || "",
     description: bot?.description || "",
     instructions: bot?.instructions || "",
@@ -130,8 +134,8 @@ function LoadedBotSettings({
   }, [memoryDirty]);
   const advanced = bootstrap.preferences.presentation === "advanced";
   // What the form and avatar last matched on the server; saves move it forward.
-  const [baseline, setBaseline] = useState<{ form: BotInput; avatar: AvatarConfig }>(() => ({
-    form: formFromBot(existing, bootstrap.bots[0]),
+  const [baseline, setBaseline] = useState<{ form: BotForm; avatar: AvatarConfig }>(() => ({
+    form: formFromBot(existing, bootstrap),
     avatar: existing?.avatar || defaultAvatar,
   }));
   const savedName = baseline.form.name || existing?.name || "";
@@ -144,12 +148,12 @@ function LoadedBotSettings({
     }
     if (!wasLoading.current || !existing) return;
     wasLoading.current = false;
-    const form = formFromBot(existing);
+    const form = formFromBot(existing, bootstrap);
     setBaseline({ form, avatar: existing.avatar || defaultAvatar });
     setForm(form);
     setAvatar(existing.avatar || defaultAvatar);
   }, [loading, existing]);
-  const [form, setForm] = useState<BotInput>(baseline.form);
+  const [form, setForm] = useState<BotForm>(baseline.form);
   const [avatar, setAvatar] = useState<AvatarConfig>(baseline.avatar);
   const actions = useAction();
   const { busy, error, notice, setError, setNotice } = actions;
@@ -311,7 +315,7 @@ function LoadedBotSettings({
         },
       },
     );
-  const createBot = (submitted: BotInput, confirmed: boolean) =>
+  const createBot = (submitted: BotForm, confirmed: boolean) =>
     actions.run(
       async () => {
         setSaving("config");
@@ -362,6 +366,9 @@ function LoadedBotSettings({
     if (!existing) return createBot(form, confirmed);
     if (!configDirty || portraitIncomplete) return;
     const submitted = form;
+    // The harness goes only when it changed: on a new server, sending it starts a fresh session.
+    const { harness, ...fields } = submitted;
+    const harnessChange = harness !== baseline.form.harness ? { harness } : {};
     // Save changes sits outside the Profile form, so its required name is checked here.
     if (formDirty && !submitted.name.trim()) {
       // Moving to Profile clears messages, so the reason is set after it.
@@ -400,7 +407,8 @@ function LoadedBotSettings({
           await request("PATCH /bots/:id", {
             params: { id: existing.id },
             body: {
-              ...submitted,
+              ...fields,
+              ...harnessChange,
               confirmModel: confirmed,
               ...(personal ? { confirmPrivate: true } : {}),
               ...(mainCleared ? { confirmMainCleared: true } : {}),
@@ -497,11 +505,17 @@ function LoadedBotSettings({
     // A phone replaces the whole view, so focus starts again at its heading.
     if (compactSettings) requestAnimationFrame(focusTitle);
   };
+  const modelSummary = existing?.modelName || form.model || "No model chosen";
+  const savedHarness = baseline.form.harness;
   const summaries: Record<SettingsTab, string> = {
     profile: form.shared ? "Shared with your household" : "Personal",
-    behavior: existing?.modelName || form.model || "No model chosen",
-    access: "Connections and logins",
-    automation: "Routines, goals, tasks and triggers",
+    // Simple view names the harness only once there is more than Hermes to tell apart.
+    behavior:
+      savedHarness && (advanced || savedHarness !== "hermes")
+        ? `${harnessLabel(savedHarness)} · ${modelSummary}`
+        : modelSummary,
+    access: "Logins and approvals",
+    automation: "Scheduled routines",
     memory: "What it remembers and learns",
   };
   const mcpServers = [
@@ -835,6 +849,7 @@ function LoadedBotSettings({
                   setForm={setForm}
                   busy={busy}
                   profile={undefined}
+                  savedHarness={undefined}
                   bootstrap={bootstrap}
                   onModelChange={() => {
                     setConfirmModel(null);
@@ -1000,6 +1015,7 @@ function LoadedBotSettings({
                   setForm={setForm}
                   busy={busy}
                   profile={existing.id}
+                  savedHarness={savedHarness}
                   bootstrap={bootstrap}
                   onModelChange={() => {
                     setConfirmModel(null);
@@ -1033,17 +1049,6 @@ function LoadedBotSettings({
             )}
             {existing && section === "access" && (
               <>
-                <section
-                  className="settings-section"
-                  aria-labelledby="settings-connections-heading"
-                >
-                  <h2 id="settings-connections-heading">Connections</h2>
-                  <IntegrationList
-                    profile={existing.id}
-                    bots={bootstrap.bots}
-                    accountScope={bootstrap.user.id}
-                  />
-                </section>
                 <section className="settings-section">
                   <VaultPanel key={existing.id} botId={existing.id} />
                 </section>
@@ -1088,9 +1093,7 @@ function LoadedBotSettings({
                         ))}
                       </div>
                     ) : (
-                      <p className="muted">
-                        No MCP servers are configured for this assistant. Add one under Connections.
-                      </p>
+                      <p className="muted">No MCP servers are configured for this assistant.</p>
                     )}
                   </section>
                 )}
@@ -1110,15 +1113,6 @@ function LoadedBotSettings({
                     actions={actions}
                     editPreferences={editPreferences}
                     advanced={advanced}
-                  />
-                </section>
-                <section className="settings-section">
-                  <AutomationPanel
-                    key={existing.id}
-                    botId={existing.id}
-                    bots={bootstrap.bots}
-                    accountScope={bootstrap.user.id}
-                    routines={routinesResource}
                   />
                 </section>
               </>

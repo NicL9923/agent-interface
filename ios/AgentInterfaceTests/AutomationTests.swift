@@ -879,17 +879,6 @@ private final class AutomationFixtureServer: @unchecked Sendable {
     XCTAssertEqual(hermesTriggerSubtitle(item, routines: [], loading: true, error: nil), "Disabled · Routine loading…")
     XCTAssertEqual(hermesTriggerSubtitle(item, routines: [], loading: false, error: "failed"), "Disabled · Routine ID: " + item.routineId)
   }
-  func testTriggerPasteboardSecretOptionsAndAcknowledgement() {
-    var captured: (String, [UIPasteboard.OptionsKey: Any])?
-    let writer = HermesTriggerPasteboard { captured = ($0, $1) }
-    let now = Date(timeIntervalSince1970: 1000)
-    writer.copySecret("secret", now: now)
-    XCTAssertEqual(captured?.0, "secret")
-    XCTAssertEqual(captured?.1[.localOnly] as? Bool, true)
-    XCTAssertEqual(captured?.1[.expirationDate] as? Date, now.addingTimeInterval(300))
-    writer.copyURL("url")
-    XCTAssertEqual(captured?.0, "url"); XCTAssertTrue(captured?.1.isEmpty == true)
-  }
   func testTriggerRefusalRefreshesWithoutLockingWork() async throws {
     let server = AutomationFixtureServer(), store = try makeStore(client(server))
     defer { AutomationFixtureProtocol.remove(server) }

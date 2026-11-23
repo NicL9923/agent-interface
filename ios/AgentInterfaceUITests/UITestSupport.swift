@@ -158,12 +158,12 @@ extension XCUIApplication {
   private static let settingsPages: [String: (section: String, page: String?)] = [
     "Profile": ("profile", nil), "Details": ("profile", nil), "Avatar": ("profile", nil),
     "Behavior": ("behavior", nil), "Tools": ("behavior", nil), "Skills": ("behavior", nil),
-    "Access": ("access", nil), "Connections": ("access", "connections"), "Logins": ("access", "logins"),
-    "Automation": ("automation", nil), "Routines": ("automation", nil), "Work": ("automation", "work"),
+    "Access": ("access", nil), "Logins": ("access", "logins"),
+    "Automation": ("automation", nil), "Routines": ("automation", nil),
     "Memory & learning": ("memory", nil), "Memory": ("memory", "memory"), "Learning": ("memory", "learning"),
   ]
   /// Opens an assistant settings page as a person does: back to the list of sections, the section,
-  /// then the row for a page such as Logins or Work.
+  /// then the row for a page such as Logins or Learning.
   func selectSettingsTab(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
     guard let route = Self.settingsPages[title] else {
       XCTFail("No settings page is named \(title)", file: file, line: line); return
@@ -173,7 +173,7 @@ extension XCUIApplication {
     XCTAssertTrue(collectionViews["settingsSections"].waitForDisappearance(), "The \(route.section) section opens", file: file, line: line)
     guard let page = route.page else { return }
     let link = buttons["settingsPage.\(page)"]
-    // Work sits below the routines, so a long list can push it off screen.
+    // A page row can sit below a long list, off screen.
     let list = collectionViews[route.section == "memory" ? "settings.memoryAndLearning" : "settings.\(route.section)"]
     for _ in 0..<8 {
       if link.hasFrame && list.hasFrame && link.frame.minY >= navigationBars.firstMatch.frame.maxY && link.frame.maxY <= list.frame.maxY - 12 { break }

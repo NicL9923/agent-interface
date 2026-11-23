@@ -38,6 +38,7 @@ struct PreferencesView: View {
   private var preferences: Preferences { form.shown }
   @State private var reachability = NetworkReachability()
   private var saving: Bool { store.preferencesSaving }
+  private var hermesUpdates: Bool { store.bootstrap?.showsHermesUpdates ?? true }
   private var saveFailed: Bool { store.preferencesSaveFailed }
   @State private var discardConfirm = false
   @State private var signOutConfirm = false
@@ -66,13 +67,16 @@ struct PreferencesView: View {
           }.padding(.vertical, 8)
         }
         Section {
-          NavigationLink {
-            HermesUpgradeView()
-          } label: {
-            settingsRow("Hermes and updates", icon: "arrow.triangle.2.circlepath",
-              detail: store.householdReachable ? "Connected" + (store.bootstrap?.connection.hermesLabel.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
-              status: store.householdReachable ? Palette.accent : Palette.attention)
-          }.accessibilityIdentifier("Hermes updates")
+          // Gone once a harness server's known roster has no Hermes assistant left; see `showsHermesUpdates`.
+          if hermesUpdates {
+            NavigationLink {
+              HermesUpgradeView()
+            } label: {
+              settingsRow("Hermes and updates", icon: "arrow.triangle.2.circlepath",
+                detail: store.householdReachable ? "Connected" + (store.bootstrap?.connection.hermesLabel.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
+                status: store.householdReachable ? Palette.accent : Palette.attention)
+            }.accessibilityIdentifier("Hermes updates")
+          }
           // The desktop opens in the app; its screen has the terminal button. The terminal runs without
           // the desktop, so the row stays open while either works.
           NavigationLink { ComputerView() } label: {
@@ -85,9 +89,6 @@ struct PreferencesView: View {
               settingsRow("Macs", icon: "laptopcomputer", detail: macs.summary)
             }.accessibilityIdentifier("macs")
           }
-          NavigationLink { IntegrationsView() } label: {
-            settingsRow("Integrations", icon: "powerplug", detail: "Accounts your assistants can use")
-          }.accessibilityIdentifier("Integrations")
         }.task { await watchComputer() }
           .task(id: store.scope) { if let api = store.api { macs = try? await MacDeviceList.load(api) } }
         if let error = store.error {
@@ -179,8 +180,8 @@ struct PreferencesView: View {
           VStack(spacing: 6) {
             Text("w.").font(.largeTitle.bold()).foregroundStyle(Palette.accent)
             Text("WildBots").font(.headline)
-            if let label = store.bootstrap?.connection.hermesLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
-            if let detail = store.bootstrap?.connection.hermesDetail {
+            if hermesUpdates, let label = store.bootstrap?.connection.hermesLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
+            if hermesUpdates, let detail = store.bootstrap?.connection.hermesDetail {
               Text(detail).font(.caption2.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled)
             }
           }.frame(maxWidth: .infinity).padding(.vertical, 12)
@@ -248,7 +249,7 @@ struct PreferencesView: View {
   private var connection: some View {
     Form {
       Section {
-        NavigationLink("Hermes updates") { HermesUpgradeView() }
+        if hermesUpdates { NavigationLink("Hermes updates") { HermesUpgradeView() } }
         LabeledContent("Server", value: store.host)
         if let detail = store.bootstrap?.connection.detail { Text(detail).font(.footnote).foregroundStyle(.secondary) }
         Button("Reconnect now") { Task { await store.reconnect() } }
