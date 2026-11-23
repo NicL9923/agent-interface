@@ -106,6 +106,70 @@ release was activated.
 Secrets, household email addresses, host access details, backups and rollback
 receipts belong in private operating notes. They are not release artifacts.
 
+## Running WildBots on Bun 1.4.5
+
+Use this drop-in for the Bun canary after activating the release through the
+guarded Node workflow above. The guarded release commands require the live
+service to run its recorded Node binary. Return to Node before the next guarded
+release or Hermes recovery.
+
+1. Extract the official host-architecture archive and put its `bun` binary at
+   `APP_BASE/runtime/bun-v1.4.5/bun`. Keep each Bun version in its own directory
+   under `APP_BASE/runtime/bun-vX.Y.Z/`. [Bun 1.4.5 release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.5)
+2. In the activated release, build the server with Bun first on the build
+   command's `PATH`. The guarded release already ran `npm ci` and built the web
+   client. For a fresh checkout, run `npm ci` and `npm run build` first.
+
+   ```sh
+   cd "$APP_BASE/current" &&
+     PATH="$APP_BASE/runtime/bun-v1.4.5:$PATH" npm run build:server:bun &&
+     python3 scripts/bun-service-check.py "$APP_BASE/runtime/bun-v1.4.5/bun"
+   ```
+
+3. Put the native runtime settings in the service's private `shared/app.env`.
+   Enable the harnesses only when the release includes native runtime wiring.
+
+   | Setting                         | Purpose                                                                                             |
+   | ------------------------------- | --------------------------------------------------------------------------------------------------- |
+   | `WILDBOTS_HARNESS_ENABLED=true` | Registers the native harness runtime for bots configured to use it.                                 |
+   | `WILDBOTS_WORKSPACE_ROOT`       | Optional absolute workspace path on releases that support the override.                             |
+   | `OPENAI_API_KEY`                | OpenAI API key for direct Voice, Talk, and image generation where wired.                            |
+   | `WILDBOTS_VAULT_KEY`            | Stable, randomly generated key material for the SQLite mini-vault. Retain it for database restores. |
+
+   The default workspace root is `workspaces/` beside `APP_DATABASE`. Set
+   `WILDBOTS_HARNESS_ENABLED=false` to disable native harnesses. Install the
+   chosen harness CLIs on the service's `PATH`. The mini-vault can
+   also read scoped values through an optional `headnet-vault` adapter supplied
+   by the server wiring.
+
+4. Create `~/.config/systemd/user/agent-interface.service.d/30-bun.conf`. Replace
+   `APP_BASE` in the drop-in with the absolute application directory.
+
+   ```ini
+   [Service]
+   WorkingDirectory=APP_BASE/current
+   EnvironmentFile=APP_BASE/shared/app.env
+   ExecStartPre=/usr/bin/python3 scripts/bun-service-check.py APP_BASE/runtime/bun-v1.4.5/bun
+   ExecStart=
+   ExecStart=APP_BASE/runtime/bun-v1.4.5/bun run --no-env-file --no-install dist/server/index.js
+   ```
+
+   `--no-env-file` disables Bun's automatic dotenv loading, including
+   `.env.local`. systemd supplies production settings from `shared/app.env`.
+   Keep release-local `.env` out of the working directory because the app still
+   reads that filename explicitly. `--no-install` disables Bun's automatic
+   dependency installation. [Bun environment variables](https://bun.com/docs/runtime/environment-variables)
+
+5. Run `systemctl --user daemon-reload` and
+   `systemctl --user restart agent-interface.service`. Check that
+   `/api/health/ready` returns 200 on loopback. Confirm `/proc/<MainPID>/exe`
+   resolves to the pinned Bun executable using the check above.
+
+To roll back the runtime, remove `30-bun.conf`, then reload and restart the
+unit. Verify readiness and confirm the process executable resolves to the
+pinned Node binary. If you also migrated a canary bot, follow the bot migration
+rollback separately.
+
 ## Live voice plugin
 
 Live Talk mints short-lived OpenAI Realtime client secrets on the household

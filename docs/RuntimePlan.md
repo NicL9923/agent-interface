@@ -1,9 +1,42 @@
 # Replacing Hermes with wrapped agent harnesses
 
+## Status (November 23, 2026)
+
+Waves 1–4 establish Bun 1.4.5, TypeScript, Effect 4, and SQLite as the WildBots
+server stack. The app owns its transcript and uses `node:sqlite` with FTS5 for
+search. The [Bun hosting procedure](Hosting.md#running-wildbots-on-bun-145)
+covers the server bundle, service configuration, and rollback.
+
+Four harness drivers adapt MIT-licensed code from [T3 Code](https://github.com/pingdotgg/t3code).
+
+| Harness     | Protocol                                                            |
+| ----------- | ------------------------------------------------------------------- |
+| Codex       | `codex app-server`, JSON-RPC over stdio                             |
+| Claude Code | CLI `stream-json` over stdio                                        |
+| Grok        | `grok agent stdio` over ACP                                         |
+| Pi          | `pi --mode rpc` for OpenRouter, Gemini, local models, and fast chat |
+
+Pi replaces OpenCode. WildBots supplies a local MCP server and an AES-256-GCM
+mini-vault with an optional `headnet-vault` adapter. Memory and skills are
+versioned, with background learning and pruning. SQLite persists routines and
+their runs, and a heartbeat that returns `HEARTBEAT_OK` stays quiet.
+
+The native runtime uses direct Mac Link and computer and browser MCP tools,
+direct OpenAI Voice and Talk, and a native multi-bot group coordinator. The
+native product drops Discord and other external gateways, the legacy OAuth
+integration manager, Kanban, Goals, Webhooks, and the 1Password and Bitwarden
+bridge.
+
+The remaining production step is to migrate a live canary with
+`scripts/migrate-bot.ts` and validate it before moving the remaining bots.
+Retire `src/hermes/` after the migration.
+
+## Original plan (November 12, 2026)
+
 Decided November 12, 2026 (UTC, as the ledger dates entries). It replaces the experiment in
 [HarnessAssessment.md](HarnessAssessment.md) as the direction. Hermes stays the runtime until step 7 retires it.
 
-## Why
+### Why
 
 Measured on production on November 11 and 12 (see `docs/ledger/20261112T*.md`):
 
@@ -19,7 +52,7 @@ The first two are fixable on Hermes, and step 1 fixes them for good. The third i
 product's core behavior lives in another project's private internals. Mature harnesses run turns well; the
 parts that are the product should be ours.
 
-## Shape
+### Shape
 
 WildBots owns the system of record. Harnesses only run turns.
 
@@ -38,7 +71,7 @@ per harness, with capability flags for what that harness supports, as `HarnessAs
 An adapter turns a request down with `RuntimeRefusal` (`InvalidInput`, `NotFound` or `Conflict`, in
 `src/shared/errors.ts`), which reaches the person as a 4xx with its message. An error without a status is a 5xx.
 
-## Harnesses
+### Harnesses
 
 Integrations follow T3 Code's approach: each harness's own CLI or SDK in a child process, driven through its
 structured protocol, never terminal output. T3 Code is MIT licensed, so we may reuse its code and replay fixtures
@@ -72,7 +105,7 @@ requests or a human takeover. Changing a bot's harness also starts a new session
 and harness-internal state do not move. A task lost to a crash is never re-run automatically, on any harness; it
 waits for review, as today.
 
-## Credentials and subscription terms
+### Credentials and subscription terms
 
 Checked November 12, 2026 against each vendor's current terms and docs. Consumer plans for Claude, ChatGPT and Grok
 belong to one person: each vendor's terms say you may not make your account available to anyone else. So a
@@ -121,7 +154,7 @@ chat, a hand-off from another member's bot and a routine posting into a group ch
 through each vendor's own CLI flow, such as `claude setup-token` or Codex's device sign-in, into their own Unix
 account; WildBots never reads, stores or relays the tokens, which Anthropic's legal page forbids.
 
-## Memory and skills
+### Memory and skills
 
 Each bot has server-owned memory, facts about the household and the people in it, and a skills folder of
 instructions and resources for recurring tasks. Both are versioned in the app database, so every change can be
@@ -140,7 +173,7 @@ shown and undone. Harnesses see them read-only; edits go through the server.
   wait for approval is a per-bot setting.
 - Hermes's existing `MEMORY.md`, `USER.md` and skills import as the starting state.
 
-## Routines
+### Routines
 
 A durable scheduler in the app database starts harness runs: cron and one-off schedules, time zones, missed-run
 policy, no overlapping runs of one routine and delivery into the bot's chat and notifications. It carries today's
@@ -151,7 +184,7 @@ scheduler.
 Each routine has exactly one scheduler of record. A routine moves with its bot in step 7: imported into WildBots
 and disabled in Hermes in one step, so it can never run on both.
 
-## Hermes features that move
+### Hermes features that move
 
 | Feature                                                               | Where it goes                                                                                                                                                                                                       |
 | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -172,7 +205,7 @@ and disabled in Hermes in one step, so it can never run on both.
 | Hermes updates screen                                                 | Pinned harness versions with an upgrade check; harnesses never update themselves, so Grok runs with `--no-auto-update`                                                                                              |
 | Discord and other gateways                                            | Dropped; the web and iOS apps are the clients                                                                                                                                                                       |
 
-## Steps
+### Steps
 
 Each step ships on its own and is accepted before the next.
 
@@ -215,7 +248,7 @@ Each step ships on its own and is accepted before the next.
    history as a rollback copy. Rolling back after new turns means Hermes resumes from that copy plus a summary of
    the turns it never saw. When every bot has moved, retire Hermes and the add-on.
 
-## Open questions
+### Open questions
 
 - Whether OpenAI counts a server Nicolas runs for himself as hosted. Until it answers, Codex runs on an API key.
 - Whether Anthropic would allow each adult to sign in with their own Claude account inside WildBots; its legal page
