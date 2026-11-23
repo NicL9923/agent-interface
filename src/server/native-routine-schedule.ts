@@ -151,11 +151,19 @@ export function isInQuietHours(hours: QuietHours, timezone: string, now: number)
   return start <= end ? time >= start && time < end : time >= start || time < end;
 }
 
+const MIN_INTERVAL_MS = 1000;
+
 function recurringTime(expr: string, timezone: string, afterMs: number, anchorMs: number): number {
   const interval = /^\d+$/.test(expr) ? Number(expr) : NaN;
   const next = anchorMs + (Math.floor((afterMs - anchorMs) / interval) + 1) * interval;
-  if (!Number.isSafeInteger(interval) || interval < 1 || !Number.isFinite(new Date(next).getTime()))
-    throw new InvalidInput("Enter a positive, whole interval in milliseconds.");
+  if (
+    !Number.isSafeInteger(interval) ||
+    interval < MIN_INTERVAL_MS ||
+    !Number.isFinite(new Date(next).getTime())
+  )
+    throw new InvalidInput(
+      `Enter a positive, whole interval of at least ${MIN_INTERVAL_MS} milliseconds.`,
+    );
   return next;
 }
 

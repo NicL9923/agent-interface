@@ -228,7 +228,7 @@ export function createComputerMcpTools({
         if (name === handoffName) {
           if (!onHandoffRequest)
             return toolFailure("computer_unavailable", handoffMessages.computer_unavailable);
-          if (ctx.scheduled === true || !ctx.sessionKey)
+          if (ctx.scheduled !== false || !ctx.sessionKey)
             return toolFailure("no_person", handoffMessages.no_person);
           const card = handoffSchema.safeParse(args);
           if (!card.success) return toolFailure("invalid_arguments", card.error.issues[0].message);

@@ -467,10 +467,17 @@ export function formatGroupPrompt(
     `You are ${bot.name} in the group chat "${room.name}"${room.description ? `: ${room.description}` : "."}`,
     "Reply to the latest message. Name another assistant with @name only when you need it to answer next.",
     "",
-    ...transcript.map(
-      (message) =>
-        `${message.senderKind === "bot" ? `🤖 ${message.senderName}` : message.senderKind === "system" ? "[room]" : message.senderName}: ${message.text}`,
-    ),
+    ...transcript.map((message) => {
+      const prefix =
+        message.senderKind === "bot"
+          ? `🤖 ${message.senderName}`
+          : message.senderKind === "system"
+            ? "[room]"
+            : message.senderName;
+      // Indent continuation lines so a message cannot forge another bot's or [room]'s transcript line.
+      const safeText = message.text.replace(/\r?\n/g, "\n  ");
+      return `${prefix}: ${safeText}`;
+    }),
   ].join("\n");
 }
 
@@ -578,11 +585,10 @@ export class GroupCoordinator {
     return { message, round };
   }
 
-  /** Stops the room's discussion. The turn in progress is abandoned and its reply never posted. */
+  /** Stops the room's discussion. The room stays busy until the abandoned turn settles. */
   stopRoom(roomId: string): boolean {
     const controller = this.running.get(roomId);
-    if (!controller) return false;
-    this.running.delete(roomId);
+    if (!controller || controller.signal.aborted) return false;
     controller.abort();
     return true;
   }

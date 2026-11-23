@@ -19,6 +19,8 @@ type MaybePromise<T> = T | Promise<T>;
 export interface NativeSchedulerOptions {
   now?: () => number;
   tickIntervalMs?: number;
+  /** Maximum runtime for one routine execution before it is aborted to free the lock. Default 15 minutes. */
+  maxRunMs?: number;
   /** Dispatch routine.prompt or routine.scriptCommand through the configured runner. */
   executeRun(
     routine: NativeRoutine,
@@ -44,6 +46,7 @@ export class NativeScheduler {
   private readonly active = new Map<string, ActiveRun>();
   private readonly now: () => number;
   private readonly tickIntervalMs: number;
+  private readonly maxRunMs: number;
   private timer?: NodeJS.Timeout;
   private stopped = false;
 
@@ -53,12 +56,15 @@ export class NativeScheduler {
   ) {
     this.now = options.now ?? Date.now;
     this.tickIntervalMs = options.tickIntervalMs ?? 1000;
+    this.maxRunMs = options.maxRunMs ?? 15 * 60_000;
     if (
       !Number.isInteger(this.tickIntervalMs) ||
       this.tickIntervalMs < 1 ||
       this.tickIntervalMs > 2_147_483_647
     )
       throw new InvalidInput("Choose a valid scheduler polling interval.");
+    if (!Number.isInteger(this.maxRunMs) || this.maxRunMs < 1 || this.maxRunMs > 2_147_483_647)
+      throw new InvalidInput("Choose a valid maximum routine runtime.");
   }
 
   /** Start one scheduler owner per database. Recovery runs before the first polling tick. */
@@ -125,11 +131,13 @@ export class NativeScheduler {
 
   private async execute(
     { routine, run }: NativeRoutineClaim,
-    signal: AbortSignal,
+    stopSignal: AbortSignal,
   ): Promise<NativeRoutineRun | undefined> {
     let output: string | null = null;
     let status: "completed" | "suppressed" = "completed";
     let delivered = false;
+    const timeoutSignal = AbortSignal.timeout(this.maxRunMs);
+    const signal = AbortSignal.any([stopSignal, timeoutSignal]);
     const isQuietNow = () =>
       routine.quietHours !== null &&
       isInQuietHours(routine.quietHours, routine.timezone, this.now());
@@ -153,8 +161,10 @@ export class NativeScheduler {
         }
       }
     } catch (error) {
-      if (signal.aborted)
+      if (stopSignal.aborted)
         return this.repository.recordInterrupted(run.id, this.now(), "Routine stopped.");
+      if (timeoutSignal.aborted)
+        return this.repository.recordFailure(run.id, this.now(), "Routine run timed out.", output);
       return this.repository.recordFailure(
         run.id,
         this.now(),
