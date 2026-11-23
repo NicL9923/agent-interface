@@ -18,3 +18,9 @@ Each temporary mutation below failed its selected test with an assertion error. 
 | Include the bot owner's scope even when the bot is shared     | The shared bot's list exposed the owner's secret name.                                                 |
 | Remove the secret name from AES-GCM associated data           | A secret read succeeded after the row's name changed.                                                  |
 | Return the card's submitted value in its tool result          | The structured result included the private value where the test expected status and save confirmation. |
+
+## Image output paths
+
+The image path fix has diff SHA-256 `8d1859f05cbdd56193298365565c984661c326641066b7aebcb86e4c7f9eb326` against `e6763bd41722fe2b4158aafbc353614c1b53d237`.
+
+Before the fix, the image test received a tool error for a generated file under a symlinked parent directory. After the fix, the test verified that the signed path uses the real directory and that a symlink at the output directory itself is refused. Typecheck, lint, formatting, and all 14 loopback tests passed again.

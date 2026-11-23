@@ -1,5 +1,15 @@
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -635,7 +645,11 @@ describe("WildBots MCP callbacks", () => {
       const address = provider.address();
       if (!address || typeof address === "string") throw new Error("No provider address");
       const files = fileSigner(store.fileKeys(), undefined);
-      const outputDir = join(directory, "generated");
+      const storage = join(directory, "storage");
+      const alias = join(directory, "alias");
+      await mkdir(storage);
+      await symlink(storage, alias);
+      const outputDir = join(alias, "generated");
       const mcp = await listen({
         imageGeneration: {
           files,
@@ -654,6 +668,7 @@ describe("WildBots MCP callbacks", () => {
           size: "1024x1024",
           quality: "high",
         });
+        expect(response.result.isError).toBeUndefined();
         const file = response.result.structuredContent?.file as FileRef;
         const registered = files.fileValue(file.id);
         expect(file).toMatchObject({ mime, size: bytes.length, url: "/api/files/" + file.id });
@@ -661,7 +676,7 @@ describe("WildBots MCP callbacks", () => {
           botId: personal.botId,
           kind: "artifact",
           mime,
-          path: join(outputDir, file.name),
+          path: join(await realpath(storage), "generated", file.name),
         });
         expect(await readFile(registered.path)).toEqual(bytes);
         expect((await stat(registered.path)).mode & 0o777).toBe(0o600);
@@ -677,6 +692,14 @@ describe("WildBots MCP callbacks", () => {
         isError: true,
         content: [{ type: "text", text: "The image provider did not return a usable image." }],
       });
+      const redirected = join(directory, "redirected");
+      await mkdir(redirected);
+      await rename(outputDir, join(storage, "original"));
+      await symlink(redirected, outputDir);
+      expect(
+        (await call(session, "image_generate", { prompt: "one red pixel" })).result.isError,
+      ).toBe(true);
+      expect(await readdir(redirected)).toEqual([]);
     } finally {
       await new Promise<void>((resolve) => provider.close(() => resolve()));
     }

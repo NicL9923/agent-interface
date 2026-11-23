@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Conflict } from "../../shared/errors.js";
 import type { FileRef } from "../../shared/types.js";
@@ -10,6 +10,7 @@ export interface ImageGenerationOptions {
   apiKey: string;
   baseUrl?: string;
   model?: string;
+  /** Host-owned storage. Keep it outside any bot's writable workspace. */
   outputDir: string;
   files: FileSigner;
   /** Additional trusted origins for image URLs returned by the API. */
@@ -130,10 +131,10 @@ export async function generateImageTool({
     throw providerError();
   }
   const extension = imageFormat(image);
-  const directory = resolve(outputDir);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  if ((await realpath(directory)) !== directory)
-    throw new Error("The image output directory must use a canonical path.");
+  const destination = resolve(outputDir);
+  await mkdir(destination, { recursive: true, mode: 0o700 });
+  if (!(await lstat(destination)).isDirectory()) throw new Error("Invalid image output directory.");
+  const directory = await realpath(destination);
 
   signal?.throwIfAborted();
   const name = `${randomUUID()}.${extension}`;
