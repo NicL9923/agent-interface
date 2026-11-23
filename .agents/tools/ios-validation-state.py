@@ -136,6 +136,8 @@ def cacheable(operation, options):
     }
     remaining = iter(options)
     for option in remaining:
+        if option.startswith(("-only-testing:@", "-skip-testing:@")):
+            return False
         if option.startswith(("-only-testing:", "-skip-testing:")):
             continue
         if option not in scalar_options:

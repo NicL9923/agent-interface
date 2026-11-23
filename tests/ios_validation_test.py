@@ -164,8 +164,16 @@ sys.exit('unexpected xcrun call: '+repr(args))
         path.chmod(0o755)
 
     def run_validation(self, operation="test", options=(), timeout=20, **env):
+        opt_in = ["--allow-full-suite"] if operation == "test" else []
         return subprocess.run(
-            ["bash", str(self.tools / "validate-ios.sh"), "PHONE", operation, *options],
+            [
+                "bash",
+                str(self.tools / "validate-ios.sh"),
+                "PHONE",
+                operation,
+                *opt_in,
+                *options,
+            ],
             check=False,
             cwd=self.root,
             env=dict(self.env, **env),
@@ -440,6 +448,8 @@ sys.exit('unexpected xcrun call: '+repr(args))
             (["-test-iterations", "2"], {}),
             (["OTHER_SWIFT_FLAGS=-I/external"], {}),
             (["-only-testing", "@tests.txt"], {}),
+            (["-only-testing:@tests.txt"], {}),
+            (["-skip-testing:@tests.txt"], {}),
             ([], {"SWIFT_EXEC": "/external/compiler"}),
         ]:
             with self.subTest(options=options, env=env):
@@ -498,7 +508,13 @@ sys.exit('unexpected xcrun call: '+repr(args))
 
     def test_invalid_device_and_missing_option_value_fail_before_native_execution(self):
         p = subprocess.run(
-            ["bash", str(self.tools / "validate-ios.sh"), "UNKNOWN", "test"],
+            [
+                "bash",
+                str(self.tools / "validate-ios.sh"),
+                "UNKNOWN",
+                "test",
+                "--allow-full-suite",
+            ],
             check=False,
             env=self.env,
             capture_output=True,

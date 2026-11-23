@@ -201,6 +201,28 @@ class ValidateIosTests(unittest.TestCase):
             for key, _, value in (row.partition(": ") for row in text.splitlines())
         }
 
+    def test_unfiltered_runs_require_opt_in_before_the_lock_or_xcode(self):
+        for args in (
+            (),
+            ("test",),
+            ("test", "-skip-testing:AgentInterfaceUITests/Suite"),
+            ("test", "-only-testing:"),
+            ("test", "-only-testing", "@tests.txt"),
+            ("test", "-only-testing:@tests.txt"),
+            ("test", "-skip-testing", "-only-testing:AgentInterfaceTests/Suite"),
+        ):
+            with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
+                result = self.run_script(*args)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(
+                    "Pass -only-testing:Target/Class/test or --allow-full-suite",
+                    result.stderr,
+                )
+                self.assertFalse(
+                    self.log.exists(), "Validation reached the lock or Xcode"
+                )
+
     def test_worker_limits_run_with_the_tests_and_options_keep_their_values(self):
         space_value = "OTHER_SWIFT_FLAGS=-Xfrontend -warn-long-function-bodies=500"
         result = self.run_script(
@@ -251,18 +273,28 @@ class ValidateIosTests(unittest.TestCase):
             "15",
         )
 
+    def test_a_separate_inline_test_selection_also_allows_a_focused_run(self):
+        selection = "AgentInterfaceTests/Suite"
+        result = self.run_script("test", "-only-testing", selection)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        [test] = self.calls(phase="test-without-building")
+        self.assertEqual(test[test.index("-only-testing") + 1], selection)
+
     def test_a_worker_option_without_a_value_is_rejected_before_building(self):
-        result = self.run_script("test", "-maximum-parallel-testing-workers")
+        result = self.run_script(
+            "test", "--allow-full-suite", "-maximum-parallel-testing-workers"
+        )
         self.assertEqual(result.returncode, 2)
         self.assertIn("-maximum-parallel-testing-workers needs a value", result.stderr)
         self.assertEqual(self.calls(), [])
 
     def test_summary_records_the_effective_build_and_test_options(self):
-        default = self.summary(self.run_script("test"))
+        default = self.summary(self.run_script("test", "--allow-full-suite"))
         flags = "SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG CUSTOM"
         release = self.summary(
             self.run_script(
                 "test",
+                "--allow-full-suite",
                 "-configuration",
                 "Release",
                 flags,
@@ -324,7 +356,9 @@ class ValidateIosTests(unittest.TestCase):
         ]:
             with self.subTest(operation=operation):
                 self.log.unlink(missing_ok=True)
-                result = self.run_script(operation)
+                result = self.run_script(
+                    operation, *(["--allow-full-suite"] if operation == "test" else [])
+                )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 builds = [
                     argv[argv.index("-derivedDataPath") + 1]
@@ -358,12 +392,12 @@ class ValidateIosTests(unittest.TestCase):
         self.assertEqual(summary["derived data"], ".private/custom-build")
 
     def test_a_failing_test_run_keeps_its_exit_status_in_the_summary(self):
-        result = self.run_script("test", FAKE_TEST_STATUS="65")
+        result = self.run_script("test", "--allow-full-suite", FAKE_TEST_STATUS="65")
         self.assertEqual(result.returncode, 65)
         self.assertEqual(self.summary(result)["exit status"], "65")
 
     def test_machine_lock_wraps_the_complete_simulator_lifetime(self):
-        result = self.run_script("test")
+        result = self.run_script("test", "--allow-full-suite")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls("mac-heavy-lock")), 1)
         entries = [json.loads(line) for line in self.log.read_text().splitlines()]
@@ -398,7 +432,9 @@ class ValidateIosTests(unittest.TestCase):
         ]:
             with self.subTest(operation=operation):
                 self.log.unlink(missing_ok=True)
-                result = self.run_script(operation)
+                result = self.run_script(
+                    operation, *(["--allow-full-suite"] if operation == "test" else [])
+                )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.calls("mac-heavy-lock"), [scope])
                 # The ownership check before the request and the one after re-entry ask about the same scope.
@@ -418,7 +454,9 @@ class ValidateIosTests(unittest.TestCase):
         ]:
             with self.subTest(options=options):
                 self.log.unlink(missing_ok=True)
-                result = self.run_script("test", *options)
+                result = self.run_script(
+                    "test", "-only-testing:AgentInterfaceTests/Suite", *options
+                )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.calls("mac-heavy-lock"), [scope])
                 self.assertEqual(
@@ -427,7 +465,7 @@ class ValidateIosTests(unittest.TestCase):
 
     def test_failed_test_stage_still_shuts_down_the_simulator(self):
         # A failing test stage must also leave its simulator stopped.
-        result = self.run_script("test", FAKE_TEST_STATUS="65")
+        result = self.run_script("test", "--allow-full-suite", FAKE_TEST_STATUS="65")
         self.assertEqual(result.returncode, 65)
         self.assertIn(["simctl", "shutdown", SIMULATOR], self.calls("xcrun"))
 
