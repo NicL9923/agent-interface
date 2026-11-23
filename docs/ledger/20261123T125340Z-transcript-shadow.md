@@ -41,3 +41,27 @@ Code state after the manifest change:
 - `npx vitest run tests/store-transcripts.test.ts tests/store*.test.ts tests/hermes-qualification.test.ts`
   passed, 43 tests in 4 files. The qualification check also verified the shared app and
   Python integration digest.
+
+## Full repository checks
+
+The application source is commit `2d36999545af7cdc9793f948c4fd7ff1bdc2495d`. The
+`check-all --keep-going` retry passed typecheck, lint, Ruff, the build, and all 4,299
+Vitest tests in 232 files. The terminal process received SIGTERM during Playwright,
+so a detached `check-all --only e2e,py --keep-going --verbose` resumed the remaining checks.
+
+| Check                      | Result                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| Chromium on Fedora         | 142 passed                                                                    |
+| WebKit on Fedora           | 142 launch failures. Playwright reported missing ICU 74 and JPEG 8 libraries. |
+| Python 3.14.10             | 52 files passed in 316.3 seconds                                              |
+| WebKit in Playwright Noble | 137 passed, 3 skipped, 2 failed in 4.5 minutes                                |
+
+The WebKit fallback used the installed `mcr.microsoft.com/playwright:v1.65.0-noble` image and
+Node 26.13.1. The first container run used `--network none`, which put WebKit into
+offline mode. The accessibility test passed with normal container networking, and the
+full WebKit rerun used that setting.
+
+Both failures reproduced on a fresh build of the base commit `320740c3` using the same
+container. The test at `e2e/smoke.spec.ts:40` reported errors loading the same two lazy
+chunks in the service worker. The test at `e2e/smoke.spec.ts:811` timed out waiting for
+the same `Fence check 24:` text. The backfill and comparison tests used a runtime fixture.
