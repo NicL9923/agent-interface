@@ -285,6 +285,45 @@ const additions = `
   CREATE INDEX IF NOT EXISTS native_group_rooms_created ON native_group_rooms(archived_at,created_at);
   CREATE INDEX IF NOT EXISTS native_group_messages_room ON native_group_messages(room_id,thread_id,seq);
   -- END native_groups
+  -- BEGIN native_routines
+  CREATE TABLE IF NOT EXISTS native_routines(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('cron','once','interval','heartbeat')),
+    schedule_expr TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    script_command TEXT,
+    model_override TEXT,
+    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+    try_once INTEGER NOT NULL CHECK(try_once IN (0,1)),
+    missed_policy TEXT NOT NULL CHECK(missed_policy IN ('skip','run_once')),
+    quiet_hours_json TEXT,
+    deliver_to_group_id TEXT,
+    next_run_at INTEGER,
+    last_run_at INTEGER,
+    last_status TEXT CHECK(last_status IN ('running','completed','suppressed','failed','interrupted')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS native_routines_due ON native_routines(next_run_at,id) WHERE enabled=1;
+  CREATE INDEX IF NOT EXISTS native_routines_bot ON native_routines(bot_id);
+  CREATE TABLE IF NOT EXISTS native_routine_runs(
+    id TEXT PRIMARY KEY NOT NULL,
+    routine_id TEXT NOT NULL REFERENCES native_routines(id) ON DELETE CASCADE,
+    bot_id TEXT NOT NULL,
+    trigger TEXT NOT NULL CHECK(trigger IN ('scheduled','manual','catchup')),
+    status TEXT NOT NULL CHECK(status IN ('running','completed','suppressed','failed','interrupted')),
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    output_text TEXT,
+    error TEXT,
+    delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1))
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS native_routine_single_flight ON native_routine_runs(routine_id) WHERE status='running';
+  CREATE INDEX IF NOT EXISTS native_routine_run_history ON native_routine_runs(routine_id,started_at);
+  -- END native_routines
 `;
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {

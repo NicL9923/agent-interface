@@ -1,4 +1,4 @@
-import { Conflict, InvalidInput } from "../shared/errors.js";
+import { Conflict, InvalidInput, NotFound } from "../shared/errors.js";
 import {
   CREDENTIAL_KINDS,
   NATIVE_HARNESS_KINDS,
@@ -93,4 +93,13 @@ export function assertGroupChatAllowed(
   if (!credential)
     throw new InvalidInput(`Choose a credential for ${bot.name} before adding it to a group chat.`);
   assertCredentialPolicy(bot, credential, { kind: "group-chat", multiUser });
+}
+
+export function assertRoutineGroupDeliveryAllowed(
+  bot: ManagedBotRecord | undefined,
+  credential: CredentialRecord | undefined,
+): void {
+  if (!bot || bot.archivedAt !== undefined) throw new NotFound("Routine assistant not found.");
+  if (!credential) throw new Conflict("Choose a credential for this routine assistant.");
+  assertCredentialPolicy(bot, credential, { kind: "routine", destination: "group" });
 }
