@@ -333,10 +333,8 @@ class GrokSession implements HarnessSession {
   }
 
   events(listener: (event: HarnessEvent) => void): () => void {
-    if (this.closedEvent) {
-      listener(this.closedEvent);
-      return () => undefined;
-    }
+    // A closed session is silent: its one session.closed already went to the listeners it had.
+    if (this.closedEvent) return () => undefined;
     this.listeners.add(listener);
     listener({ type: "session.ready", providerSessionId: this.providerSessionId });
     return () => this.listeners.delete(listener);

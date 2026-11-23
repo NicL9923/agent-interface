@@ -408,6 +408,12 @@ class ClaudeSession implements HarnessSession {
         : `${errorMessage(error)}${this.stderrSuffix()}`;
       throw new Error(`Claude Code failed to start: ${reason}`);
     }
+    // The CLI sends its system/init frame only once the first user message arrives, but the session
+    // ID is fixed at launch by --session-id or --resume. Announce it now so callers can wait for it.
+    if (this.providerSessionId) {
+      this.announcedSessionId = this.providerSessionId;
+      this.emit({ type: "session.ready", providerSessionId: this.providerSessionId });
+    }
     return this;
   }
 
@@ -594,8 +600,9 @@ class ClaudeSession implements HarnessSession {
     if (typeof frame.model === "string") this.model = frame.model;
     const sessionId = frame.session_id;
     if (typeof sessionId !== "string" || !sessionId) return;
+    // session.ready is announced once at startup. A later ID only updates the property.
     this.providerSessionId = sessionId;
-    if (sessionId === this.announcedSessionId) return;
+    if (this.announcedSessionId) return;
     this.announcedSessionId = sessionId;
     this.emit({ type: "session.ready", providerSessionId: sessionId });
   }

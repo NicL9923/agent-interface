@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -12,6 +14,9 @@ if (process.argv.includes("--version")) {
 }
 
 assert.equal(process.argv.at(-1), "app-server");
+// The HarnessDriver contract kit counts and kills live harness processes through this directory.
+if (process.env.HARNESS_CONTRACT_DIR)
+  writeFileSync(join(process.env.HARNESS_CONTRACT_DIR, `${process.pid}.pid`), "");
 const threadId = "codex-thread";
 const replies = new Map();
 let handshake = "new";
@@ -133,9 +138,59 @@ async function streamTurn() {
   );
 }
 
+// Contract scenario: the turn text names a HarnessScript from tests/helpers/harness-driver-contract.ts.
+const contractAnswers = new Map();
+function contractTurn(text) {
+  const script = /^contract (text|tool|question|hang)$/.exec(text ?? "")?.[1];
+  assert(script, `Unscripted contract turn ${JSON.stringify(text)}`);
+  const reply = (prefix) => {
+    turnEvent("item/agentMessage/delta", { delta: `${prefix}contract` });
+    turnEvent("item/agentMessage/delta", { delta: " reply" });
+    turnEvent("item/completed", {
+      item: { type: "agentMessage", id: "reply", phase: "final_answer", text: `${prefix}contract reply` },
+    });
+    complete("completed");
+  };
+  if (script === "text") return reply("");
+  if (script === "tool") {
+    const item = { type: "mcpToolCall", id: "contract-call", tool: "contract_tool", arguments: {} };
+    turnEvent("item/started", { item });
+    turnEvent("item/completed", { item: { ...item, status: "completed", result: "done" } });
+    return reply("");
+  }
+  if (script === "question") {
+    const id = `contract-question-${turnNumber}`;
+    contractAnswers.set(id, (result) => reply(`${result.answers["contract-choice"].answers[0]} `));
+    send({
+      id,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId,
+        turnId,
+        itemId: "contract-input",
+        questions: [
+          {
+            id: "contract-choice",
+            question: "Proceed with the contract check?",
+            options: [{ label: "yes" }, { label: "no" }],
+          },
+        ],
+      },
+    });
+    return;
+  }
+  turnEvent("item/agentMessage/delta", { delta: "working" });
+}
+
 const input = createInterface({ input: process.stdin });
 for await (const line of input) {
   const message = JSON.parse(line);
+  if (!message.method && contractAnswers.has(message.id)) {
+    const answered = contractAnswers.get(message.id);
+    contractAnswers.delete(message.id);
+    answered(message.result);
+    continue;
+  }
   if (!message.method) {
     assert(replies.has(message.id), `Unexpected client response ID ${message.id}`);
     const expected = replies.get(message.id);
@@ -234,6 +289,11 @@ for await (const line of input) {
     case "thread/start":
     case "thread/resume": {
       assert.equal(params.cwd, process.cwd());
+      if (scenario === "contract") {
+        notify("thread/started", { thread: { id: threadId } });
+        reply(id, { thread: { id: threadId } });
+        break;
+      }
       assert.equal(params.model, "gpt-6-sol");
       assert.equal(params.modelProvider, undefined);
       assert.equal(params.developerInstructions, "Follow instructions");
@@ -270,6 +330,13 @@ for await (const line of input) {
     case "turn/start":
       assert.equal(params.threadId, threadId);
       assert.equal(turnId, undefined);
+      if (scenario === "contract") {
+        turnId = `provider-turn-${++turnNumber}`;
+        reply(id, { turn: { id: turnId, status: "inProgress" } });
+        notify("turn/started", { turn: { id: turnId, status: "inProgress" } });
+        contractTurn(params.input[0]?.text);
+        break;
+      }
       assert.equal(params.effort, "high");
       const clientId = params.clientUserMessageId;
       turnId = `provider-turn-${++turnNumber}`;
@@ -329,6 +396,12 @@ for await (const line of input) {
       reply(id, { turnId });
       break;
     case "turn/interrupt":
+      if (scenario === "contract") {
+        assert.deepEqual(params, { threadId, turnId });
+        complete("interrupted");
+        reply(id, {});
+        break;
+      }
       assert.equal(scenario, "interrupt");
       assert.deepEqual(params, { threadId, turnId });
       assert(!replies.has("restricted"));

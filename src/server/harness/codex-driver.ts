@@ -327,10 +327,11 @@ class CodexSession implements HarnessSession {
   }
 
   events(listener: (event: HarnessEvent) => void): () => void {
+    // A closed session is silent: its one session.closed already went to the listeners it had.
+    if (this.#closedEvent) return () => undefined;
     if (this.#providerSessionId)
       listener({ type: "session.ready", providerSessionId: this.#providerSessionId });
-    if (this.#closedEvent) listener(this.#closedEvent);
-    else this.#listeners.add(listener);
+    this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
 

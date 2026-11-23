@@ -10,6 +10,13 @@ export { createCodexDriver, type CodexDriverOptions } from "./codex-driver.js";
 export { createGrokDriver, type GrokDriverOptions } from "./grok-driver.js";
 export { createPiDriver, type PiDriverOptions } from "./pi-driver.js";
 export { createHarnessRuntime, type HarnessRuntimeOptions } from "./runtime.js";
+export {
+  createCompositeRuntime,
+  harnessRuntimeId,
+  HARNESS_PROBE_TTL_MS,
+  type CompositeRuntime,
+  type CompositeRuntimeOptions,
+} from "./wiring.js";
 export * from "./session-coordinator.js";
 export * from "./process-spawn.js";
 

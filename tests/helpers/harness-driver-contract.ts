@@ -39,6 +39,7 @@ export type HarnessScript =
 
 export const CONTRACT_REPLY = "contract reply";
 export const CONTRACT_TOOL = "contract_tool";
+/** The contract finds this question by its text. A stand-in whose protocol carries question IDs uses `id`. */
 export const CONTRACT_QUESTION = {
   id: "contract-choice",
   question: "Proceed with the contract check?",
@@ -450,25 +451,27 @@ export const harnessDriverChecks: HarnessDriverCheck[] = [
         if (asked.turnId !== "turn-question")
           throw new Error(`question.asked named turn ${asked.turnId}`);
         if (!asked.requestId.trim()) throw new Error("question.asked carried an empty requestId");
-        const question = asked.questions.find((entry) => entry.id === CONTRACT_QUESTION.id);
+        // Question IDs belong to the driver: Claude's AskUserQuestion and Pi's dialogs carry none of
+        // their own, so match the text and answer with whatever ID the driver assigned.
+        const question = asked.questions.find(
+          (entry) => entry.question === CONTRACT_QUESTION.question,
+        );
         if (!question)
-          throw new Error(`question.asked did not include question ${CONTRACT_QUESTION.id}`);
+          throw new Error(
+            `question.asked did not include ${JSON.stringify(CONTRACT_QUESTION.question)}`,
+          );
+        if (!question.id.trim()) throw new Error("question.asked carried a question with no id");
+        const answer = { [question.id]: CONTRACT_ANSWER };
 
         await expectRejects(
-          session.answerQuestion(`${asked.requestId}-unknown`, {
-            [CONTRACT_QUESTION.id]: CONTRACT_ANSWER,
-          }),
+          session.answerQuestion(`${asked.requestId}-unknown`, answer),
           timeoutMs,
           "answerQuestion with an unknown requestId",
         );
         if (log.turn("turn-question").some(isTerminal))
           throw new Error("a refused answer ended the turn");
 
-        await within(
-          session.answerQuestion(asked.requestId, { [CONTRACT_QUESTION.id]: CONTRACT_ANSWER }),
-          timeoutMs,
-          "answerQuestion",
-        );
+        await within(session.answerQuestion(asked.requestId, answer), timeoutMs, "answerQuestion");
         const end = await log.terminal("turn-question");
         if (end.type !== "turn.completed") throw new Error(`answered turn ended with ${end.type}`);
         const text = log
@@ -481,7 +484,7 @@ export const harnessDriverChecks: HarnessDriverCheck[] = [
           );
 
         await expectRejects(
-          session.answerQuestion(asked.requestId, { [CONTRACT_QUESTION.id]: CONTRACT_ANSWER }),
+          session.answerQuestion(asked.requestId, answer),
           timeoutMs,
           "answerQuestion for an already answered requestId",
         );

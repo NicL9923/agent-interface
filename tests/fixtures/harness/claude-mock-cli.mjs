@@ -10,7 +10,8 @@
 //
 // A user message picks its scenario from its text: "ask", "tool", "wait", "fail", "crash",
 // "sigkill", otherwise a plain streamed reply.
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const argv = process.argv.slice(2);
@@ -49,6 +50,10 @@ if (flag("--permission-mode") === "bypassPermissions" && !argv.includes("--allow
   process.stderr.write("Error: bypassPermissions needs --allow-dangerously-skip-permissions\n");
   process.exit(1);
 }
+
+// The HarnessDriver contract kit counts and kills live harness processes through this directory.
+if (process.env.HARNESS_CONTRACT_DIR)
+  writeFileSync(join(process.env.HARNESS_CONTRACT_DIR, `${process.pid}.pid`), "");
 
 const mcpPath = flag("--mcp-config");
 record({
@@ -123,9 +128,50 @@ const result = (fields) =>
     ...fields,
   });
 
+/** Plays one HarnessScript from tests/helpers/harness-driver-contract.ts. */
+async function runContractTurn(script) {
+  const reply = (prefix) => {
+    delta(0, { type: "text_delta", text: `${prefix}contract` });
+    delta(0, { type: "text_delta", text: " reply" });
+    assistant([{ type: "text", text: `${prefix}contract reply` }]);
+    result({ result: `${prefix}contract reply` });
+  };
+  if (script === "tool") {
+    assistant([{ type: "tool_use", id: "toolu_contract", name: "contract_tool", input: {} }]);
+    toolResult("toolu_contract", "done");
+  }
+  if (script === "question") {
+    const question = "Proceed with the contract check?";
+    const input = {
+      questions: [
+        { question, header: "Contract", multiSelect: false, options: [{ label: "yes" }, { label: "no" }] },
+      ],
+    };
+    assistant([{ type: "tool_use", id: "toolu_contract_ask", name: "AskUserQuestion", input }]);
+    const decision = await askHost({
+      subtype: "can_use_tool",
+      tool_name: "AskUserQuestion",
+      input,
+      tool_use_id: "toolu_contract_ask",
+    });
+    const answer = decision?.updatedInput?.answers?.[question];
+    toolResult("toolu_contract_ask", `User answered: ${answer}`);
+    return reply(`${answer} `);
+  }
+  reply("");
+}
+
 async function runTurn(text) {
   busy = true;
   send({ type: "system", subtype: "init", session_id: sessionId, model, cwd: process.cwd(), permissionMode });
+  const contract = process.env.HARNESS_CONTRACT_DIR
+    ? /^contract (text|tool|question|hang)$/.exec(text)?.[1]
+    : undefined;
+  if (contract && contract !== "hang") {
+    await runContractTurn(contract);
+    busy = false;
+    return;
+  }
   if (text.includes("sigkill")) process.kill(process.pid, "SIGKILL");
   if (text.includes("crash")) {
     delta(0, { type: "text_delta", text: "about to" });
@@ -133,7 +179,7 @@ async function runTurn(text) {
     process.stderr.write("fatal: mock crash\n");
     process.exit(3);
   }
-  if (text.includes("wait")) {
+  if (text.includes("wait") || contract === "hang") {
     delta(0, { type: "text_delta", text: "working" });
     // An interrupt can arrive before this turn starts; the real CLI still honors it.
     if (!interrupted) {

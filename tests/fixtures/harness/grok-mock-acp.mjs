@@ -2,7 +2,8 @@
 // The upstream license notice is in src/server/harness/grok-driver.ts.
 
 import assert from "node:assert/strict";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -37,6 +38,9 @@ if (argv.includes("--version")) {
 }
 
 async function serve() {
+  // The HarnessDriver contract kit counts and kills live harness processes through this directory.
+  if (process.env.HARNESS_CONTRACT_DIR)
+    writeFileSync(join(process.env.HARNESS_CONTRACT_DIR, `${process.pid}.pid`), "");
   const models = [
     { modelId: "grok-4.6", name: "Grok 4.6" },
     {
@@ -51,6 +55,7 @@ async function serve() {
   let currentModelId = models[0].modelId;
   let prompt;
   let pendingClientRequest;
+  let contractAnswer;
   let authenticated = scenario !== "headless-auth";
   const modelState = () => ({ currentModelId, availableModels: models });
   const modelConfig = () => ({
@@ -88,6 +93,14 @@ async function serve() {
     assert.equal(message.jsonrpc, "2.0");
     log(message);
     const { id, method, params } = message;
+    if (method === undefined && contractAnswer) {
+      assert.equal(id, pendingClientRequest);
+      pendingClientRequest = undefined;
+      const answered = contractAnswer;
+      contractAnswer = undefined;
+      answered(message.result);
+      continue;
+    }
     if (method === undefined) {
       assert.equal(id, pendingClientRequest);
       pendingClientRequest = undefined;
@@ -162,7 +175,38 @@ async function serve() {
         assert.equal(prompt, undefined);
         prompt = { id, promptId: params._meta.promptId };
         const input = params.prompt.filter((block) => block.type === "text").at(-1).text;
-        if (input === "Hold") {
+        const contract = process.env.HARNESS_CONTRACT_DIR
+          ? /^contract (text|tool|question|hang)$/.exec(input)?.[1]
+          : undefined;
+        // Plays one HarnessScript from tests/helpers/harness-driver-contract.ts.
+        const reply = (prefix) => {
+          send(update("agent_message_chunk", text(`${prefix}contract`)));
+          send(update("agent_message_chunk", text(" reply")));
+          complete("end_turn");
+        };
+        if (contract === "text") {
+          reply("");
+        } else if (contract === "tool") {
+          send(update("tool_call", { toolCallId: "contract-call", title: "contract_tool", status: "pending" }));
+          send(update("tool_call_update", { toolCallId: "contract-call", status: "completed", rawOutput: "done" }));
+          reply("");
+        } else if (contract === "question") {
+          const question = "Proceed with the contract check?";
+          pendingClientRequest = "contract-question";
+          contractAnswer = (result) => reply(`${result.answers[question][0]} `);
+          send({
+            id: pendingClientRequest,
+            method: "_x.ai/ask_user_question",
+            params: {
+              sessionId: activeSession,
+              questions: [
+                { id: "contract-choice", question, options: [{ label: "yes" }, { label: "no" }] },
+              ],
+            },
+          });
+        } else if (contract === "hang") {
+          send(update("agent_message_chunk", text("working")));
+        } else if (input === "Hold") {
           send(update("agent_message_chunk", text("Waiting")));
         } else if (input === "Crash") {
           process.stderr.write(`${"!".repeat(5000)}\nGrok fixture crashed\n`, () => {

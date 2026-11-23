@@ -41,6 +41,9 @@ if (argv.includes("--version")) {
 }
 
 function runRpc() {
+  // The HarnessDriver contract kit counts and kills live harness processes through this directory.
+  if (process.env.HARNESS_CONTRACT_DIR)
+    writeFileSync(path.join(process.env.HARNESS_CONTRACT_DIR, `${process.pid}.pid`), "");
   const extensionPath = flag("--extension");
   const appendPromptArg = flag("--append-system-prompt");
   const mcpConfigPath = process.env.WILDBOTS_PI_MCP_CONFIG;
@@ -126,7 +129,43 @@ function runRpc() {
     emit({ type: "turn_start" });
     emit({ type: "message_start", message: { role: "assistant", content: [] } });
     let final;
-    if (message.includes("abort-crash")) {
+    const contract = process.env.HARNESS_CONTRACT_DIR
+      ? /^contract (text|tool|question|hang)$/.exec(message)?.[1]
+      : undefined;
+    // Plays one HarnessScript from tests/helpers/harness-driver-contract.ts.
+    const reply = (prefix) => {
+      delta("text_delta", `${prefix}contract`);
+      delta("text_delta", " reply");
+      return assistant(`${prefix}contract reply`);
+    };
+    if (contract === "text") {
+      final = reply("");
+    } else if (contract === "tool") {
+      emit({ type: "tool_execution_start", toolCallId: "contract-call", toolName: "contract_tool", args: {} });
+      emit({
+        type: "tool_execution_end",
+        toolCallId: "contract-call",
+        toolName: "contract_tool",
+        result: { content: [{ type: "text", text: "done" }], details: {} },
+        isError: false,
+      });
+      final = reply("");
+    } else if (contract === "question") {
+      const id = "contract-ui-1";
+      emit({
+        type: "extension_ui_request",
+        id,
+        method: "select",
+        title: "Proceed with the contract check?",
+        options: ["yes", "no"],
+      });
+      const response = await waitForUi(id);
+      final = reply(`${response.value} `);
+    } else if (contract === "hang") {
+      delta("text_delta", "working");
+      await new Promise((resolve) => (abortTurn = resolve));
+      final = assistant("working", "aborted");
+    } else if (message.includes("abort-crash")) {
       abortCrash = true;
       await new Promise(() => undefined);
     } else if (message.includes("crash")) {
