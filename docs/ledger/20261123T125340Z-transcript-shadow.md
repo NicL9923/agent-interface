@@ -26,3 +26,18 @@ repository check.
 | Leave the old message text in FTS after an edit    | A search for the old text still found the edited row. |
 | Ignore order differences during shadow comparison  | The mismatch count missed the moved row.              |
 | Publish a stale Hermes read after forgetting a bot | A deleted bot's transcript returned.                  |
+
+## Hermes qualification manifest
+
+The first full app suite passed 4,298 tests and failed the Hermes qualification dependency
+check because `store.ts` imported an unlisted module. The manifest now includes
+`store-transcripts.ts` and the Hermes backfill entry point `transcript-sync.ts`. The first
+`check-all` process exited 143 after it started the browser suite.
+
+Code state after the manifest change:
+`sha256:e0a138ccf6c85485cb7a5feaa1a1a4e53b0027b3b3685a47904d860a1a0fa50a`.
+
+- Typecheck, lint, and format check passed again.
+- `npx vitest run tests/store-transcripts.test.ts tests/store*.test.ts tests/hermes-qualification.test.ts`
+  passed, 43 tests in 4 files. The qualification check also verified the shared app and
+  Python integration digest.
