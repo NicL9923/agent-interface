@@ -120,6 +120,45 @@ const additions = `
   -- Macs linked with WildBots for Mac. The credential is stored as its SHA-256 only. A revoked Mac
   -- keeps its row with revoked_at set, so its ID and credential can never be used again.
   CREATE TABLE IF NOT EXISTS mac_devices(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,model TEXT,os_version TEXT,app_version TEXT,credential_hash TEXT NOT NULL,created_at INTEGER NOT NULL,last_seen_at INTEGER,revoked_at INTEGER);
+  -- BEGIN managed_bots
+  CREATE TABLE IF NOT EXISTS bot_credentials(
+    id TEXT PRIMARY KEY NOT NULL,
+    label TEXT NOT NULL,
+    vendor TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    owner_id TEXT,
+    allowed_harnesses TEXT NOT NULL,
+    env_var TEXT,
+    os_user TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS managed_bots(
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    harness TEXT NOT NULL,
+    model TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    reasoning TEXT NOT NULL,
+    speed TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    owner_os_user TEXT NOT NULL,
+    shared INTEGER NOT NULL CHECK(shared IN (0,1)),
+    credential_id TEXT REFERENCES bot_credentials(id) ON DELETE SET NULL,
+    enabled_tools TEXT NOT NULL,
+    enabled_skills TEXT NOT NULL,
+    enabled_mcp_servers TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    archived_at INTEGER,
+    CHECK(archived_at IS NOT NULL OR harness = 'hermes' OR credential_id IS NOT NULL)
+  );
+  CREATE INDEX IF NOT EXISTS managed_bots_credential ON managed_bots(credential_id,archived_at);
+  CREATE INDEX IF NOT EXISTS managed_bots_created ON managed_bots(created_at,id);
+  CREATE INDEX IF NOT EXISTS bot_credentials_created ON bot_credentials(created_at,id);
+  -- END managed_bots
   -- Plain B-tree indexes for hot polling, pruning, and lookup paths. Rollback-safe: SQLite maintains
   -- non-unique indexes automatically across releases without raising user_version.
   CREATE INDEX IF NOT EXISTS chat_presence_user_bot ON chat_presence(user_id,bot_id,updated_at);
