@@ -24,3 +24,18 @@ Each temporary mutation below failed its selected test with an assertion error. 
 The image path fix has diff SHA-256 `8d1859f05cbdd56193298365565c984661c326641066b7aebcb86e4c7f9eb326` against `e6763bd41722fe2b4158aafbc353614c1b53d237`.
 
 Before the fix, the image test received a tool error for a generated file under a symlinked parent directory. After the fix, the test verified that the signed path uses the real directory and that a symlink at the output directory itself is refused. Typecheck, lint, formatting, and all 14 loopback tests passed again.
+
+## Full repository check
+
+The full check ran on `1475070b111309be1848903a88f7140dddc99c06` with `~/.agents/tools/linux-heavy-lock.sh .agents/tools/check-all --keep-going`. It exited 1 because all 142 WebKit tests failed during browser launch. All 142 Chromium tests passed. A WebKit launch probe in a fresh archive of Wave 2 commit `2ee7ec9a` with its own `npm ci` reproduced the missing `libicu74` and `libjpeg-turbo8` dependencies.
+
+| Check                                            | Result                                                               |
+| ------------------------------------------------ | -------------------------------------------------------------------- |
+| Typecheck, lint, and Ruff                        | Passed.                                                              |
+| Vitest                                           | 4,479 tests passed across 244 files.                                 |
+| Build                                            | Passed with 911 modules.                                             |
+| Browser suite                                    | 142 passed in Chromium. 142 failed at WebKit launch.                 |
+| Python                                           | 52 files passed, 0 skipped, and 0 failed.                            |
+| `npx vitest run tests/store-transcripts.test.ts` | 17 tests passed, including the existing highlighted search snippets. |
+
+The machine lock queued for 28 minutes and 43 seconds. The check script ran for 20 minutes and 8 seconds, including 9 minutes and 59 seconds waiting for its heavy slots. Its logs are under `~/.cache/agent-interface/check-all/logs/20261123T111152-898162-t3-e878e7ad-70499b86e7d95c26`.
