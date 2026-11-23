@@ -6,11 +6,14 @@ import { App } from "../src/App";
 import { clearResponseCache } from "../src/client-api";
 import { authEpochKey, savedRosterKey, savedThemeKey, signInHintKey } from "../src/app/storage";
 import { LIMITS, MAX_SAVED_CHARS } from "../src/app/saved-roster";
+import { shapes } from "../src/components/avatar-shapes";
 import type { GroupCatalog } from "../src/shared/collaboration";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { browserLocks } from "./helpers/web-locks";
-import { advance, button, mountRoot, stubMatchMedia } from "./ui-harness";
+import { advance, button, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
+import { preloadBotMenu } from "../src/app/BotMenu";
+import { applyMergePatch } from "../src/shared/merge-patch";
 import { mockOf } from "./helpers/mock-of";
 
 // The whole app, through the real client API, against a fake server at fetch; browser storage is
@@ -880,7 +883,9 @@ describe("what a saved copy may hold", () => {
   // the page without the copy, and none reaches the avatar or the rail to break it.
   it.each([
     ["a geometric avatar's color that is not a color", bot({ ...geometric, color: { r: 1 } })],
-    ["a geometric avatar's unknown shape", bot({ ...geometric, shape: "hexagon" })],
+    ["a geometric avatar's shape that is not a name", bot({ ...geometric, shape: "../hex" })],
+    ["a geometric avatar's shape that is not text", bot({ ...geometric, shape: 7 })],
+    ["a geometric avatar's shape past any name's length", bot({ ...geometric, shape: long(41) })],
     ["a geometric avatar's unknown eyes", bot({ ...geometric, eyes: "laser" })],
     ["a geometric avatar's unknown accessory", bot({ ...geometric, accessory: "cape" })],
     [
@@ -892,8 +897,12 @@ describe("what a saved copy may hold", () => {
       "a geometric avatar's eye spacing under the server's range",
       bot({ ...geometric, eyeSpacing: 0.5 }),
     ],
-    ["a mascot's unknown family", bot({ ...mascot, family: "dragon" })],
-    ["a mascot's color that is not a color", bot({ ...mascot, color: "orange" })],
+    ["a retired mascot's unknown family", bot({ ...mascot, family: "dragon" })],
+    [
+      "a retired mascot's family that is only an object property",
+      bot({ ...mascot, family: "constructor" }),
+    ],
+    ["a retired mascot's color that is not a color", bot({ ...mascot, color: "orange" })],
     ["a portrait's unknown origin", bot({ ...portrait, origin: "found" })],
     [
       "a portrait's address past its bound",
@@ -1040,6 +1049,62 @@ describe("what a saved copy may hold", () => {
       "Fox",
     ])
       expect(railText()).toContain(name);
+  });
+});
+
+describe("a copy holding a shape this release does not have", () => {
+  it("is kept and drawn, with that assistant as the blob, so a newer server's shape costs no one their saved home", async () => {
+    signedInAsOne();
+    store(savedRosterKey, {
+      ...savedOne,
+      bots: [
+        ...savedOne.bots,
+        {
+          id: "cube",
+          name: "Cube",
+          shared: false,
+          avatar: {
+            mode: "geometric",
+            shape: "tesseract",
+            color: "#8C8F99",
+            eyes: "oval",
+            accessory: "none",
+          },
+        },
+      ],
+    });
+    await open();
+    const cube = rail()!.querySelector('[role="img"][aria-label^="Cube"]')!;
+    expect(cube.getAttribute("data-shape")).toBe("tesseract");
+    expect(cube.querySelector(".avatar-body")!.getAttribute("d")).toBe(shapes.blob.path);
+  });
+});
+
+describe("a copy saved before mascots were retired", () => {
+  it("draws each mascot as the shape that took its place, in the color it had", async () => {
+    signedInAsOne();
+    store(savedRosterKey, {
+      ...savedOne,
+      bots: [
+        ...savedOne.bots,
+        {
+          id: "fox",
+          name: "Fox",
+          shared: false,
+          avatar: {
+            mode: "mascot",
+            family: "raccoon",
+            color: "#8C8F99",
+            eyes: "round",
+            accessory: "hat",
+          },
+        },
+      ],
+    });
+    await open();
+    const fox = rail()!.querySelector('[role="img"][aria-label^="Fox"]')!;
+    expect(fox.getAttribute("data-shape")).toBe("fox");
+    expect(fox.querySelector(".avatar-body")!.getAttribute("fill")).toBe("#8C8F99");
   });
 });
 
@@ -1335,5 +1400,74 @@ describe("signing out from the saved home when the app cannot be reached", () =>
     signedInAsOne();
     await open();
     expect(container.textContent).not.toContain("Sign out of this device");
+  });
+});
+
+// A later launch draws this copy before bootstrap answers, so it must hold only what the server confirmed.
+describe("the saved home while preference saves wait", () => {
+  it("keeps the server's confirmed pins and theme, not the changes still on their way", async () => {
+    for (const [method, open] of [
+      ["showModal", true],
+      ["close", false],
+    ] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, method, {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.open = open;
+        },
+      });
+    store(signInHintKey, hintFor("one"));
+    await open();
+    await answer("GET /bootstrap?roster=lean", 200, one);
+    await answer("GET /groups", 200, catalog);
+    let stored = one.preferences;
+    const saves: (() => Promise<void>)[] = [];
+    const served = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init = {}) => {
+      // The client sends every request with a string URL and a JSON string body.
+      const url = new URL(input as string, location.origin);
+      if (init.method !== "PATCH" || url.pathname !== "/api/preferences")
+        return served(input, init);
+      calls.push("PATCH /preferences");
+      return new Promise<Response>((resolve) =>
+        saves.push(async () => {
+          stored = applyMergePatch(stored, JSON.parse(init.body as string)) as typeof stored;
+          await act(async () => resolve(respond(200, stored)));
+          await advance(0);
+        }),
+      );
+    });
+    const key = (init: KeyboardEventInit, target: EventTarget = document.body) =>
+      act(async () =>
+        target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init })),
+      );
+    await key({ key: "k", ctrlKey: true });
+    const search = document.querySelector<HTMLInputElement>("dialog.command-palette input")!;
+    await typeInto(search, "light");
+    await key({ key: "Enter" }, search);
+    await act(async () => {
+      await preloadBotMenu();
+    });
+    await act(async () =>
+      row("Ranch Hand").dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      ),
+    );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+        .find((item) => item.textContent === "Pin to top")!
+        .click(),
+    );
+    const savedTheme = () =>
+      (JSON.parse(localStorage.getItem(savedThemeKey) ?? "null") as { theme?: string })?.theme;
+    const pins = () => (savedRoster() as { order: { favorites: string[] } }).order.favorites;
+    // Both changes show at once; neither is saved for the next launch until the server confirms it.
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(rail()!.querySelectorAll(".pinned-name")[1]?.textContent).toContain("Ranch Hand");
+    expect([savedTheme(), pins()]).toEqual(["dark", ["home"]]);
+    await saves[0]();
+    expect([savedTheme(), pins()]).toEqual(["light", ["home"]]);
+    await saves[1]();
+    expect([savedTheme(), pins()]).toEqual(["light", ["home", "ranch"]]);
   });
 });

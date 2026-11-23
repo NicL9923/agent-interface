@@ -12,7 +12,7 @@ import { AdvancedRoutineFields } from "../../components/AdvancedRoutineFields";
 import { routinePresets } from "../../shared/routine-presets";
 import { runsHidden, withRunsShown } from "../../shared/routine-runs";
 import { checkInFrequencyLabel, scheduleMinutes } from "../../shared/main-assistant";
-import { usePreferenceEdits, type PreferenceEdit } from "../use-preference-edits";
+import type { EditPreferences } from "../use-preference-edits";
 
 export function RoutineManager({
   onOpenRoutine,
@@ -25,7 +25,7 @@ export function RoutineManager({
   advanced,
 }: {
   onOpenRoutine?: (botId: string, routineId: string) => void;
-  editPreferences?: (edit: PreferenceEdit) => Promise<void>;
+  editPreferences?: EditPreferences;
   /** Advanced presentation shows per-routine overrides; Simple keeps them as saved. */
   advanced: boolean;
   botId: string;
@@ -37,10 +37,9 @@ export function RoutineManager({
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   // Showing runs in chat is this person's view of the conversation, not part of the routine.
-  const [preferences, commitPreferences] = usePreferenceEdits(
-    bootstrap.preferences,
-    editPreferences ?? (async () => {}),
-  );
+  const { preferences } = bootstrap;
+  const commitPreferences: EditPreferences =
+    editPreferences ?? (() => Promise.resolve("unchanged"));
   const editor = useRef<HTMLFormElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const editButtons = useRef(new Map<string, HTMLButtonElement>());
@@ -201,7 +200,10 @@ export function RoutineManager({
                   checked={!runsHidden(preferences, botId, routine.id)}
                   onChange={(event) => {
                     const shown = event.target.checked;
-                    commitPreferences((value) => withRunsShown(value, botId, routine.id, shown));
+                    void commitPreferences(
+                      (value) => withRunsShown(value, botId, routine.id, shown),
+                      ["hiddenRoutineRuns"],
+                    );
                   }}
                 />
                 <span>

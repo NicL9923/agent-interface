@@ -1,7 +1,7 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BLOCK_LIMIT, HOLD_LIMIT, streamingHoldBack } from "../src/components/streaming-hold-back";
 
 interface Node {
@@ -38,6 +38,8 @@ const replies = [
   '**[Docs](https://example.test/docs)** and **more `npm ci` here**. ![Logo](https://example.test/logo.png "Logo")',
   "## **Plan** for today\n\n- **Soak** the beans\n- Rinse them *well*\n  - [ ] Check the pot\n\n> **Note:** keep the ~~lid~~ pot covered.",
   "| Day | Meal |\n| --- | :---: |\n| **Sat** | `chili` |\n| Sun | ~~beans~~ stew |\n\nEnjoy.",
+  // The reviewer's case: a header that reads as a finished sentence partway through.
+  "Use `|` as a separator.\n| Name | No. |\n| --- | --- |\n| Sam | 4 |",
   `Run this:\n\n${fence}py\nx = a**b\nprint(*args, **kwargs)\n[r]: not a link\n${fence}\n\nThen **check** it.`,
   "See [the docs][r] and **this**.\n\n[r]: https://example.test/_private",
   `Set up\n=====\n\nInstall:\n\n${fence}bash\nnpm install bullmq\n${fence}\n\n1. Create the key:\n\n   ${fence}sh\n   az keyvault key create --name \`app\`\n   ${fence}\n\n2. Restart the app.\n\n---\n\nDone.`,
@@ -94,18 +96,32 @@ const prefixes = (text: string) =>
 describe("holding back a streaming reply's unfinished tail", () => {
   // The contract is mechanical, so it is checked on every prefix rather than by sampling formatting.
   it("returns a prefix, holds at most the bound on the last line, and never cuts code", () => {
+    // Rule 4's one exception: a table header held with its delimiter row, each within the bound.
+    const headerOverDelimiter = (held: string) =>
+      /^ {0,3}\|[^\r\n]*(?:\r\n|\r|\n)[-|: \t]*$/.test(held) &&
+      held.split(/\r\n|\r|\n/).every((line) => line.length <= HOLD_LIMIT);
     const faults: string[] = [];
     let cuts = 0;
-    for (const text of [...replies, ...samples(fragments, 400, 40)])
+    for (const text of [...replies, ...samples(fragments, 400, 40)]) {
+      let before = "";
       for (const prefix of prefixes(text)) {
         const shown = streamingHoldBack(prefix),
           held = prefix.slice(shown.length);
+        // A header hold hides a whole line that starts with a pipe. None of it may have shown one character earlier,
+        // or the reader would see the line and then lose it.
+        const lineStart = !shown || /[\r\n]$/.test(shown);
+        if (lineStart && /^ {0,3}\|/.test(held) && /\S/.test(before.slice(shown.length)))
+          faults.push(`hid a shown line: ${JSON.stringify([before, prefix])}`);
+        before = shown;
         if (!prefix.startsWith(shown))
           faults.push(`not a prefix: ${JSON.stringify([prefix, shown])}`);
-        else if (held.length > HOLD_LIMIT) faults.push(`over the bound: ${JSON.stringify(prefix)}`);
+        else if (headerOverDelimiter(held)) {
+          if (!lineStart) faults.push(`header cut mid-line: ${JSON.stringify([prefix, shown])}`);
+        } else if (held.length > HOLD_LIMIT)
+          faults.push(`over the bound: ${JSON.stringify(prefix)}`);
         else if (/[\r\n]/.test(held))
           faults.push(`crossed a line break: ${JSON.stringify([prefix, shown])}`);
-        else if (
+        if (
           held &&
           codeRanges(parse(prefix)).some(
             ([start, end]) => start < prefix.length && end > shown.length,
@@ -115,6 +131,7 @@ describe("holding back a streaming reply's unfinished tail", () => {
         if (held) cuts++;
         if (faults.length > 4) break;
       }
+    }
     expect(faults).toEqual([]);
     // An identity function passes everything above; this is what the hold-back is for.
     expect(cuts).toBeGreaterThan(1000);
@@ -173,10 +190,48 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ],
     ["a reference link's label", "See [the docs][r", "See ", "See [the docs][r] now"],
     ["link text that may still gain a destination", "See [the docs]", "See ", "See [the docs] now"],
-    ["a table header", "Intro\n\n| Day | Me", "Intro\n\n", "Intro\n\n| Day | Meal |\n"],
+    [
+      "a table header",
+      "Intro\n\n| Day | Me",
+      "Intro\n\n",
+      "Intro\n\n| Day | Meal |\n| --- | --- |\n",
+    ],
+    // The reported case: the header showed as raw pipes in a bubble until its delimiter row ended.
+    [
+      "a table header over its delimiter row",
+      "Intro\n\n| Day | Meal |\n| --- | :-",
+      "Intro\n\n",
+      "Intro\n\n| Day | Meal |\n| --- | :---: |\n",
+    ],
+    [
+      "a table header before its delimiter row starts",
+      "Intro\n| Day |\r\n",
+      "Intro\n",
+      "Intro\n| Day |\r\n|-|\n",
+    ],
     ["a line of markers", "Title\n--", "Title\n", "Title\n-- and more"],
     ["a trailing marker run after a space", "Feed the **", "Feed the ", "Feed the ** now"],
     ["a lone pipe at the end", "Pick a |", "Pick a ", "Pick a | b"],
+    // The reviewer's case: GFM keeps a cell that holds only a nonbreaking space, so this header has two cells.
+    [
+      "a table header whose last cell is a nonbreaking space",
+      "Intro\n| A | \u00a0",
+      "Intro\n",
+      "Intro\n| A | \u00a0\n|-|-|\n",
+    ],
+    // The reviewer's cases: a pipe on the line above, in code or a heading, does not stop a table there.
+    [
+      "a table header under a line with a pipe in code",
+      "Use `|` as a separator.\n| Day | Meal |\n",
+      "Use `|` as a separator.\n",
+      "Use `|` as a separator.\n| Day | Meal |\n| --- | --- |\n",
+    ],
+    [
+      "a table header under a heading with a pipe",
+      "# A | B\n| Day | Meal |\n| --",
+      "# A | B\n",
+      "# A | B\n| Day | Meal |\n| --- | --- |\n",
+    ],
     // A word's inner underscore cannot close emphasis, so the opener before it stays open.
     [
       "an emphasis opener past a word with an underscore",
@@ -221,6 +276,37 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["an escaped backtick", "Type \\`x"],
     ["a link title holding a backtick", 'See [docs](https://example.test "Run `x") now'],
     ["a table header longer than the bound", `| ${"Day | ".repeat(25)}`],
+    ["a table header longer than the bound, once it ends", `| ${"Day | ".repeat(25)}\n`],
+    ["a line starting with a pipe once the next line reads as prose", "| Day |\n- Saturday"],
+    ["a table row under another row", "| Day |\n| --- |\n| Sat |\n"],
+    // The reviewer's cases: rows of a table whose delimiter row or an earlier row has no pipe at the start.
+    ["a table row under a one-column delimiter row without pipes", "| Meal |\n:---\n| Soup |\n"],
+    ["a table row under a row without pipes", "| Meal |\n|---|\nPasta\n| Soup |\n"],
+    // A line shaped like a delimiter row above means a table's rows, which the parser is never asked about.
+    // Where that line is a heading's underline instead, the line under it shows too.
+    ["a line under a heading's underline", "Title\n---\n| Day |\n"],
+    // A list item's paragraph takes this line in, and no delimiter row can make it a table.
+    ["a line a list item's paragraph takes in", "- item\nText **bold**\n| - | - |\n"],
+    // The reviewer's case: a table whose delimiter row, or a row above, has no leading pipe.
+    [
+      "a table row under a delimiter row without a leading pipe",
+      "| Day | Meal |\n--- | ---\n| Mon | Pasta |\n",
+    ],
+    [
+      "a table row under a row without a leading pipe",
+      "| Day | Meal |\n|---|---|\nMon | Pasta\n| Tue | Soup |\n",
+    ],
+    [
+      "a table row still arriving under a delimiter row without a leading pipe",
+      "| Day | Meal |\n--- | ---\n| Mon | Pas",
+    ],
+    ["a line starting with a pipe before a blank line", "| Day |\n\n"],
+    [
+      "a table header over a delimiter row longer than the bound",
+      `| Day |\n|${"-".repeat(HOLD_LIMIT)}`,
+    ],
+    ["pipes inside inline code", "Run `ls | wc -l`\n"],
+    ["pipes inside a code fence", `${fence}\n| Day |\n`],
     ["a line of markers longer than the bound", "-".repeat(HOLD_LIMIT + 1)],
     ["a fenced code line", `${fence}py\nx = **kw`],
     ["a code line in a list item's fence", `- Code:\n\n    ${fence}\n\n  **literal`],
@@ -242,6 +328,7 @@ describe("holding back a streaming reply's unfinished tail", () => {
     ["an underscore name", "_private is the field name used throughout this example."],
     ["a starred name", "*args are passed through unchanged to the wrapped function."],
     ["a line starting with a pipe", "| this is a paragraph of ordinary prose, not a table."],
+    ["a pipe, on the line above", "| this is a paragraph of ordinary prose, not a table.\n"],
     ["a bracket", "[ a bracket followed by plain prose."],
     ["a question in a list item", "- *args or **kwargs?"],
     ["a quoted sentence", '> _private is "the field."'],
@@ -258,6 +345,31 @@ describe("holding back a streaming reply's unfinished tail", () => {
 
   // U+0600 joins the character after it into one grapheme, so cutting between them would render a
   // detached mark. An ordinary combining accent sits before the cut and stays whole.
+  // Without a segmenter nothing after the first character is held, so a header that showed as typed
+  // stays shown once its line ends.
+  it("holds nothing it showed when the runtime has no grapheme segmenter", async () => {
+    vi.stubGlobal("Intl", Object.create(Intl, { Segmenter: { value: undefined } }));
+    vi.resetModules();
+    try {
+      const { streamingHoldBack: withoutSegmenter } =
+        await import("../src/components/streaming-hold-back");
+      expect(withoutSegmenter("Intro\n| Day |")).toBe("Intro\n| Day |");
+      expect(withoutSegmenter("Intro\n| Day |\n")).toBe("Intro\n| Day |\n");
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
+  // The reviewer's case: the header read as a finished sentence at `No.` and showed. It stays on screen from
+  // then on, though only the closing pipe's own marker, and then the delimiter row's line, wait.
+  it("keeps showing a header that read as a finished sentence while it arrived", () => {
+    const intro = "Use `|` as a separator.\n";
+    expect(streamingHoldBack(`${intro}| Name | No.`)).toBe(`${intro}| Name | No.`);
+    expect(streamingHoldBack(`${intro}| Name | No. |`)).toBe(`${intro}| Name | No. `);
+    expect(streamingHoldBack(`${intro}| Name | No. |\n| --- | -`)).toBe(`${intro}| Name | No. |\n`);
+  });
+
   it("never cuts inside a grapheme", () => {
     expect(streamingHoldBack("\u0600`abc")).toBe("\u0600`abc");
     expect(streamingHoldBack("Cafe\u0301 `abc")).toBe("Cafe\u0301 ");

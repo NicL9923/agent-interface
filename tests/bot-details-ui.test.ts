@@ -53,9 +53,15 @@ beforeEach(() => {
     avatarState: "working",
     conversation: null,
     connectionLost: false,
-    // Like the session's queue: each edit applies to the newest value.
+    // Like the session: each edit runs on the preferences on screen, and its result goes on screen at once.
     editPreferences: vi.fn(async (edit: (value: Preferences) => Preferences) => {
-      saved.push(edit(saved.at(-1) ?? props.boot.preferences));
+      const before = props.boot.preferences;
+      const next = edit(before);
+      if (next === before) return "unchanged" as const;
+      saved.push(next);
+      props = { ...props, boot: { ...props.boot, preferences: next } };
+      root.render(createElement(BotDetails, props));
+      return "saved" as const;
     }),
     onSettings: vi.fn(),
     onFind: vi.fn(),

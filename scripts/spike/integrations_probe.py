@@ -267,7 +267,7 @@ for path in (
     try:
         selected_file(home, path)
         raise AssertionError("Escaped selected root")
-    except ValueError, OSError:
+    except (ValueError, OSError):
         pass
 # Broad installer bases cannot authorize caches or vaults anywhere under
 # Hermes itself. Revalidate reads of previously configured roots too.

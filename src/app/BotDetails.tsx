@@ -18,11 +18,13 @@ import {
   newSectionId,
   sectionOf,
   setFollowing,
+  setPinned,
 } from "./preferences-editing";
 import type { SavedConversation } from "./storage";
-import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
+import type { EditPreferences } from "./use-preference-edits";
 import "./home.css";
 import { FormMessage } from "../components/ui/form-message";
+import { SaveRefusal, type Refusal } from "./SaveRefusal";
 import { CHECK_IN_HOURS, checkInFrequencyLabel, mainEligible } from "../shared/main-assistant";
 import type { CheckInSettings, Preferences } from "../shared/types";
 
@@ -47,6 +49,7 @@ export function BotDetails({
   connectionLost,
   startNewSection,
   editPreferences,
+  saveRefusal,
   onMain,
   onCheckIns,
   onSettings,
@@ -61,7 +64,9 @@ export function BotDetails({
   connectionLost: boolean;
   /** Opens with the new section field ready, as from the home menu. */
   startNewSection?: boolean;
-  editPreferences: (edit: PreferenceEdit) => Promise<void>;
+  editPreferences: EditPreferences;
+  /** Why the last preferences save was refused; its change has already left the screen. */
+  saveRefusal?: Refusal | null;
   /** Makes this assistant the main one, or clears it with null; rejects with the reason it couldn't. */
   onMain?: (botId: string | null) => Promise<Preferences>;
   onCheckIns?: (change: Partial<CheckInSettings>) => Promise<Preferences>;
@@ -71,7 +76,9 @@ export function BotDetails({
   onClose: () => void;
 }) {
   const titleId = useId();
-  const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
+  const prefs = boot.preferences;
+  // The edit shows at once; a refusal reaches the person through `saveRefusal`.
+  const commit = (...args: Parameters<EditPreferences>) => void editPreferences(...args);
   const pinned = prefs.favorites.includes(bot.id);
   const following = prefs.followBots.includes(bot.id);
   const section = sectionOf(prefs, bot.id);
@@ -93,6 +100,7 @@ export function BotDetails({
   const checkingIn = isMain && !!checkIns?.enabled;
   const [mainBusy, setMainBusy] = useState(false);
   const [mainError, setMainError] = useState("");
+  const [moveNotice, setMoveNotice] = useState("");
   const act = (work: () => Promise<unknown>) => {
     setMainBusy(true);
     setMainError("");
@@ -111,7 +119,7 @@ export function BotDetails({
       return;
     }
     const id = newSectionId();
-    commit((value) => addSection(value, checked.name, id, bot.id));
+    commit((value) => addSection(value, checked.name, id, bot.id), ["sections"]);
     setCreating(false);
     setName("");
     setNameError("");
@@ -148,14 +156,7 @@ export function BotDetails({
           <Button
             className={`bot-details-action${pinned ? " on" : ""}`}
             aria-pressed={pinned}
-            onClick={() =>
-              commit((value) => ({
-                ...value,
-                favorites: pinned
-                  ? value.favorites.filter((id) => id !== bot.id)
-                  : [...value.favorites, bot.id],
-              }))
-            }
+            onClick={() => commit((value) => setPinned(value, bot.id, !pinned), ["favorites"])}
           >
             <Icon name="pin" filled={pinned} />
             {pinned ? "Unpin" : "Pin"}
@@ -279,6 +280,12 @@ export function BotDetails({
             {mainError}
           </FormMessage>
         )}
+        <SaveRefusal refusal={saveRefusal} />
+        {moveNotice && (
+          <FormMessage tone="error" className="settings-footnote">
+            {moveNotice}
+          </FormMessage>
+        )}
         <div className="settings-group">
           <label className="settings-row">
             <span className="row-text">
@@ -292,7 +299,7 @@ export function BotDetails({
               checked={following}
               onChange={(event) => {
                 const on = event.target.checked;
-                commit((value) => setFollowing(value, bot.id, on));
+                commit((value) => setFollowing(value, bot.id, on), ["followBots"]);
               }}
             />
           </label>
@@ -307,7 +314,14 @@ export function BotDetails({
                   return;
                 }
                 setCreating(false);
-                commit((current) => moveBotToSection(current, bot.id, value || null));
+                setMoveNotice("");
+                void editPreferences(
+                  (current) => moveBotToSection(current, bot.id, value || null),
+                  ["sections"],
+                ).then((result) => {
+                  if (result === "unchanged" && value)
+                    setMoveNotice(`That section is gone, so ${bot.name} stayed where it was.`);
+                });
               }}
             >
               <option value="">None</option>

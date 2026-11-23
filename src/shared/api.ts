@@ -47,11 +47,13 @@ import type {
   IntegrationConnection,
   IntegrationFlow,
 } from "./integrations.js";
+import type { LegacyMascotAvatar } from "./avatar-legacy.js";
 import type { UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "./upgrades.js";
 import type { AddVaultLogin, ProfileVault, SecureRequestAnswer, VaultResponse } from "./vault.js";
 import type { RoutineRunPage } from "./routine-runs.js";
 import type { LinkedMacs } from "./mac.js";
 import type { ReplyCardState } from "./reply-cards.js";
+import { MERGE_PATCH } from "./merge-patch.js";
 import type { Routine } from "./types.js";
 import type { ApprovalScope, ApprovalSettings } from "./types.js";
 import type { routinePresets } from "./routine-presets.js";
@@ -86,6 +88,7 @@ import type {
   ModelCatalog,
   ModelChoice,
   Preferences,
+  PreferencesPatch,
   CheckInSettings,
   RuntimeStatus,
   SavedDraft,
@@ -371,7 +374,8 @@ export interface ApiRoutes {
   };
   "GET /bootstrap": { query: { roster?: "lean" }; response: Bootstrap };
   "POST /connection/retry": { response: RuntimeStatus };
-  "PATCH /preferences": { body: Preferences; response: Preferences };
+  // A partial save: see `routeMediaTypes`. A body sent as application/json is a whole object, as older clients send.
+  "PATCH /preferences": { body: PreferencesPatch; response: Preferences };
   "PUT /preferences/models": {
     body: { modelFavorites: ModelChoice[] };
     response: { modelFavorites: ModelChoice[] };
@@ -388,7 +392,8 @@ export interface ApiRoutes {
   "GET /bots/:id": { response: Bot };
   "PATCH /bots/:id": { body: BotSaveRequest; response: Bot };
   "DELETE /bots/:id": { response: Ok };
-  "PUT /bots/:id/avatar": { body: Avatar; response: Avatar };
+  /** A client from before mascots were retired may still send one; the answer is the shape it became. */
+  "PUT /bots/:id/avatar": { body: Avatar | LegacyMascotAvatar; response: Avatar };
   "PUT /bots/:id/voice": { body: { voice: TalkVoice }; response: { voice: TalkVoice } };
   /** A Realtime credential for live Talk with this assistant. Never cached. */
   "POST /bots/:id/talk/session": { response: TalkSession };
@@ -640,6 +645,10 @@ export type ApiMethod<K extends ApiRoute> = K extends `${infer Method} ${string}
 /** The route's path parameters, such as `{ id: string }` for "/bots/:id". */
 export type ApiParams<K extends ApiRoute> = { [Name in ParamNames<ApiPath<K>>]: string };
 
+/** Routes whose body is not plain JSON. The client sends each with this media type. */
+export const routeMediaTypes: Partial<Record<ApiRoute, string>> = {
+  "PATCH /preferences": MERGE_PATCH,
+};
 /** The method and path pattern a route key names. */
 export function routeParts<K extends ApiRoute>(route: K) {
   const space = route.indexOf(" ");

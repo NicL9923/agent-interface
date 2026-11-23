@@ -67,7 +67,7 @@ def plugin_state(root=None, source=PLUGIN_SOURCE):
         )
     try:
         target = link.resolve(strict=True)
-    except OSError, RuntimeError:
+    except (OSError, RuntimeError):
         return (
             False,
             "The WildBots voice plugin link is broken. Activate a current WildBots release.",
@@ -234,7 +234,7 @@ def mint(data, root=None):
         raise VoiceError(
             409, "Sign in to ChatGPT in Hermes to use live voice."
         ) from None
-    except realtime.Refused, PermissionError:
+    except (realtime.Refused, PermissionError):
         raise VoiceError(
             503, "Hermes refused the WildBots voice plugin. " + ENABLE_HINT
         ) from None

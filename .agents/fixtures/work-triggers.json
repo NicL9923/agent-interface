@@ -20,7 +20,9 @@
         "eyes": "oval",
         "accessory": "none"
       },
-      "enabledMcpServers": ["existing-calendar"]
+      "enabledMcpServers": [
+        "existing-calendar"
+      ]
     },
     {
       "id": "garden",
@@ -42,7 +44,9 @@
         "eyes": "oval",
         "accessory": "none"
       },
-      "enabledMcpServers": ["existing-calendar"]
+      "enabledMcpServers": [
+        "existing-calendar"
+      ]
     }
   ],
   "preferences": {
@@ -138,7 +142,10 @@
         {
           "id": "freezer-alerts",
           "description": "Check the freezer when it reports a temperature alert",
-          "events": ["freezer.alert", "freezer.recovered"],
+          "events": [
+            "freezer.alert",
+            "freezer.recovered"
+          ],
           "routineId": "routine-freezer",
           "enabled": true,
           "url": "https://hooks.example.invalid/p/ranch/webhooks/freezer-alerts",
@@ -148,7 +155,9 @@
         {
           "id": "gate-left-open",
           "description": "",
-          "events": ["gate.open"],
+          "events": [
+            "gate.open"
+          ],
           "routineId": "routine-weekly",
           "enabled": false,
           "url": "https://hooks.example.invalid/p/ranch/webhooks/gate-left-open",
@@ -216,7 +225,10 @@
           {
             "id": "freezer-alerts",
             "description": "Check the freezer when it reports a temperature alert",
-            "events": ["freezer.alert", "freezer.recovered"],
+            "events": [
+              "freezer.alert",
+              "freezer.recovered"
+            ],
             "routineId": "routine-freezer",
             "enabled": true,
             "url": "https://hooks.example.invalid/p/ranch/webhooks/freezer-alerts",
@@ -226,7 +238,9 @@
           {
             "id": "gate-left-open",
             "description": "",
-            "events": ["gate.open"],
+            "events": [
+              "gate.open"
+            ],
             "routineId": "routine-weekly",
             "enabled": false,
             "url": "https://hooks.example.invalid/p/ranch/webhooks/gate-left-open",
@@ -293,7 +307,10 @@
           {
             "id": "freezer-alerts",
             "description": "Check the freezer when it reports a temperature alert",
-            "events": ["freezer.alert", "freezer.recovered"],
+            "events": [
+              "freezer.alert",
+              "freezer.recovered"
+            ],
             "routineId": "routine-freezer",
             "enabled": true,
             "url": "https://hooks.example.invalid/p/ranch/webhooks/freezer-alerts",
@@ -303,7 +320,9 @@
           {
             "id": "gate-left-open",
             "description": "",
-            "events": ["gate.open"],
+            "events": [
+              "gate.open"
+            ],
             "routineId": "routine-weekly",
             "enabled": false,
             "url": "https://hooks.example.invalid/p/ranch/webhooks/gate-left-open",
@@ -405,13 +424,18 @@
       "body": "Review the checklist before ordering.",
       "priority": 2,
       "assignee": "garden",
-      "dependencies": ["t_00000004", "t_00000003"]
+      "dependencies": [
+        "t_00000004",
+        "t_00000003"
+      ]
     },
     "editTaskAssignee": null,
     "newTrigger": {
       "id": "freezer-door",
       "description": "Check the freezer door",
-      "events": ["freezer.door"],
+      "events": [
+        "freezer.door"
+      ],
       "routineId": "routine-freezer"
     },
     "triggerRoutes": [
@@ -422,7 +446,10 @@
         "created_at": "2026-10-01T00:00:00Z",
         "deliver": "log",
         "description": "Check the freezer when it reports a temperature alert",
-        "events": ["freezer.alert", "freezer.recovered"],
+        "events": [
+          "freezer.alert",
+          "freezer.recovered"
+        ],
         "cron_job": "routine-freezer"
       },
       {
@@ -432,7 +459,9 @@
         "created_at": "2026-10-01T00:00:00Z",
         "deliver": "log",
         "description": "",
-        "events": ["gate.open"],
+        "events": [
+          "gate.open"
+        ],
         "cron_job": "routine-weekly"
       },
       {

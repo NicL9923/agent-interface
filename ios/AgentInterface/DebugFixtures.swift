@@ -199,6 +199,30 @@
               "actor": ["kind": "user", "id": "cron:fixture-job", "display_name": "[bot:ranch] Morning brief"],
               "payload": ["text": "Fixture routine post: the smoker is free Sunday.", "thread_id": "cron-1"]])
           }
+          if environment["AGENT_INTERFACE_UI_GROUP_INK"] == "1" {
+            // The prose with colors of its own, in the person's bubble: a link, inline code and a checked box.
+            FixtureProtocol.groupEvents.append(["event_id": "group-ink", "seq": FixtureProtocol.groupEvents.count + 1, "kind": "message.user",
+              "created_at": 1_790_000_900, "sender": ["id": "native-test", "name": "Local test member"],
+              "payload": ["text": "See [the plan](https://example.com/plan) and `gate 4`.\n\n- [x] Brisket ordered\n- [ ] Beans soaked", "thread_id": "thread-ink"]])
+          }
+          if environment["AGENT_INTERFACE_UI_GROUP_BUBBLES"] == "1" {
+            // Every kind of speaker for the chat styles: a routine's post, the person's reply in a thread, an assistant's
+            // reply holding a table, and the person's quote holding nested lists.
+            let own: [String: Any] = ["id": "native-test", "name": "Local test member"]
+            for (id, kind, extra, payload) in [
+              ("cron-post:2", "message.user", ["actor": ["kind": "user", "id": "cron:fixture-job", "display_name": "[bot:ranch] Morning brief"]],
+               ["text": "Fixture routine post: the smoker is free Sunday.", "thread_id": "cron-2"]),
+              ("group-own-1", "message.user", ["sender": own], ["text": "I can light the smoker at six. Who brings the **rub**?", "thread_id": "thread-1"]),
+              ("group-ranch-1", "message.member", ["actor": ["kind": "member", "id": "ranch"]],
+               ["text": "Here is the plan so far:\n\n| Dish | Who |\n| --- | --- |\n| Brisket | Kitchen companion |\n| Beans | Ranch hand |\n\nI'll post a reminder Saturday.",
+                "thread_id": "thread-1", "member_id": "ranch"]),
+              ("group-own-2", "message.user", ["sender": own], ["text": "> - Gates\n>   - North\n>     - Width is fine.\n\nThen the trailer fits through.", "thread_id": "thread-2"]),
+            ] as [(String, String, [String: Any], [String: Any])] {
+              let seq = FixtureProtocol.groupEvents.count + 1
+              FixtureProtocol.groupEvents.append(["event_id": id, "seq": seq, "kind": kind, "created_at": 1_790_000_000 + seq * 60, "payload": payload]
+                .merging(extra) { current, _ in current })
+            }
+          }
         }
         if environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
           // Enough turns for three history pages, with replies tall enough to scroll.
@@ -508,7 +532,7 @@
           "id": "kitchen", "name": "Kitchen companion", "model": "configured-model", "shared": true,
           "activity": "idle",
           "avatar": [
-            "mode": "mascot", "family": "bear", "color": "#FF9800", "eyes": "round",
+            "mode": "geometric", "shape": "bear", "color": "#FF9800", "eyes": "round",
             "accessory": "none",
           ],
         ],
@@ -517,7 +541,27 @@
           "ownerId": "native-test", "activity": "idle", "unread": true,
           "lastMessage": ["text": "Your library books are due Friday.", "at": personalReplyAt],
         ],
-      ] + createdBots
+      ] + variedRoster + createdBots
+    }
+    /// More assistants for screenshots of the avatar set, with AGENT_INTERFACE_UI_ROSTER=varied.
+    /// Other UI tests count on the three above, so these stay opt-in.
+    private static var variedRoster: [[String: Any]] {
+      guard ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_ROSTER"] == "varied" else { return [] }
+      let looks: [(String, String, String, [String: String])] = [
+        ("garden", "Garden helper", "sprout", ["color": "#1FBF68"]),
+        ("coffee", "Coffee run", "mug", ["color": "#F4F4F4", "eyes": "round"]),
+        ("trail", "Trail boss", "cactus", ["color": "#1FBF68", "accessory": "hat"]),
+        ("tars", "TARS", "tars", ["color": "#7A7A7A", "eyes": "visor"]),
+        ("rocky", "Rocky", "rocky", ["color": "#97683D", "accessory": "glasses"]),
+      ]
+      return looks.map { entry -> [String: Any] in
+        let (id, name, shape, look) = entry
+        let base: [String: Any] = ["mode": "geometric", "shape": shape, "color": "#1084FE", "eyes": "oval", "accessory": "none"]
+        let avatar = base.merging(look.mapValues { $0 as Any }) { $1 }
+        // A very light body that needs help shows its exclamation mark with the body's soft edge.
+        let activity = id == "coffee" ? "blocked" : "idle"
+        return ["id": id, "name": name, "model": "configured-model", "shared": true, "activity": activity, "avatar": avatar]
+      }
     }
     nonisolated(unsafe) static let user: [String: Any] = [
       "id": "native-test", "name": "Local test member", "email": "test@localhost.invalid",

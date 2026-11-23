@@ -40,57 +40,65 @@ export type ActivityState =
   | "disconnected"
   | "failed"
   | "interrupted";
-/** Geometric silhouettes in picker order. ios/AgentInterface/Models.swift mirrors this list. */
+/**
+ * Avatar silhouettes by picker group, each in picker order. ios/AgentInterface/AvatarVocabulary.swift
+ * mirrors these lists. The art and face anchor of each is in src/components/avatar-shapes.ts.
+ */
+export const avatarShapeGroups = {
+  classic: [
+    "blob",
+    "pebble",
+    "squircle",
+    "capsule",
+    "triangle",
+    "hex",
+    "drop",
+    "circle",
+    "diamond",
+    "sparkle",
+    "clover",
+    "heart",
+    "cookie",
+    "pentagon",
+    "burst",
+    "alien",
+    "flower",
+    "sun",
+  ],
+  objects: [
+    "cloud",
+    "star",
+    "egg",
+    "shield",
+    "chat",
+    "lightbulb",
+    "mug",
+    "book",
+    "camera",
+    "magnifier",
+    "controller",
+    "barbell",
+    "brain",
+    "rocket",
+    "palette",
+    "paint-brush",
+    "watering-can",
+    "sprout",
+    "cactus",
+    "witch-hat",
+  ],
+  creatures: ["ghost", "cat", "bunny", "bull", "bear", "fox", "owl", "dino", "tars", "rocky"],
+  seasonal: ["pumpkin", "bat", "turkey", "santa-hat", "reindeer", "snowman"],
+} as const;
+export type AvatarShapeGroup = keyof typeof avatarShapeGroups;
 export const avatarShapes = [
-  "blob",
-  "pebble",
-  "squircle",
-  "capsule",
-  "triangle",
-  "hex",
-  "cloud",
-  "drop",
-  "circle",
-  "diamond",
-  "sparkle",
-  "clover",
-  "heart",
-  "cookie",
-  "pentagon",
-  "burst",
-  "alien",
-  "ghost",
-  "flower",
-  "sun",
+  ...avatarShapeGroups.classic,
+  ...avatarShapeGroups.objects,
+  ...avatarShapeGroups.creatures,
+  ...avatarShapeGroups.seasonal,
 ] as const;
 export type AvatarShape = (typeof avatarShapes)[number];
-/** Mascot characters in picker order. ios/AgentInterface/Models.swift mirrors both lists. */
-export const everydayFamilies = [
-  "bear",
-  "fox",
-  "sprout",
-  "panda",
-  "raccoon",
-  "owl",
-  "cactus",
-  "dinosaur",
-] as const;
-/** Listed under their own "Seasonal" heading, in calendar order from spring. */
-export const seasonalFamilies = [
-  "leprechaun",
-  "bunny",
-  "eagle",
-  "pumpkin",
-  "bat",
-  "ghost",
-  "turkey",
-  "santa",
-  "rudolph",
-  "snowman",
-] as const;
-export const mascotFamilies = [...everydayFamilies, ...seasonalFamilies] as const;
-export type MascotFamily = (typeof mascotFamilies)[number];
-export type SeasonalFamily = (typeof seasonalFamilies)[number];
+export type SeasonalShape = (typeof avatarShapeGroups.seasonal)[number];
 export const avatarEyes = ["round", "oval", "visor", "spark"] as const;
 export type Eyes = (typeof avatarEyes)[number];
 export const avatarAccessories = ["none", "hat", "glasses"] as const;
@@ -99,16 +107,6 @@ export type Avatar =
   | {
       mode: "geometric";
       shape: AvatarShape;
-      color: string;
-      eyes: Eyes;
-      accessory: Accessory;
-      eyeWidth?: number;
-      eyeHeight?: number;
-      eyeSpacing?: number;
-    }
-  | {
-      mode: "mascot";
-      family: MascotFamily;
       color: string;
       eyes: Eyes;
       accessory: Accessory;
@@ -156,6 +154,36 @@ export interface Preferences {
   mainSuggestionDismissed?: boolean;
   // --- End main assistant ---
 }
+/** Preferences fields only their own routes change. A partial save ignores them. */
+export type RoutedPreference = "modelFavorites" | "mainBotId" | "checkIns";
+/** Fields a partial save may clear with `null`. Leaving any field out keeps it. */
+export type ClearablePreference =
+  | "defaultBotId"
+  | "startPage"
+  | "chatStyle"
+  | "ownBubble"
+  | "notifications"
+  | "hiddenRoutineRuns"
+  | "mainSuggestionDismissed";
+type NotificationSettings = NonNullable<Preferences["notifications"]>;
+/**
+ * A partial preferences save, sent as a JSON Merge Patch (RFC 7396, `application/merge-patch+json`).
+ * Each field it names replaces the saved one, `null` clears a clearable field, and a field left out
+ * keeps the saved one. `notifications` merges key by key, and `null` there clears the quiet hours.
+ */
+export type PreferencesPatch = {
+  [K in Exclude<keyof Preferences, RoutedPreference>]?: K extends "notifications"
+    ?
+        | {
+            [N in keyof NotificationSettings]?: N extends "quietStart" | "quietEnd"
+              ? NotificationSettings[N] | null
+              : NotificationSettings[N];
+          }
+        | null
+    : K extends ClearablePreference
+      ? Preferences[K] | null
+      : Preferences[K];
+};
 // --- Main assistant and check-ins ---
 export interface CheckInSettings {
   enabled: boolean;

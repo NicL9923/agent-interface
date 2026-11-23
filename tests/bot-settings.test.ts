@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement, StrictMode } from "react";
 import type { Root } from "react-dom/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { preparePortrait } from "../src/portrait-upload";
 import { BotSettings } from "../src/BotSettings";
 import { api, ApiError, write } from "../src/client-api";
@@ -234,7 +234,7 @@ describe("one Save changes", () => {
       { id: "web", name: "Web search", description: "", enabled: true },
     ]);
     await act(async () =>
-      container.querySelector<HTMLInputElement>('input[type="radio"]:not(:checked)')!.click(),
+      container.querySelector<HTMLInputElement>('input[name$="-shape"]:not(:checked)')!.click(),
     );
     await editInstructions("New instructions");
     await act(async () => checkbox("Web search").click());
@@ -709,7 +709,7 @@ describe("closing with unsaved edits", () => {
 
   it("treats an unsaved avatar change as an edit until it is saved", async () => {
     await act(async () =>
-      container.querySelector<HTMLInputElement>('input[type="radio"]:not(:checked)')!.click(),
+      container.querySelector<HTMLInputElement>('input[name$="-shape"]:not(:checked)')!.click(),
     );
     await escape();
     expect(container.textContent).toContain("Discard your unsaved changes?");
@@ -1204,7 +1204,7 @@ describe("creating an assistant", () => {
   });
   const toRole = async (name = "Ranch hand") => {
     await type(name);
-    await choose("Mascot");
+    await choose("Cactus");
     await act(async () => button("Next: role and model")!.click());
   };
 
@@ -1229,7 +1229,7 @@ describe("creating an assistant", () => {
     expect(container.querySelector<HTMLInputElement>("#create-name")!.value).toBe("Ranch hand");
     expect(
       Array.from(container.querySelectorAll("label"))
-        .find((item) => item.textContent?.trim() === "Mascot")!
+        .find((item) => item.textContent?.trim() === "Cactus")!
         .querySelector("input")!.checked,
     ).toBe(true);
   });
@@ -1245,7 +1245,7 @@ describe("creating an assistant", () => {
       ["/bots/ranch-hand/avatar", "PUT"],
     ]);
     expect(vi.mocked(write).mock.calls[0][1]).toMatchObject({ name: "Ranch hand", model: "test" });
-    expect(vi.mocked(write).mock.calls[1][1]).toMatchObject({ mode: "mascot" });
+    expect(vi.mocked(write).mock.calls[1][1]).toMatchObject({ mode: "geometric", shape: "cactus" });
     expect(onClose).toHaveBeenCalledTimes(1);
     // The new assistant's chat opens, rather than leaving the person where they were.
     expect(onCreated).toHaveBeenCalledWith("ranch-hand");
@@ -1297,7 +1297,7 @@ describe("creating an assistant", () => {
     expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots")).toHaveLength(1);
     expect(vi.mocked(write).mock.lastCall).toEqual([
       "/bots/ranch-hand/avatar",
-      expect.objectContaining({ mode: "mascot" }),
+      expect.objectContaining({ mode: "geometric", shape: "cactus" }),
       "PUT",
     ]);
     expect(container.querySelector(".avatar-failure")).toBeNull();
@@ -1424,7 +1424,7 @@ describe("existing assistant portraits", () => {
     expect(write).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Uploads unavailable.");
     expect(container.textContent).toContain("Generation unavailable.");
-    expect(container.textContent).toContain("Choose Geometric or Mascot.");
+    expect(container.textContent).toContain("Portraits are unavailable. Choose Character.");
   });
   it("blocks a description over the server limit while keeping it editable", async () => {
     await typeInto(promptField(), "x".repeat(2001));
@@ -1642,11 +1642,16 @@ describe("routines in Automation", () => {
       },
     ]);
     const edits: ((value: typeof bootstrap.preferences) => typeof bootstrap.preferences)[] = [];
-    // Saves stay on their way, so the switch shows the edit as it would until the server answers.
+    // Like the session: the edit's result goes on screen at once while its save stays on its way.
+    let shown = bootstrap;
     const editPreferences = vi.fn(
       (edit: (value: typeof bootstrap.preferences) => typeof bootstrap.preferences) => {
         edits.push(edit);
-        return new Promise<void>(() => {});
+        shown = { ...shown, preferences: edit(shown.preferences) };
+        root.render(
+          createElement(BotSettings, { bot, bootstrap: shown, onClose, onSaved, editPreferences }),
+        );
+        return new Promise<never>(() => {});
       },
     );
     await render({ editPreferences });
@@ -1667,6 +1672,43 @@ describe("routines in Automation", () => {
       }).hiddenRoutineRuns,
     ).toEqual([]);
     expect(write).not.toHaveBeenCalled();
+  });
+
+  // The app's toast sits outside this modal, where a person in it cannot reach it.
+  it("says inside the sheet, in view, when a Show runs in chat change was refused", async () => {
+    const scrolled = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: function (this: HTMLElement) {
+        scrolled(this);
+      },
+    });
+    onTestFinished(() => {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    });
+    serve("/routines", [
+      {
+        id: "r1",
+        botId: bot.id,
+        name: "Certificates",
+        prompt: "",
+        schedule: "every 6h",
+        enabled: true,
+      },
+    ]);
+    const editPreferences = vi.fn(() => new Promise<never>(() => {}));
+    await render({ editPreferences });
+    await click("Automation");
+    await act(async () =>
+      container.querySelector<HTMLInputElement>(".routine-chat-toggle input")!.click(),
+    );
+    await render({
+      editPreferences,
+      saveRefusal: { message: "Your change didn't save. The server refused that change.", id: 1 },
+    });
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe("Your change didn't save. The server refused that change.");
+    expect(scrolled).toHaveBeenCalledWith(alert);
   });
 
   it("posts a routine's results in chosen group chats, and never sends rooms it could not read", async () => {

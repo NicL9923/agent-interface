@@ -56,7 +56,7 @@ def process_start_time(pid):
     """Linux start time in clock ticks, the PID-reuse guard Hermes records in gateway.pid."""
     try:
         return int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
-    except OSError, ValueError, IndexError:
+    except (OSError, ValueError, IndexError):
         return None
 
 
@@ -68,7 +68,7 @@ def stop_home_gateway(home):
     """
     try:
         record = json.loads((home / "gateway.pid").read_text())
-    except OSError, ValueError:
+    except (OSError, ValueError):
         return None
     pid, started = record.get("pid"), record.get("start_time")
     if (
@@ -439,7 +439,7 @@ approvals:
                 )
             try:
                 state = json.loads((home / "gateway_state.json").read_text())
-            except OSError, ValueError:
+            except (OSError, ValueError):
                 state = {}
             if (
                 state.get("pid") == process.pid

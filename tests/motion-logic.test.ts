@@ -79,10 +79,13 @@ it("draws each tool with its family's glyph and folds old steps into a count", (
 
 it("tints a chat with a drawn avatar's color, and never with a photo or an unexpected value", () => {
   const drawn = {
-    avatar: { mode: "mascot", family: "fox", color: "#C46F2C", eyes: "round", accessory: "none" },
+    avatar: { mode: "geometric", shape: "fox", color: "#C46F2C", eyes: "round", accessory: "none" },
   } as Bot;
   expect(botTint(drawn)).toBe("#C46F2C");
-  expect(tintProps(drawn)).toEqual({ "data-tint": "", style: { "--bot-tint": "#C46F2C" } });
+  expect(tintProps(drawn)).toEqual({
+    "data-tint": "",
+    style: { "--bot-tint": "#C46F2C", "--solid-fill": "#9F5000" },
+  });
   expect(
     botTint({ avatar: { mode: "portrait", src: "/a.png", origin: "uploaded" } } as Bot),
   ).toBeUndefined();

@@ -119,12 +119,12 @@ import XCTest
     XCTAssertFalse(app.buttons["saveChanges"].isEnabled)
     XCTAssertFalse(app.staticTexts["No tools were reported by Hermes."].exists)
   }
-  func testSeasonalAvatarChoicesSaveAndRemainSelected() {
+  func testShapeChoicesFromEachGroupSaveAndRemainSelected() {
     let app = app()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand")
     selectSettingsTab(app, "Profile")
-    app.buttons["Mascot"].tapWhenReady()
+    XCTAssertTrue(app.buttons["Character"].wait(until: "selected == true"))
     let form = app.collectionViews["settings.profile"]
     // Accessibility hit tests see through the sticky preview and Save bars, so a tile under
     // either reads as tappable while a real tap lands on the bar.
@@ -134,7 +134,8 @@ import XCTest
       return (!top.exists || button.frame.minY >= top.frame.maxY) && (!bottom.exists || button.frame.maxY <= bottom.frame.minY)
     }
     func scrollTo(_ button: XCUIElement, up: Bool) {
-      for _ in 0..<12 {
+      // The shape picker holds 54 tiles, so a seasonal one is many short drags down.
+      for _ in 0..<40 {
         if clear(button) { return }
         let top = app.descendants(matching: .any)["avatarPreviewBar"]
         let bottom = app.descendants(matching: .any)["saveBar"]
@@ -152,21 +153,25 @@ import XCTest
       }
       XCTAssertTrue(clear(button), "\(button) is clear of the sticky bars")
     }
-    // The UI tests cannot see app types; SettingsParityTests pins this list to AvatarConfig.seasonalFamilies.
-    for family in ["leprechaun", "bunny", "eagle", "pumpkin", "bat", "ghost", "turkey", "santa", "rudolph", "snowman"] {
-      let choice = app.buttons["avatarTile.family.\(family)"]
+    // One shape from each group after Classic. The seasonal pumpkin brings its orange, and the
+    // shapes on either side keep whatever color is chosen at the time.
+    for (shape, color) in [("mug", "#1084FE"), ("pumpkin", "#FF6700"), ("tars", "#FF6700")] {
+      let choice = app.buttons["avatarTile.shape.\(shape)"]
       scrollTo(choice, up: true)
       choice.tap()
-      XCTAssertTrue(choice.wait(until: "selected == true"), "\(family) is selected")
+      XCTAssertTrue(choice.wait(until: "selected == true"), "\(shape) is selected")
       // The preview bar stays in view above the form, so the screenshot shows the new look.
-      screenshot(app, "Seasonal native \(family)")
+      screenshot(app, "Shape native \(shape)")
       app.buttons["saveChanges"].tapWhenReady()
       XCTAssertTrue(app.staticTexts["settingsNotice"].wait(until: "label == %@", "Saved"))
       app.buttons["Close"].tap()
       app.openAssistantSettings("Ranch hand")
       selectSettingsTab(app, "Profile")
-      scrollTo(app.buttons["avatarTile.family.\(family)"], up: true)
-      XCTAssertTrue(app.buttons["avatarTile.family.\(family)"].wait(until: "selected == true"), "\(family) stays selected")
+      scrollTo(app.buttons["avatarTile.shape.\(shape)"], up: true)
+      XCTAssertTrue(app.buttons["avatarTile.shape.\(shape)"].wait(until: "selected == true"), "\(shape) stays selected")
+      let swatch = app.buttons["Color \(color)"]
+      scrollTo(swatch, up: true)
+      XCTAssertTrue(swatch.wait(until: "selected == true"), "\(shape) saved in \(color)")
     }
   }
   func testSettingsListOpensEachSectionAndProfileKeepsAvatarVisible() {

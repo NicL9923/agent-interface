@@ -38,6 +38,44 @@ export function scrollIntent(event: InputEvent): Intent | undefined {
   }
   return undefined;
 }
+/**
+ * What a scroll key pressed inside `transcript` does to it, read once every handler has had the key:
+ * "scrolls" it, leaves it "kept" where it is, or "unknown" when the engines differ. It is kept when a
+ * handler took it, as a menu or listbox does; when the focused field uses it; when Space presses the focused
+ * button or opens a summary; or when a box between the focus and the transcript keeps it. See `keptBy`.
+ */
+export type KeyScroll = "scrolls" | "kept" | "unknown";
+export function keyScroll(event: KeyboardEvent, transcript: Element, intent: Intent): KeyScroll {
+  const target = event.target instanceof Element ? event.target : null;
+  if (event.defaultPrevented || !target) return "kept";
+  if (
+    (target instanceof HTMLElement && target.isContentEditable) ||
+    /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)
+  )
+    return "kept";
+  if (event.key === " " && /^(BUTTON|SUMMARY)$/.test(target.tagName)) return "kept";
+  for (let box: Element | null = target; box && box !== transcript; box = box.parentElement) {
+    const kept = keptBy(box, intent);
+    if (kept) return kept;
+  }
+  return "scrolls";
+}
+/**
+ * Whether a scroll key stops at `box` on its way from the focus to the transcript. A fixed box, such as a
+ * modal dialog, scrolls with the viewport. A scrolling box keeps the key while it can still move that way,
+ * and at its end passes it on. One that sets `overscroll-behavior` is "unknown" at its end: Chromium keeps
+ * the key there, and WebKit passes it on to the transcript.
+ */
+function keptBy(box: Element, intent: Intent): Exclude<KeyScroll, "scrolls"> | undefined {
+  const style = getComputedStyle(box);
+  if (style.position === "fixed") return "kept";
+  if (!/auto|scroll/.test(style.overflowY)) return undefined;
+  const room =
+    intent === "up" ? box.scrollTop : box.scrollHeight - box.clientHeight - box.scrollTop;
+  if (room >= 1) return "kept";
+  // Safari before 16 has no `overscroll-behavior` and reads it as empty.
+  return (style.overscrollBehaviorY || "auto") === "auto" ? undefined : "unknown";
+}
 /** Any intent ends an anchor; following ends only when the reader heads away from the end. */
 export function afterIntent(mode: ScrollMode, intent: Intent): ScrollMode {
   if (mode === "anchored") return "free";

@@ -47,12 +47,16 @@ beforeEach(() => {
     } as Bootstrap,
     connectionLost: false,
     offline: false,
-    // Saves resolve only when the test says so, like a slow network.
-    // Like the session's queue, each edit applies to the newest value; saves resolve only
-    // when the test says so, like a slow network.
+    // Like the session: each edit runs on the preferences on screen and its result goes on screen at
+    // once, while its save stays on its way, like a slow network.
     editPreferences: vi.fn((edit: (value: Preferences) => Preferences) => {
-      saved.push(edit(saved.at(-1) ?? props.boot.preferences));
-      return new Promise<void>(() => {});
+      const before = props.boot.preferences;
+      const next = edit(before);
+      if (next === before) return Promise.resolve("unchanged" as const);
+      saved.push(next);
+      props = { ...props, boot: { ...props.boot, preferences: next } };
+      root.render(createElement(PreferencesDialog, props));
+      return new Promise<never>(() => {});
     }),
     notifications: { busy: false } as ComponentProps<typeof PreferencesDialog>["notifications"],
     installEvent: null,
@@ -187,6 +191,58 @@ describe("home sections", () => {
     );
     expect(title()).toBe("Settings");
     expect(saved).toHaveLength(0);
+  });
+
+  // The screen's copy changes under an open section page: another tab renames it, or a refused rename goes back.
+  // The field saves on Back only what the person typed since it was last in step with the screen.
+  const shownWith = (name: string) =>
+    act(async () => {
+      props = {
+        ...props,
+        boot: {
+          ...props.boot,
+          preferences: {
+            ...props.boot.preferences,
+            sections: props.boot.preferences.sections.map((section) =>
+              section.id === "kids" ? { ...section, name } : section,
+            ),
+          },
+        },
+      };
+      root.render(createElement(PreferencesDialog, props));
+    });
+  const back = () =>
+    act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Back to settings"]')!.click(),
+    );
+  it("keeps an untouched name in step with the screen, so Back never writes over another tab's rename", async () => {
+    await render();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[data-opens="section:kids"]')!.click(),
+    );
+    await shownWith("Little ones");
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Section name"]')!.value).toBe(
+      "Little ones",
+    );
+    await back();
+    expect(title()).toBe("Settings");
+    expect(saved).toHaveLength(0);
+  });
+
+  it("puts a refused rename's field back to the screen's name and does not send it again on Back", async () => {
+    await render();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[data-opens="section:kids"]')!.click(),
+    );
+    const name = container.querySelector<HTMLInputElement>('[aria-label="Section name"]')!;
+    await typeInto(name, "Barn");
+    await act(async () => button("Rename").click());
+    expect(saved.at(-1)!.sections[1].name).toBe("Barn");
+    // The session takes the refused rename back off the screen.
+    await shownWith("Kids");
+    expect(name.value).toBe("Kids");
+    await back();
+    expect(saved).toHaveLength(1);
   });
 
   it.each(["Around the house", "Family"])(

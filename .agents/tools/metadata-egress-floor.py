@@ -305,7 +305,7 @@ def live_rule_problems(listing, uid, user):
     """Compare `nft -j list table inet agent_interface_metadata` output with the expected floor."""
     try:
         items = json.loads(listing)["nftables"]
-    except TypeError, ValueError, KeyError:
+    except (TypeError, ValueError, KeyError):
         return ["The live table could not be listed as nft JSON."]
     chains = [item["chain"] for item in items if "chain" in item]
     shape = [

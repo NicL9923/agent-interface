@@ -322,7 +322,10 @@ Replies can include a fenced `agent-ui` JSON document with `version: 1` and a
 
 IDs contain letters, numbers, underscores or hyphens. Documents are limited to
 eight cards and 60 items per card. Invalid JSON, unsupported fields, ambiguous
-IDs or invalid dates remain readable code. Cards never run arbitrary HTML or script.
+IDs or invalid dates remain readable code. The server takes a card only from
+a fence at the margin, and the app shows an indented one, such as one inside
+a list item, as code in its place. The web does too, unless a valid fence at
+the margin elsewhere in the same reply carries a card with the same ID. Cards never run arbitrary HTML or script.
 
 Checklist selections and itinerary notes are saved for your account. The original
 assistant proposal stays in the canonical conversation. The server verifies card

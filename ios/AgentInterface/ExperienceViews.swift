@@ -123,7 +123,7 @@ struct TodayView: View {
         }.listRowBackground(Color.clear)
         if !attention(value).isEmpty {
           Section {
-            ForEach(attention(value)) { item in attentionRow(item) }
+            ForEach(attention(value)) { item in TodayAttentionRow(item: item) { open(item.botId) } }
           } header: { sectionTitle("Needs your attention") }
             .listRowBackground(Palette.raised(scheme))
         }
@@ -233,30 +233,6 @@ struct TodayView: View {
   }
   private func active(_ value: TodayOverview) -> [TodayItem] {
     value.items.filter { $0.error == nil && [.thinking, .working, .waiting].contains($0.activity.state) }
-  }
-  private func attentionRow(_ item: TodayItem) -> some View {
-    let approval = item.approvals.first { $0.status == "pending" }
-    let question = item.attention.first
-    let failed = item.error != nil || [.failed, .interrupted].contains(item.activity.state)
-    let title = item.error ?? approval?.title ?? question?.title ?? item.activity.detail ?? item.activity.state.label
-    let reason = item.error != nil ? "Disconnected" : approval != nil ? "Approval" : question != nil ? (question?.kind == "clarify" ? "Question" : question?.kind == "secure" ? "Secure request" : question?.kind == "connection" ? "Connection request" : question?.kind == "terminal" ? "Terminal request" : "Needs your help") : item.activity.state.label
-    let verb = item.error != nil ? "Reconnect" : approval != nil ? "Review" : question != nil ? (question?.kind == "clarify" ? "Answer" : "Review") : failed ? "View error" : "Review"
-    return Button { open(item.botId) } label: {
-      HStack(spacing: 12) {
-        avatar(item.botId, name: item.botName)
-        VStack(alignment: .leading, spacing: 4) {
-          Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
-            .lineLimit(typeSize.isAccessibilitySize ? nil : 3)
-          (Text(item.botName + " · ").foregroundStyle(Palette.muted) + Text(reason).foregroundStyle(failed ? Palette.danger : Palette.attention))
-            .font(.footnote)
-          if typeSize.isAccessibilitySize { Text(verb).font(.footnote.weight(.semibold)).foregroundStyle(Palette.accent) }
-        }.frame(maxWidth: .infinity, alignment: .leading)
-        if !typeSize.isAccessibilitySize {
-          Text(verb).font(.caption.weight(.semibold)).foregroundStyle(Palette.accent)
-            .padding(.horizontal, 9).padding(.vertical, 6).background(Palette.accentSoft, in: Capsule())
-        }
-      }.padding(.vertical, 4)
-    }.accessibilityIdentifier("today.bot.\(item.botId)").accessibilityElement(children: .combine)
   }
   private func open(_ bot: String, routine: String? = nil) {
     openBot()
@@ -707,6 +683,66 @@ struct RoutineEnhancements: View {
       error = failure.localizedDescription
       if (failure as? APIError)?.status == 404 { retrySameRun = true }
     case nil: break
+    }
+  }
+}
+
+/// A Today row for an assistant that needs the person, which holds the attention color as text.
+struct TodayAttentionRow: View {
+  var item: TodayItem
+  var open: () -> Void
+  @Environment(AppStore.self) private var store
+  @Environment(\.dynamicTypeSize) private var typeSize
+  var body: some View {
+    let approval = item.approvals.first { $0.status == "pending" }
+    let question = item.attention.first
+    let failed = item.error != nil || [.failed, .interrupted].contains(item.activity.state)
+    let title = item.error ?? approval?.title ?? question?.title ?? item.activity.detail ?? item.activity.state.label
+    let reason = item.error != nil ? "Disconnected" : approval != nil ? "Approval" : question != nil ? (question?.kind == "clarify" ? "Question" : question?.kind == "secure" ? "Secure request" : question?.kind == "connection" ? "Connection request" : question?.kind == "terminal" ? "Terminal request" : "Needs your help") : item.activity.state.label
+    let verb = item.error != nil ? "Reconnect" : approval != nil ? "Review" : question != nil ? (question?.kind == "clarify" ? "Answer" : "Review") : failed ? "View error" : "Review"
+    return Button(action: open) {
+      HStack(spacing: 12) {
+        AvatarView(avatar: store.bootstrap?.bots.first { $0.id == item.botId }?.avatar ?? AvatarConfig(), state: .idle, size: 36,
+          name: item.botName, forceReducedMotion: true).accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+            .lineLimit(typeSize.isAccessibilitySize ? nil : 3)
+          (Text(item.botName + " · ").foregroundStyle(Palette.muted) + Text(reason).foregroundStyle(failed ? Palette.danger : Palette.attention))
+            .font(.footnote)
+          if typeSize.isAccessibilitySize { Text(verb).font(.footnote.weight(.semibold)).foregroundStyle(Palette.accent) }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+        if !typeSize.isAccessibilitySize {
+          Text(verb).font(.caption.weight(.semibold)).foregroundStyle(Palette.accent)
+            .padding(.horizontal, 9).padding(.vertical, 6).background(Palette.accentSoft, in: Capsule())
+        }
+      }.padding(.vertical, 4)
+    }.buttonStyle(AttentionRowStyle()).accessibilityIdentifier("today.bot.\(item.botId)").accessibilityElement(children: .combine)
+  }
+}
+
+private struct AttentionRowPressedKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+  /// Draws an attention row as pressed, for a test that renders one, since it cannot hold a finger on it.
+  var attentionRowPressed: Bool {
+    get { self[AttentionRowPressedKey.self] }
+    set { self[AttentionRowPressedKey.self] = newValue }
+  }
+}
+/// A Today attention row while it is pressed: the soft accent at 45% over the raised row, as the web's hover, so the
+/// row's attention reason keeps 4.5:1. On systemGray4, a gray a list may highlight with, the reason reads 3.84:1 in light.
+struct AttentionRowStyle: ButtonStyle {
+  static let pressedOpacity = 0.45
+  func makeBody(configuration: Configuration) -> some View {
+    RowBody(label: configuration.label, pressed: configuration.isPressed)
+  }
+  private struct RowBody<Label: View>: View {
+    var label: Label
+    var pressed: Bool
+    @Environment(\.attentionRowPressed) private var drawnPressed
+    var body: some View {
+      label.contentShape(Rectangle())
+        .background(Palette.accentSoft.opacity(pressed || drawnPressed ? AttentionRowStyle.pressedOpacity : 0),
+          in: RoundedRectangle(cornerRadius: 12).inset(by: -6))
     }
   }
 }

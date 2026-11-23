@@ -46,7 +46,7 @@ def restart_reason(loaded, source, hermes_home):
     """
     try:
         state = json.loads((Path(hermes_home) / "gateway_state.json").read_text())
-    except OSError, ValueError:
+    except (OSError, ValueError):
         return None
     if state.get("gateway_state") != "running":
         return None
@@ -196,14 +196,14 @@ def main():
                 next_check = time.monotonic() + CODE_CHECK_SECONDS
                 try:
                     restart = restart_reason(loaded, source, hermes_home)
-                except OSError, subprocess.SubprocessError:
+                except (OSError, subprocess.SubprocessError):
                     restart = None
                 # Keep the lock through shutdown, so no bot action starts on the old browser.
                 if restart and claim_idle(computer, held, module.ComputerError):
                     # Recheck under the lock; an update or release may have started meanwhile.
                     try:
                         restart = restart_reason(loaded, source, hermes_home)
-                    except OSError, subprocess.SubprocessError:
+                    except (OSError, subprocess.SubprocessError):
                         restart = None
                     if restart:
                         break

@@ -52,6 +52,8 @@ struct ComposerView: View {
       // Talk belongs to one assistant and one sign-in: another one ends it.
       .onChange(of: bot.id) { _, _ in talk.end(); talk.dismiss(); configureTalk() }
       .onChange(of: store.scope) { _, _ in talk.end(); talk.dismiss(); configureTalk() }
+      // Each sign-in has its own client; the one Talk was given ends with the last sign-in.
+      .onChange(of: store.api.map(ObjectIdentifier.init)) { _, _ in configureTalk() }
       #if DEBUG
       .onChange(of: store.draftReady, initial: true) { _, ready in
         guard ready else { return }
@@ -284,7 +286,8 @@ struct ComposerView: View {
     voice.restoreRecording(from: store.voiceRecordingURL(botId: bot.id))
     let botId = bot.id
     let target = store
-    voice.onTranscript = { [weak target] text in _ = target?.appendTranscript(text, botId: botId) }
+    let scope = store.scope
+    voice.onTranscript = { [weak target] text in _ = target?.appendTranscript(text, botId: botId, scope: scope) }
   }
   private func drop(_ providers: [NSItemProvider]) {
     let scope = store.scope

@@ -29,7 +29,7 @@ def settings(values):
 # One version for the app and every extension: App Store validation rejects extensions whose
 # versions differ from the app's.
 MARKETING_VERSION = "1.0"
-CURRENT_PROJECT_VERSION = "29"
+CURRENT_PROJECT_VERSION = "30"
 LINK_DOMAIN = "agentui.wildflowersranch.com"
 EXTENSIONS = [
     "AgentInterfaceShare",
@@ -50,6 +50,9 @@ for name, kind in [(extension, "extension") for extension in EXTENSIONS] + [
     # Widget and Live Activity models and views: the app writes and previews what the widgets show.
     if name in ("AgentInterface", "AgentInterfaceWidgets"):
         files += sorted((ROOT / "Shared" / "Widgets").glob("*.swift"))
+    # Notification prefetch: only the app and the notification service extension share the prefetch token and cache.
+    if name in ("AgentInterface", "AgentInterfaceNotifications"):
+        files += sorted((ROOT / "Shared" / "Notifications").glob("*.swift"))
     # The independently owned contract suite is included before its first write.
     if name == "AgentInterfaceTests" and not any(
         p.name == "NativeContractTests.swift" for p in files

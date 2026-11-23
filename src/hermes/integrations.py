@@ -210,7 +210,7 @@ def auth_episodes(home, runtime):
     path = Path(home) / "agent_interface_mcp_auth_episodes.json"
     try:
         saved = private_json(path)
-    except ValueError, OSError:
+    except (ValueError, OSError):
         saved = {}
     episodes = (
         {key: value for key, value in saved.items() if isinstance(value, str)}
@@ -233,7 +233,7 @@ def cache_check(home, result, episode=None):
     path = Path(home) / "agent_interface_integration_checks.json"
     try:
         cached = private_json(path)
-    except ValueError, OSError:
+    except (ValueError, OSError):
         cached = {}
     # needsAuthEpisode: the rejected sign-in episode Hermes still reported when this check ran.
     cached[result["id"]] = dict(
@@ -256,7 +256,7 @@ def apply_checks(home, rows, runtime=None):
     """
     try:
         saved = private_json(Path(home) / "agent_interface_integration_checks.json")
-    except ValueError, OSError:
+    except (ValueError, OSError):
         saved = {}
     current, tokens = fingerprint(home), token_stamp(home)
     episodes = auth_episodes(home, runtime)
@@ -379,7 +379,7 @@ def clean_url(value):
         ):
             return None
         return value
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return None
 
 
@@ -416,7 +416,7 @@ def google_client(home, token_client_id):
             continue
         try:
             client = private_json(path)
-        except ValueError, OSError:
+        except (ValueError, OSError):
             continue
         for kind, section in client.items():
             if (
@@ -509,7 +509,7 @@ def workspace(home, profile):
             ],
             actions=dict(connect=True, check=True, disconnect=True),
         )
-    except ValueError, OSError:
+    except (ValueError, OSError):
         return card(
             "google_workspace",
             "Google Workspace",
@@ -661,7 +661,7 @@ def begin_google(home, profile, redirect_uri, fields=None):
     )
     try:
         client = private_json(client_path)
-    except ValueError, OSError:
+    except (ValueError, OSError):
         return dict(
             kind="instructions",
             status="error",
@@ -1088,7 +1088,7 @@ def register_google_tasks_tool():
             return permission_granted(
                 "tasks", scopes_from(json.loads(path.read_text()))
             )
-        except ValueError, OSError:
+        except (ValueError, OSError):
             return False
 
     registry.register(

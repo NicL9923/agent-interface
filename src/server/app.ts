@@ -342,7 +342,7 @@ export async function createApp(
     }
     store.close();
   });
-  return { app, store, worker, health, eventLoop, routes, directRoutes, mains, macs };
+  return { app, store, worker, health, eventLoop, routes, directRoutes, mains, macs, snapshot };
 }
 
 /** The association file Apple's CDN fetches for universal links and Handoff from Safari. */

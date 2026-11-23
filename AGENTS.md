@@ -10,6 +10,8 @@
   `package-lock.json`; macOS-only lockfile regeneration must not drop Linux binaries.
 - See `docs/Dependencies.md` for the tool choice and `README.md` for validation.
 - Before calling work done, run `.agents/tools/check-all`. Use `npm ci` per worktree, never a symlinked `node_modules`.
+  Where WebKit cannot start on the host, as on Fedora, check-all runs the WebKit half of e2e in Playwright's
+  container under podman. A WebKit failure there is a real failure.
 
 # CI
 
@@ -20,6 +22,10 @@
   third-party runner service. `tests/workflows.test.ts` fails on any other `runs-on` label.
 - The repository allows only GitHub-owned actions pinned to a full commit SHA; the same test
   checks that before a push does.
+- The `Browser smoke` job runs each browser as its own job in Playwright's container image, pinned by digest.
+  `tests/workflows.test.ts` allows no other image and fails when its version is not the installed
+  `@playwright/test` or its digest is not the one `.github/playwright-image-digests.json` records for
+  that version. A Playwright upgrade adds the new digest there and changes the tag and digest in `checks.yml`.
 - CI does not replace `check-all`: the Mac mini still runs the native iOS checks, and CI never
   runs the `scripts/spike/*` probes that host qualification runs.
 

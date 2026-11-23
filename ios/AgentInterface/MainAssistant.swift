@@ -60,7 +60,7 @@ extension AppStore {
   func setMainAssistant(_ botId: String?) async throws {
     guard let api else { return }
     let currentGeneration = generation
-    let saved: Preferences = try await applyingSaved(currentGeneration) { try await api.write("/preferences/main", MainChoice(botId: botId), method: "PUT") }
+    let saved: Preferences = try await applyingSaved(currentGeneration) { try await savingPreferences { try await api.write("/preferences/main", MainChoice(botId: botId), method: "PUT") } }
     if currentGeneration == generation { bootstrap?.preferences = saved }
   }
   /// Applies the preferences a failed request reports the server saved first, as when Hermes hasn't
@@ -83,7 +83,7 @@ extension AppStore {
     let body = CheckInSettings(enabled: enabled ?? current?.enabled ?? false, everyHours: everyHours ?? current?.everyHours ?? MainAssistant.defaultHours,
       timezone: TimeZone.current.identifier)
     let currentGeneration = generation
-    let saved: Preferences = try await applyingSaved(currentGeneration) { try await api.write("/preferences/check-ins", body, method: "PUT") }
+    let saved: Preferences = try await applyingSaved(currentGeneration) { try await savingPreferences { try await api.write("/preferences/check-ins", body, method: "PUT") } }
     if currentGeneration == generation { bootstrap?.preferences = saved }
   }
   func dismissMainSuggestion() {

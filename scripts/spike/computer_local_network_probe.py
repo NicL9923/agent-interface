@@ -357,7 +357,7 @@ try:
         def handle(self):
             try:
                 super().handle()
-            except ssl.SSLError, ConnectionError, TimeoutError:
+            except (ssl.SSLError, ConnectionError, TimeoutError):
                 pass  # Chrome's rejected handshake is the expected outcome.
 
         def do_GET(self):

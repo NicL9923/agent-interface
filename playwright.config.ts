@@ -4,6 +4,9 @@ import { port } from "./e2e/ports.js";
 // Run `npm run build` first: the server in e2e/server.ts serves dist/client.
 export default defineConfig({
   testDir: "e2e",
+  // Only TypeScript specs, which lint holds to the suite's own fixtures and their route guard. A spec in any other
+  // form is never collected.
+  testMatch: "**/*.spec.ts",
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,

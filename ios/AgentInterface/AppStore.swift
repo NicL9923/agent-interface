@@ -40,6 +40,13 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
   /// Assistant pictures for notifications in the App Group. Unit tests leave the App Group alone.
   @ObservationIgnored var senderAvatars: SenderAvatars? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? SenderAvatars(root: NotificationSenders.root) : nil
+  /// Conversation prefetch cache in the App Group shared with the notification service extension.
+  /// Unit tests leave the real App Group alone and inject a temporary directory.
+  @ObservationIgnored var prefetchRoot: URL? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? NotificationPrefetchStore.root : nil
+  /// Invoked when cold launch restores a cached bootstrap so a pending notification tap can open
+  /// its chat immediately in parallel with the live bootstrap read. Returns the navigation task
+  /// when a pending navigation took over, or `nil` when nothing was pending.
+  @ObservationIgnored var onBootstrapReady: (@MainActor () -> Task<Void, Never>?)?
   /// Text from Siri, a notification's Reply or the Share inbox waiting for its draft; see `DraftAdditions.swift`.
   var additions: [DraftAddition] = []
   @ObservationIgnored var earlyAdditions: [DraftAddition] = []
@@ -221,6 +228,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var queuedChoices: Set<PreferenceChoice> = []
   /// Set when the server answered a save without the choice the person made, as one from before it does.
   var preferencesNotice: String?
+  /// Orders preference saves against bootstrap reads; see `PreferenceSaveOrder`.
+  @ObservationIgnored var preferenceSaves = PreferenceSaveOrder()
   /// This device's notification switch and onboarding card for the signed-in account.
   var deviceNotifications = DeviceNotificationState()
   var openedFile: PreviewFile?
@@ -464,6 +473,12 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// quiet about it and marks it read there, as the web does.
   @ObservationIgnored var viewingBotId: String?
   @ObservationIgnored var presenceBeat: Task<Void, Never>?
+  /// Saves another member's token as they sign in. Tests watch the moment.
+  @ObservationIgnored var saveToken: (String, String) throws -> Void = { try SecureToken.save($0, host: $1) }
+  /// How long reading settles before its position is saved. Tests substitute a wait they control.
+  @ObservationIgnored var readPause: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+  /// The account scope the chat on screen was opened under; presence goes out only while it is current.
+  @ObservationIgnored var presenceScope: String?
   @ObservationIgnored var presenceReports: Task<Void, Never>?
   /// Sheets over the chat, such as settings or files. A covered chat is not being read, as on the web.
   var chatCovers = 0
@@ -472,6 +487,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// `desktopCleanupWait`, before revoking the session the cleanup's release needs.
   @ObservationIgnored var desktopCleanup: Task<Void, Never>?
   @ObservationIgnored var desktopCleanupWait: Duration = .seconds(5)
+  /// How long another member's sign-in waits for the last member's session to end on the server.
+  @ObservationIgnored var revokeWait: Duration = .seconds(5)
   /// Set while sign-out waits for that cleanup.
   @ObservationIgnored var awaitingDesktopCleanup = false
   @ObservationIgnored var computerWrites = 0
@@ -531,11 +548,26 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// settings and anything else not aimed at the open chat need only the household (`householdReachable`),
   /// so one chat's failed read never refuses them.
   enum WriteGate { case openChat, household }
+  /// A save of several steps, all through the client it started with. A sign-in between two steps retires that
+  /// client, so the rest of the save stops instead of going out under the next account.
+  @MainActor struct HouseholdSave {
+    fileprivate let store: AppStore
+    let api: APIClient
+    /// A step that also needs the household, checked as it goes out.
+    func perform<V: Encodable>(_ path: String, _ value: V, method: String) async throws {
+      try await store.perform(path, value, method: method, gate: .household, via: api)
+    }
+  }
+  func householdSave(_ steps: (HouseholdSave) async throws -> Void) async throws {
+    guard let api else { return }
+    try await steps(HouseholdSave(store: self, api: api))
+  }
   /// Every write in the open chat and in an assistant's settings. It checks its gate again as it posts, so
   /// one confirmed after the connection it needs went down, as from an alert left open, is refused instead
   /// of sent.
-  func perform<V: Encodable>(_ path: String, _ value: V, method: String = "POST", gate: WriteGate) async throws {
-    guard let api else { throw APIError(message: "Connect to an app server first.", status: 0) }
+  /// Work of several steps passes the `client` it started with, so a sign-in between them stops the rest.
+  func perform<V: Encodable>(_ path: String, _ value: V, method: String = "POST", gate: WriteGate, via client: APIClient? = nil) async throws {
+    guard let api = client ?? self.api else { throw APIError(message: "Connect to an app server first.", status: 0) }
     guard gate == .household ? householdReachable : connected else { throw connectionRefused() }
     let currentGeneration = generation
     do {
@@ -568,6 +600,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     self.error = error.localizedDescription
     if let apiError = error as? APIError, apiError.isSessionExpired {
       clearOfflineLibrary()
+      clearNotificationPrefetch()
       if let api { try? SecureToken.save(nil, host: api.baseURL.absoluteString) }
       api?.token = nil
       stopPolling()
@@ -593,4 +626,18 @@ struct ReplyAnnouncement: Equatable {
   var id: Int
   var botId: String
   var text: String
+}
+extension AppStore {
+  /// The account changed: its messages on their way, their records and the reply last announced for it go,
+  /// so none of them shows or is read out in the next account's chats.
+  func forgetSentEchoes() {
+    echoTimer?.cancel()
+    echoTimer = nil
+    echoDeadline = nil
+    echoes = []
+    ownSends = []
+    ownRows = []
+    replyAnnouncement = nil
+    updateEcho(conversationChanged: true)
+  }
 }

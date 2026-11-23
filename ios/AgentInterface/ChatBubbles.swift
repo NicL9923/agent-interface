@@ -180,12 +180,28 @@ enum ReplyBubbles {
 }
 
 private struct ChatBubblesKey: EnvironmentKey { static let defaultValue = false }
+/// What Markdown sits on, for the few marks that need another color there.
+enum MarkdownGround {
+  /// The transcript, a row or a reply bubble.
+  case page
+  /// The person's tinted bubble.
+  case tint
+  /// The person's solid bubble, under white text.
+  case solid
+}
+private struct MarkdownGroundKey: EnvironmentKey { static let defaultValue = MarkdownGround.page }
 private struct OwnBubbleFillKey: EnvironmentKey { static let defaultValue: Color? = nil }
 extension EnvironmentValues {
   /// Whether the open chat shows the assistant's prose in bubbles: the person's `chatStyle`.
   var chatBubbles: Bool {
     get { self[ChatBubblesKey.self] }
     set { self[ChatBubblesKey.self] = newValue }
+  }
+  /// What the Markdown below sits on. On a solid fill a quote, a link and a task's box, which have colors of their own
+  /// elsewhere, take white; on the person's tint a quote's bar darkens, since `Palette.line` nearly matches the fill.
+  var markdownGround: MarkdownGround {
+    get { self[MarkdownGroundKey.self] }
+    set { self[MarkdownGroundKey.self] = newValue }
   }
   /// The solid fill for the person's own messages, or nil for the tinted look.
   var ownBubbleFill: Color? {
@@ -195,23 +211,27 @@ extension EnvironmentValues {
 }
 
 /// Sizes a bubble to its content, up to a share of the column and a cap, and puts it at the
-/// leading or trailing edge. It takes the column's whole width, so the bubble can sit at either.
+/// leading or trailing edge. It takes the column's whole width, so the bubble can sit at either. Its height is
+/// always its content's: the content is offered no height, since a list row's height offer held a nested list item
+/// to one truncated line at large text sizes.
 struct BubbleWidth: Layout {
   var fraction: CGFloat = 1
   var cap: CGFloat = .infinity
   var trailing = false
+  /// A width the fraction may not take the bubble under, though the column and the cap still can.
+  var minimum: CGFloat = 0
   /// The widest the bubble may be in a column this wide.
-  func width(for column: CGFloat) -> CGFloat { min(column * fraction, cap) }
+  func width(for column: CGFloat) -> CGFloat { min(column, max(column * fraction, minimum), cap) }
   private func limit(_ width: CGFloat?) -> CGFloat? { width.map(self.width(for:)) }
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     guard let child = subviews.first else { return .zero }
-    let size = child.sizeThatFits(ProposedViewSize(width: limit(proposal.width), height: proposal.height))
+    let size = child.sizeThatFits(ProposedViewSize(width: limit(proposal.width), height: nil))
     guard let width = proposal.width, width.isFinite else { return size }
     return CGSize(width: width, height: size.height)
   }
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
     guard let child = subviews.first else { return }
-    let offer = ProposedViewSize(width: limit(bounds.width), height: proposal.height)
+    let offer = ProposedViewSize(width: limit(bounds.width), height: nil)
     let size = child.sizeThatFits(offer)
     child.place(at: CGPoint(x: trailing ? bounds.maxX - size.width : bounds.minX, y: bounds.minY), proposal: offer)
   }
@@ -224,13 +244,25 @@ struct BubbledReplyView: View {
   var messageId: String
   /// Whether this message ends the assistant's reply, so its last bubble carries the tail.
   var endsReply: Bool
+  /// The person's own message in a group chat: its prose sits in the person's bubbles at the trailing edge, with the
+  /// corners mirrored, in `ownBubbleFill` when it is set.
+  var own = false
+  @Environment(\.ownBubbleFill) private var ownBubbleFill
+  /// The body text's size, which the person's bubble in a group needs room for; see `PersonBubbles.groupLayout`.
+  @ScaledMetric(relativeTo: .body) private var em: CGFloat = 17
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: own ? .trailing : .leading, spacing: 6) {
       ForEach(segments) { segment in
         switch segment.kind {
         case .bubble(let blocks, let settled):
           let corners = ReplyBubbles.corners(at: segment.id, count: segments.count, endsReply: endsReply)
-          ReplyBubble(blocks: blocks, settled: settled, top: corners.top, bottom: corners.bottom)
+          if own {
+            PersonBubble(solid: ownBubbleFill, found: false, top: corners.top, bottom: corners.bottom, layout: PersonBubbles.groupLayout(em: em)) {
+              MarkdownBlocksView(blocks: blocks, settled: settled).markdownLinks().padding(.vertical, 10).padding(.horizontal, 14)
+            }
+          } else {
+            ReplyBubble(blocks: blocks, settled: settled, top: corners.top, bottom: corners.bottom)
+          }
         case .block(let block, let settled):
           MarkdownBlockView(block: block, listDepth: 0).environment(\.markdownSettled, settled)
             .frame(maxWidth: .infinity, alignment: .leading).markdownLinks()
@@ -266,6 +298,10 @@ private struct ReplyBubble: View {
 enum PersonBubbles {
   /// 86% of the column, and no wider than 560 points, as the web's min(86%, 560px).
   static let layout = BubbleWidth(fraction: 0.86, cap: 560, trailing: true)
+  /// The person's bubble in a group, where it holds Markdown: as `layout`, but never under 16 times the body text's
+  /// size `em` while the column allows, as the web's min(100%, max(86%, 16em), 560px). A quote holding nested lists
+  /// indents with the text size, and at an accessibility size on a small phone 86% left its innermost line no room.
+  static func groupLayout(em: CGFloat) -> BubbleWidth { BubbleWidth(fraction: 0.86, cap: 560, trailing: true, minimum: 16 * em) }
   /// The edge drawn around the bubble: with Increase Contrast on, tinted or solid, since a dark solid fill
   /// can sit as close as 1.13:1 to the dark transcript.
   static func border(solid: Bool, increasedContrast: Bool) -> Color? {
@@ -279,32 +315,68 @@ enum PersonBubbles {
 
 /// The person's message bubble, in both chat styles: it hugs its text up to 86% of the column, at most
 /// 560 points, at the trailing edge, with its tail at the bottom trailing corner. `solid` fills it with the assistant's
-/// color and white text.
+/// color and white text. A group message in several pieces passes the trailing corners for each, as a reply's.
 struct PersonBubble<Content: View>: View {
   var solid: Color?
   var found: Bool
+  /// The trailing corners' radii; the leading ones are 18.
+  var top: CGFloat = 18
+  var bottom: CGFloat = 4
+  var layout = PersonBubbles.layout
   @ViewBuilder var content: () -> Content
   @Environment(\.colorScheme) private var scheme
   @Environment(\.colorSchemeContrast) private var contrast
-  static var shape: UnevenRoundedRectangle {
-    UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18, bottomTrailingRadius: 4, topTrailingRadius: 18, style: .continuous)
+  private var shape: UnevenRoundedRectangle {
+    UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18, bottomTrailingRadius: bottom, topTrailingRadius: top, style: .continuous)
   }
   var body: some View {
-    PersonBubbles.layout {
+    layout {
       Group {
         if let solid {
-          content().foregroundStyle(.white, .white).tint(.white).background(solid, in: Self.shape)
+          // Markdown in the bubble draws its quotes, links and boxes for the fill too; see `markdownGround`.
+          content().foregroundStyle(.white, .white).tint(.white).environment(\.markdownGround, .solid).background(solid, in: shape)
         } else {
-          content().foregroundStyle(Color.primary, Palette.bubbleSecondary).background(Palette.user(scheme), in: Self.shape)
+          content().foregroundStyle(Color.primary, Palette.bubbleSecondary).environment(\.markdownGround, .tint)
+            .background(Palette.user(scheme), in: shape)
         }
       }
       .overlay {
         if let border = PersonBubbles.border(solid: solid != nil, increasedContrast: contrast == .increased) {
-          Self.shape.strokeBorder(border)
+          shape.strokeBorder(border)
         }
       }
       // The find outline hugs the bubble.
-      .overlay { if found { Self.shape.stroke(Palette.accent, lineWidth: 2) } }
+      .overlay { if found { shape.stroke(Palette.accent, lineWidth: 2) } }
     }
+  }
+}
+
+/// Group chats in the bubbles style. The web's GroupChats.tsx follows the same rules.
+enum GroupBubbles {
+  /// A group has no one assistant's color, and any member's would read as that member speaking, so the person's solid
+  /// bubbles take the app's green, light `Palette.accent`, which `SolidBubble.fill` keeps as it is.
+  static let solidColor = "#246F59"
+  /// A group message's pieces: the whole text is Markdown, so a card fence stays code, as Classic shows it.
+  static func segments(_ text: String) -> [ReplySegment] {
+    ReplyBubbles.segments([ReplyContentPart(id: 0, markdown: text)], streaming: false)
+  }
+  /// How a group message is laid out in a chat style. Classic keeps the log: flat Markdown, with the person's own row
+  /// in its wash. Bubbles lays every message out as a reply and puts the person's own at the trailing edge.
+  enum Row {
+    case classic(own: Bool)
+    case bubbles(own: Bool, segments: [ReplySegment])
+  }
+  static func row(_ event: GroupEvent, userId: String?, style: ChatStyle) -> Row {
+    let own = isOwn(event, userId: userId)
+    switch style {
+    case .classic: return .classic(own: own)
+    case .bubbles: return .bubbles(own: own, segments: segments(event.payload.text ?? ""))
+    }
+  }
+  /// Whether the signed-in person wrote this message. A routine's post arrives as a person's message from a `cron:`
+  /// actor with no sender, so it is never theirs.
+  static func isOwn(_ event: GroupEvent, userId: String?) -> Bool {
+    guard event.kind == "message.user", let userId else { return false }
+    return (event.sender?.id ?? event.actor?.id) == userId
   }
 }

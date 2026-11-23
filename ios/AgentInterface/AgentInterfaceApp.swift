@@ -17,6 +17,10 @@ import UserNotifications
         )
         .task {
           NotificationController.shared.store = store
+          store.onBootstrapReady = {
+            guard NotificationController.shared.hasPendingNavigation else { return nil }
+            return Task { await NotificationController.shared.openPendingConversation() }
+          }
           LiveActivityController.shared.store = store
           DeviceActivity.shared.store = store
           CrashReporter.shared.api = { [weak store] in store?.api }
@@ -256,9 +260,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     UserDefaults.standard.set(value, forKey: DeviceDefaults.pushDeviceId)
     return value
   }
+  var hasPendingNavigation: Bool {
+    pendingURL != nil || pendingBotId != nil || !pendingReplies.isEmpty
+  }
   /// Brings this device's registration in line with what the person chose and what iOS allows.
   /// It never asks iOS for permission: that happens only after Enable, from the in-app card or Settings.
   func synchronize() async {
+    await openPendingConversation()
     guard !synchronizing else { synchronizeAgain = true; return }
     synchronizing = true
     defer { synchronizing = false }
@@ -310,7 +318,27 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         return
       }
       try await sendRegistration(with: session)
-    } catch { if session.current && !busy { store.deviceNotifications = .failed(error.localizedDescription) } }
+    } catch {
+      if session.current && !busy { store.deviceNotifications = .failed(error.localizedDescription) }
+      retryAfterConflict(error, session)
+    }
+  }
+  /// How long a registration refused because this device belongs to another member waits to ask again.
+  /// That member's session ends within the minute the app gives them to sign in again, or at once when
+  /// the next member's sign-in ends it, so the second ask usually succeeds.
+  var conflictRetryDelay: Duration = .seconds(65)
+  private var conflictRetry: Task<Void, Never>?
+  /// A 409 means another member's live session still holds this device. Nothing else asks again while the
+  /// app stays open, so this does, once that session can have ended, for as long as this account is signed in.
+  private func retryAfterConflict(_ error: Error, _ session: Session) {
+    guard (error as? APIError)?.status == 409, session.current else { return }
+    conflictRetry?.cancel()
+    let delay = conflictRetryDelay
+    conflictRetry = Task { [weak self] in
+      try? await Task.sleep(for: delay)
+      guard !Task.isCancelled, session.current else { return }
+      await self?.synchronize()
+    }
   }
   /// Sends this device's token to the server, or asks iOS for one first.
   private func sendRegistration(with session: Session) async throws {
@@ -350,7 +378,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       NotificationIntent.write(.on, store)
       try await sendRegistration(with: session)
       if session.current { store.deviceNotifications.prompt = false }
-    } catch { if session.current { store.deviceNotifications.enabled = false; store.deviceNotifications.error = error.localizedDescription } }
+    } catch {
+      if session.current { store.deviceNotifications.enabled = false; store.deviceNotifications.error = error.localizedDescription }
+      retryAfterConflict(error, session)
+    }
   }
   /// Turns notifications off for this account on this device and removes the registration from the server.
   func disable() async {

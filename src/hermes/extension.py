@@ -127,7 +127,7 @@ def source_state():
                 receipt["revision"] == actual
                 and receipt["trackedPatchSha256"] == patch_hash
             )
-        except OSError, ValueError, KeyError, TypeError:
+        except (OSError, ValueError, KeyError, TypeError):
             known = False
     if not known:
         raise SystemExit(
@@ -815,7 +815,7 @@ def redaction_state():
             source_module = importlib.import_module("agent.redact_secret_sources")
             with source_module._LOCK:
                 sources = json.dumps(source_module._VALUES_BY_HOME, sort_keys=True)
-    except ImportError, AttributeError:
+    except (ImportError, AttributeError):
         return None
     with vault_lock:
         vault = sorted((str(home), sorted(values)) for home, values in vault.items())
@@ -846,7 +846,7 @@ def parsed_result(result):
     if isinstance(result, str):
         try:
             return json.loads(result)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             pass
     return result
 
@@ -1923,7 +1923,7 @@ class Bridge:
                     else request.get("params")
                 )
                 merge = (id(transport), json.dumps(merged_params, sort_keys=True))
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 merge = None
         try:
             (self.sends if method in QUEUED_SENDS else self.reads).submit(
@@ -2058,7 +2058,7 @@ class Bridge:
             return known[1]
         try:
             parsed = json.loads(content)
-        except json.JSONDecodeError, TypeError:
+        except (json.JSONDecodeError, TypeError):
             parsed = content
         if rows is not None and type(row_id) is int:
             RowCache.keep(rows.tool_results, row_id, (content, parsed))
@@ -2106,7 +2106,7 @@ class Bridge:
                         or "application/octet-stream",
                     }
                 )
-            except OSError, ValueError:
+            except (OSError, ValueError):
                 continue
         return registered
 
@@ -3115,7 +3115,7 @@ class Bridge:
                 if isinstance(detail, dict):
                     try:
                         arguments = json.loads(detail.get("arguments", "{}"))
-                    except ValueError, TypeError:
+                    except (ValueError, TypeError):
                         arguments = None
                 found[record_id] = (
                     json.loads(result),
@@ -3301,7 +3301,7 @@ class Bridge:
             ).get("timestamp")
             try:
                 at = float(stamp or time.time())
-            except TypeError, ValueError, OverflowError:
+            except (TypeError, ValueError, OverflowError):
                 return None
             return at if math.isfinite(at) else None
 
@@ -3365,7 +3365,7 @@ class Bridge:
                 floor = floors.get(tool_id)
                 try:
                     arguments = json.loads(call.get("arguments", "{}"))
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     arguments = None
                 for message in messages:
                     if message.get("role") != "tool":
@@ -3563,7 +3563,7 @@ class Bridge:
         if SessionDB is not None:
             try:
                 arguments = inspect.signature(SessionDB).parameters
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 arguments = {}
             if not {"db_path", "read_only"} <= set(arguments):
                 missing.append("SessionDB(db_path, read_only)")
@@ -3574,7 +3574,7 @@ class Bridge:
                 parameters = inspect.signature(
                     SessionDB.get_messages_as_conversation
                 ).parameters
-            except AttributeError, TypeError, ValueError:
+            except (AttributeError, TypeError, ValueError):
                 parameters = {}
             # Without compacted rows the read is not the history an open projects.
             if not {"include_ancestors", "include_row_ids", "include_compacted"} <= set(
@@ -4521,7 +4521,7 @@ class Bridge:
         server = self.server
         try:
             cursor = int(params.get("cursor") or 0)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return server._err(rid, -32602, "Invalid discovery cursor")
         self.scan_routines(params.get("full") is True)
         with self.journal.lock:

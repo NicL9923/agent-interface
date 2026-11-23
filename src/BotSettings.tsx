@@ -16,6 +16,7 @@ import { useResource } from "./app/use-resource";
 import { CatalogEditor } from "./components/CatalogEditor";
 import { SettingsConfirmation } from "./components/SettingsConfirmation";
 import { FormMessage } from "./components/ui/form-message";
+import { SaveRefusal, type Refusal } from "./app/SaveRefusal";
 import { Icon } from "./components/Icon";
 import { defaultAvatar } from "./components/Avatar";
 import { AvatarEditor } from "./components/AvatarEditor";
@@ -24,7 +25,7 @@ import { LearningPanel, SkillLocks } from "./components/automation/SkillsLearnin
 import { ApprovalSettingsPanel } from "./components/ApprovalSettingsPanel";
 import { VaultPanel } from "./components/VaultPanel";
 import { VoicePicker } from "./components/VoicePicker";
-import type { PreferenceEdit } from "./app/use-preference-edits";
+import type { EditPreferences } from "./app/use-preference-edits";
 import "./app/home.css";
 import {
   BehaviorFields,
@@ -88,6 +89,7 @@ function LoadedBotSettings({
   onDeleted,
   onOpenRoutine,
   editPreferences,
+  saveRefusal,
   loading,
   closer,
 }: {
@@ -103,7 +105,9 @@ function LoadedBotSettings({
   onDeleted?: (botId: string) => void;
   onOpenRoutine?: (botId: string, routineId: string) => void;
   /** Saves this person's preferences, for "Show runs in chat". */
-  editPreferences?: (edit: PreferenceEdit) => Promise<void>;
+  editPreferences?: EditPreferences;
+  /** Why the last preferences save was refused; its change has already left the screen. */
+  saveRefusal?: Refusal | null;
 }) {
   // Creating saves the assistant and then its avatar. Once it exists, this same sheet edits it,
   // so an avatar that failed to save is still here to retry.
@@ -245,7 +249,7 @@ function LoadedBotSettings({
       : "Upload a portrait before saving."
     : bootstrap.capabilities.portraitGeneration?.supported
       ? "Generate a portrait before saving."
-      : "Portraits are unavailable. Choose Geometric or Mascot.";
+      : "Portraits are unavailable. Choose Character.";
   const portraitPromptLimit =
     prompt.length > 2000
       ? `The description is ${(prompt.length - 2000).toLocaleString()} character${prompt.length - 2000 === 1 ? "" : "s"} over the ${(2000).toLocaleString()} limit. Shorten the text to generate a portrait.`
@@ -640,6 +644,7 @@ function LoadedBotSettings({
               </FormMessage>
             )}
             {notice && !portraitNotice && <FormMessage tone="notice">{notice}</FormMessage>}
+            <SaveRefusal refusal={saveRefusal} />
             {confirmDiscard && (
               <div className="capability-note" role="alert">
                 <p>Discard your unsaved changes?</p>

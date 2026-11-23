@@ -153,7 +153,8 @@ struct BotSettingsView: View {
     routinePresentations(NavigationStack(path: $path) {
       editor.navigationDestination(for: SettingsRoute.self) { destination($0) }
     })
-    .task { await loadDetail() }
+    // A sign-in ends a load with its client, so the next one starts over, as for the tabs below.
+    .task(id: store.api.map(ObjectIdentifier.init)) { await loadDetail() }
     .onChange(of: path) { _, _ in
       // A message belongs to the screen that produced it, so it does not follow you to another page.
       if keepMessages { keepMessages = false } else { error = nil; notice = nil }
@@ -646,7 +647,7 @@ struct BotSettingsView: View {
     if store.supports(.uploads) {
       return store.supports(.portraitGeneration) ? "Upload or generate a portrait before saving." : "Upload a portrait before saving."
     }
-    return store.supports(.portraitGeneration) ? "Generate a portrait before saving." : "Portraits are unavailable. Choose Geometric or Mascot."
+    return store.supports(.portraitGeneration) ? "Generate a portrait before saving." : "Portraits are unavailable. Choose Character."
   }
   private var avatarPreview: some View {
     Section {
@@ -658,8 +659,7 @@ struct BotSettingsView: View {
     Group {
       Section {
         Picker("Style", selection: Binding(get: { avatar.mode }, set: { switchAvatarMode($0) })) {
-          Text("Geometric").tag(AvatarMode.geometric)
-          Text("Mascot").tag(AvatarMode.mascot)
+          Text("Character").tag(AvatarMode.geometric)
           if bot != nil { Text("Portrait").tag(AvatarMode.portrait) }
         }.pickerStyle(.segmented).accessibilityIdentifier("avatarStyle")
       } header: { settingsHeader(bot == nil ? "Style" : "Avatar") } footer: {
@@ -692,17 +692,15 @@ struct BotSettingsView: View {
           unavailable(.portraitGeneration)
         } header: { settingsHeader("Generate a portrait") }
       } else {
-        if avatar.mode == .geometric {
+        // A seasonal shape arrives in its own color, and its tile previews it in that color.
+        ForEach(AvatarCatalog.groups, id: \.id) { group in
           Section {
             AvatarTiles(
-              group: "shape", options: AvatarConfig.shapes.map { ($0, $0.rawValue.capitalized) },
+              group: "shape", options: group.shapes.map { ($0, $0.label) },
               selected: avatar.shape ?? .blob,
-              preview: { var a = avatar; a.shape = $0; a.accessory = .plain; return a },
-              select: { avatar.shape = $0 })
-          } header: { settingsHeader("Shape") }
-        } else {
-          Section { characterTiles(AvatarConfig.everydayFamilies) } header: { settingsHeader("Character") }
-          Section { characterTiles(AvatarConfig.seasonalFamilies) } header: { settingsHeader("Seasonal") }
+              preview: { var a = avatar.showingShape($0); a.accessory = .plain; return a },
+              select: { avatar = avatar.selectingShape($0) })
+          } header: { settingsHeader(group.label) }
         }
         Section { colorSwatches } header: { settingsHeader("Color") }
         Section {
@@ -743,13 +741,6 @@ struct BotSettingsView: View {
       Button(progress.label("changes", idle: "Retry saving avatar")) { saveChanges() }
         .disabled(busy || !store.householdReachable || portraitMissing).accessibilityIdentifier("retryAvatar")
     }
-  }
-  private func characterTiles(_ families: [(id: AvatarFamily, label: String)]) -> some View {
-    AvatarTiles(
-      group: "family", options: families.map { ($0.id, $0.label) },
-      selected: avatar.family ?? .sprout,
-      preview: { var a = avatar.selectingFamily($0); a.accessory = .plain; return a },
-      select: { avatar = avatar.selectingFamily($0) })
   }
   private var colorSwatches: some View {
     let custom = !AvatarConfig.colors.contains { $0.lowercased() == (avatar.color ?? "#1084FE").lowercased() }
@@ -805,8 +796,7 @@ struct BotSettingsView: View {
     }
     var next = lastDrawn
     next.mode = mode
-    if mode == .geometric { next.shape = lastDrawn.shape ?? .blob }
-    if mode == .mascot { next.family = lastDrawn.family ?? .bear }
+    next.shape = lastDrawn.shape ?? .blob
     avatar = next
   }
 
@@ -1118,46 +1108,48 @@ struct BotSettingsView: View {
     personalConfirmed = personal
     let retryingCreatedAvatar = avatarFailure != nil
     action(progressKey: "changes") {
-      guard let bot, let api = store.api else { return }
-      var patched = false
-      var refresh = false
-      do {
-        if form != savedForm {
-          let sent = form
-          var value = sent
-          value.confirmModel = confirmed
-          // On a new server, sending the harness starts a fresh session, so it goes only when it changed.
-          if sent.harness == savedForm.harness { value.harness = nil }
-          if personal { value.confirmPrivate = true }
-          if mainCleared { value.confirmMainCleared = true }
-          let _: Bot = try await api.write("/bots/\(APIClient.component(bot.id))", value, method: "PATCH")
-          savedForm = sent
-          patched = true
-          refresh = true
+      guard let bot else { return }
+      try await store.householdSave { save in
+        var patched = false
+        var refresh = false
+        do {
+          if form != savedForm {
+            let sent = form
+            var value = sent
+            value.confirmModel = confirmed
+            // On a new server, sending the harness starts a fresh session, so it goes only when it changed.
+            if sent.harness == savedForm.harness { value.harness = nil }
+            if personal { value.confirmPrivate = true }
+            if mainCleared { value.confirmMainCleared = true }
+            let _: Bot = try await save.api.write("/bots/\(APIClient.component(bot.id))", value, method: "PATCH")
+            savedForm = sent
+            patched = true
+            refresh = true
+          }
+          if avatar != savedAvatar || avatarFailure != nil {
+            let sent = avatar
+            try await putAvatar(bot.id, save.api, sent)
+            savedAvatar = sent
+            avatarFailure = nil
+            refresh = true
+          }
+          for kind in CatalogKind.allCases where capabilityDirty(kind) {
+            let ids = selectedIds(kind)
+            try await save.perform("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT")
+            savedCapabilities[kind] = Set(ids)
+          }
+        } catch {
+          // Sharing may have ended it being main before Hermes refused; the error carries what was saved.
+          store.applySavedPreferences(from: error)
+          if refresh { await store.refreshBootstrap() }
+          throw error
         }
-        if avatar != savedAvatar || avatarFailure != nil {
-          let sent = avatar
-          try await putAvatar(bot.id, api, sent)
-          savedAvatar = sent
-          avatarFailure = nil
-          refresh = true
-        }
-        for kind in CatalogKind.allCases where capabilityDirty(kind) {
-          let ids = selectedIds(kind)
-          try await store.perform("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT", gate: .household)
-          savedCapabilities[kind] = Set(ids)
-        }
-      } catch {
-        // Sharing may have ended it being main before Hermes refused; the error carries what was saved.
-        store.applySavedPreferences(from: error)
         if refresh { await store.refreshBootstrap() }
-        throw error
+        notice = settingsSavedNotice(patched: patched, shared: savedForm.shared)
+        // A retried avatar from creation finishes the job the Create button started, unless
+        // other edits made meanwhile still need saving.
+        if retryingCreatedAvatar && !dirty { closeSheet() }
       }
-      if refresh { await store.refreshBootstrap() }
-      notice = settingsSavedNotice(patched: patched, shared: savedForm.shared)
-      // A retried avatar from creation finishes the job the Create button started, unless
-      // other edits made meanwhile still need saving.
-      if retryingCreatedAvatar && !dirty { closeSheet() }
     }
   }
   /// Creates the assistant, then saves the look chosen on the first step. The server takes the
@@ -1188,9 +1180,7 @@ struct BotSettingsView: View {
     }
   }
   private func putAvatar(_ id: String, _ api: APIClient, _ avatar: AvatarConfig) async throws {
-    var value = avatar
-    if value.mode == .mascot { value.family = value.family ?? .sprout }
-    let _: AvatarConfig = try await api.write("/bots/\(APIClient.component(id))/avatar", value, method: "PUT")
+    let _: AvatarConfig = try await api.write("/bots/\(APIClient.component(id))/avatar", avatar, method: "PUT")
   }
   private func generatePortrait() {
     portraitPromptFocused = false

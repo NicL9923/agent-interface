@@ -25,12 +25,29 @@ processes once held one slot. So `main` closes every inherited descriptor above 
 puts the locks at 3 and 4, and `run_process` refuses to pass on one that is 16 or more. A stopped run (Ctrl-C, SIGTERM or --check-timeout) sends its check SIGINT first, as Ctrl-C would, so Playwright
 can shut down the web server it started in a process group of its own, and kills what is left after ten
 seconds. Nothing here needs a package outside the standard library.
+
+WebKit needs system libraries that some Linux hosts lack (Fedora has no libicu74 or libjpeg-turbo8). Before e2e,
+check-all launches WebKit once, in a process group of its own that is stopped whole when it ends. When WebKit starts, e2e
+runs both browser projects on the host as one check. When it cannot, the e2e check runs in two steps under the
+same slot and ports: Chromium on the host, then WebKit under podman in Playwright's container for the installed
+@playwright/test. It names the image by tag, which CI's Browser smoke job pins by digest. The table shows a row
+for each step. Without podman it refuses to run, so WebKit is never skipped silently. The container's network is
+its own, so two worktrees' containers never share a port. The lock descriptors are never passed to podman, whose
+helpers could outlive the run: check-all holds them while it waits for the container, and on every stop removes
+the container before it lets them go. A removal that fails is reported with the container's name. A check's output
+is read for at most a few seconds after the check exits or is stopped, since a process outside its group, such as
+a container its client left behind, can hold it open; past that the check is stopped as a timeout would stop it,
+its log is closed with what it printed, and the table says the output was cut short.
+check-all killed by SIGKILL frees the locks while the container runs on; podman's --timeout ends that container
+after --check-timeout.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -42,6 +59,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -186,7 +204,7 @@ def wait_for(path, poll=0.2):
 def read_info(path):
     try:
         info = json.loads(path.read_text())
-    except OSError, ValueError:
+    except (OSError, ValueError):
         return None
     return info if isinstance(info, dict) else None
 
@@ -513,6 +531,134 @@ def find_ruff(root, cache, env=None, bootstrap_python=sys.executable, note=None)
 
 
 # ---------------------------------------------------------------------------------------------------------------
+# Where WebKit runs.
+
+# Playwright starts the browser in a process group of its own, which stopping Node's group does not reach, so the
+# probe hands the launch Playwright's own timeout: when it expires, Playwright kills the browser's group itself,
+# even one paused at launch. Node then exits as soon as the answer is written instead of lingering.
+WEBKIT_LAUNCH_TIMEOUT = 45
+WEBKIT_PROBE = f"""
+import {{ webkit }} from "@playwright/test";
+let message = null;
+try {{
+  await (await webkit.launch({{ timeout: {WEBKIT_LAUNCH_TIMEOUT * 1000} }})).close();
+}} catch (error) {{
+  message = String(error?.message ?? error);
+}}
+process.stdout.write(JSON.stringify({{ ok: message === null, message }}) + "\\n", () => process.exit(0));
+"""
+# The probe's own limit, for a Node that hangs outside the launch.
+WEBKIT_PROBE_TIMEOUT = 60
+
+
+def first_sentence(message):
+    """Playwright's launch error without its box drawing and `browserType.launch:` prefix, to its first full stop."""
+    text = " ".join(re.sub(r"[╔╗╚╝║═]", " ", message).split())
+    text = re.sub(r"^browserType\.launch:\s*", "", text)
+    match = re.match(r"(.+?\.)(\s|$)", text)
+    return (match.group(1) if match else text)[:300]
+
+
+# How long a probe that timed out gets to stop the browser it launched after SIGINT before its group is killed.
+WEBKIT_PROBE_GRACE = 5.0
+
+
+def webkit_failure(
+    root, env=None, timeout=WEBKIT_PROBE_TIMEOUT, grace=WEBKIT_PROBE_GRACE
+):
+    """Why WebKit cannot start on this host, or None when it starts. It launches the browser once, as a test would.
+
+    Node runs in a process group of its own, which is stopped once Node is done, every time: SIGINT, so Playwright
+    closes a browser it still has, then SIGKILL after `grace` for anything left in the group. A Node that hangs
+    is stopped the same way at `timeout`. The browser's own group is left to Playwright's launch timeout (see
+    WEBKIT_PROBE); if WebKit hangs past it as well, one idle browser process can be left behind.
+
+    `grace` is waited out only when something in the group ignores SIGINT."""
+    process = subprocess.Popen(
+        ["node", "--input-type=module", "-e", WEBKIT_PROBE],
+        cwd=root,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop_group(process, grace)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.communicate(timeout=1)
+        return f"it did not start within {timeout}s"
+    except BaseException:
+        stop_group(process, grace)
+        raise
+    # A child that closed its output can outlive Node in the group.
+    stop_group(process, grace)
+    try:
+        info = json.loads(stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return f"the launch check failed: {(stderr or stdout).strip()[-300:]}"
+    return None if info.get("ok") else first_sentence(str(info.get("message")))
+
+
+def playwright_image(root):
+    """Playwright's image for the installed @playwright/test. tests/workflows.test.ts reads the same file."""
+    path = root / "node_modules/@playwright/test/package.json"
+    try:
+        version = json.loads(path.read_text())["version"]
+    except (OSError, ValueError, KeyError) as error:
+        raise Refusal(
+            f"Could not read the @playwright/test version from {path} ({error}). Fix: npm ci"
+        ) from error
+    return f"mcr.microsoft.com/playwright:v{version}-noble"
+
+
+def find_podman(env=None):
+    """podman from PATH, or None. Docker is not used: a rootful container outlives a killed run, since docker has no
+    --timeout, and rootless docker maps --user to a subordinate ID that cannot write the checkout."""
+    return shutil.which("podman", path=(os.environ if env is None else env).get("PATH"))
+
+
+def container_command(podman, root, image, name, timeout, argv):
+    """`argv` in `image` with the checkout mounted at its own path, as this user, so the files the suite writes stay
+    this user's. E2E_PORT and NO_COLOR come through from the environment the command runs in. --timeout ends a
+    container that check-all, killed by SIGKILL, could not remove."""
+    return [
+        podman, "run", "--rm", "--init", "--name", name, f"--timeout={int(timeout) + 60}",
+        "--userns=keep-id", "--security-opt", "label=disable", "--ipc=host",
+        "-v", f"{root}:{root}", "-w", str(root),
+        "-e", "HOME=/tmp", "-e", "E2E_PORT", "-e", "NO_COLOR",
+        image, *argv,
+    ]  # fmt: skip
+
+
+REMOVE_TIMEOUT = 30
+
+
+def remove_container(podman, name):
+    """Remove the container, running or not. Returns None once it is gone, including when it already removed itself,
+    or why podman could not remove it."""
+    try:
+        result = subprocess.run(
+            [podman, "rm", "--force", "--ignore", "--time", "5", name],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=REMOVE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return f"podman rm did not finish within {REMOVE_TIMEOUT}s"
+    except OSError as error:
+        return f"podman rm could not run: {error}"
+    if result.returncode:
+        return f"podman rm exited {result.returncode}: {(result.stderr or result.stdout).strip()[-300:]}"
+    return None
+
+
+# ---------------------------------------------------------------------------------------------------------------
 # Whether the Python suite is worth running.
 
 
@@ -702,6 +848,7 @@ class Result:
         note="",
         detail="",
         log=None,
+        check=None,
     ):
         self.name, self.status, self.queued, self.seconds = (
             name,
@@ -710,16 +857,24 @@ class Result:
             seconds,
         )
         self.counts, self.note, self.detail, self.log = counts or {}, note, detail, log
+        # The check a row belongs to, which says how to read its counts. A step's row is named apart from it.
+        self.check = check or name
+        # Something a person must act on that the result itself does not show, such as a container left running.
+        self.warning = None
+        # The output was cut off while another process still held it, so a summary and its counts may be missing.
+        self.cut_short = False
 
 
 # How long a stopped check gets to shut itself down after SIGINT before its group is killed.
 STOP_GRACE = 10.0
+# How long the output of a stopped check is read after the stop, for a pipe that a process outside the group holds.
+OUTPUT_GRACE = 5.0
 
 
 def signal_group(pgid, number):
     try:
         os.killpg(pgid, number)
-    except ProcessLookupError, PermissionError:
+    except (ProcessLookupError, PermissionError):
         pass
 
 
@@ -764,13 +919,18 @@ def stop_group(process, grace=None):
 NODE_KEEPS_BELOW = 16
 
 
-def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start=None):
-    """Run `argv` in its own process group, saving its output. Returns (returncode or None on timeout, output).
+def run_process(
+    argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start=None, on_stop=None
+):
+    """Run `argv` in its own process group, saving its output. Returns (returncode or None on timeout, output, and
+    whether the output was cut short because another process still held the pipe).
 
     The descriptors in `inherit` (the lock files) go to the child, so the locks last as long as it does, even if
     this process is killed. They must be below 16: Node keeps those from its own children, so only the npm wrapper
     holds the locks, where a higher descriptor reaches every process in the suite tree (see the module docstring).
-    `on_start(pid)` runs once the child exists, for a caller that records who now holds the locks."""
+    `on_start(pid)` runs once the child exists, for a caller that records who now holds the locks. `on_stop()` runs
+    after a timeout or an interrupt has stopped the group, for what the group does not contain, such as a container
+    that holds the output open after its client is gone."""
     too_high = [fd for fd in inherit if fd >= NODE_KEEPS_BELOW]
     if too_high:
         raise RuntimeError(
@@ -791,32 +951,72 @@ def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start
         pass_fds=tuple(inherit),
     )
     expired = threading.Event()
+    stops = []
+
+    def stop():
+        stops.append(True)
+        try:
+            stop_group(process)
+        finally:
+            if on_stop:
+                on_stop()
 
     def expire():
         expired.set()
-        stop_group(process)
+        stop()
 
-    timer = threading.Timer(timeout, expire)
-    timer.start()
     chunks = []
-    try:
-        if on_start:
-            on_start(process.pid)
-        with log_path.open("w") as log:
-            for line in process.stdout:
+    log = log_path.open("w")
+    log_lock = threading.Lock()
+
+    def read():
+        for line in process.stdout:
+            with log_lock:
+                if log.closed:
+                    return
                 chunks.append(line)
                 log.write(line)
                 if verbose:
                     sys.stderr.write(line)
+
+    # The output is read on its own thread. A process outside the check's group can hold the pipe open after the
+    # check has exited or been stopped, such as a web server in a session of its own or a container whose client is
+    # gone, so the output is read for at most OUTPUT_GRACE after either. Past that, the check counts as stopped: the
+    # stop a timeout makes runs for what is left, and the locks are freed when this returns.
+    reader = threading.Thread(target=read, daemon=True)
+    timer = threading.Timer(timeout, expire)
+    timer.start()
+    try:
+        if on_start:
+            on_start(process.pid)
+        reader.start()
         process.wait()
+        reader.join(OUTPUT_GRACE)
     except BaseException:
-        stop_group(process)
+        stop()
         raise
     finally:
         timer.cancel()
         timer.join()  # a timeout's stop finishes before the caller releases its locks
-        process.stdout.close()
-    return (None if expired.is_set() else process.returncode), "".join(chunks)
+        if reader.ident is not None and reader.is_alive():
+            if not stops:
+                stop()
+            reader.join(OUTPUT_GRACE)
+        with log_lock:
+            cut_short = reader.is_alive()
+            if cut_short:
+                note = f"\ncheck-all: stopped reading the output {OUTPUT_GRACE:g}s after the check ended; a process outside the check's group still holds it\n"
+                chunks.append(note)
+                log.write(note)
+            # Closed here however the reading ended, so what the check printed is on disk.
+            log.close()
+        if not cut_short:
+            process.stdout.close()
+    return (
+        None if expired.is_set() else process.returncode,
+        "".join(chunks),
+        cut_short,
+    )
 
 
 def tail(output, lines=40):
@@ -845,14 +1045,16 @@ def render_table(results):
     rows = [("check", "result", "queued", "run", "counts")]
     for result in results:
         text = (
-            describe_counts(result.name, result.counts)
+            describe_counts(result.check, result.counts)
             or result.note
             or (
                 "counts unknown"
-                if result.status == "pass" and result.name in COUNTED
+                if result.status == "pass" and result.check in COUNTED
                 else "-"
             )
         )
+        if result.cut_short:
+            text = "output cut short" + (f": {text}" if text != "-" else "")
         rows.append(
             (
                 result.name,
@@ -958,6 +1160,42 @@ def prune_logs(directory, keep, current):
             shutil.rmtree(path, ignore_errors=True)
 
 
+def plan_e2e(root, env, check_timeout, log):
+    """The browser suite's steps: one on the host when WebKit starts here, else Chromium here and WebKit in a
+    container. Refuses when WebKit cannot start and podman is absent, rather than skip it."""
+    failure = webkit_failure(root, env)
+    if failure is None:
+        return [Step("e2e", ["npm", "run", "test:e2e"])]
+    podman = find_podman(env)
+    if not podman:
+        raise Refusal(
+            f"WebKit cannot start on this host: {failure.rstrip('.')}. podman is not on PATH to run it in"
+            " Playwright's container, and check-all does not skip WebKit. Fix: install podman (on Fedora, sudo dnf"
+            " install podman), or give the host what WebKit needs (npx playwright install webkit, and on Debian or"
+            " Ubuntu sudo npx playwright install-deps webkit)."
+        )
+    image = playwright_image(root)
+    container = f"check-all-webkit-{os.getpid()}"
+    log(
+        f"e2e: WebKit cannot start on this host: {failure.rstrip('.')}. Chromium runs here and WebKit in {image} under podman."
+    )
+    return [
+        Step("e2e:chromium", ["npm", "run", "test:e2e", "--", "--project=chromium"]),
+        Step(
+            "e2e:webkit (podman)",
+            container_command(
+                podman,
+                root,
+                image,
+                container,
+                check_timeout,
+                ["npm", "run", "test:e2e", "--", "--project=webkit"],
+            ),
+            container=(podman, container),
+        ),
+    ]
+
+
 def run_battery(root, args, cache, log=None, env=None):
     """Run the checks. Returns (results, warnings). Preconditions are checked before anything runs."""
     log = log or (
@@ -1002,6 +1240,8 @@ def run_battery(root, args, cache, log=None, env=None):
                 f"E2E_PORT={env['E2E_PORT']!r} must be a whole number from 1024 to 65534."
             )
         requested = int(env["E2E_PORT"])
+    # Decided before anything runs, so a host that can run no WebKit is refused up front.
+    e2e_steps = plan_e2e(root, env, args.check_timeout, log) if "e2e" in names else []
     run_py, py_reason = False, ""
     if "py" in names:
         paths = (
@@ -1017,17 +1257,39 @@ def run_battery(root, args, cache, log=None, env=None):
         "lint": ["npm", "run", "lint"],
         "test": ["npm", "test"],
         "build": ["npm", "run", "build"],
-        "e2e": ["npm", "run", "test:e2e"],
         "py": ["npm", "run", "test:py"],
     }
     if ruff:
         commands["ruff"] = [ruff, "check", "."]
+    steps = {name: [Step(name, argv)] for name, argv in commands.items()}
+    steps["e2e"] = e2e_steps
     logs = (
         cache / "logs" / f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}-{root.name}"
     )
     prune_logs(cache / "logs", keep=30, current=logs)
 
     results, failed = [], {}
+
+    def report(result):
+        """Record a step's result and say how it went, as soon as it is known."""
+        results.append(result)
+        log(
+            f"{result.name}: {result.status} in {format_seconds(result.seconds)}"
+            + (
+                f" after {format_seconds(result.queued)} queued"
+                if result.queued >= 0.05
+                else ""
+            )
+        )
+        if result.status != "pass":
+            failed[result.check] = result
+            if result.detail:
+                print(
+                    f"\n--- {result.name}: last lines (full output: {result.log}) ---\n{result.detail}\n",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
     for index, name in enumerate(names, 1):
         if name == "py" and not run_py:
             results.append(Result(name, "skip", note=py_reason))
@@ -1040,10 +1302,10 @@ def run_battery(root, args, cache, log=None, env=None):
                 f"[{index}/{len(names)}] {name}"
                 + (f" ({py_reason})" if name == "py" else "")
             )
-            result = run_one(
+            run_one(
                 root,
                 name,
-                commands[name],
+                steps[name],
                 child_env,
                 logs,
                 cache,
@@ -1051,28 +1313,56 @@ def run_battery(root, args, cache, log=None, env=None):
                 args,
                 requested,
                 log,
+                report,
             )
-            results.append(result)
-            log(
-                f"{name}: {result.status} in {format_seconds(result.seconds)}"
-                + (
-                    f" after {format_seconds(result.queued)} queued"
-                    if result.queued >= 0.05
-                    else ""
-                )
-            )
-            if result.status != "pass":
-                failed[name] = result
-                if result.detail:
-                    print(
-                        f"\n--- {name}: last lines (full output: {result.log}) ---\n{result.detail}\n",
-                        file=sys.stderr,
-                        flush=True,
-                    )
     return results, warnings
 
 
-def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
+@dataclass
+class Step:
+    """One command of a check, with its own row in the table. A step with `container` set, as (runtime, name), runs
+    in that container: it gets no lock descriptors, and check-all removes the container when the step ends."""
+
+    label: str
+    argv: list
+    container: tuple | None = None
+
+
+def step_result(
+    name, step, code, output, cut_short, seconds, log_path, queued, timeout
+):
+    counts = parse_counts(name, output)
+    if code is None:
+        result = Result(
+            step.label,
+            "timeout",
+            queued,
+            seconds,
+            counts,
+            f"killed after {int(timeout)}s",
+            f"killed after {int(timeout)}s\n{tail(output)}",
+            log_path,
+            name,
+        )
+    else:
+        result = Result(
+            step.label,
+            "pass" if code == 0 else "fail",
+            queued,
+            seconds,
+            counts,
+            "",
+            tail(output) if code else "",
+            log_path,
+            name,
+        )
+    result.cut_short = cut_short
+    return result
+
+
+def run_one(root, name, steps, env, logs, cache, slots, args, requested, log, report):
+    """Run a check's steps in order, under one heavy slot and, for e2e, one port lease, and `report(Result)` for
+    each step as it ends. The queue time goes on the first step's row."""
     held = port_lease = None
     queued = 0.0
     try:
@@ -1086,20 +1376,21 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
                     note=lambda message: log(f"{name}: {message}"),
                 )
             except LockTimeout as error:
-                return Result(
-                    name,
-                    "locked",
-                    args.lock_timeout,
-                    0.0,
-                    note="gave up queueing for a heavy slot",
-                    detail=str(error),
+                report(
+                    Result(
+                        name,
+                        "locked",
+                        args.lock_timeout,
+                        0.0,
+                        note="gave up queueing for a heavy slot",
+                        detail=str(error),
+                    )
                 )
+                return
         if name == "e2e":
             port_lease, port = pick_e2e_port(cache / "locks", root, requested)
             env = {**env, "E2E_PORT": str(port)}
             log(f"e2e: app port {port}, control port {port + 1}")
-        started = time.monotonic()
-        log_path = logs / f"{name}.log"
         leases = [lease for lease in (held, port_lease) if lease]
 
         def name_the_child(pid):
@@ -1107,45 +1398,54 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
             for lease in leases:
                 lease.update_info(pid=pid)
 
-        code, output = run_process(
-            argv,
-            root,
-            env,
-            log_path,
-            args.check_timeout,
-            args.verbose,
-            inherit=[fd for lease in leases for fd in lease.fds],
-            on_start=name_the_child,
-        )
-        seconds = time.monotonic() - started
+        for step in steps:
+            if len(steps) > 1:
+                log(f"{step.label}: started")
+            started = time.monotonic()
+            left_running = None
+            log_path = logs / f"{step.label.split(' ')[0].replace(':', '-')}.log"
+            try:
+                code, output, cut_short = run_process(
+                    step.argv,
+                    root,
+                    env,
+                    log_path,
+                    args.check_timeout,
+                    args.verbose,
+                    inherit=()
+                    if step.container
+                    else [fd for lease in leases for fd in lease.fds],
+                    on_start=name_the_child,
+                    on_stop=functools.partial(remove_container, *step.container)
+                    if step.container
+                    else None,
+                )
+            finally:
+                if step.container:
+                    podman, container = step.container
+                    problem = remove_container(podman, container)
+                    if problem:
+                        left_running = f"could not remove the container {container} ({problem}). Remove it with: {podman} rm --force {container}"
+                        log(f"{step.label}: {left_running}")
+            result = step_result(
+                name,
+                step,
+                code,
+                output,
+                cut_short,
+                time.monotonic() - started,
+                log_path,
+                queued if step is steps[0] else 0.0,
+                args.check_timeout,
+            )
+            result.warning = left_running
+            report(result)
     except Refusal as error:
-        return Result(name, "fail", queued, 0.0, note="refused", detail=str(error))
+        report(Result(name, "fail", queued, 0.0, note="refused", detail=str(error)))
     finally:
         for lease in (port_lease, held):
             if lease:
                 lease.release()
-    counts = parse_counts(name, output)
-    if code is None:
-        return Result(
-            name,
-            "timeout",
-            queued,
-            seconds,
-            counts,
-            f"killed after {int(args.check_timeout)}s",
-            f"killed after {int(args.check_timeout)}s\n{tail(output)}",
-            log_path,
-        )
-    return Result(
-        name,
-        "pass" if code == 0 else "fail",
-        queued,
-        seconds,
-        counts,
-        "",
-        tail(output) if code else "",
-        log_path,
-    )
 
 
 class Interrupted(BaseException):
@@ -1156,7 +1456,7 @@ def close_inherited_descriptors():
     """Close every descriptor above 2, so the locks this process opens next get the lowest numbers (3 and 4)."""
     try:
         highest = os.sysconf("SC_OPEN_MAX")
-    except ValueError, OSError:
+    except (ValueError, OSError):
         highest = 4096
     os.closerange(3, max(highest, 4096))
 
@@ -1192,7 +1492,7 @@ def main(argv, root=ROOT, cache=None, close_inherited=True):
         for number, handler in previous.items():
             signal.signal(number, handler)
     print("\n" + render_table(results))
-    for warning in warnings:
+    for warning in warnings + [result.warning for result in results if result.warning]:
         print(f"\nWarning: {warning}")
     bad = [
         result.name

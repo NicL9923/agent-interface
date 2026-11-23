@@ -82,7 +82,17 @@ class ValidationTests(unittest.TestCase):
             self.home / ".agents/tools/mac-heavy-lock.sh",
             """#!/bin/bash
 set -eu
-if [[ "$1" == --check-held ]]; then [[ "${TEST_HELD:-}" == 1 ]]; exit $?; fi
+check=0
+if [[ "$1" == --check-held ]]; then check=1; shift; fi
+# The scope validate-ios.sh declares: its own simulator for a test, the build slot for a build.
+case "${1:-}" in
+  --sim) shift 2 ;;
+  --build) shift ;;
+esac
+if [[ $check == 1 ]]; then
+  [[ $# == 0 ]] || { echo "unexpected --check-held arguments: $*" >&2; exit 99; }
+  [[ "${TEST_HELD:-}" == 1 ]]; exit $?
+fi
 printf 'queued\n' >> "$TEST_ROOT/queue.log"
 if [[ "${TEST_QUEUED_SOURCE_CHANGE:-}" == 1 ]]; then printf %s "${TEST_QUEUED_SOURCE_VALUE:-changed}" > "$TEST_ROOT/ios/Input.swift"; fi
 export TEST_HELD=1
@@ -154,8 +164,16 @@ sys.exit('unexpected xcrun call: '+repr(args))
         path.chmod(0o755)
 
     def run_validation(self, operation="test", options=(), timeout=20, **env):
+        opt_in = ["--allow-full-suite"] if operation == "test" else []
         return subprocess.run(
-            ["bash", str(self.tools / "validate-ios.sh"), "PHONE", operation, *options],
+            [
+                "bash",
+                str(self.tools / "validate-ios.sh"),
+                "PHONE",
+                operation,
+                *opt_in,
+                *options,
+            ],
             check=False,
             cwd=self.root,
             env=dict(self.env, **env),
@@ -430,6 +448,8 @@ sys.exit('unexpected xcrun call: '+repr(args))
             (["-test-iterations", "2"], {}),
             (["OTHER_SWIFT_FLAGS=-I/external"], {}),
             (["-only-testing", "@tests.txt"], {}),
+            (["-only-testing:@tests.txt"], {}),
+            (["-skip-testing:@tests.txt"], {}),
             ([], {"SWIFT_EXEC": "/external/compiler"}),
         ]:
             with self.subTest(options=options, env=env):
@@ -488,7 +508,13 @@ sys.exit('unexpected xcrun call: '+repr(args))
 
     def test_invalid_device_and_missing_option_value_fail_before_native_execution(self):
         p = subprocess.run(
-            ["bash", str(self.tools / "validate-ios.sh"), "UNKNOWN", "test"],
+            [
+                "bash",
+                str(self.tools / "validate-ios.sh"),
+                "UNKNOWN",
+                "test",
+                "--allow-full-suite",
+            ],
             check=False,
             env=self.env,
             capture_output=True,

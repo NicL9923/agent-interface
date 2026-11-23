@@ -95,7 +95,13 @@ export const MessageRail = memo(function MessageRail({
     row.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop;
   const rowOf = (view: HTMLElement, id: string) =>
     view.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
+  // Each turn's height when the positions were measured, so a size report that matches it moved nothing.
+  const heights = useRef(new WeakMap<Element, number>());
   const locate = (view: HTMLElement, width: number) => {
+    // Changes to the column not yet reported came before this measurement, which sees them already.
+    // Their turns still need watching, but they are no reason to measure again.
+    const unreported = columnChanges.current?.takeRecords();
+    if (unreported?.length) settle(view, unreported, null);
     const index = new Map(ids.current.map((id, at) => [id, at]));
     const list: RailPlace[] = [];
     for (const row of view.querySelectorAll<HTMLElement>("[data-message-id]")) {
@@ -103,7 +109,23 @@ export const MessageRail = memo(function MessageRail({
       if (at !== undefined) list.push({ index: at, offset: offsetOf(view, row) });
     }
     places.current = { ids: ids.current, list: list.sort((a, b) => a.offset - b.offset), width };
+    const measured = new WeakMap<Element, number>();
+    for (const turn of view.firstElementChild?.children ?? [])
+      measured.set(turn, turn.getBoundingClientRect().height);
+    heights.current = measured;
     stale.current = false;
+  };
+  /**
+   * Whether a turn's reported size is exactly the one it had when the positions were measured. Any
+   * difference measures again: shifts too small to matter alone add up across turns. The report's border
+   * box and getBoundingClientRect agree for an untransformed turn at a device pixel ratio of 1, as measured in
+   * Chromium and WebKit. Under CSS zoom, or a transform on the turn, they can differ, and then every report
+   * measures again. Today's turns have neither.
+   */
+  const unchanged = ({ target, borderBoxSize }: ResizeObserverEntry) => {
+    const known = heights.current.get(target);
+    // Safari before 15.4 reports no border box.
+    return known !== undefined && borderBoxSize?.[0]?.blockSize === known;
   };
   const lastRow = (view: HTMLElement) => {
     const cached = places.current;
@@ -176,6 +198,33 @@ export const MessageRail = memo(function MessageRail({
     if (!(turn instanceof Element) || !watched.current.delete(turn)) return;
     turnObserver.current?.unobserve(turn);
   };
+  // A turn or run card that joins, leaves or moves above the last sent message moves the messages after it,
+  // and the browser may report only the column's new size, or nothing at all when the height is the same.
+  const columnChanges = useRef<MutationObserver>(undefined);
+  /** Watches the turns that joined the column and drops those that left. True when one sat above `last`. */
+  const settle = (view: HTMLElement, records: MutationRecord[], last: Element | null) => {
+    const column = view.firstElementChild;
+    let shifted = false;
+    for (const { addedNodes, removedNodes, nextSibling } of records) {
+      for (const node of removedNodes) unwatch(node);
+      for (const node of addedNodes)
+        if (node.parentNode === column) {
+          watch(node);
+          if (last && above(node, last)) shifted = true;
+        }
+      // A removed turn sat just before its next sibling. One whose sibling went too may have sat anywhere.
+      if (
+        last &&
+        removedNodes.length &&
+        nextSibling &&
+        (nextSibling.parentNode !== column ||
+          nextSibling.contains(last) ||
+          above(nextSibling, last))
+      )
+        shifted = true;
+    }
+    return shifted;
+  };
   // All at once only when the rail shows or hides, or the observer starts.
   const watchAll = useRef(() => {});
   watchAll.current = () => {
@@ -203,20 +252,17 @@ export const MessageRail = memo(function MessageRail({
     const media = typeof matchMedia === "function" ? matchMedia(HOVER_QUERY) : undefined;
     const changed = () => measure.current();
     media?.addEventListener?.("change", changed);
-    /** A turn that ends above the last sent message: a change to it can move messages above that one and not it. */
-    const above = (node: Node, last: Element) =>
-      !node.contains(last) &&
-      !!(node.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING);
     // The view, the column and each turn in it. A turn that ends above the last sent message makes the
     // positions stale. The last turn, where a reply streams, and the column growing with it, do not:
-    // the render that grew them already checked the last sent message.
+    // the render that grew them already checked the last sent message. Nor does a turn's first report after
+    // it joins, when the measurement that saw it join found it this size.
     const resized = (entries: ResizeObserverEntry[] | undefined) => {
       const last = lastRow(view);
       let check = !entries || !last;
-      for (const { target } of entries ?? []) {
-        if (target === view) check = true;
+      for (const entry of entries ?? []) {
+        if (entry.target === view) check = true;
         // The column and the last turn hold the last sent message, so they pass here.
-        else if (last && above(target, last)) stale.current = true;
+        else if (last && above(entry.target, last) && !unchanged(entry)) stale.current = true;
       }
       measure.current(check);
     };
@@ -226,40 +272,19 @@ export const MessageRail = memo(function MessageRail({
     if (view.firstElementChild) observer?.observe(view.firstElementChild);
     turnObserver.current = observer;
     watchAll.current();
-    // A turn or run card that joins, leaves or moves above the last sent message moves the messages after it,
-    // and the browser may report only the column's new size, or nothing at all when the height is the same.
     const joined =
       typeof MutationObserver === "undefined"
         ? undefined
         : new MutationObserver((records) => {
             if (!shownNow.current) return;
-            const column = view.firstElementChild;
             const last = lastRow(view);
-            let shifted = false;
-            for (const { addedNodes, removedNodes, nextSibling } of records) {
-              for (const node of removedNodes) unwatch(node);
-              for (const node of addedNodes)
-                if (node.parentNode === column) {
-                  watch(node);
-                  if (last && above(node, last)) shifted = true;
-                }
-              // A removed turn sat just before its next sibling. One whose sibling went too may have sat anywhere.
-              if (
-                last &&
-                removedNodes.length &&
-                nextSibling &&
-                (nextSibling.parentNode !== column ||
-                  nextSibling.contains(last) ||
-                  above(nextSibling, last))
-              )
-                shifted = true;
-            }
             // With no last sent message on the page, the positions are of messages that left.
-            if (!last || shifted) {
+            if (settle(view, records, last) || !last) {
               stale.current = true;
               measure.current();
             }
           });
+    columnChanges.current = joined;
     if (view.firstElementChild) joined?.observe(view.firstElementChild, { childList: true });
     return () => {
       cancelAnimationFrame(frame);
@@ -267,6 +292,7 @@ export const MessageRail = memo(function MessageRail({
       media?.removeEventListener?.("change", changed);
       observer?.disconnect();
       joined?.disconnect();
+      columnChanges.current = undefined;
       turnObserver.current = undefined;
       watched.current.clear();
     };
@@ -413,6 +439,10 @@ export const MessageRail = memo(function MessageRail({
     </nav>
   );
 });
+
+/** A turn that ends above the last sent message: a change to it can move messages above that one and not it. */
+const above = (node: Node, last: Element) =>
+  !node.contains(last) && !!(node.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING);
 
 /** Keyboard focus shows the preview; a click's focus does not, so a jump leaves nothing over the text. */
 function focusVisible(element: Element) {

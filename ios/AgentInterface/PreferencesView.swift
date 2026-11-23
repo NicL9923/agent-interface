@@ -315,27 +315,54 @@ struct PreferencesView: View {
     @State private var reduced = false
     @State private var matrixWidth: CGFloat = 353
     @ScaledMetric(relativeTo: .caption2) private var specimenLabel: CGFloat = 9
-    /// The web specimen's state matrix across every activity state.
-    private let matrix: [(String, AvatarConfig)] = [
-      ("Blob", AvatarConfig()),
-      ("Triangle", AvatarConfig(shape: .triangle, color: "#FF309B", eyes: .visor)),
-      ("Drop", AvatarConfig(shape: .drop, color: "#97683D", accessory: .hat)),
-      ("Hex", AvatarConfig(shape: .hex, color: "#9159FE", accessory: .glasses)),
-      ("Bear", AvatarConfig(mode: .mascot, shape: nil, family: .bear, color: "#FF9800", eyes: .round)),
-      ("Fox", AvatarConfig(mode: .mascot, shape: nil, family: .fox, color: "#FF6700")),
-      ("Sprout", AvatarConfig(mode: .mascot, shape: nil, family: .sprout, color: "#00BCA6", accessory: .hat)),
-      ("Portrait", AvatarConfig(mode: .portrait, shape: nil, origin: "uploaded")),
-    ] + AvatarConfig.families.filter { AvatarConfig.characterFamilies.contains($0.id) }.map {
-      ($0.label, AvatarConfig(mode: .mascot, shape: nil, eyes: .round).selectingFamily($0.id))
+    /// The color each object and creature is shown in, as on the web specimen. In the app a shape
+    /// takes the color already chosen, and a seasonal one its own.
+    private static let showcase: [AvatarShape: String] = {
+      let shown: [AvatarShape: String] = [
+        .cloud: "#00BCA6", .star: "#FF6700", .egg: "#F4F4F4", .shield: "#1084FE", .chat: "#9159FE",
+        .lightbulb: "#FF9800", .mug: "#F4F4F4", .book: "#97683D", .camera: "#7A7A7A",
+        .magnifier: "#1084FE", .controller: "#FF6700", .barbell: "#FF263C", .brain: "#FF309B",
+        .rocket: "#7A7A7A", .palette: "#97683D", .paintBrush: "#1FBF68", .wateringCan: "#00BCA6",
+        .sprout: "#1FBF68", .cactus: "#1FBF68", .witchHat: "#9159FE", .ghost: "#F4F4F4",
+        .cat: "#FF9800", .bunny: "#FF309B", .bull: "#FF263C", .bear: "#97683D", .fox: "#FF6700",
+        .owl: "#9159FE", .dino: "#1FBF68", .tars: "#7A7A7A", .rocky: "#97683D",
+      ]
+      return shown.merging(AvatarCatalog.seasonalColors) { $1 }
+    }()
+    static func shown(_ shape: AvatarShape) -> AvatarConfig {
+      let index = AvatarConfig.shapes.firstIndex(of: shape) ?? 0
+      return AvatarConfig(shape: shape, color: showcase[shape] ?? AvatarConfig.colors[index % AvatarConfig.colors.count])
     }
+    /// The web specimen's state matrix across every activity state.
+    private let matrix: [(String, AvatarConfig)] = {
+      func with(_ shape: AvatarShape, _ change: (inout AvatarConfig) -> Void = { _ in }) -> AvatarConfig {
+        var avatar = AvatarSpecimenView.shown(shape)
+        change(&avatar)
+        return avatar
+      }
+      return [
+        ("Blob", AvatarConfig()),
+        ("Triangle", AvatarConfig(shape: .triangle, color: "#FF309B", eyes: .visor)),
+        ("Drop", AvatarConfig(shape: .drop, color: "#97683D", accessory: .hat)),
+        ("Hex", AvatarConfig(shape: .hex, color: "#9159FE", accessory: .glasses)),
+        ("Sprout", with(.sprout)),
+        ("Mug", with(.mug) { $0.eyes = .round }),
+        ("Ghost", with(.ghost)),
+        ("Cactus", with(.cactus) { $0.accessory = .hat }),
+        ("Dino", with(.dino)),
+        ("TARS", with(.tars)),
+        ("Rocky", with(.rocky) { $0.accessory = .glasses }),
+        ("Pumpkin", with(.pumpkin)),
+        ("Portrait", AvatarConfig(mode: .portrait, shape: nil, origin: "uploaded")),
+      ]
+    }()
     var body: some View {
       ScrollView {
         // Lazy, so offscreen specimens stop their animation timelines.
         LazyVStack(spacing: 24) {
           Picker("Mode", selection: $avatar.mode) {
-            Text("Geometric").tag("geometric")
-            Text("Mascot").tag("mascot")
-            Text("Portrait").tag("portrait")
+            Text("Character").tag(AvatarMode.geometric)
+            Text("Portrait").tag(AvatarMode.portrait)
           }.pickerStyle(.segmented)
           Toggle("Reduced motion", isOn: $reduced)
           LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 24) {
@@ -370,12 +397,23 @@ struct PreferencesView: View {
             }.frame(maxWidth: .infinity)
           }.onGeometryChange(for: CGFloat.self) { $0.size.width } action: { matrixWidth = $0 }
             .accessibilityElement(children: .contain).accessibilityIdentifier("avatarMatrix")
-          ForEach(AvatarConfig.shapes, id: \.self) { shape in
-            HStack {
-              AvatarView(avatar: AvatarConfig(shape: shape), size: 64)
-              Text(shape.rawValue.capitalized)
-              Spacer()
-            }
+          // The picker's four groups, each shape in its showcase color. Tapping one previews it above.
+          ForEach(AvatarCatalog.groups, id: \.id) { group in
+            VStack(alignment: .leading, spacing: 12) {
+              Text(group.label).font(.headline)
+              LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 8)], spacing: 12) {
+                ForEach(group.shapes, id: \.self) { shape in
+                  Button {
+                    avatar = Self.shown(shape)
+                  } label: {
+                    VStack(spacing: 4) {
+                      AvatarView(avatar: Self.shown(shape), size: 56, name: shape.label, forceReducedMotion: reduced)
+                      Text(shape.label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                  }.buttonStyle(.plain).accessibilityIdentifier("specimenShape.\(shape.rawValue)")
+                }
+              }
+            }.accessibilityElement(children: .contain).accessibilityIdentifier("specimenGroup.\(group.id)")
           }
         }.padding(20)
       }.navigationTitle("Avatar specimen")

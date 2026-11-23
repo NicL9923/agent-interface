@@ -38,7 +38,17 @@ const prose = Array.from({ length: 60 }, (_, index) =>
 const code =
   "```ts\n" +
   Array.from({ length: 900 }, (_, index) => `const line${index} = feed(${index});`).join("\n");
-const replies = { prose: prose.slice(0, 20_000), "one open code block": code.slice(0, 20_000) };
+// A table still arriving at the end of the reply, the last block the table hold-back reads: about 3,600
+// characters of rows by the end, under the hold-back's 4,000-character limit.
+const table =
+  prose.slice(0, 16_400) +
+  "\n\n| Day | Chore | Who |\n| --- | --- | --- |\n" +
+  Array.from({ length: 200 }, (_, index) => `| Day ${index} | Feed the horses | Sam |`).join("\n");
+const replies = {
+  prose: prose.slice(0, 20_000),
+  "one open code block": code.slice(0, 20_000),
+  "a table at the end": table.slice(0, 20_000),
+};
 
 afterEach(() => {
   vi.useRealTimers();

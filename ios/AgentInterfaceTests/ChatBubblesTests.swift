@@ -180,6 +180,20 @@ final class ChatBubblesTests: XCTestCase {
       XCTAssertLessThanOrEqual(max(abs(r - er), abs(g - eg), abs(b - eb)), 1, "\(color) became \(fill), expected \(expected)")
     }
   }
+  /// The web's solidFill reads the same cases (tests/solid-bubble.test.ts), so both clients fill a person's bubble
+  /// with one color. This algorithm is the reference: a case that fails here is reported, not edited to pass.
+  func testSolidFillMatchesTheSharedVectors() throws {
+    struct Case: Decodable { var name: String; var color: String; var fill: String? }
+    struct Vectors: Decodable { var cases: [Case] }
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Vectors/solid-bubble.json")
+    let cases = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: url)).cases
+    XCTAssertFalse(cases.isEmpty)
+    for vector in cases {
+      XCTAssertEqual(SolidBubble.fill(vector.color), vector.fill, "\(vector.name): \(vector.color)")
+    }
+    let covered = Set(cases.map(\.color))
+    XCTAssertEqual(AvatarConfig.colors.filter { !covered.contains($0) }, [], "Every avatar color has a vector")
+  }
   func testOnlyADrawnAvatarTintsTheBubble() {
     XCTAssertEqual(SolidBubble.tint(AvatarConfig(color: "#FF6700")), "#FF6700")
     XCTAssertNil(SolidBubble.tint(AvatarConfig(mode: .portrait, color: "#FF6700", src: "/api/files/me")), "A portrait keeps the tint")
@@ -191,46 +205,29 @@ final class ChatBubblesTests: XCTestCase {
   // MARK: Contrast
 
   private static let avatarColors = AvatarConfig.colors + ["#1084FE", "#FF6700", "#00BCA6", "#FF263C", "#FF309B", "#9159FE", "#FF9800", "#97683D", "#292929"]
-  /// A color as one appearance draws it, with its alpha.
-  private static func resolved(_ color: Color, dark: Bool) -> (r: Double, g: Double, b: Double, a: Double) {
-    let ui = UIColor(color).resolvedColor(with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light))
-    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-    ui.getRed(&r, green: &g, blue: &b, alpha: &a)
-    return (Double(r), Double(g), Double(b), Double(a))
-  }
-  /// `top` at `opacity` (times its own alpha) over an opaque `bottom`, as 0...1 channels.
-  private static func over(_ top: (r: Double, g: Double, b: Double, a: Double), _ bottom: (r: Double, g: Double, b: Double, a: Double),
-    opacity: Double = 1) -> (r: Double, g: Double, b: Double, a: Double) {
-    let a = top.a * opacity
-    return (top.r * a + bottom.r * (1 - a), top.g * a + bottom.g * (1 - a), top.b * a + bottom.b * (1 - a), 1)
-  }
-  private static func luminance(_ c: (r: Double, g: Double, b: Double, a: Double)) -> Double {
-    func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
-    return 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
-  }
-  private static func ratio(_ x: (r: Double, g: Double, b: Double, a: Double), _ y: (r: Double, g: Double, b: Double, a: Double)) -> Double {
-    let (l1, l2) = (luminance(x), luminance(y))
-    return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
-  }
-
   /// Every text color that can sit in a reply bubble or the person's tinted bubble reads at 4.5:1 on its fill
   /// in both appearances; a task's empty box, a graphic, at 3:1. A palette change that lowers one fails here.
-  func testTextInsideABubbleKeepsItsContrastInBothAppearances() {
-    let light = Self.resolved(Palette.replyBubble, dark: false), dark = Self.resolved(Palette.replyBubble, dark: true)
+  @MainActor func testTextInsideABubbleKeepsItsContrastInBothAppearances() {
+    let light = Contrast.resolved(Palette.replyBubble, dark: false), dark = Contrast.resolved(Palette.replyBubble, dark: true)
     XCTAssertGreaterThan(abs(light.r - dark.r), 0.5, "The reply fill resolves per appearance")
     for isDark in [false, true] {
       let scheme: ColorScheme = isDark ? .dark : .light
-      let reply = Self.resolved(Palette.replyBubble, dark: isDark), person = Self.resolved(Palette.user(scheme), dark: isDark)
-      let pairs: [(String, Color, (r: Double, g: Double, b: Double, a: Double), Double)] = [
+      let reply = Contrast.resolved(Palette.replyBubble, dark: isDark), person = Contrast.resolved(Palette.user(scheme), dark: isDark)
+      let pairs: [(String, Color, Contrast.RGBA, Double)] = [
         ("reply text, headings, inline code and list numbers", Color(uiColor: .label), reply, 4.5),
         ("a link in a reply", Palette.accent, reply, 4.5),
         ("a block quote", Palette.quote, reply, 4.5),
         ("a task's empty box", Palette.bubbleSecondary, reply, 3),
         ("the person's text and a file's name", Color(uiColor: .label), person, 4.5),
         ("a file's size under the person's message", Palette.bubbleSecondary, person, 4.5),
+        // A group message in the person's bubble is Markdown.
+        ("a link in the person's group message", Palette.accent, person, 4.5),
+        ("a quote in the person's group message", Palette.quote, person, 4.5),
+        ("a quote's bar in the person's group message", MarkdownBlockView.quoteBar(on: .tint), person, 3),
+        ("a checked box in the person's group message", Palette.accent, person, 3),
       ]
       for (name, text, fill, minimum) in pairs {
-        let value = Self.ratio(Self.over(Self.resolved(text, dark: isDark), fill), fill)
+        let value = Contrast.ratio(Contrast.over(Contrast.resolved(text, dark: isDark), fill), fill)
         XCTAssertGreaterThanOrEqual(value, minimum, "\(name) in \(isDark ? "dark" : "light"): \(String(format: "%.2f", value)):1")
       }
     }
@@ -239,13 +236,13 @@ final class ChatBubblesTests: XCTestCase {
   func testIncreasedContrastGivesEveryPersonsBubbleAVisibleEdge() throws {
     for isDark in [false, true] {
       let scheme: ColorScheme = isDark ? .dark : .light
-      let surface = Self.resolved(Palette.surface(scheme), dark: isDark)
+      let surface = Contrast.resolved(Palette.surface(scheme), dark: isDark)
       let tinted = PersonBubbles.border(solid: false, increasedContrast: true) ?? Palette.user(scheme)
-      XCTAssertGreaterThanOrEqual(Self.ratio(Self.resolved(tinted, dark: isDark), surface), 3, "Tinted in \(scheme)")
+      XCTAssertGreaterThanOrEqual(Contrast.ratio(Contrast.resolved(tinted, dark: isDark), surface), 3, "Tinted in \(scheme)")
       for color in Self.avatarColors {
         let fill = try XCTUnwrap(SolidBubble.fill(color))
         let edge = PersonBubbles.border(solid: true, increasedContrast: true) ?? Color(hex: fill)
-        let value = Self.ratio(Self.resolved(edge, dark: isDark), surface)
+        let value = Contrast.ratio(Contrast.resolved(edge, dark: isDark), surface)
         XCTAssertGreaterThanOrEqual(value, 3, "\(color) as \(fill) in \(scheme): \(String(format: "%.2f", value)):1")
       }
     }
@@ -254,12 +251,12 @@ final class ChatBubblesTests: XCTestCase {
   func testASolidBubbleOnItsWayKeepsItsTextReadable() throws {
     let opacity = PersonBubbles.sendingOpacity(solid: true)
     for isDark in [false, true] {
-      let surface = Self.resolved(Palette.surface(isDark ? .dark : .light), dark: isDark)
+      let surface = Contrast.resolved(Palette.surface(isDark ? .dark : .light), dark: isDark)
       for color in Self.avatarColors {
         let fill = try XCTUnwrap(SolidBubble.fill(color))
-        let background = Self.over(Self.resolved(Color(hex: fill), dark: isDark), surface, opacity: opacity)
-        let text = Self.over(Self.over(Self.resolved(.white, dark: isDark), Self.resolved(Color(hex: fill), dark: isDark)), surface, opacity: opacity)
-        let value = Self.ratio(text, background)
+        let background = Contrast.over(Contrast.resolved(Color(hex: fill), dark: isDark), surface, opacity: opacity)
+        let text = Contrast.over(Contrast.over(Contrast.resolved(Color.white, dark: isDark), Contrast.resolved(Color(hex: fill), dark: isDark)), surface, opacity: opacity)
+        let value = Contrast.ratio(text, background)
         XCTAssertGreaterThanOrEqual(value, 4.5, "\(color) as \(fill) in \(isDark ? "dark" : "light"): \(String(format: "%.2f", value)):1")
       }
     }
@@ -268,6 +265,117 @@ final class ChatBubblesTests: XCTestCase {
   func testThePersonsBubbleStopsAt560Points() {
     XCTAssertEqual(PersonBubbles.layout.width(for: 390), 335.4, accuracy: 0.01, "A phone column")
     XCTAssertEqual(PersonBubbles.layout.width(for: 900), 560, "An iPad column")
+  }
+
+  // MARK: Group chats
+
+  private func groupEvent(_ id: String, _ kind: String, _ text: String, who: String) throws -> GroupEvent {
+    let json = #"{"event_id":"\#(id)","seq":1,"kind":"\#(kind)","created_at":1,"payload":{"text":\#(String(decoding: try JSONEncoder().encode(text), as: UTF8.self))},\#(who)}"#
+    return try JSONDecoder().decode(GroupEvent.self, from: Data(json.utf8))
+  }
+  private func kinds(_ segments: [ReplySegment]) -> [String] {
+    segments.map { segment -> String in
+      switch segment.kind {
+      case .bubble(let blocks, _): return "bubble(\(blocks.count))"
+      case .block(.code, _): return "code"
+      case .block(.table, _): return "table"
+      case .block: return "block"
+      case .inline: return "inline"
+      case .cards: return "cards"
+      }
+    }
+  }
+  /// Classic keeps every group message flat. Bubbles lays out everyone's message as a reply, the person's included:
+  /// prose in bubbles, a table at the column's width. Only the person's own sit at the trailing edge.
+  func testGroupRowsFollowTheChatStyle() throws {
+    let me = #""sender":{"id":"me","name":"Local test member"}"#
+    let mixed = "Here is the plan:\n\n| Dish | Who |\n| --- | --- |\n| Brisket | Kitchen |\n\nI'll post a reminder."
+    let rows = [
+      (try groupEvent("own", "message.user", mixed, who: me), true),
+      (try groupEvent("member", "message.user", mixed, who: #""sender":{"id":"two","name":"Second test member"}"#), false),
+      (try groupEvent("bot", "message.member", mixed, who: #""actor":{"kind":"member","id":"kitchen"}"#), false),
+      (try groupEvent("routine", "message.user", mixed, who: #""actor":{"kind":"user","id":"cron:job","display_name":"[bot:ranch] Morning brief"}"#), false),
+      // A message a native Hermes client wrote names its author only as the actor.
+      (try groupEvent("native", "message.user", mixed, who: #""actor":{"kind":"user","id":"me"}"#), true),
+    ]
+    for (event, own) in rows {
+      guard case .classic(let classicOwn) = GroupBubbles.row(event, userId: "me", style: .classic) else { return XCTFail("\(event.id) in Classic") }
+      XCTAssertEqual(classicOwn, own, "\(event.id): Classic washes only the person's own row")
+      guard case .bubbles(let bubbleOwn, let segments) = GroupBubbles.row(event, userId: "me", style: .bubbles) else { return XCTFail("\(event.id) in Bubbles") }
+      XCTAssertEqual(bubbleOwn, own, "\(event.id): only the person's own sit at the trailing edge")
+      XCTAssertEqual(kinds(segments), ["bubble(1)", "table", "bubble(1)"], event.id)
+    }
+    let signedOut = try groupEvent("own", "message.user", "Hi", who: me)
+    guard case .bubbles(let own, _) = GroupBubbles.row(signedOut, userId: nil, style: .bubbles) else { return XCTFail("Bubbles") }
+    XCTAssertFalse(own, "Before the account loads no message is the person's")
+  }
+  /// A group message's Markdown groups as a reply's does: a quote holding nested lists is prose, and a card fence stays
+  /// code, as Classic shows it, since a group message is never parsed for cards.
+  func testGroupMessagesGroupTheirMarkdownAsAReplyDoes() {
+    XCTAssertEqual(kinds(GroupBubbles.segments("> - Gates\n>   - North\n>     - Width is fine.\n\nThen the trailer fits through.")), ["bubble(2)"])
+    XCTAssertEqual(kinds(GroupBubbles.segments("First\n\n```wildbots-cards\n{\"version\":1,\"cards\":[]}\n```\n\nLast")), ["bubble(1)", "code", "bubble(1)"])
+    XCTAssertEqual(kinds(GroupBubbles.segments("")), [])
+  }
+  /// The person's solid bubbles in a group take the app's green, which keeps white text, white links and inline code,
+  /// a white quote and its bar, and a checked box readable; Increase Contrast gives it an edge against the transcript.
+  @MainActor func testAGroupsSolidBubbleKeepsEverythingInItReadable() throws {
+    let fill = try XCTUnwrap(SolidBubble.fill(GroupBubbles.solidColor))
+    XCTAssertEqual(fill, GroupBubbles.solidColor, "The green is dark enough already, so the fill keeps it")
+    for isDark in [false, true] {
+      let green = Contrast.resolved(Color(hex: fill), dark: isDark), white = Contrast.resolved(Color.white, dark: isDark)
+      XCTAssertGreaterThanOrEqual(Contrast.ratio(white, green), 4.5, "Text, links, inline code, quotes and checked boxes are white")
+      let bar = Contrast.over(Contrast.resolved(MarkdownBlockView.quoteBar(on: .solid), dark: isDark), green)
+      XCTAssertGreaterThanOrEqual(Contrast.ratio(bar, green), 3, "A quote's bar")
+      let surface = Contrast.resolved(Palette.surface(isDark ? .dark : .light), dark: isDark)
+      let edge = try XCTUnwrap(PersonBubbles.border(solid: true, increasedContrast: true))
+      XCTAssertGreaterThanOrEqual(Contrast.ratio(Contrast.resolved(edge, dark: isDark), surface), 3, "Increase Contrast's edge")
+    }
+  }
+  /// What the solid bubble draws a task's box in, both states, resolved as the screen does. The empty box was the
+  /// system's secondary gray, which a capture showed all but gone on the green in light.
+  @MainActor func testBothTaskBoxesShowOnTheGroupsSolidFill() {
+    for isDark in [false, true] {
+      let green = Contrast.resolved(Color(hex: GroupBubbles.solidColor), dark: isDark)
+      for done in [false, true] {
+        let box = Contrast.over(Contrast.resolved(MarkdownListView.boxColor(done: done, onSolid: true), dark: isDark), green)
+        XCTAssertGreaterThanOrEqual(Contrast.ratio(box, green), 3, "\(done ? "Checked" : "Empty") in \(isDark ? "dark" : "light")")
+      }
+    }
+  }
+  /// On a solid fill a link is as white as the words around it, so it is underlined, and nothing else is.
+  @MainActor func testALinkOnASolidFillIsUnderlined() {
+    let ink = MarkdownBlockView.solidInk(Markdown.attributed("See [the plan](https://example.com/plan) and `gate 4`."))
+    XCTAssertEqual(ink.runs.filter { $0.underlineStyle != nil }.map { String(ink[$0.range].characters) }, ["the plan"])
+  }
+  /// In a group the person's bubble holds Markdown, so on a narrow row at a large text size it takes the whole row,
+  /// as the web's min(100%, max(86%, 16em), 560px), and otherwise follows the 86% and 560-point rules.
+  func testThePersonsGroupBubbleUsesTheRowWhenTheTextIsLarge() {
+    XCTAssertEqual(PersonBubbles.groupLayout(em: 17).width(for: 319), 274.34, accuracy: 0.01, "A small phone at the default size")
+    XCTAssertEqual(PersonBubbles.groupLayout(em: 28).width(for: 319), 319, "A small phone at an accessibility size")
+    XCTAssertEqual(PersonBubbles.groupLayout(em: 53).width(for: 900), 560, "The cap still holds")
+    XCTAssertEqual(PersonBubbles.groupLayout(em: 17.5).width(for: 300), 280, accuracy: 0.01, "16em wins over 86% while the row has room")
+  }
+
+  /// Records every size its parent proposes to it.
+  private struct ProposalProbe: Layout {
+    final class Log: @unchecked Sendable { var heights: [CGFloat?] = [] }
+    let log: Log
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+      log.heights.append(proposal.height)
+      return CGSize(width: 100, height: 40)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) { log.heights.append(proposal.height) }
+  }
+  /// A bubble's height follows its content. A list row offers a height, and passing it on held a nested list item in
+  /// the person's group bubble to one truncated line at the largest text sizes.
+  @MainActor func testABubbleNeverOffersItsContentTheRowsHeight() {
+    let log = ProposalProbe.Log()
+    let bubble = PersonBubbles.groupLayout(em: 44), probe = ProposalProbe(log: log)
+    let renderer = ImageRenderer(content: bubble { probe { Color.clear } }.frame(width: 320, height: 90))
+    renderer.proposedSize = ProposedViewSize(width: 320, height: 90)
+    _ = renderer.uiImage
+    XCTAssertFalse(log.heights.isEmpty, "The bubble laid out its content")
+    XCTAssertEqual(log.heights.compactMap { $0 }, [], "Every offer leaves the height open: \(log.heights)")
   }
 
   private static func hex(hue: Double) -> String {

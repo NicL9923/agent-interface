@@ -92,7 +92,7 @@ def scan_ticket(mailbox, path):
     """
     try:
         record = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-    except OSError, ValueError:
+    except (OSError, ValueError):
         record = None
     if (
         isinstance(record, dict)
@@ -146,7 +146,7 @@ def ensure_helpers(mailbox):
             counter = Path(root) / _SEQUENCE_FILE
             try:
                 persisted = int(counter.read_text(encoding="utf-8-sig"))
-            except OSError, ValueError:
+            except (OSError, ValueError):
                 persisted = 0
             scanned = max(
                 (

@@ -61,6 +61,8 @@ import { OPEN_CHAT_EVENT } from "./components/AgentExchange";
 import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
+import type { EditPreferences } from "./app/use-preference-edits";
+import type { Refusal } from "./app/SaveRefusal";
 import { useShortcuts } from "./app/shortcuts";
 import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph";
 import { tintProps } from "./app/bot-tint";
@@ -231,7 +233,12 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       onFirstBootstrap: (next) => {
         if (!chosenEarly.current && startsOnToday(next.preferences)) setView("today");
       },
-      onError: setError,
+      // A refused or lost preferences save has already left the screen; say so wherever the person is,
+      // in place of any "done" notice it would contradict.
+      onPreferencesRefused: (message) => {
+        setSaveRefusal({ message, id: ++refusalCount.current });
+        toast.show(message);
+      },
       onBotGone: gone,
       savedRoster: (user) => (saved?.user === user ? savedHome(saved).bots : undefined),
     },
@@ -240,6 +247,15 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
   const toast = useToast(session.auth ? undefined : userId);
+  /** Why the last preferences save was refused, for the open sheet; a new edit or closing it clears it. */
+  const [saveRefusal, setSaveRefusal] = useState<Refusal | null>(null);
+  const refusalCount = useRef(0);
+  const editPreferences: EditPreferences = useStableCallback(
+    (...[edit, chosen]: Parameters<EditPreferences>) => {
+      setSaveRefusal(null);
+      return session.editPreferences(edit, chosen);
+    },
+  );
   const syncUrl = useUrlSync(view, panel, botId, userId, roomId);
   // Home lists the household's group chats beside its assistants. The catalog carries each room's
   // newest message, so one read serves every row; no room's log is read from here. The household
@@ -473,12 +489,14 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // At most one message is on its way; accepted ones read as ordinary messages.
   const outgoing = echoes.find((echo) => echo.status !== "accepted") ?? null;
   const theme = boot?.preferences.theme || "system";
+  // The next launch paints the theme the server confirmed, not one still on its way.
+  const confirmedTheme = session.confirmedPreferences?.theme || "system";
   useEffect(() => {
     // Until bootstrap answers, the theme public/boot.js applied from this device stays. Signed out, the system's.
     if (!userId && !session.auth) return;
     document.documentElement.dataset.theme = userId ? theme : "system";
-    if (userId) rememberTheme(userId, theme);
-  }, [theme, userId, session.auth]);
+    if (userId) rememberTheme(userId, confirmedTheme);
+  }, [theme, confirmedTheme, userId, session.auth]);
   // The connecting and sign-in screens that follow this account show the theme a signed-out page has.
   useEffect(
     () => () => {
@@ -575,9 +593,12 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   );
   // Home menu changes can be taken back for a few seconds, by the toast's Undo or Cmd+Z. The
   // toast belongs to whoever made the change; useToast drops it for anyone else.
+  // The change shows at once, so the toast says it at once; a refusal replaces the toast with its reason.
   const undoable = (change: UndoableEdit) => {
-    void session.editPreferences(change.apply);
-    toast.show(change.message, () => void session.editPreferences(change.undo));
+    toast.show(change.message, () => void editPreferences(change.undo, change.fields));
+    void editPreferences(change.apply, change.fields).then((result) => {
+      if (result === "unchanged" && change.unchanged) toast.show(change.unchanged);
+    });
   };
   const togglePin = useStableCallback((bot: Bot) => {
     if (boot) undoable(togglePinEdit(boot.preferences, bot.id, bot.name));
@@ -597,7 +618,11 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   );
   const chooseMainFromHome = useStableCallback(() => setChoosingMain(true));
   const dismissMainSuggestion = useStableCallback(
-    () => void session.editPreferences((value) => ({ ...value, mainSuggestionDismissed: true })),
+    () =>
+      void editPreferences(
+        (value) => ({ ...value, mainSuggestionDismissed: true }),
+        ["mainSuggestionDismissed"],
+      ),
   );
   // "Ask Sage…" from the palette opens the main assistant's chat with the question in its draft, once that draft has loaded.
   const asking = useRef<{ botId: string; text: string } | null>(null);
@@ -644,6 +669,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       apply: (value) => withRunsShown(value, botId, routineId, false),
       undo: (value) => withRunsShown(value, botId, routineId, true),
       message: `Hid ${name} runs from this chat`,
+      fields: ["hiddenRoutineRuns"],
     }),
   );
   // Home is memoized, so its group props keep one identity until something they show changes.
@@ -679,7 +705,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   });
   const setTheme = useStableCallback(
     (theme: Preferences["theme"]) =>
-      void session.editPreferences((preferences) => ({ ...preferences, theme })),
+      void editPreferences((preferences) => ({ ...preferences, theme }), ["theme"]),
   );
   const showShortcuts = useStableCallback(() => setOverlay("shortcuts"));
   // Find in chat belongs to the transcript, which listens for this once the chat is on screen.
@@ -708,6 +734,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const [leaving] = useState(waitingOnClose<Destination>);
   /** A sheet with its own close closed; a notification waiting on that sheet opens now. */
   const sheetClosed = (kind: Panel["kind"]) => {
+    setSaveRefusal(null);
     const next = leaving.take(panelClose.current?.sheet, userId);
     closePanels(kind);
     if (next) goTo(next);
@@ -895,9 +922,12 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live
   // roster, and one whose server knows none shows rows another tab may have saved over since.
   const connected = !!boot?.connection.connected && boot.rosterUnknown !== true;
+  // It keeps the pins and sections the server confirmed, so a change still on its way is never drawn as saved.
+  const confirmedPreferences = session.confirmedPreferences;
   useEffect(() => {
-    if (boot && connected) rememberRoster(boot, catalog ? rooms : null);
-  }, [boot, connected, catalog, rooms]);
+    if (boot && connected && confirmedPreferences)
+      rememberRoster({ ...boot, preferences: confirmedPreferences }, catalog ? rooms : null);
+  }, [boot, confirmedPreferences, connected, catalog, rooms]);
   // Read for the account the sign-in hint names (see readSavedRoster), once per account generation:
   // every change of account, in this tab or another, mounts a new one (see App).
   const early = !boot && saved ? saved : null;
@@ -1251,7 +1281,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
               selectBot(botId);
               setPanel({ kind: "routine", botId, routineId });
             }}
-            editPreferences={session.editPreferences}
+            editPreferences={editPreferences}
+            saveRefusal={saveRefusal}
             onSaved={() => void session.refresh()}
             onCreated={(id) =>
               void session.refresh().then((next) => {
@@ -1277,12 +1308,16 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             conversation={conversation}
             connectionLost={connectionLost}
             startNewSection={panel.newSection}
-            editPreferences={session.editPreferences}
+            editPreferences={editPreferences}
+            saveRefusal={saveRefusal}
             onFind={findInChat}
             onMain={setMain}
             onCheckIns={setCheckIns}
             onSettings={(bot) => open({ kind: "settings", bot })}
-            onClose={() => closePanels("details")}
+            onClose={() => {
+              setSaveRefusal(null);
+              closePanels("details");
+            }}
           />
         </Loading>
       )}
@@ -1337,7 +1372,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             boot={boot}
             connectionLost={appShown}
             offline={offlineShown}
-            editPreferences={session.editPreferences}
+            editPreferences={editPreferences}
+            saveRefusal={saveRefusal}
             notifications={notifications}
             installEvent={installEvent}
             notice={notice}

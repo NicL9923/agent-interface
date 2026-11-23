@@ -28,6 +28,28 @@
   },
   "overrides": [
     {
+      "files": ["e2e/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@playwright/test",
+                "allowTypeImports": true,
+                "message": "Import test and expect from ./fixtures.js: its fixtures refuse routes the service worker would hide in WebKit and check every page for errors. Type-only imports are fine."
+              },
+              {
+                "name": "playwright/test",
+                "allowTypeImports": true,
+                "message": "Import test and expect from ./fixtures.js: its fixtures refuse routes the service worker would hide in WebKit and check every page for errors. Type-only imports are fine."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": [".agents/tools/*.js"],
       "rules": {
         "no-unused-expressions": "off"
