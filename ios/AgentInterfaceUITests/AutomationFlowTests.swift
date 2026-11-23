@@ -152,7 +152,11 @@ import CryptoKit
     XCTAssertFalse(resume.isEnabled)
     let review = app.switches["automation.reviewedInterruption"]
     XCTAssertTrue(review.exists)
-    guard setSwitch(review, in: form, to: true) else { return }
+    guard setSwitch(review, in: form, to: true, afterGesture: {
+      // The form can scroll the review row offscreen during the thumb drag.
+      reveal(review.switches.firstMatch, in: form, downward: true)
+      return true
+    }) else { return }
     XCTAssertTrue(resume.wait(until: "enabled == true"))
     reveal(resume, in: form)
     capture(app, "Native interrupted goal review")
