@@ -48,3 +48,18 @@ tests passed. All 142 WebKit tests failed at browser launch because the Fedora
 host lacks `libicu74` and `libjpeg-turbo8`. Launching the same browser on the
 base commit reproduced the missing dependencies. The web build artifacts
 were byte-for-byte identical to the base build.
+
+`.agents/tools/check-all --only test` passed all 4,309 tests in 232 files on
+`64a16a0f`. The unit suite took 20.5 seconds after waiting 4 minutes 23 seconds
+for the repository lock.
+
+The first container attempt used an isolated network that made WebKit report
+offline. The retry used default container networking and Node 24.22.2 in
+`mcr.microsoft.com/playwright:v1.65.0-noble`. WebKit reported 137 passed,
+3 skipped, and 2 failed in 5.7 minutes. Both failures reproduced on
+`320740c3` in the same container:
+
+- `e2e/smoke.spec.ts:40` logged service-worker chunk load errors during the
+  offline reload.
+- `e2e/smoke.spec.ts:811` timed out waiting for the seeded transcript's latest
+  message before measuring the phone composer.
