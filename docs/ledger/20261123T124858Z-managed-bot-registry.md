@@ -26,3 +26,25 @@ The Bun smoke used the real in-memory store. It saved a bot and credential in an
 transaction, changed the harness, confirmed the live credential deletion refusal,
 switched the bot to Hermes, and deleted the credential. No vendor CLI or token was
 involved. Group chat, handoff, and routine delivery were exercised as policy inputs.
+
+## Qualification manifest
+
+The first full Vitest run on `be46d515` found one missing dependency in the Hermes
+qualification manifest. The qualification suite passed all five tests on the base
+commit `320740c3`. The manifest now includes the repository and its two new imports,
+so the app and the Hermes qualification worker bind the same source.
+
+The updated source fingerprint is
+`sha256:93285ada4d38558ce34a9b5c91be19863fb65816c7607bf9eee49b8054062224`.
+Typecheck, lint, format check, all 27 registry tests, and all 15 combined
+qualification and migration tests passed on that source.
+
+## Repository-wide checks
+
+`.agents/tools/check-all --keep-going` passed typecheck, lint, Ruff, the build of
+912 modules, and the Python suite covering 52 files. Its initial unit run reported
+4,308 passed and one failed before the manifest correction. All 142 Chromium
+tests passed. All 142 WebKit tests failed at browser launch because the Fedora
+host lacks `libicu74` and `libjpeg-turbo8`. Launching the same browser on the
+base commit reproduced the missing dependencies. The web build artifacts
+were byte-for-byte identical to the base build.
