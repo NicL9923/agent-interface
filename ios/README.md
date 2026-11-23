@@ -186,7 +186,8 @@ List available simulators with `xcrun simctl list devices available`, then use
 the repo's validation wrapper:
 
 ```sh
-bash .agents/tools/validate-ios.sh SIMULATOR_UUID test
+bash .agents/tools/validate-ios.sh SIMULATOR_UUID test \
+  -only-testing:AgentInterfaceTests/ContractFixtureTests
 ```
 
 The wrapper queues on the shared Mac lock and verifies nested ownership. Run it
@@ -204,7 +205,9 @@ settings before queuing and after acquisition. Live checks, captures, repetition
 and custom external inputs run fresh. `IOS_VALIDATION_FRESH=1` forces execution.
 A fresh failure invalidates older matching evidence.
 
-The same wrapper accepts Xcode test filters. The parity suite exercises home,
+For an intentional full run, pass `--allow-full-suite` immediately after `test`.
+Without that flag, `test` requires an inline `-only-testing` selection before it queues.
+The parity suite exercises home,
 pinning, Settings saves and recovery, the model catalog and inference controls,
 conversation grouping, and Today. It uses synthetic transport fixtures.
 
@@ -350,7 +353,7 @@ The release number lives in `ios/tools/generate-project.py` (`MARKETING_VERSION`
 whole suite must pass again on the committed state, on the Mac mini:
 
 ```sh
-bash .agents/tools/validate-ios.sh SIMULATOR_UUID test
+bash .agents/tools/validate-ios.sh SIMULATOR_UUID test --allow-full-suite
 ```
 
 Run it with no `-only-testing` or `-skip-testing` filter. A filtered run never counts toward a

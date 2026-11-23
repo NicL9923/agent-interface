@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-export const validateCommand = "bash .agents/tools/validate-ios.sh SIMULATOR_UUID test";
+export const validateCommand =
+  "bash .agents/tools/validate-ios.sh SIMULATOR_UUID test --allow-full-suite";
 
 const fail = (condition, reason) => {
   if (!condition) throw new Error(reason);

@@ -2,7 +2,7 @@
 # Run on the Mac mini, using a simulator reserved for this task.
 set -euo pipefail
 if [[ $# -lt 1 ]]; then
-  echo 'Usage: bash .agents/tools/validate-ios.sh SIMULATOR_UUID [test|build|live] [xcodebuild options...]' >&2
+  echo 'Usage: bash .agents/tools/validate-ios.sh SIMULATOR_UUID [test [--allow-full-suite]|build|live] [xcodebuild options...]' >&2
   exit 2
 fi
 simulator_id=$1
@@ -10,6 +10,45 @@ operation=${2:-test}
 case "$operation" in test|build|live) ;; *) echo 'Choose test, build, or live' >&2; exit 2 ;; esac
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 if [[ $# -ge 2 ]]; then shift 2; else shift; fi
+allow_full_suite=()
+if [[ $operation == test && ${1-} == --allow-full-suite ]]; then
+  allow_full_suite=("$1")
+  shift
+fi
+request_options=("$@")
+build_options=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+test_options=()
+if [[ "$operation" == live ]]; then
+  build_options+=('SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LIVE_HERMES_UI_TESTS')
+  test_options+=(-only-testing:AgentInterfaceUITests/LiveConnectionTests)
+fi
+# Test selection, repetition and parallelism options apply when the tests run; everything else is a build option.
+has_test_selection=0
+while [[ $operation != build && $# -gt 0 ]]; do
+  case "$1" in
+    -only-testing:*)
+      [[ ${1#-only-testing:} == *[![:space:]]* ]] && has_test_selection=1
+      test_options+=("$1"); shift ;;
+    -skip-testing:* | -retry-tests-on-failure | -run-tests-until-failure)
+      test_options+=("$1"); shift ;;
+    -only-testing | -skip-testing | -test-iterations | -test-repetition-relaunch-enabled \
+      | -only-test-configuration | -skip-test-configuration | -test-timeouts-enabled \
+      | -default-test-execution-time-allowance | -maximum-test-execution-time-allowance \
+      | -collect-test-diagnostics | -parallel-testing-enabled | -parallel-testing-worker-count \
+      | -maximum-parallel-testing-workers | -maximum-concurrent-test-simulator-destinations \
+      | -maximum-concurrent-test-device-destinations)
+      if [[ $# -lt 2 ]]; then echo "$1 needs a value" >&2; exit 2; fi
+      if [[ $1 == -only-testing && $2 != [-@]* && $2 == *[![:space:]]* ]]; then
+        has_test_selection=1
+      fi
+      test_options+=("$1" "$2"); shift 2 ;;
+    *) build_options+=("$1"); shift ;;
+  esac
+done
+if [[ $operation == test && ${allow_full_suite[0]-} == "" && $has_test_selection == 0 ]]; then
+  echo 'iOS test needs an inline test selection. Pass -only-testing:Target/Class/test or --allow-full-suite immediately after test.' >&2
+  exit 2
+fi
 cd "$repo_dir"
 # Forward shared fixtures to XCTest, while allowing callers to select an alternate fixture.
 for fixture in "$repo_dir"/.agents/fixtures/*.json; do
@@ -21,7 +60,6 @@ for fixture in "$repo_dir"/.agents/fixtures/*.json; do
   if [[ ! ${!variable+x} ]]; then export "$variable=$fixture"; fi
 done
 state_tool="$repo_dir/.agents/tools/ios-validation-state.py"
-request_options=("$@")
 source_before=$(python3 "$state_tool" source)
 inputs_before=$(python3 "$state_tool" key "$operation" "$simulator_id" ${request_options[@]+"${request_options[@]}"})
 can_reuse=0
@@ -55,7 +93,7 @@ MAC_HEAVY_LOCK_TIMEOUT=0 "$heavy_lock" --check-held ${lock_scope[@]+"${lock_scop
 case "$held" in
   0) ;;  # Verified ancestor ownership that covers this scope.
   1)
-  exec "$heavy_lock" ${lock_scope[@]+"${lock_scope[@]}"} bash "$repo_dir/.agents/tools/validate-ios.sh" "$simulator_id" "$operation" ${request_options[@]+"${request_options[@]}"}
+  exec "$heavy_lock" ${lock_scope[@]+"${lock_scope[@]}"} bash "$repo_dir/.agents/tools/validate-ios.sh" "$simulator_id" "$operation" ${allow_full_suite[@]+"${allow_full_suite[@]}"} ${request_options[@]+"${request_options[@]}"}
     ;;
   *) echo 'Update agent-memory before running this helper; the shared lock needs scoped --check-held support.' >&2; exit 75 ;;
 esac
@@ -95,7 +133,6 @@ case "$operation" in
   *) derived_data=${IOS_DERIVED_DATA:-.private/ios-build} ;;
 esac
 destination="platform=iOS Simulator,id=$simulator_id"
-build_options=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
 if [[ "$operation" == build ]]; then
   xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface -destination "$destination" \
     -derivedDataPath "$derived_data" -resultBundlePath "$result_path" "${build_options[@]}" build "$@"
@@ -104,29 +141,10 @@ if [[ "$operation" == build ]]; then
   exit 0
 fi
 
-test_options=()
 if [[ "$operation" == live ]]; then
   # This smoke check refuses non-loopback hosts and servers without explicit local test auth.
   node .agents/tools/native-smoke.mjs http://127.0.0.1:3004
-  build_options+=('SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LIVE_HERMES_UI_TESTS')
-  test_options+=(-only-testing:AgentInterfaceUITests/LiveConnectionTests)
 fi
-# Test selection, repetition and parallelism options apply when the tests run; everything else is a build option.
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -only-testing:* | -skip-testing:* | -retry-tests-on-failure | -run-tests-until-failure)
-      test_options+=("$1"); shift ;;
-    -only-testing | -skip-testing | -test-iterations | -test-repetition-relaunch-enabled \
-      | -only-test-configuration | -skip-test-configuration | -test-timeouts-enabled \
-      | -default-test-execution-time-allowance | -maximum-test-execution-time-allowance \
-      | -collect-test-diagnostics | -parallel-testing-enabled | -parallel-testing-worker-count \
-      | -maximum-parallel-testing-workers | -maximum-concurrent-test-simulator-destinations \
-      | -maximum-concurrent-test-device-destinations)
-      if [[ $# -lt 2 ]]; then echo "$1 needs a value" >&2; exit 2; fi
-      test_options+=("$1" "$2"); shift 2 ;;
-    *) build_options+=("$1"); shift ;;
-  esac
-done
 # Respect explicit caller settings. Enable Xcode's built-in per-test allowance
 # instead of choosing an unmeasured custom limit for legitimate long tests.
 if [[ " ${test_options[*]-} " != *" -parallel-testing-enabled "* ]]; then
