@@ -15,6 +15,7 @@ import { CheckInRepository } from "./store-check-ins.js";
 import { MacRepository } from "./store-macs.js";
 import { FileKeyRepository } from "./store-files.js";
 import { ManagedBotRepository } from "./store-bots.js";
+import { TranscriptRepository } from "./store-transcripts.js";
 import type { FileSigner } from "./hermes-files.js";
 
 export { schemaVersion } from "./store-database.js";
@@ -57,6 +58,7 @@ export class Store {
   readonly macs: MacRepository;
   readonly files: FileKeyRepository;
   readonly managedBots: ManagedBotRepository;
+  readonly transcripts: TranscriptRepository;
   constructor(path: string) {
     this.database = new StoreDatabase(path);
     this.db = this.database.db;
@@ -85,11 +87,13 @@ export class Store {
       this.presentations,
       this.checkIns,
     );
+    this.transcripts = new TranscriptRepository(this.database);
     this.retention = new RetentionRepository(
       this.database,
       this.accounts,
       this.personalState,
       this.queue,
+      this.transcripts,
       this.checkIns,
     );
     this.macs = new MacRepository(this.database);

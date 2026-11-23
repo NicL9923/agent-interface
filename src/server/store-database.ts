@@ -198,6 +198,62 @@ const additions = `
   CREATE INDEX IF NOT EXISTS bot_queue_order ON bot_queue(bot_id,status,position);
   CREATE TABLE IF NOT EXISTS bot_conversation_versions(bot_id TEXT PRIMARY KEY NOT NULL,version INTEGER NOT NULL);
   -- END bot_queue
+  -- BEGIN transcripts
+  CREATE TABLE IF NOT EXISTS transcript_messages(
+    row_id INTEGER PRIMARY KEY,
+    bot_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    message_id TEXT NOT NULL,
+    run_id TEXT,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant','tool','system')),
+    text TEXT NOT NULL,
+    reasoning TEXT,
+    tool_name TEXT,
+    tool_call_json TEXT,
+    files_json TEXT,
+    sender_id TEXT,
+    sender_name TEXT,
+    origin_json TEXT,
+    steered INTEGER,
+    interim INTEGER,
+    created_at TEXT,
+    updated_at INTEGER NOT NULL,
+    source_runtime TEXT NOT NULL,
+    source_row_id TEXT,
+    UNIQUE(bot_id,message_id),
+    -- SQLite scans the bot's seq range backward for newest-first reads.
+    UNIQUE(bot_id,seq)
+  );
+  CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING fts5(
+    text, reasoning, tool_name, content='transcript_messages', content_rowid='row_id'
+  );
+  CREATE TRIGGER IF NOT EXISTS transcript_fts_insert AFTER INSERT ON transcript_messages BEGIN
+    INSERT INTO transcript_fts(rowid,text,reasoning,tool_name)
+    VALUES(new.row_id,new.text,new.reasoning,new.tool_name);
+  END;
+  CREATE TRIGGER IF NOT EXISTS transcript_fts_delete AFTER DELETE ON transcript_messages BEGIN
+    INSERT INTO transcript_fts(transcript_fts,rowid,text,reasoning,tool_name)
+    VALUES('delete',old.row_id,old.text,old.reasoning,old.tool_name);
+  END;
+  CREATE TRIGGER IF NOT EXISTS transcript_fts_update AFTER UPDATE ON transcript_messages
+  WHEN old.row_id IS NOT new.row_id OR old.text IS NOT new.text OR old.reasoning IS NOT new.reasoning OR old.tool_name IS NOT new.tool_name BEGIN
+    INSERT INTO transcript_fts(transcript_fts,rowid,text,reasoning,tool_name)
+    VALUES('delete',old.row_id,old.text,old.reasoning,old.tool_name);
+    INSERT INTO transcript_fts(rowid,text,reasoning,tool_name)
+    VALUES(new.row_id,new.text,new.reasoning,new.tool_name);
+  END;
+  CREATE TABLE IF NOT EXISTS transcript_sync(
+    bot_id TEXT PRIMARY KEY,
+    source_runtime TEXT NOT NULL,
+    canonical_source TEXT NOT NULL DEFAULT 'hermes' CHECK(canonical_source IN ('hermes','local')),
+    last_synced_at INTEGER,
+    last_message_id TEXT,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    last_allocated_seq INTEGER NOT NULL DEFAULT 0,
+    shadow_mismatch_count INTEGER NOT NULL DEFAULT 0,
+    last_mismatch_at INTEGER
+  );
+  -- END transcripts
 `;
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {

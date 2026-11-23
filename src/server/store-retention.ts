@@ -4,6 +4,7 @@ import type { PersonalRepository } from "./store-personal.js";
 import type { StoreDatabase } from "./store-database.js";
 import type { CheckInRepository } from "./store-check-ins.js";
 import type { QueueRepository } from "./store-queue.js";
+import type { TranscriptRepository } from "./store-transcripts.js";
 
 /** Removals that span every area: a deleted assistant's records, and rows past their retention. */
 export class RetentionRepository {
@@ -12,6 +13,7 @@ export class RetentionRepository {
     private readonly accounts: AccountRepository,
     private readonly personal: PersonalRepository,
     private readonly queue: QueueRepository,
+    private readonly transcripts: TranscriptRepository,
     private readonly checkIns?: CheckInRepository,
   ) {}
   private get db() {
@@ -22,6 +24,7 @@ export class RetentionRepository {
   // reach former participants and followers, or attribute a reused ID's messages.
   forgetBot(botId: string) {
     this.database.transaction(() => {
+      this.transcripts.forgetBot(botId);
       const ids = (sql: string) =>
         (this.db.prepare(sql).all(botId, botId) as { id: string | null }[]).flatMap((row) =>
           row.id ? [row.id] : [],
