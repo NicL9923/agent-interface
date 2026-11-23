@@ -213,7 +213,15 @@ import XCTest
     let purpose = app.descendants(matching: .any).matching(identifier: "groupPurpose").firstMatch
     purpose.typeWhenFocused("Plan Sunday supper")
     app.buttons["saveGroupSettings"].tapWhenReady()
-    XCTAssertTrue(app.staticTexts["Plan Sunday supper"].waitForExistence(timeout: 10), "The saved purpose shows under the members: \(app.debugDescription)")
+    XCTAssertTrue(app.navigationBars["Group settings"].waitForDisappearance(), "Saving returns to the group")
+    // The chat keeps its latest messages on screen, while the members and purpose are at the top.
+    let savedPurpose = app.staticTexts["Plan Sunday supper"]
+    let transcript = app.collectionViews.firstMatch
+    for _ in 0..<6 {
+      if savedPurpose.exists { break }
+      transcript.swipeDown()
+    }
+    XCTAssertTrue(savedPurpose.waitForExistence(timeout: 10), "The saved purpose shows under the members: \(app.debugDescription)")
   }
 
   /// A group message's speaker line in Bubbles, the default style: one element whose label starts with the name.
