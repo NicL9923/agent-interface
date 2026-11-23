@@ -208,9 +208,11 @@ class ValidateIosTests(unittest.TestCase):
             ("test", "-skip-testing:AgentInterfaceUITests/Suite"),
             ("test", "-only-testing:"),
             ("test", "-only-testing", "@tests.txt"),
+            ("test", "-only-testing:@tests.txt"),
             ("test", "-skip-testing", "-only-testing:AgentInterfaceTests/Suite"),
         ):
             with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
                 result = self.run_script(*args)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn(

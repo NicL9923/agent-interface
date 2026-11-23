@@ -27,7 +27,10 @@ has_test_selection=0
 while [[ $operation != build && $# -gt 0 ]]; do
   case "$1" in
     -only-testing:*)
-      [[ ${1#-only-testing:} == *[![:space:]]* ]] && has_test_selection=1
+      selection=${1#-only-testing:}
+      if [[ $selection != [-@]* && $selection == *[![:space:]]* ]]; then
+        has_test_selection=1
+      fi
       test_options+=("$1"); shift ;;
     -skip-testing:* | -retry-tests-on-failure | -run-tests-until-failure)
       test_options+=("$1"); shift ;;

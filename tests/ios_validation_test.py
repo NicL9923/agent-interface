@@ -448,6 +448,8 @@ sys.exit('unexpected xcrun call: '+repr(args))
             (["-test-iterations", "2"], {}),
             (["OTHER_SWIFT_FLAGS=-I/external"], {}),
             (["-only-testing", "@tests.txt"], {}),
+            (["-only-testing:@tests.txt"], {}),
+            (["-skip-testing:@tests.txt"], {}),
             ([], {"SWIFT_EXEC": "/external/compiler"}),
         ]:
             with self.subTest(options=options, env=env):
