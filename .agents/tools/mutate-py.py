@@ -407,7 +407,7 @@ def stop_group(child: subprocess.Popen) -> None:
     """Kill what is left of the command's process group, which is only its own descendants."""
     try:
         os.killpg(child.pid, signal.SIGKILL)
-    except ProcessLookupError, PermissionError:
+    except (ProcessLookupError, PermissionError):
         pass
 
 

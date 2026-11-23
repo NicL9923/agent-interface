@@ -302,7 +302,7 @@ def lookup(key):
             print("Validated inputs:", key)
             print("Result bundle:", record["result"])
             return 0
-    except OSError, ValueError, KeyError, TypeError:
+    except (OSError, ValueError, KeyError, TypeError):
         pass
     return 1
 
@@ -364,7 +364,7 @@ def full_run():
                 and value["tests"].get("passed", 0) > 0
             ):
                 matching.append((path.stat().st_mtime, value))
-        except OSError, ValueError, KeyError, TypeError:
+        except (OSError, ValueError, KeyError, TypeError):
             continue
     if not matching:
         reason = (

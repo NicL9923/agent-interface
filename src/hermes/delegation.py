@@ -378,7 +378,7 @@ class Delegation:
                     self.policies.update(
                         validate({profile: json.loads(value)}, PROTOCOL)
                     )
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     continue
             # Once WildBots has sent rosters, a profile without one is unknown and reaches nobody.
             self.enforcing = (
@@ -505,7 +505,7 @@ class Delegation:
                 )
             )
             response = result["responses"][0]
-        except ValueError, TypeError, KeyError, IndexError:
+        except (ValueError, TypeError, KeyError, IndexError):
             return None
         if (
             response.get("status") == "answered"
@@ -715,7 +715,7 @@ class Delegation:
                     or profile == "default"
                     and resolved.is_relative_to(root / "profiles")
                 )
-            except OSError, ValueError, TypeError:
+            except (OSError, ValueError, TypeError):
                 return "Your main assistant can't write to that path."
             if elsewhere:
                 return "Your main assistant can't write into other assistants' files."
@@ -762,14 +762,14 @@ class Delegation:
         try:
             module = importlib.import_module(TOOL_MODULE)
             original = getattr(module, TOOL_NAME)
-        except ImportError, AttributeError:
+        except (ImportError, AttributeError):
             return False
         if not getattr(original, "__wrapped__", None):
             setattr(module, TOOL_NAME, self.gated(original))
         try:
             probe = importlib.import_module(PROBE_MODULE)
             self.install_probe(probe)
-        except ImportError, AttributeError:
+        except (ImportError, AttributeError):
             return False
         try:
             from tools.registry import registry
@@ -826,7 +826,7 @@ def without_teammates(result):
     """Hermes lists every local profile as `teammates` in some message_agent errors; that list goes."""
     try:
         payload = json.loads(result)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return result
     if isinstance(payload, dict) and "teammates" in payload:
         payload.pop("teammates")

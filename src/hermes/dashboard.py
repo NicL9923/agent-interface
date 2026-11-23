@@ -78,7 +78,7 @@ def main():
     try:
         service.validate_secret(secret)
         extension.source_state()
-    except SystemExit, OSError, subprocess.SubprocessError:
+    except (SystemExit, OSError, subprocess.SubprocessError):
         # This check is pure. Preserve the native dashboard if its separately
         # deployed integration needs requalification or credential repair.
         print(

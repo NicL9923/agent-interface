@@ -366,7 +366,7 @@ def uts46_ascii(name):
             if mapped.isascii()
             else idna.encode(mapped, uts46=False).decode("ascii")
         )
-    except idna.IDNAError, UnicodeError, ValueError:
+    except (idna.IDNAError, UnicodeError, ValueError):
         return None
 
 
@@ -562,7 +562,7 @@ class Computer:
             )
             if result.returncode:
                 return False
-        except OSError, subprocess.TimeoutExpired:
+        except (OSError, subprocess.TimeoutExpired):
             return False
         (self.state / "computer-recovery.json").unlink(missing_ok=True)
         return True
@@ -601,7 +601,7 @@ class Computer:
     def _browser_ready(self):
         try:
             return bool(self._browser_endpoint())
-        except OSError, ValueError, ComputerError:
+        except (OSError, ValueError, ComputerError):
             return False
 
     @staticmethod
@@ -1207,7 +1207,7 @@ def install_tools():
                 computer.lease.assert_agent_may_act(profile_key=str(home))
                 await native_watchdog(self, dialog_id)
                 return
-        except ComputerError, lease.HumanHasControl:
+        except (ComputerError, lease.HumanHasControl):
             self._dialog_watchdogs[dialog_id] = asyncio.get_running_loop().call_later(
                 1.0,
                 lambda: asyncio.create_task(self._dialog_timeout_expired(dialog_id)),

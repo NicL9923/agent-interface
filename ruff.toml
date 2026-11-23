@@ -1,6 +1,7 @@
 # Static check that catches undefined names and other likely bugs. CI runs it in
 # the Python job with a pinned ruff version; run `npm run lint:py` locally.
-target-version = "py314"
+# Host release tools load application modules with the system Python 3.12.
+target-version = "py312"
 
 [format]
 # Files whose exact bytes a host or receipt pins. Reformatting them breaks a deployed check.

@@ -610,7 +610,7 @@ class Controller:
                 result[key] = dict(supported=True, **read())
             except AutomationError as exc:
                 result[key] = dict(supported=False, reason=str(exc), **empty)
-            except ImportError, AttributeError:
+            except (ImportError, AttributeError):
                 result[key] = dict(
                     supported=False,
                     reason=f"This Hermes revision cannot expose {key}. Update and qualify its integration.",

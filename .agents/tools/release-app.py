@@ -1239,7 +1239,7 @@ def protected_releases():
     for path in sorted(MANIFESTS.glob("release-*.json")):
         try:
             manifest = json.loads(path.read_text())
-        except OSError, ValueError:
+        except (OSError, ValueError):
             continue
         if (
             isinstance(manifest, dict)
