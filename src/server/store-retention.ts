@@ -3,6 +3,7 @@ import { presenceTtl } from "./store-notifications.js";
 import type { PersonalRepository } from "./store-personal.js";
 import type { StoreDatabase } from "./store-database.js";
 import type { CheckInRepository } from "./store-check-ins.js";
+import type { QueueRepository } from "./store-queue.js";
 
 /** Removals that span every area: a deleted assistant's records, and rows past their retention. */
 export class RetentionRepository {
@@ -10,6 +11,7 @@ export class RetentionRepository {
     private readonly database: StoreDatabase,
     private readonly accounts: AccountRepository,
     private readonly personal: PersonalRepository,
+    private readonly queue: QueueRepository,
     private readonly checkIns?: CheckInRepository,
   ) {}
   private get db() {
@@ -63,8 +65,11 @@ export class RetentionRepository {
         "retry_claims",
         "routine_trials",
         "push_action_tokens",
+        "bot_queue",
       ])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
+      // A new assistant reusing this ID must reject actions written against its predecessor.
+      this.queue.bumpVersion(botId);
       for (const job of this.checkIns?.current().filter((job) => job.botId === botId) ?? [])
         this.checkIns!.removed(botId, job.jobId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);

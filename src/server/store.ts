@@ -6,6 +6,7 @@ import { PersonalRepository } from "./store-personal.js";
 import { DraftRepository } from "./store-drafts.js";
 import { PresentationRepository } from "./store-presentation.js";
 import { SubmissionRepository } from "./store-submissions.js";
+import { QueueRepository } from "./store-queue.js";
 import { RoutineRepository } from "./store-routines.js";
 import { NotificationRepository } from "./store-notifications.js";
 import { EventRepository } from "./store-events.js";
@@ -47,6 +48,7 @@ export class Store {
   readonly drafts: DraftRepository;
   readonly presentations: PresentationRepository;
   readonly submissions: SubmissionRepository;
+  readonly queue: QueueRepository;
   readonly routines: RoutineRepository;
   readonly notifications: NotificationRepository;
   readonly events: EventRepository;
@@ -67,6 +69,7 @@ export class Store {
     this.drafts = new DraftRepository(this.database);
     this.presentations = new PresentationRepository(this.database);
     this.submissions = new SubmissionRepository(this.database, this.drafts);
+    this.queue = new QueueRepository(this.database);
     this.routines = new RoutineRepository(this.database);
     this.checkIns = new CheckInRepository(this.database);
     this.notifications = new NotificationRepository(this.database, {
@@ -86,6 +89,7 @@ export class Store {
       this.database,
       this.accounts,
       this.personalState,
+      this.queue,
       this.checkIns,
     );
     this.macs = new MacRepository(this.database);

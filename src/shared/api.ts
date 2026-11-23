@@ -60,6 +60,16 @@ import type { EarlierFiles } from "./history.js";
 import type { LiveState } from "./live-activity.js";
 import type { TalkAnswer, TalkSession, TalkVoice, VoicePlayback } from "./voice.js";
 import type {
+  QueueCancelResponse,
+  QueueEditRequest,
+  QueueEditResponse,
+  QueueListRequest,
+  QueueListResponse,
+  QueueReorderRequest,
+  QueueReorderResponse,
+  QueueSendNowResponse,
+} from "./queue.js";
+import type {
   Avatar,
   Bootstrap,
   Bot,
@@ -409,6 +419,14 @@ export interface ApiRoutes {
   };
   "GET /bots/:id/files": { query: { before?: string }; response: EarlierFiles };
   "POST /bots/:id/messages": { body: MessageRequest; response: SubmissionReceipt };
+  "GET /bots/:id/queue": { query: QueueListRequest; response: QueueListResponse };
+  "PATCH /bots/:id/queue/:itemId": { body: QueueEditRequest; response: QueueEditResponse };
+  "POST /bots/:id/queue/:itemId/reorder": {
+    body: QueueReorderRequest;
+    response: QueueReorderResponse;
+  };
+  "POST /bots/:id/queue/:itemId/send-now": { response: QueueSendNowResponse };
+  "DELETE /bots/:id/queue/:itemId": { response: QueueCancelResponse };
   "POST /bots/:id/steer": { body: MessageRequest; response: SubmissionReceipt };
   "GET /submissions/:id": { response: SubmissionReceipt };
   /** `answerFormat: "json"` says multi-select answers are JSON arrays; without it they are read as an older client's comma-joined picks. */
@@ -630,7 +648,7 @@ export function routeUrl<K extends ApiRoute>(route: K, params: ApiParams<K>, que
   });
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(
-    (query ?? {}) as Record<string, string | number | undefined>,
+    (query ?? {}) as Record<string, string | number | boolean | undefined>,
   ))
     if (value !== undefined) search.set(key, String(value));
   const text = search.toString();

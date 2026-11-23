@@ -175,6 +175,29 @@ const additions = `
   CREATE INDEX IF NOT EXISTS approval_attribution_created ON approval_attribution(created_at);
   CREATE INDEX IF NOT EXISTS retry_claims_created ON retry_claims(created_at);
   CREATE INDEX IF NOT EXISTS submissions_created ON submissions(created_at);
+  -- BEGIN bot_queue
+  CREATE TABLE IF NOT EXISTS bot_queue(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    request_id TEXT NOT NULL UNIQUE,
+    sender_id TEXT NOT NULL,
+    sender_name TEXT NOT NULL,
+    text TEXT NOT NULL,
+    files TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued','running','completed','interrupted','cancelled')),
+    priority INTEGER NOT NULL CHECK(priority IN (0,1)),
+    conversation_version INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    run_id TEXT,
+    claimed_at INTEGER,
+    settled_at INTEGER,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS bot_queue_order ON bot_queue(bot_id,status,position);
+  CREATE TABLE IF NOT EXISTS bot_conversation_versions(bot_id TEXT PRIMARY KEY NOT NULL,version INTEGER NOT NULL);
+  -- END bot_queue
 `;
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {
