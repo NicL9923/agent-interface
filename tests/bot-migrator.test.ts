@@ -241,6 +241,7 @@ describe("Hermes bot migration", () => {
         ownerId,
         shared: false,
         credentialId: "openai-key",
+        enabledMcpServers: ["wildbots"],
       });
       expect(
         store.db
@@ -278,6 +279,42 @@ describe("Hermes bot migration", () => {
     } finally {
       observer.close();
     }
+  });
+
+  it("migrates script routines and catch-up policies cleanly", async () => {
+    const result = await migration({
+      disableHermesRoutine() {},
+      readRoutines: async () => [
+        {
+          ...routineFixture({
+            id: "audit",
+            botId,
+            name: "Nightly audit",
+            prompt: "",
+            schedule: "0 3 * * *",
+            script: "/usr/bin/python3 /opt/scripts/audit.py",
+            noAgent: true,
+          }),
+          timezone: "America/Chicago",
+          catchUp: true,
+        },
+      ],
+    });
+    expect(result.status).toBe("migrated");
+    expect(
+      store.db
+        .prepare(
+          "SELECT name,prompt,script_command,missed_policy FROM native_routines WHERE bot_id=?",
+        )
+        .all(botId),
+    ).toEqual([
+      {
+        name: "Nightly audit",
+        prompt: "",
+        script_command: "/usr/bin/python3 /opt/scripts/audit.py",
+        missed_policy: "run_once",
+      },
+    ]);
   });
 
   it("refuses a shared subscription before reading source data or writing anything", async () => {

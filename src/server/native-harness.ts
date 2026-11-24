@@ -120,6 +120,7 @@ export async function composeServerRuntime({
       workspaceRoot: config.nativeHarness.workspaceRoot,
       files,
       defaultMcpServers: (bot) => [wildbotsServer(mcp, bot)],
+      startScheduler: true,
     });
     return {
       runtime: composite.runtime,
