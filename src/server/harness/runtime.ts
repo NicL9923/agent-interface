@@ -36,6 +36,7 @@ import {
   type HarnessOption,
   type InferenceSettings,
   type Message,
+  type Routine,
   type Runtime,
   type RuntimeEvent,
   type Submission,
@@ -47,11 +48,16 @@ import {
   serviceTiers,
 } from "../../shared/types.js";
 import { MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, UPLOAD_MIME_TYPES } from "../../shared/uploads.js";
+import type { RoutineOutput, RoutineResult } from "../../shared/collaboration.js";
+import type { RoutineRunStatus } from "../../shared/routine-runs.js";
 import { assertCredentialPolicy } from "../credential-policy.js";
 import type { FileSigner, RegisteredFile } from "../hermes-files.js";
 import { httpError } from "../http-error.js";
+import { firstRoutineTime, type NativeRoutineKind } from "../native-routine-schedule.js";
+import { NativeScheduler } from "../scheduler.js";
 import { namespacedEventId } from "../runtime-router.js";
 import type { Store } from "../store.js";
+import type { NativeRoutine, NativeRoutineRun } from "../store-native-routines.js";
 import type { TranscriptMessage } from "../store-transcripts.js";
 import {
   HARNESS_DRIVER_IDS,
@@ -137,6 +143,8 @@ export interface HarnessRuntimeOptions {
   files: FileSigner;
   defaultMcpServers?: (bot: ManagedBotRecord) => HarnessMcpServerSpec[];
   contextFraction?: number;
+  /** Starts the background native routine scheduler. Default false. */
+  startScheduler?: boolean;
 }
 
 function directory(path: string, mode = 0o700) {
@@ -195,6 +203,7 @@ export function createHarnessRuntime({
   files,
   defaultMcpServers = () => [],
   contextFraction,
+  startScheduler = false,
 }: HarnessRuntimeOptions) {
   const root = resolve(workspaceRoot);
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -630,6 +639,161 @@ export function createHarnessRuntime({
     }
   }
 
+  function systemPromptFor(bot: ManagedBotRecord): string {
+    const sections: string[] = [];
+    if (bot.instructions.trim()) sections.push(bot.instructions.trim());
+    const entries = store.memory.listEntries(bot.id, "active");
+    if (entries.length) sections.push(`# Memory\n${store.memory.renderMemoryMarkdown(bot.id)}`);
+    const skills = store.memory.listSkills(bot.id, "active");
+    if (skills.length)
+      sections.push(
+        `# Skills\nUse the \`wildbots\` MCP \`skill_read\` tool to load a skill's full instructions.\n${store.memory.renderSkillIndex(bot.id)}`,
+      );
+    return sections.join("\n\n");
+  }
+
+  function parseRoutineSchedule(schedule: string): { kind: NativeRoutineKind; expression: string } {
+    const trimmed = schedule.trim();
+    if (/^(?:once\b|\d{4}-\d{2}-\d{2}T)/i.test(trimmed))
+      return { kind: "once", expression: trimmed.replace(/^once\s+/i, "") };
+    const interval = /^(?:every\s+)?(\d+)\s*([mhd])$/i.exec(trimmed);
+    if (interval) {
+      const multiplier: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+      return {
+        kind: "interval",
+        expression: String(Number(interval[1]) * multiplier[interval[2]!.toLowerCase()]!),
+      };
+    }
+    return { kind: "cron", expression: trimmed };
+  }
+
+  function formatRoutineSchedule(routine: NativeRoutine): string {
+    if (routine.kind === "interval") {
+      const ms = Number(routine.scheduleExpr);
+      if (Number.isFinite(ms) && ms > 0) {
+        if (ms % 86_400_000 === 0) return `every ${ms / 86_400_000}d`;
+        if (ms % 3_600_000 === 0) return `every ${ms / 3_600_000}h`;
+        if (ms % 60_000 === 0) return `every ${ms / 60_000}m`;
+      }
+    }
+    return routine.scheduleExpr;
+  }
+
+  function mapRoutineRunStatus(status: NativeRoutineRun["status"]): RoutineRunStatus {
+    if (status === "completed" || status === "suppressed") return "succeeded";
+    if (status === "interrupted") return "stopped";
+    return status;
+  }
+
+  function toRoutine(routine: NativeRoutine): Routine {
+    return {
+      id: routine.id,
+      botId: routine.botId,
+      name: routine.name,
+      prompt: routine.prompt,
+      schedule: formatRoutineSchedule(routine),
+      enabled: routine.enabled,
+      script: routine.scriptCommand,
+      noAgent: routine.scriptCommand !== null && !routine.prompt.trim(),
+      running: routine.lastStatus === "running",
+      nextRunAt: routine.nextRunAt ? new Date(routine.nextRunAt).toISOString() : undefined,
+      lastRunAt: routine.lastRunAt ? new Date(routine.lastRunAt).toISOString() : undefined,
+      lastStatus: routine.lastStatus ? mapRoutineRunStatus(routine.lastStatus) : undefined,
+    };
+  }
+
+  async function runRoutineScript(
+    command: string,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const parts = command.trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) throw new Error("Routine script command is empty.");
+    const { stdout, stderr } = await runFile(parts[0]!, parts.slice(1), {
+      cwd,
+      signal,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return [stdout, stderr]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join("\n\n");
+  }
+
+  async function runRoutinePrompt(
+    routine: NativeRoutine,
+    promptText: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const bot = requireBot(routine.botId);
+    const driver = requireDriver(bot);
+    const credential = credentialFor(bot);
+    const env = credentialsEnv(credential);
+    const cwd = await cwdFor(bot);
+    const turnId = `routine-${randomUUID()}`;
+    const session = await driver.openSession({
+      botId: bot.id,
+      sessionKey: `routine-${routine.id}-${randomUUID()}`,
+      cwd,
+      osUser: bot.ownerOsUser || undefined,
+      model: routine.modelOverride ?? bot.model,
+      provider: bot.provider || undefined,
+      reasoning: driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
+      speed: driver.capabilities.supportsSpeed ? bot.speed : undefined,
+      systemPrompt: systemPromptFor(bot),
+      env,
+      mcpServers: driver.capabilities.supportsMcp
+        ? defaultMcpServers(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
+        : undefined,
+      fullPermissions: true,
+    });
+    try {
+      let text = "";
+      let finished = false;
+      let failure: string | undefined;
+      let resolveDone!: () => void;
+      const done = new Promise<void>((resolve) => {
+        resolveDone = resolve;
+      });
+      const onAbort = () => {
+        void session.interrupt(turnId).catch(() => undefined);
+        finished = true;
+        resolveDone();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      const unsub = session.events((event) => {
+        if (event.type === "text.delta") text += event.delta;
+        else if (event.type === "turn.completed") {
+          if (event.text !== undefined) text = event.text;
+          finished = true;
+          resolveDone();
+        } else if (event.type === "turn.failed") {
+          failure = event.message;
+          finished = true;
+          resolveDone();
+        } else if (event.type === "session.closed" && !finished) {
+          failure = event.reason || "Routine session closed unexpectedly.";
+          finished = true;
+          resolveDone();
+        }
+      });
+      try {
+        await session.startTurn({ turnId, text: promptText });
+        await done;
+      } finally {
+        unsub();
+        signal.removeEventListener("abort", onAbort);
+      }
+      signal.throwIfAborted();
+      if (failure) throw new Error(failure);
+      return text.trim();
+    } finally {
+      await session.close().catch(() => undefined);
+    }
+  }
+
+  let scheduler: NativeScheduler | undefined;
+
   async function prepareTurn(turn: ActiveTurn) {
     const { bot, driver, runId } = turn;
     try {
@@ -650,7 +814,7 @@ export function createHarnessRuntime({
           provider: bot.provider || undefined,
           reasoning: driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
           speed: driver.capabilities.supportsSpeed ? bot.speed : undefined,
-          systemPrompt: bot.instructions,
+          systemPrompt: systemPromptFor(bot),
           env,
           mcpServers: driver.capabilities.supportsMcp
             ? defaultMcpServers(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
@@ -920,7 +1084,7 @@ export function createHarnessRuntime({
         botConfiguration: supported(registered.length > 0 && !closed),
         tools: supported(false),
         skills: supported(false),
-        routines: supported(false),
+        routines: supported(!closed),
         durableEvents: supported(true),
         idempotency: supported(true),
         imageGeneration: supported(false),
@@ -1397,14 +1561,131 @@ export function createHarnessRuntime({
       throw unsupported();
     },
     async routines(botId) {
-      if (botId !== undefined) requireBot(botId);
-      return [];
+      if (botId !== undefined) {
+        const bot = requireBot(botId);
+        return store.nativeRoutines.list(bot.id).map(toRoutine);
+      }
+      return store.managedBots
+        .listManagedBots()
+        .filter(({ id }) => getBot(id))
+        .flatMap(({ id }) => store.nativeRoutines.list(id).map(toRoutine));
     },
-    async saveRoutine() {
-      throw unsupported();
+    async saveRoutine(input: Omit<Routine, "id">, id?: string) {
+      assertOpen();
+      const bot = requireBot(input.botId);
+      const schedule = parseRoutineSchedule(input.schedule);
+      const prompt = input.noAgent ? "" : (input.prompt ?? "");
+      const scriptCommand = input.script?.trim() || null;
+      if (!prompt.trim() && !scriptCommand)
+        throw new InvalidInput("Enter a routine prompt or script command.");
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const timestamp = Date.now();
+      if (id === undefined) {
+        const created = store.nativeRoutines.create(
+          {
+            botId: bot.id,
+            name: input.name.trim(),
+            kind: schedule.kind,
+            scheduleExpr: schedule.expression,
+            timezone,
+            prompt,
+            scriptCommand,
+            modelOverride: input.model ?? null,
+            enabled: input.enabled,
+          },
+          timestamp,
+        );
+        return toRoutine(created);
+      }
+      const existing = store.nativeRoutines.get(id);
+      if (!existing || existing.botId !== bot.id) throw new NotFound("Routine not found.");
+      const next = input.enabled
+        ? firstRoutineTime(schedule.kind, schedule.expression, existing.timezone, timestamp)
+        : null;
+      store.db
+        .prepare(
+          `UPDATE native_routines
+           SET name=?, kind=?, schedule_expr=?, prompt=?, script_command=?, model_override=?,
+               enabled=?, next_run_at=?, updated_at=?
+           WHERE id=? AND bot_id=?`,
+        )
+        .run(
+          input.name.trim(),
+          schedule.kind,
+          schedule.expression,
+          prompt,
+          scriptCommand,
+          input.model ?? null,
+          Number(input.enabled),
+          next,
+          timestamp,
+          id,
+          bot.id,
+        );
+      return toRoutine(store.nativeRoutines.get(id)!);
     },
-    async deleteRoutine() {
-      throw unsupported();
+    async deleteRoutine(id, botId) {
+      assertOpen();
+      const bot = requireBot(botId);
+      const existing = store.nativeRoutines.get(id);
+      if (!existing || existing.botId !== bot.id) throw new NotFound("Routine not found.");
+      scheduler?.stopRun(id);
+      store.db.prepare("DELETE FROM native_routines WHERE id=? AND bot_id=?").run(id, bot.id);
+    },
+    async setRoutineEnabled(botId, routineId, enabled) {
+      assertOpen();
+      const bot = requireBot(botId);
+      const existing = store.nativeRoutines.get(routineId);
+      if (!existing || existing.botId !== bot.id) throw new NotFound("Routine not found.");
+      const timestamp = Date.now();
+      const next = enabled
+        ? firstRoutineTime(existing.kind, existing.scheduleExpr, existing.timezone, timestamp)
+        : null;
+      store.db
+        .prepare(
+          "UPDATE native_routines SET enabled=?, next_run_at=?, updated_at=? WHERE id=? AND bot_id=?",
+        )
+        .run(Number(enabled), next, timestamp, routineId, bot.id);
+    },
+    async stopRoutineRun(botId, routineId) {
+      requireBot(botId);
+      return scheduler?.stopRun(routineId) ?? false;
+    },
+    async routineResults(botId, routineId): Promise<RoutineResult[]> {
+      const bot = requireBot(botId);
+      const existing = store.nativeRoutines.get(routineId);
+      if (!existing || existing.botId !== bot.id) throw new NotFound("Routine not found.");
+      return store.nativeRoutines.listRuns(routineId).map((run) => ({
+        id: run.id,
+        title: existing.name,
+        startedAt: new Date(run.startedAt).toISOString(),
+        finishedAt: run.finishedAt ? new Date(run.finishedAt).toISOString() : undefined,
+        status: mapRoutineRunStatus(run.status),
+        preview: run.outputText ? excerpt(run.outputText) : undefined,
+        previewOnly: false,
+        error: run.error ?? undefined,
+      }));
+    },
+    async routineOutput(botId, routineId, resultId): Promise<RoutineOutput> {
+      const bot = requireBot(botId);
+      const existing = store.nativeRoutines.get(routineId);
+      if (!existing || existing.botId !== bot.id) throw new NotFound("Routine not found.");
+      const run = store.nativeRoutines.listRuns(routineId).find((item) => item.id === resultId);
+      if (!run) throw new NotFound("Routine output not found.");
+      const text = run.outputText ?? run.error ?? "";
+      return {
+        messages: text
+          ? [
+              {
+                id: `routine-output-${run.id}`,
+                role: "assistant",
+                text,
+                createdAt: new Date(run.finishedAt ?? run.startedAt).toISOString(),
+              },
+            ]
+          : [],
+        previewOnly: false,
+      };
     },
     close() {
       return (closing ??= (async () => {
@@ -1414,6 +1695,7 @@ export function createHarnessRuntime({
           if (turn) finish(turn, "interrupted", "The harness runtime closed.");
         }
         const results = await Promise.allSettled([
+          scheduler?.stop(),
           coordinator.close(),
           ...[...preparations.values()].flatMap((pending) => [...pending]),
         ]);
@@ -1450,6 +1732,36 @@ export function createHarnessRuntime({
     }
     queueMicrotask(() => drain(bot.id));
   }
+
+  scheduler = new NativeScheduler(store.nativeRoutines, {
+    tickIntervalMs: 15_000,
+    executeRun: async (routine, _run, signal) => {
+      const bot = requireBot(routine.botId);
+      const cwd = await cwdFor(bot);
+      let scriptOutput = "";
+      if (routine.scriptCommand) {
+        scriptOutput = await runRoutineScript(routine.scriptCommand, cwd, signal);
+        if (!routine.prompt.trim()) return scriptOutput;
+      }
+      const promptText = scriptOutput
+        ? `[Script output for routine "${routine.name}"]\n${scriptOutput}\n\n${routine.prompt}`
+        : routine.prompt;
+      return runRoutinePrompt(routine, promptText, signal);
+    },
+    onDeliver: async (routine, run, outputText) => {
+      if (!outputText.trim()) return false;
+      const at = new Date().toISOString();
+      const text = `[Cron delivery: ${routine.name}]\n\n${outputText.trim()}`;
+      store.transcripts.appendMessages(
+        routine.botId,
+        [{ id: `routine-run-${run.id}`, role: "assistant", text, createdAt: at }],
+        runtimeId,
+      );
+      structural(routine.botId);
+      return true;
+    },
+  });
+  if (startScheduler) scheduler.start();
 
   return runtime;
 }

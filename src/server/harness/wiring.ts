@@ -38,6 +38,8 @@ export interface CompositeRuntimeOptions {
   probeTtlMs?: number;
   /** The clock the probe cache reads. */
   now?: () => number;
+  /** Starts the background native routine scheduler. Default false. */
+  startScheduler?: boolean;
 }
 
 export interface CompositeRuntime {
@@ -67,6 +69,7 @@ export function createCompositeRuntime({
   defaultMcpServers,
   probeTtlMs = HARNESS_PROBE_TTL_MS,
   now = Date.now,
+  startScheduler = false,
 }: CompositeRuntimeOptions): CompositeRuntime {
   // Construction recovers each native assistant's claimed row from its recorded outcome, synchronously.
   const harnessRuntime = createHarnessRuntime({
@@ -75,6 +78,7 @@ export function createCompositeRuntime({
     workspaceRoot,
     files,
     defaultMcpServers,
+    startScheduler,
   });
   // Whatever is still running belongs to no live dispatcher: an archived assistant, one moved to Hermes, or a row
   // from before a crash that nothing else reads. Each would hold its assistant's queue shut forever, because a claim

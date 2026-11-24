@@ -37,6 +37,7 @@ type HermesRoutine = Routine & {
   timezone?: string;
   nativeSchedule?: { kind: "cron" | "once" | "interval"; expression: string };
   tryOnce?: boolean;
+  catchUp?: boolean;
   unsupported?: string[];
 };
 type RoutineSwitch = (botId: string, routineId: string) => void | Promise<void>;
@@ -236,11 +237,10 @@ function routineSchedule(routine: HermesRoutine) {
 function convertRoutine(routine: HermesRoutine, now: number) {
   if (!routine.id.trim()) throw new Error("Hermes did not provide a routine ID.");
   if (routine.running || routine.inFlight) throw new Error("Wait for the Hermes run to finish.");
-  if (routine.script || routine.noAgent || routine.unsupported?.length)
-    throw new Error(
-      `Unsupported Hermes settings: ${[...(routine.unsupported ?? []), ...(routine.script || routine.noAgent ? ["script execution"] : [])].join(", ")}.`,
-    );
-  if (!routine.prompt.trim()) throw new Error("Enter a routine prompt.");
+  if (routine.unsupported?.length)
+    throw new Error(`Unsupported Hermes settings: ${routine.unsupported.join(", ")}.`);
+  const scriptCommand = routine.script?.trim() || null;
+  if (!routine.prompt.trim() && !scriptCommand) throw new Error("Enter a routine prompt.");
   const schedule = routineSchedule(routine);
   const native = {
     id: randomUUID(),
@@ -249,9 +249,11 @@ function convertRoutine(routine: HermesRoutine, now: number) {
     kind: schedule.kind,
     scheduleExpr: schedule.expression.trim(),
     timezone: routine.timezone ?? "UTC",
-    prompt: routine.prompt,
+    prompt: routine.noAgent ? "" : routine.prompt,
+    scriptCommand,
     enabled: routine.enabled,
     tryOnce: routine.tryOnce ?? false,
+    missedPolicy: routine.catchUp ? "run_once" : "skip",
   } satisfies CreateNativeRoutine;
   firstRoutineTime(native.kind, native.scheduleExpr, native.timezone, now);
   return native;
@@ -340,7 +342,9 @@ function targetBot(input: BotMigrationInput, database: StoreDatabase, now: numbe
     credentialId: credential.id,
     enabledTools: original?.enabledTools ?? bot.enabledTools ?? [],
     enabledSkills: original?.enabledSkills ?? bot.enabledSkills ?? [],
-    enabledMcpServers: original?.enabledMcpServers ?? bot.enabledMcpServers ?? [],
+    enabledMcpServers: [
+      ...new Set([...(original?.enabledMcpServers ?? bot.enabledMcpServers ?? []), "wildbots"]),
+    ],
     createdAt: original?.createdAt ?? now,
     updatedAt: now,
   } satisfies ManagedBotRecord;

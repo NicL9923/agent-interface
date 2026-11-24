@@ -119,7 +119,53 @@ async function profileTimezone(directory: string) {
   );
 }
 
-function toRoutine(botId: string, job: z.infer<typeof rawCronJob>, fallbackTimezone: string) {
+const IGNORED_HERMES_ROUTINE_FIELDS = new Set([
+  "repeat",
+  "timezone",
+  "effective_timezone",
+  "profile",
+  "profile_name",
+  "skill",
+  "script",
+  "no_agent",
+  "hermes_home",
+  "is_default_profile",
+  "scheduler_heartbeat_age_s",
+  "attach_to_session",
+  "catch_up",
+  "workdir",
+  "monitor_script",
+  "failure_deliver",
+  "canonical_completions",
+  "last_delivery_queued",
+  "last_dispatch",
+  "latest_execution",
+  "live_execution",
+  "fire_claim",
+  "run_claim",
+  "paused_at",
+  "paused_reason",
+]);
+
+function resolveRoutineScript(
+  script: string | null | undefined,
+  profileDir: string,
+): string | null {
+  const trimmed = script?.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("/")) return trimmed;
+  const scriptPath = resolve(join(profileDir, "scripts", trimmed));
+  if (scriptPath.endsWith(".py")) return `/usr/bin/python3 ${scriptPath}`;
+  if (scriptPath.endsWith(".sh")) return `/bin/bash ${scriptPath}`;
+  return scriptPath;
+}
+
+function toRoutine(
+  botId: string,
+  job: z.infer<typeof rawCronJob>,
+  fallbackTimezone: string,
+  profileDir: string,
+) {
   const { schedule } = job;
   const id = job.id ?? job.job_id ?? "";
   const expression =
@@ -132,10 +178,7 @@ function toRoutine(botId: string, job: z.infer<typeof rawCronJob>, fallbackTimez
   const remaining =
     job.repeat?.times == null ? null : job.repeat.times - (job.repeat.completed ?? 0);
   const unsupported = nativeOverrides(job).filter(
-    (field) =>
-      !["repeat", "timezone", "effective_timezone", "profile", "profile_name", "skill"].includes(
-        field,
-      ),
+    (field) => !IGNORED_HERMES_ROUTINE_FIELDS.has(field),
   );
   if (remaining !== null && remaining !== 1 && (enabled || remaining > 1))
     unsupported.push("repeat count");
@@ -151,9 +194,10 @@ function toRoutine(botId: string, job: z.infer<typeof rawCronJob>, fallbackTimez
     nativeSchedule: { kind: schedule.kind, expression },
     nextRunAt: job.next_run_at ?? undefined,
     tryOnce: remaining === 1,
+    catchUp: job.catch_up === true,
     running: Boolean(job.live_execution),
     inFlight: Boolean(job.fire_claim || job.run_claim),
-    script: job.script,
+    script: resolveRoutineScript(job.script, profileDir),
     noAgent: job.no_agent === true,
     unsupported,
     // Keep the full Hermes record in the snapshot, including delivery and skill selections.
@@ -253,7 +297,7 @@ export async function runMigrationCli(args: string[]) {
                 jobs(botId),
                 profileTimezone(flags.profileDir),
               ]);
-              return records.map((record) => toRoutine(botId, record, timezone));
+              return records.map((record) => toRoutine(botId, record, timezone, flags.profileDir));
             },
             disableHermesRoutine: async (botId, id) => {
               await hermes().setRoutineEnabled!(botId, id, false);

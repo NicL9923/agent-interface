@@ -774,6 +774,53 @@ describe("native harness runtime", () => {
       code: "file_not_found",
     });
   });
+
+  it("manages native routines and injects active memory and skills into session prompts", async () => {
+    const { runtime, store, planner, codex } = await setup();
+    expect((await runtime.capabilities(planner.id)).routines.supported).toBe(true);
+    const created = await runtime.saveRoutine({
+      botId: planner.id,
+      name: "Daily check",
+      prompt: "Summarize status.",
+      schedule: "0 9 * * *",
+      enabled: true,
+    });
+    expect(created).toMatchObject({
+      botId: planner.id,
+      name: "Daily check",
+      schedule: "0 9 * * *",
+      enabled: true,
+    });
+    expect(await runtime.routines(planner.id)).toMatchObject([{ id: created.id, enabled: true }]);
+    await runtime.setRoutineEnabled(planner.id, created.id, false);
+    expect(await runtime.routines(planner.id)).toMatchObject([{ id: created.id, enabled: false }]);
+    await runtime.deleteRoutine(created.id, planner.id);
+    expect(await runtime.routines(planner.id)).toEqual([]);
+
+    store.memory.importItems(planner.id, {
+      entries: [
+        {
+          kind: "user",
+          key: "pref",
+          content: "Nicolas prefers concise updates.",
+          reason: "imported",
+        },
+      ],
+      skills: [
+        {
+          slug: "ops-check",
+          title: "Ops Check",
+          description: "Check VPS health",
+          body: "# Ops",
+          reason: "imported",
+        },
+      ],
+    });
+    const sent = await runtime.submit(submission(planner.id, "with-memory", "hi"));
+    await nextSession(codex, sent.runId);
+    expect(codex.opened.at(-1)?.spec.systemPrompt).toContain("Nicolas prefers concise updates.");
+    expect(codex.opened.at(-1)?.spec.systemPrompt).toContain("ops-check: Ops Check.");
+  });
 });
 
 describe("harness process spawning", () => {
