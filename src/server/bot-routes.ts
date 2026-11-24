@@ -51,12 +51,17 @@ export class BotDirectory {
   }
   /** nativeAvatar means Hermes keeps profile metadata, the avatar and the Talk voice; otherwise this app's store does. */
   decorate(bot: Bot, nativeAvatar = false): Bot {
-    const voice = nativeAvatar ? bot.voice : (this.store.botVoice(bot.id) ?? bot.voice);
+    const useNativeAvatar =
+      bot.capabilities?.avatarMetadata?.supported ??
+      (asksForNativeHarness(bot.harness) ? false : nativeAvatar);
+    const voice = useNativeAvatar
+      ? (bot.voice ?? this.store.botVoice(bot.id))
+      : (this.store.botVoice(bot.id) ?? bot.voice);
     const { voice: _, ...rest } = bot;
     return {
       ...rest,
       ...this.store.presentation(bot.id),
-      ...(nativeAvatar ? { avatar: bot.avatar } : {}),
+      ...(useNativeAvatar ? { avatar: bot.avatar } : {}),
       ...(voice ? { voice } : {}),
     };
   }

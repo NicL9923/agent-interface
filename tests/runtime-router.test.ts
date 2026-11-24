@@ -291,6 +291,33 @@ describe("runtime router", () => {
     await expect(router.download("forged", 10)).rejects.toThrow("Unsigned file");
   });
 
+  it("falls back to a runtime that owns a migrated bot's historical file ID", async () => {
+    const portrait = {
+      name: "tars.jpg",
+      mime: "image/jpeg",
+      body: new ReadableStream<Uint8Array>(),
+    };
+    const hermesDownload = vi.fn<Runtime["download"]>(async () => portrait);
+    const codexDownload = vi.fn<Runtime["download"]>(async () => {
+      throw new Error("File not found");
+    });
+    const router = routerOver(
+      {
+        download: hermesDownload,
+        fileBotId: (id) =>
+          id === "legacy-portrait" ? "barn" : id === "legacy-ranch" ? "ranch" : undefined,
+      },
+      {
+        download: codexDownload,
+        fileBotId: () => undefined,
+      },
+    );
+    expect(await router.download("legacy-portrait", 1024, "barn")).toBe(portrait);
+    expect(hermesDownload).toHaveBeenCalledWith("legacy-portrait", 1024, "barn");
+    expect(codexDownload).not.toHaveBeenCalled();
+    await expect(router.download("legacy-ranch", 1024, "barn")).rejects.toThrow("File not found");
+  });
+
   it("reads each runtime's events from its own source, and fails one without durable events", async () => {
     const event = (id: string, botId: string): RuntimeEvent => ({
       id,

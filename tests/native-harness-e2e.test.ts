@@ -124,7 +124,7 @@ async function until(check: () => boolean | Promise<boolean>, what: string) {
   throw new Error(`Timed out waiting for ${what}.`);
 }
 
-async function boot() {
+async function boot(hermesCapabilities?: Parameters<typeof capabilitiesFixture>[0]) {
   const directory = await mkdtemp(join(tmpdir(), "native-harness-e2e-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   vi.stubEnv("WILDBOTS_VAULT_KEY", undefined);
@@ -152,7 +152,7 @@ async function boot() {
   const hermesSaves: unknown[] = [];
   const hermes: Runtime = fakeRuntime({
     status: async () => ({ connected: true }),
-    capabilities: async () => capabilitiesFixture(),
+    capabilities: async () => capabilitiesFixture(hermesCapabilities),
     listBots: async () => [botFixture({ id: "barn", name: "Barn" })],
     conversation: async (botId) => conversationFixture({ botId }),
     saveBot: async (input) => {
@@ -411,6 +411,21 @@ describe("native harnesses in the live server", () => {
     expect(response.json()).toMatchObject({ error: "Choose a registered native harness." });
     expect(hermesSaves).toEqual([]);
   });
+
+  it("preserves a native bot's saved SQLite avatar even when Hermes reports avatarMetadata supported", async () => {
+    const { app, store, headers, create } = await boot({ avatarMetadata: { supported: true } });
+    const scout = await create("Avatar Scout", "claude-code");
+    const savedAvatar = {
+      mode: "geometric" as const,
+      shape: "flower" as const,
+      color: "#32C759",
+      eyes: "oval" as const,
+      accessory: "none" as const,
+    };
+    store.saveAvatar(scout.id, savedAvatar, false);
+    const bootstrap = (await app.inject({ url: "/api/bootstrap", headers })).json() as Bootstrap;
+    expect(bootstrap.bots.find((bot) => bot.id === scout.id)?.avatar).toEqual(savedAvatar);
+  });
 });
 
 describe("native harness configuration", () => {
@@ -431,6 +446,28 @@ describe("native harness configuration", () => {
         .nativeHarness,
     ).toBeUndefined();
     expect(loadConfig({ APP_DATABASE: ":memory:" }).nativeHarness).toBeUndefined();
+    expect(
+      loadConfig({
+        APP_DATABASE: "/srv/wildbots/app.sqlite",
+        OPENROUTER_API_KEY: "synthetic-openrouter-key",
+      }).nativeHarness,
+    ).toEqual({
+      workspaceRoot: "/srv/wildbots/harness",
+      fallback: {
+        harness: "pi",
+        model: "deepseek/deepseek-v4.1-flash",
+        provider: "openrouter",
+      },
+    });
+    expect(
+      loadConfig({
+        APP_DATABASE: "/srv/wildbots/app.sqlite",
+        OPENROUTER_API_KEY: "synthetic-openrouter-key",
+        WILDBOTS_FALLBACK_ENABLED: "false",
+      }).nativeHarness,
+    ).toEqual({
+      workspaceRoot: "/srv/wildbots/harness",
+    });
     expect(() => loadConfig({ WILDBOTS_HARNESS_ENABLED: "off" })).toThrow(
       "WILDBOTS_HARNESS_ENABLED must be true or false",
     );

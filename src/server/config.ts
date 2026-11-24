@@ -1,5 +1,12 @@
 import { dirname, join } from "node:path";
 import type { DirectRouteKind } from "../shared/api.js";
+import { NATIVE_HARNESS_KINDS, type NativeHarnessKind } from "../shared/harness.js";
+export interface HarnessFallbackConfig {
+  harness: NativeHarnessKind;
+  model: string;
+  provider: string;
+  credentialId?: string;
+}
 export interface DirectRoutesConfig {
   kinds: DirectRouteKind[];
   port: number;
@@ -39,11 +46,11 @@ export interface Config {
   /** Shared with the Hermes add-on, which uses it to ask linked Macs to act. Unset turns Mac links off. */
   macLinkKey?: string;
   /**
-   * Native agent harnesses (Codex, Claude Code, Grok, Pi) beside Hermes, with their workspaces and uploads under
+   * Native agent harnesses (Antigravity, Codex, Claude Code, Grok, Pi) beside Hermes, with their workspaces and uploads under
    * `workspaceRoot`. On unless WILDBOTS_HARNESS_ENABLED=false, and off for an in-memory database, which has no
    * directory to keep them beside.
    */
-  nativeHarness?: { workspaceRoot: string };
+  nativeHarness?: { workspaceRoot: string; fallback?: HarnessFallbackConfig };
   /** The newest distributed iOS build and where to get it, for the app's update banner. */
   nativeApp?: { latestBuild: number; updateUrl: string };
   apns?: {
@@ -258,8 +265,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error("WILDBOTS_HARNESS_ENABLED must be true or false");
   if (env.WILDBOTS_HARNESS_ENABLED !== "false" && config.database !== ":memory:") {
     const root = env.WILDBOTS_WORKSPACE_ROOT?.trim();
+    const fallbackDisabled =
+      env.WILDBOTS_FALLBACK_ENABLED === "false" ||
+      env.WILDBOTS_FALLBACK_MODEL?.trim().toLowerCase() === "off";
+    const fallbackRequested =
+      !fallbackDisabled &&
+      Boolean(env.WILDBOTS_FALLBACK_MODEL?.trim() || env.OPENROUTER_API_KEY?.trim());
+    let fallback: HarnessFallbackConfig | undefined;
+    if (fallbackRequested) {
+      const rawHarness = (env.WILDBOTS_FALLBACK_HARNESS?.trim().toLowerCase() || "pi") as string;
+      if (!NATIVE_HARNESS_KINDS.includes(rawHarness as NativeHarnessKind)) {
+        throw new Error(
+          `WILDBOTS_FALLBACK_HARNESS must be one of ${NATIVE_HARNESS_KINDS.join(", ")}`,
+        );
+      }
+      fallback = {
+        harness: rawHarness as NativeHarnessKind,
+        model: env.WILDBOTS_FALLBACK_MODEL?.trim() || "deepseek/deepseek-v4.1-flash",
+        provider: env.WILDBOTS_FALLBACK_PROVIDER?.trim() || "openrouter",
+        ...(env.WILDBOTS_FALLBACK_CREDENTIAL?.trim()
+          ? { credentialId: env.WILDBOTS_FALLBACK_CREDENTIAL.trim() }
+          : {}),
+      };
+    }
     config.nativeHarness = {
       workspaceRoot: root || join(dirname(config.database), "harness"),
+      ...(fallback ? { fallback } : {}),
     };
   }
   if (env.IOS_APP_LATEST_BUILD || env.IOS_APP_UPDATE_URL) {

@@ -10,8 +10,8 @@ struct HarnessOption: Codable, Equatable {
 /// The agent harnesses a bot can run on, mirroring `harnessIds` and `src/app/harness.ts` on the web.
 enum Harness {
   static let hermes = "hermes"
-  static let native = ["codex", "claude-code", "grok", "pi"]
-  private static let labels = ["codex": "Codex", "claude-code": "Claude Code", "grok": "Grok", "pi": "Pi", "hermes": "Hermes"]
+  static let native = ["antigravity", "codex", "claude-code", "grok", "pi"]
+  private static let labels = ["antigravity": "Antigravity", "codex": "Codex", "claude-code": "Claude Code", "grok": "Grok", "pi": "Pi", "hermes": "Hermes"]
   struct Choice: Equatable, Identifiable {
     var id: String
     var label: String

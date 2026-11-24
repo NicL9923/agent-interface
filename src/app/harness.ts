@@ -14,13 +14,14 @@ import type {
 export type BotForm = BotInput & { harness?: string };
 
 const labels: Record<HarnessId, string> = {
+  antigravity: "Antigravity",
   codex: "Codex",
   "claude-code": "Claude Code",
   grok: "Grok",
   pi: "Pi",
   hermes: "Hermes",
 };
-const native: HarnessId[] = ["codex", "claude-code", "grok", "pi"];
+const native: HarnessId[] = ["antigravity", "codex", "claude-code", "grok", "pi"];
 
 /** A readable name. An id this client does not know shows as sent. */
 export const harnessLabel = (id: string) => labels[id as HarnessId] ?? id;

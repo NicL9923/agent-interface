@@ -1,5 +1,6 @@
 import { InvalidInput } from "../../shared/errors.js";
 import type { BotInput, HarnessOption, Runtime } from "../../shared/types.js";
+import type { HarnessFallbackConfig } from "../config.js";
 import type { FileSigner } from "../hermes-files.js";
 import { createRuntimeRouter, hermesRuntimeId } from "../runtime-router.js";
 import type { Store } from "../store.js";
@@ -9,6 +10,7 @@ import {
   createHarnessRuntime,
   type HarnessRuntime,
   type HarnessRuntimeOptions,
+  type HarnessVoiceDelegate,
 } from "./runtime.js";
 
 /** The router ID native harness bots run under. `ManagedBotRepository.runtimeIdForBot` returns it. */
@@ -40,6 +42,10 @@ export interface CompositeRuntimeOptions {
   now?: () => number;
   /** Starts the background native routine scheduler. Default false. */
   startScheduler?: boolean;
+  /** Automatic fallback harness/model for native turns when the primary harness fails. */
+  fallback?: HarnessFallbackConfig;
+  /** Live Talk, transcription, and speech synthesis provider for native bots. */
+  voice?: HarnessVoiceDelegate;
 }
 
 export interface CompositeRuntime {
@@ -70,6 +76,8 @@ export function createCompositeRuntime({
   probeTtlMs = HARNESS_PROBE_TTL_MS,
   now = Date.now,
   startScheduler = false,
+  fallback,
+  voice,
 }: CompositeRuntimeOptions): CompositeRuntime {
   // Construction recovers each native assistant's claimed row from its recorded outcome, synchronously.
   const harnessRuntime = createHarnessRuntime({
@@ -79,6 +87,8 @@ export function createCompositeRuntime({
     files,
     defaultMcpServers,
     startScheduler,
+    fallback,
+    voice,
   });
   // Whatever is still running belongs to no live dispatcher: an archived assistant, one moved to Hermes, or a row
   // from before a crash that nothing else reads. Each would hold its assistant's queue shut forever, because a claim

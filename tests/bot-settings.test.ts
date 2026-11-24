@@ -328,6 +328,7 @@ describe("harness", () => {
       bootstrap: { ...bootstrap, preferences: { ...defaultPreferences, presentation: "advanced" } },
     });
     expect(options()).toEqual([
+      ["antigravity", true],
       ["codex", true],
       ["claude-code", true],
       ["grok", true],
@@ -341,6 +342,7 @@ describe("harness", () => {
     await render({ bootstrap: native });
     await click("Behavior");
     expect(options()).toEqual([
+      ["antigravity", true],
       ["codex", false],
       ["claude-code", false],
       ["grok", true],
@@ -363,7 +365,13 @@ describe("harness", () => {
     await render({ bot: "new", bootstrap: native });
     await typeInto(container.querySelector<HTMLInputElement>("#create-name")!, "Ranch hand");
     await click("Next");
-    expect(options().map(([id]) => id)).toEqual(["codex", "claude-code", "grok", "pi"]);
+    expect(options().map(([id]) => id)).toEqual([
+      "antigravity",
+      "codex",
+      "claude-code",
+      "grok",
+      "pi",
+    ]);
     expect(field()!.value).toBe("codex");
     vi.mocked(write).mockResolvedValue({ ...bot, id: "ranch-hand", harness: "codex" });
     await click("Create");

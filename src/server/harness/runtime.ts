@@ -30,12 +30,14 @@ import {
   type AttentionRequest,
   type Bot,
   type BotInput,
+  type Capability,
   type ConversationOptions,
   type FileRef,
   type Inflight,
   type HarnessOption,
   type InferenceSettings,
   type Message,
+  type RealtimeSessionInput,
   type Routine,
   type Runtime,
   type RuntimeEvent,
@@ -47,6 +49,8 @@ import {
   reasoningLevels,
   serviceTiers,
 } from "../../shared/types.js";
+import type { TalkSession, TalkVoice, VoiceAudio, VoiceTranscript } from "../../shared/voice.js";
+import type { HarnessFallbackConfig } from "../config.js";
 import { MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, UPLOAD_MIME_TYPES } from "../../shared/uploads.js";
 import type { RoutineOutput, RoutineResult } from "../../shared/collaboration.js";
 import type { RoutineRunStatus } from "../../shared/routine-runs.js";
@@ -122,7 +126,24 @@ type ActiveTurn = {
   steering?: { requestId: string; promise: Promise<SubmissionReceipt> };
   driver: HarnessDriver;
   sessionId?: string;
+  fallbackAttempted?: boolean;
 };
+
+type ResolvedTarget = {
+  driver: HarnessDriver;
+  model: string;
+  provider: string;
+  env: Record<string, string> | undefined;
+  osUser: string | undefined;
+  isFallback: boolean;
+};
+
+export interface HarnessVoiceDelegate {
+  liveVoice(): Promise<Capability>;
+  realtimeSession?(input: RealtimeSessionInput): Promise<TalkSession>;
+  transcribeVoice?(botId: string, input: { mime: string; data: Buffer }): Promise<VoiceTranscript>;
+  synthesizeVoice?(botId: string, text: string, voice?: TalkVoice): Promise<VoiceAudio>;
+}
 
 type QueueAdmission = Pick<
   QueueItem,
@@ -145,6 +166,10 @@ export interface HarnessRuntimeOptions {
   contextFraction?: number;
   /** Starts the background native routine scheduler. Default false. */
   startScheduler?: boolean;
+  /** Automatic fallback harness/model used when a primary harness fails before streaming a reply. */
+  fallback?: HarnessFallbackConfig;
+  /** Live Talk, transcription, and speech synthesis provider for native bots. */
+  voice?: HarnessVoiceDelegate;
 }
 
 function directory(path: string, mode = 0o700) {
@@ -204,6 +229,8 @@ export function createHarnessRuntime({
   defaultMcpServers = () => [],
   contextFraction,
   startScheduler = false,
+  fallback,
+  voice,
 }: HarnessRuntimeOptions) {
   const root = resolve(workspaceRoot);
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -317,6 +344,47 @@ export function createHarnessRuntime({
     if (reservedHarnessEnvironment(source))
       throw new InvalidInput("Choose a vendor API-key environment variable.");
     return { [vendorEnvironment[credential.vendor] ?? source]: key };
+  }
+
+  function resolveFallback(bot: ManagedBotRecord): ResolvedTarget | undefined {
+    if (!fallback) return undefined;
+    if (bot.harness === fallback.harness && bot.model === fallback.model) return undefined;
+    const driver = drivers[fallback.harness];
+    if (!driver) return undefined;
+    const all = store.managedBots.listCredentials();
+    const credential = fallback.credentialId
+      ? store.managedBots.getCredential(fallback.credentialId)
+      : (all.find(
+          (entry) =>
+            entry.kind === "api_key" &&
+            entry.vendor === fallback.provider &&
+            entry.allowedHarnesses.includes(fallback.harness),
+        ) ??
+        all.find(
+          (entry) => entry.kind === "api_key" && entry.allowedHarnesses.includes(fallback.harness),
+        ));
+    let env: Record<string, string> | undefined;
+    if (credential) {
+      if (!credential.allowedHarnesses.includes(fallback.harness)) return undefined;
+      try {
+        env = credentialsEnv(credential);
+      } catch {
+        return undefined;
+      }
+    } else {
+      const envKey = vendorEnvironment[fallback.provider as CredentialRecord["vendor"]];
+      const secret = envKey && Object.hasOwn(process.env, envKey) ? process.env[envKey] : undefined;
+      if (!envKey || !secret) return undefined;
+      env = { [envKey]: secret };
+    }
+    return {
+      driver,
+      model: fallback.model,
+      provider: fallback.provider,
+      env,
+      osUser: credential?.kind === "subscription" ? credential.osUser : undefined,
+      isFallback: true,
+    };
   }
 
   const attachmentDirectory = (bot: Pick<ManagedBotRecord, "id">) => join(uploads, bot.id);
@@ -541,6 +609,23 @@ export function createHarnessRuntime({
       return;
     }
     if (event.type === "turn.failed" || event.stopReason === "error") {
+      if (!turn.fallbackAttempted && !turn.reply.text && !turn.tools.size) {
+        const target = resolveFallback(turn.bot);
+        if (target) {
+          turn.fallbackAttempted = true;
+          void trackPreparation(
+            turn.bot.id,
+            coordinator
+              .retireSession(turn.bot.id)
+              .catch(() => {})
+              .then(() => {
+                if (!closed && active(turn.bot.id) === turn && !turn.stopping)
+                  return prepareTurn(turn, target);
+              }),
+          );
+          return;
+        }
+      }
       finish(turn, "failed", "The harness reported a turn failure.");
     } else if (event.stopReason === "interrupted") {
       finish(turn, "interrupted", "The harness interrupted the reply.");
@@ -720,29 +805,33 @@ export function createHarnessRuntime({
       .join("\n\n");
   }
 
-  async function runRoutinePrompt(
+  async function executeRoutinePromptOn(
+    bot: ManagedBotRecord,
     routine: NativeRoutine,
     promptText: string,
     signal: AbortSignal,
+    target: {
+      driver: HarnessDriver;
+      model: string;
+      provider: string | undefined;
+      env: Record<string, string> | undefined;
+      osUser: string | undefined;
+    },
   ): Promise<string> {
-    const bot = requireBot(routine.botId);
-    const driver = requireDriver(bot);
-    const credential = credentialFor(bot);
-    const env = credentialsEnv(credential);
     const cwd = await cwdFor(bot);
     const turnId = `routine-${randomUUID()}`;
-    const session = await driver.openSession({
+    const session = await target.driver.openSession({
       botId: bot.id,
       sessionKey: `routine-${routine.id}-${randomUUID()}`,
       cwd,
-      osUser: bot.ownerOsUser || undefined,
-      model: routine.modelOverride ?? bot.model,
-      provider: bot.provider || undefined,
-      reasoning: driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
-      speed: driver.capabilities.supportsSpeed ? bot.speed : undefined,
+      osUser: target.osUser,
+      model: target.model,
+      provider: target.provider,
+      reasoning: target.driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
+      speed: target.driver.capabilities.supportsSpeed ? bot.speed : undefined,
       systemPrompt: systemPromptFor(bot),
-      env,
-      mcpServers: driver.capabilities.supportsMcp
+      env: target.env,
+      mcpServers: target.driver.capabilities.supportsMcp
         ? defaultMcpServers(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
         : undefined,
       fullPermissions: true,
@@ -792,31 +881,68 @@ export function createHarnessRuntime({
     }
   }
 
-  let scheduler: NativeScheduler | undefined;
-
-  async function prepareTurn(turn: ActiveTurn) {
-    const { bot, driver, runId } = turn;
+  async function runRoutinePrompt(
+    routine: NativeRoutine,
+    promptText: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const bot = requireBot(routine.botId);
     try {
+      const driver = requireDriver(bot);
       const credential = credentialFor(bot);
       const env = credentialsEnv(credential);
+      return await executeRoutinePromptOn(bot, routine, promptText, signal, {
+        driver,
+        model: routine.modelOverride ?? bot.model,
+        provider: bot.provider || undefined,
+        env,
+        osUser: bot.ownerOsUser || undefined,
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      const target = resolveFallback(bot);
+      if (!target) throw error;
+      return executeRoutinePromptOn(bot, routine, promptText, signal, target);
+    }
+  }
+
+  let scheduler: NativeScheduler | undefined;
+
+  async function prepareTurn(turn: ActiveTurn, override?: ResolvedTarget) {
+    const { bot, runId } = turn;
+    try {
+      const target: ResolvedTarget =
+        override ??
+        (() => {
+          const credential = credentialFor(bot);
+          return {
+            driver: turn.driver,
+            model: bot.model,
+            provider: bot.provider || "",
+            env: credentialsEnv(credential),
+            osUser: bot.ownerOsUser || undefined,
+            isFallback: false,
+          };
+        })();
+      turn.driver = target.driver;
       const cwd = await cwdFor(bot);
       const input = await driverInput(bot, turn.item, runId);
       if (closed || active(bot.id) !== turn || turn.stopping) return;
       const session = await coordinator.open(
         bot.id,
         turn,
-        driver,
+        target.driver,
         {
           botId: bot.id,
           cwd,
-          osUser: bot.ownerOsUser || undefined,
-          model: bot.model,
-          provider: bot.provider || undefined,
-          reasoning: driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
-          speed: driver.capabilities.supportsSpeed ? bot.speed : undefined,
+          osUser: target.osUser,
+          model: target.model,
+          provider: target.provider || undefined,
+          reasoning: target.driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
+          speed: target.driver.capabilities.supportsSpeed ? bot.speed : undefined,
           systemPrompt: systemPromptFor(bot),
-          env,
-          mcpServers: driver.capabilities.supportsMcp
+          env: target.env,
+          mcpServers: target.driver.capabilities.supportsMcp
             ? defaultMcpServers(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
             : undefined,
           fullPermissions: true,
@@ -836,6 +962,16 @@ export function createHarnessRuntime({
 
   async function failStart(turn: ActiveTurn) {
     if (active(turn.bot.id) !== turn || turn.stopping) return;
+    if (!turn.fallbackAttempted && !closed) {
+      const target = resolveFallback(turn.bot);
+      if (target) {
+        turn.fallbackAttempted = true;
+        await coordinator.retireSession(turn.bot.id).catch(() => {});
+        if (closed || active(turn.bot.id) !== turn || turn.stopping) return;
+        await prepareTurn(turn, target);
+        return;
+      }
+    }
     turn.stopping = true;
     const retired = coordinator.retireSession(turn.bot.id).catch(() => {});
     finish(turn, "failed", "The harness could not start the reply.");
@@ -845,7 +981,7 @@ export function createHarnessRuntime({
   function drain(botId: string, reviewed = false): ActiveTurn | undefined {
     if (closed || active(botId)) return;
     const bot = getBot(botId);
-    const driver = bot && driverFor(bot);
+    const driver = bot && (driverFor(bot) ?? resolveFallback(bot)?.driver);
     if (!bot || !driver || (!reviewed && activity(bot).state === "interrupted")) return;
     const runId = randomUUID();
     const item = store.queue.claimNext(botId, runId);
@@ -1091,7 +1227,7 @@ export function createHarnessRuntime({
         stop: supported(configured),
         portraitGeneration: supported(false),
         avatarMetadata: supported(false),
-        liveVoice: supported(false),
+        liveVoice: !closed && voice ? await voice.liveVoice() : supported(false),
       };
     },
     async listBots() {
@@ -1119,15 +1255,20 @@ export function createHarnessRuntime({
       if (!input.shared && !ownerId)
         throw new InvalidInput("Choose an owner for this personal assistant.");
       const allCredentials = store.managedBots.listCredentials();
-      const ownerSubscriptions =
-        !input.shared && ownerId
-          ? allCredentials.filter(
-              (credential) =>
-                credential.kind === "subscription" &&
-                credential.ownerId === ownerId &&
-                credential.allowedHarnesses.includes(harness),
-            )
-          : [];
+      const ownerSubscriptions = ownerId
+        ? allCredentials.filter(
+            (credential) =>
+              credential.kind === "subscription" &&
+              credential.ownerId === ownerId &&
+              credential.allowedHarnesses.includes(harness),
+          )
+        : [];
+      const householdSubscriptions = input.shared
+        ? allCredentials.filter(
+            (credential) =>
+              credential.kind === "subscription" && credential.allowedHarnesses.includes(harness),
+          )
+        : [];
       const sharedApiKeys = allCredentials.filter(
         (credential) =>
           credential.kind === "api_key" &&
@@ -1137,9 +1278,11 @@ export function createHarnessRuntime({
       const autoCredentialId =
         ownerSubscriptions.length === 1
           ? ownerSubscriptions[0].id
-          : sharedApiKeys.length === 1
-            ? sharedApiKeys[0].id
-            : null;
+          : householdSubscriptions.length === 1
+            ? householdSubscriptions[0].id
+            : sharedApiKeys.length === 1
+              ? sharedApiKeys[0].id
+              : null;
       const reusablePrevious =
         previous?.credentialId &&
         allCredentials
@@ -1250,8 +1393,13 @@ export function createHarnessRuntime({
       if (!bot.shared && bot.ownerId !== input.senderId) throw missingBot();
       const previous = known(input);
       if (previous) return previous;
-      requireDriver(bot);
-      credentialsEnv(credentialFor(bot));
+      const hasFallback = resolveFallback(bot) !== undefined;
+      try {
+        requireDriver(bot);
+        credentialsEnv(credentialFor(bot));
+      } catch (error) {
+        if (!hasFallback) throw error;
+      }
       if (!input.reviewedInterruption && activity(bot).state === "interrupted")
         throw new Conflict(interruptionPendingMessage, "interruption_pending");
       if (!input.text.trim() && !input.attachments.length)
@@ -1709,6 +1857,25 @@ export function createHarnessRuntime({
         previewOnly: false,
       };
     },
+    ...(voice?.realtimeSession
+      ? { realtimeSession: (input: RealtimeSessionInput) => voice.realtimeSession!(input) }
+      : {}),
+    ...(voice?.transcribeVoice
+      ? {
+          transcribeVoice: (botId: string, input: { mime: string; data: Buffer }) => {
+            requireBot(botId);
+            return voice.transcribeVoice!(botId, input);
+          },
+        }
+      : {}),
+    ...(voice?.synthesizeVoice
+      ? {
+          synthesizeVoice: (botId: string, text: string) => {
+            const bot = requireBot(botId);
+            return voice.synthesizeVoice!(bot.id, text, store.botVoice(bot.id));
+          },
+        }
+      : {}),
     close() {
       return (closing ??= (async () => {
         closed = true;
