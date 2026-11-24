@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createAntigravityDriver } from "../src/server/harness/antigravity-driver.js";
 import { createClaudeDriver } from "../src/server/harness/claude-driver.js";
 import { createCodexDriver } from "../src/server/harness/codex-driver.js";
 import type { HarnessDriver } from "../src/server/harness/driver.js";
@@ -83,6 +84,22 @@ function stdioFactory(setup: MockSetup): HarnessDriverContractFactory {
     missing: () => ({ driver: setup.missing() }),
   };
 }
+
+describeHarnessDriverContract(
+  "antigravity",
+  stdioFactory({
+    installed: (env, dir) =>
+      createAntigravityDriver({
+        command: process.execPath,
+        args: [fixture("antigravity-mock-acp.mjs")],
+        geminiDir: join(dir, "gemini"),
+        env: { ...env, AGY_FIXTURE_LOG: join(dir, "wire.ndjson") },
+        modelCacheTtlMs: 0,
+      }),
+    missing: () => createAntigravityDriver({ command: missingBinary }),
+    model: "gemini-4-neon",
+  }),
+);
 
 describeHarnessDriverContract(
   "codex",

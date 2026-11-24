@@ -57,32 +57,16 @@ export function assertCredentialPolicy(
     throw new InvalidInput(`Choose a credential that supports the ${bot.harness} harness.`);
   if (credential.kind === "api_key") return;
 
-  if (bot.shared !== false) throw new InvalidInput("Use an API key credential for a shared bot.");
-  if (bot.ownerId !== credential.ownerId)
+  if (bot.shared === false && bot.ownerId !== credential.ownerId)
     throw new InvalidInput("Choose a subscription credential owned by this bot's owner.");
   if (credential.osUser !== undefined && bot.ownerOsUser !== credential.osUser)
     throw new InvalidInput("Run this bot under the Unix account that owns the subscription login.");
 
   switch (use.kind) {
     case "configure":
-      return;
     case "group-chat":
-      if (use.multiUser !== false)
-        throw new Conflict(
-          "Use a bot with an API key credential in a group chat with other members.",
-        );
-      return;
     case "handoff":
-      if (use.sourceOwnerId !== bot.ownerId)
-        throw new Conflict(
-          "Use a bot with an API key credential for handoffs between members' bots.",
-        );
-      return;
     case "routine":
-      if (use.destination !== "personal")
-        throw new Conflict(
-          "Use a bot with an API key credential for routines that post to group chats.",
-        );
       return;
     default:
       throw new InvalidInput("Choose where this subscription credential will be used.");

@@ -283,7 +283,7 @@ function targetBot(input: BotMigrationInput, database: StoreDatabase, now: numbe
     throw new Error("Choose a valid matching Hermes bot ID.");
   if (bot.harness && bot.harness !== "hermes") throw new Error("Choose a Hermes bot.");
   const harness = nativeHarness.safeParse(input.harness);
-  if (!harness.success) throw new Error("Choose codex, claude-code, grok, or pi.");
+  if (!harness.success) throw new Error(`Choose ${NATIVE_HARNESS_KINDS.join(", ")}.`);
   const model = input.model.trim();
   // oxlint-disable-next-line no-control-regex -- Model names must not contain control characters.
   if (!model || model.length > 200 || /[\x00-\x1f\x7f]/.test(model) || model === "Inherited")

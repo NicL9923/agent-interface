@@ -317,13 +317,14 @@ describe("Hermes bot migration", () => {
     ]);
   });
 
-  it("refuses a shared subscription before reading source data or writing anything", async () => {
+  it("refuses another member's subscription on a personal bot before reading source data or writing anything", async () => {
+    store.user({ id: "bob", name: "Bob", email: "bob@example.com" });
     store.managedBots.upsertCredential({
       id: "subscription",
-      label: "Owner's login",
+      label: "Bob's login",
       kind: "subscription",
       vendor: "openai",
-      ownerId,
+      ownerId: "bob",
       osUser: "wildbots",
       allowedHarnesses: ["codex"],
     });
@@ -331,12 +332,15 @@ describe("Hermes bot migration", () => {
     const disable = vi.fn();
     const readRoutines = vi.fn(async () => sourceRoutines);
     const invalid = {
-      shared: true,
+      shared: false,
+      ownerId,
       credentialId: "subscription",
       disableHermesRoutine: disable,
       readRoutines,
     };
-    await expect(migration(invalid)).rejects.toThrow("Use an API key credential for a shared bot.");
+    await expect(migration(invalid)).rejects.toThrow(
+      "Choose a subscription credential owned by this bot's owner.",
+    );
     expect(readRoutines).not.toHaveBeenCalled();
     expect(disable).not.toHaveBeenCalled();
     expect(totalChanges()).toBe(changes);
@@ -345,13 +349,13 @@ describe("Hermes bot migration", () => {
       status: "dry_run",
       messageCount: 2,
       routineCount: 2,
-      policyErrors: ["Use an API key credential for a shared bot."],
+      policyErrors: ["Choose a subscription credential owned by this bot's owner."],
     });
     expect(totalChanges()).toBe(changes);
   });
 
   it.each([
-    [{ harness: "hermes" }, /Choose codex/],
+    [{ harness: "hermes" }, /Choose .*codex/],
     [{ model: "Inherited" }, /explicit native model/],
     [{ ownerId: "unknown" }, /owner who exists/],
     [{ credentialId: "missing" }, /credential that still exists/],

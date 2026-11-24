@@ -419,25 +419,22 @@ describe("native group chats", () => {
     expect(groups.listRooms()).toEqual([]);
   });
 
-  it("refuses a subscription-backed personal bot in a household room", () => {
-    const message = "Use a bot with an API key credential in a group chat with other members.";
-    // Alice's own subscription bot next to a shared assistant: the room is the household's.
-    expect(() =>
-      groups.createRoom({
-        name: "Kitchen",
-        leadBotId: "scout",
-        memberBotIds: ["scout", "alice-claude"],
-        createdBy: "alice",
-      }),
-    ).toThrow(new Conflict(message));
-    const room = groups.createRoom({
+  it("allows a household subscription bot in a household room", () => {
+    const kitchen = groups.createRoom({
       name: "Kitchen",
+      leadBotId: "scout",
+      memberBotIds: ["scout", "alice-claude"],
+      createdBy: "alice",
+    });
+    expect(kitchen.memberBotIds).toEqual(["scout", "alice-claude"]);
+    const room = groups.createRoom({
+      name: "Living",
       leadBotId: "scout",
       memberBotIds: ["scout", "alice-key"],
       createdBy: "alice",
     });
-    expect(() => groups.addMember(room.id, "alice-claude")).toThrow(new Conflict(message));
-    expect(groups.getRoom(room.id)!.memberBotIds).toEqual(["scout", "alice-key"]);
+    groups.addMember(room.id, "alice-claude");
+    expect(groups.getRoom(room.id)!.memberBotIds).toEqual(["scout", "alice-key", "alice-claude"]);
     // Among only Alice's own personal bots, her subscription may answer.
     expect(
       groups.createRoom({

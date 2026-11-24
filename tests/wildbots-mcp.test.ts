@@ -599,9 +599,7 @@ describe("WildBots MCP callbacks", () => {
     expect(
       (await call(sharedSession, "message_bot", { botId: "target", message: "hello" })).result,
     ).toMatchObject({ isError: true, content: [{ type: "text", text: "Assistant not found." }] });
-    expect(() => assertBotHandoffAllowed(bobTarget, bobCredential, "alice")).toThrow(
-      "Use a bot with an API key credential for handoffs between members' bots.",
-    );
+    expect(() => assertBotHandoffAllowed(bobTarget, bobCredential, "alice")).not.toThrow();
     expect(() => assertBotHandoffAllowed(bobTarget, undefined, "bob")).toThrow(
       "This assistant's credential is unavailable.",
     );

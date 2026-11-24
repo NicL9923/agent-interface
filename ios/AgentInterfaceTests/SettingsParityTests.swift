@@ -26,12 +26,12 @@ final class SettingsParityTests: XCTestCase {
   func testHarnessChoicesOfferNativeHarnessesAndKeepHermesOnlyWhereItRuns() {
     let ids = { (choices: [Harness.Choice]) in choices.map { "\($0.id)\($0.available ? "" : "-off")" } }
     // A server from before harnesses advertises none, so Hermes is the only choice.
-    XCTAssertEqual(ids(Harness.choices(nil, saved: nil)), ["codex-off", "claude-code-off", "grok-off", "pi-off", "hermes"])
+    XCTAssertEqual(ids(Harness.choices(nil, saved: nil)), ["antigravity-off", "codex-off", "claude-code-off", "grok-off", "pi-off", "hermes"])
     XCTAssertEqual(Harness.defaultChoice(nil), "hermes")
     let advertised = [HarnessOption(id: "codex", available: true), HarnessOption(id: "grok", available: false, reason: "Sign in first."),
       HarnessOption(id: "opencode", available: true)]
     // A new bot never lands on Hermes once a native harness runs; an unknown advertised one is offered as named.
-    XCTAssertEqual(ids(Harness.choices(advertised, saved: nil)), ["codex", "claude-code-off", "grok-off", "pi-off", "opencode"])
+    XCTAssertEqual(ids(Harness.choices(advertised, saved: nil)), ["antigravity-off", "codex", "claude-code-off", "grok-off", "pi-off", "opencode"])
     XCTAssertEqual(Harness.defaultChoice(advertised), "codex")
     XCTAssertEqual(Harness.choices(advertised, saved: nil).first { $0.id == "grok" }?.reason, "Sign in first.")
     XCTAssertEqual(Harness.choices(advertised, saved: "hermes").last?.id, "hermes", "A Hermes bot keeps its current harness")

@@ -263,8 +263,21 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
     approve: async (...args) => on(args[0]).approve(...args),
     upload: async (...args) => on(args[0]).upload(...args),
     // A file ID's signature names its assistant, so a caller that hasn't checked it still reaches the right runtime.
-    // An ID no runtime signed goes to the default, which refuses it.
-    download: async (...args) => on(args[2] ?? router.fileBotId?.(args[0])).download(...args),
+    // Migrated assistants keep historical Hermes attachments and portraits: if the assistant's current runtime does not
+    // own the file ID, fall back to the runtime that does (matching `botId` when supplied).
+    download: async (...args) => {
+      const [id, , botId] = args;
+      const primary = on(botId ?? router.fileBotId?.(id));
+      const primaryOwner = primary.fileBotId?.(id);
+      if (primaryOwner !== undefined && (botId === undefined || primaryOwner === botId)) {
+        return primary.download(...args);
+      }
+      const ownerRuntime = all.find((runtime) => {
+        const owner = runtime.fileBotId?.(id);
+        return owner !== undefined && (botId === undefined || owner === botId);
+      });
+      return (ownerRuntime ?? primary).download(...args);
+    },
     fileBotId: (id) => {
       for (const runtime of all) {
         const botId = runtime.fileBotId?.(id);

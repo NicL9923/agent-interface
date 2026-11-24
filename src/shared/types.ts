@@ -257,7 +257,7 @@ export type Capabilities = Record<CapabilityKey, Capability>;
 /** Refuses with a 409 unless the runtime of `botId`, or the default runtime for undefined, supports `key`. */
 export type RequireCapability = (key: CapabilityKey, botId: string | undefined) => Promise<void>;
 /** The agent harnesses a bot can run on, in picker order. Hermes is the runtime being retired. */
-export const harnessIds = ["codex", "claude-code", "grok", "pi", "hermes"] as const;
+export const harnessIds = ["antigravity", "codex", "claude-code", "grok", "pi", "hermes"] as const;
 export type HarnessId = (typeof harnessIds)[number];
 /** A harness the server can run bots on. An unavailable one carries the reason. */
 export interface HarnessOption {

@@ -652,26 +652,24 @@ describe("durable native scheduler", () => {
       );
     });
 
-    it("refuses group jobs for a subscription after a previously valid credential changes", async () => {
+    it("allows group jobs for household subscriptions and refuses mismatched credentials", async () => {
       const { bots, record, subscription } = bot();
       const routine = create("group", group);
       bots.upsertManagedBot({ ...record, credentialId: subscription.id });
-      const reason = "Use a bot with an API key credential for routines that post to group chats.";
-      expect(() => create("refused", group)).toThrow(new Conflict(reason));
-      const personal = create("personal");
       const executeRun = vi.fn(() => "finished");
       const onDeliver = vi.fn();
       const scheduler = new NativeScheduler(repository, { now: () => now, executeRun, onDeliver });
-      await expect(scheduler.runNow(routine.id)).rejects.toThrow(new Conflict(reason));
-      now += 1000;
-      await scheduler.tick();
+      await expect(scheduler.runNow(routine.id)).resolves.toMatchObject({
+        status: "completed",
+        delivered: true,
+      });
 
-      expect(repository.listRuns(routine.id)).toMatchObject([
-        { status: "failed", error: reason, delivered: false },
-      ]);
-      expect(executeRun).toHaveBeenCalledTimes(1);
+      // Removing the bot's credential after creation still refuses delivery.
+      bots.upsertManagedBot({ ...record, archivedAt: now, credentialId: null });
+      const missingReason = "Routine assistant not found.";
+      await expect(scheduler.runNow(routine.id)).rejects.toThrow(missingReason);
       expect(onDeliver).toHaveBeenCalledWith(
-        expect.objectContaining({ id: personal.id }),
+        expect.objectContaining({ id: routine.id }),
         expect.anything(),
         "finished",
         expect.any(AbortSignal),
@@ -679,7 +677,7 @@ describe("durable native scheduler", () => {
     });
 
     it("checks the credential again before delivering an already running group result", async () => {
-      const { bots, record, subscription } = bot();
+      const { bots, record } = bot();
       const routine = create("group", group);
       const response = pendingOutput();
       const executeRun = vi.fn(() => response.promise);
@@ -692,15 +690,15 @@ describe("durable native scheduler", () => {
         expect.anything(),
         expect.any(AbortSignal),
       );
-      bots.upsertManagedBot({ ...record, credentialId: subscription.id });
+      bots.upsertManagedBot({ ...record, archivedAt: now, credentialId: null });
       response.resolve("finished");
       await expect(running).resolves.toMatchObject({
         status: "failed",
-        error: "Use a bot with an API key credential for routines that post to group chats.",
+        error: "Routine assistant not found.",
         delivered: false,
       });
       expect(onDeliver).not.toHaveBeenCalled();
-      bots.upsertManagedBot(record);
+      bots.upsertManagedBot({ ...record, archivedAt: undefined });
       await expect(scheduler.runNow(routine.id)).resolves.toMatchObject({
         status: "completed",
         delivered: true,

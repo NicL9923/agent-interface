@@ -638,7 +638,12 @@ describe("native harness runtime", () => {
       envVar: "OPENAI_BILLING_KEY",
       allowedHarnesses: ["codex"],
     });
-    const bot = await runtime.saveBot({ ...botInput, name: "Shared bot", shared: true });
+    const bot = await runtime.saveBot({
+      ...botInput,
+      name: "Shared bot",
+      shared: true,
+      credentialId: "api",
+    });
     await expect(
       runtime.submit({ ...submission(bot.id, "unknown"), senderId: "friend" }),
     ).rejects.toMatchObject({
@@ -718,8 +723,8 @@ describe("native harness runtime", () => {
     await expect(runtime.inferenceSettings(writer.id, { speed: "fast" })).rejects.toMatchObject({
       statusCode: 409,
     });
-    await expect(runtime.saveBot({ ...botInput, shared: true }, writer.id)).rejects.toMatchObject({
-      message: "Use an API key credential for a shared bot.",
+    await expect(runtime.saveBot({ ...botInput, shared: true }, writer.id)).resolves.toMatchObject({
+      shared: true,
     });
     await runtime.deleteBot(writer.id);
     await expect(runtime.botDetail(writer.id)).rejects.toMatchObject({
@@ -842,6 +847,198 @@ describe("native harness runtime", () => {
       harness: "codex",
       credentialId: "codex-subscription",
       provider: "openai",
+    });
+  });
+
+  it("prefers household subscriptions over API keys when creating shared bots", async () => {
+    const { runtime, store } = await setup();
+    store.managedBots.upsertCredential({
+      id: "shared-openai-key",
+      label: "Shared OpenAI key",
+      kind: "api_key",
+      vendor: "openai",
+      envVar: "OPENAI_API_KEY",
+      allowedHarnesses: ["codex"],
+    });
+    const sharedBot = await runtime.saveBot({
+      ...botInput,
+      name: "Shared Sub",
+      harness: "codex",
+      shared: true,
+    });
+    expect(store.managedBots.getManagedBot(sharedBot.id)).toMatchObject({
+      harness: "codex",
+      shared: true,
+      credentialId: "codex-subscription",
+      ownerOsUser: owner,
+    });
+  });
+
+  it("falls back to OpenRouter DeepSeek V4.1 Flash when the primary harness fails before streaming", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "synthetic-openrouter-key");
+    const directory = await mkdtemp(join(tmpdir(), "harness-fallback-"));
+    const store = new Store(":memory:");
+    const files = fileSigner(store.fileKeys(), undefined);
+    store.user({ id: "sam", name: "Sam", email: "sam@example.net" });
+    store.managedBots.upsertCredential({
+      id: "agy-sub",
+      label: "Antigravity sub",
+      kind: "subscription",
+      vendor: "google",
+      ownerId: "sam",
+      osUser: owner,
+      allowedHarnesses: ["antigravity"],
+    });
+    store.managedBots.upsertCredential({
+      id: "household-openrouter-key",
+      label: "OpenRouter key",
+      kind: "api_key",
+      vendor: "openrouter",
+      envVar: "OPENROUTER_API_KEY",
+      allowedHarnesses: ["pi"],
+    });
+    const antigravity = new FakeDriver("antigravity", false);
+    const pi = new FakeDriver("pi", false);
+    const runtime = createHarnessRuntime({
+      store,
+      files,
+      workspaceRoot: join(directory, "sandbox"),
+      drivers: { antigravity, pi },
+      fallback: {
+        harness: "pi",
+        model: "deepseek/deepseek-v4.1-flash",
+        provider: "openrouter",
+        credentialId: "household-openrouter-key",
+      },
+    });
+    cleanups.push(async () => {
+      await runtime.close();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const bot = await runtime.saveBot({
+      ...botInput,
+      name: "Neon Bot",
+      harness: "antigravity",
+      model: "gemini-4-neon",
+      shared: true,
+    });
+
+    // 1. Primary openSession throws → falls back seamlessly to Pi DeepSeek V4.1 Flash.
+    antigravity.beforeOpen = async () => {
+      throw new Error("quota exhausted");
+    };
+    const first = await runtime.submit(submission(bot.id, "fb-open", "Check weather"));
+    const fallbackSession1 = await nextSession(pi, first.runId);
+    expect(pi.opened.at(-1)?.spec).toMatchObject({
+      model: "deepseek/deepseek-v4.1-flash",
+      provider: "openrouter",
+      env: { OPENROUTER_API_KEY: "synthetic-openrouter-key" },
+    });
+    fallbackSession1.emit({
+      type: "text.delta",
+      turnId: first.runId!,
+      delta: "Sunny via fallback",
+    });
+    fallbackSession1.emit({
+      type: "turn.completed",
+      turnId: first.runId!,
+      text: "Sunny via fallback",
+      stopReason: "end_turn",
+    });
+    await vi.waitFor(async () => {
+      const convo = await runtime.conversation(bot.id);
+      expect(convo.messages.at(-1)?.text).toBe("Sunny via fallback");
+    });
+
+    // 2. Primary opens cleanly but emits turn.failed before streaming → falls back seamlessly.
+    antigravity.beforeOpen = undefined;
+    const second = await runtime.submit(submission(bot.id, "fb-fail", "Second check"));
+    const primarySession = await nextSession(antigravity, second.runId);
+    primarySession.emit({
+      type: "turn.failed",
+      turnId: second.runId!,
+      message: "rate limited",
+      recoverable: true,
+    });
+    const fallbackSession2 = await nextSession(pi, second.runId);
+    fallbackSession2.emit({
+      type: "text.delta",
+      turnId: second.runId!,
+      delta: "Recovered via DeepSeek",
+    });
+    fallbackSession2.emit({
+      type: "turn.completed",
+      turnId: second.runId!,
+      text: "Recovered via DeepSeek",
+      stopReason: "end_turn",
+    });
+    await vi.waitFor(async () => {
+      const convo = await runtime.conversation(bot.id);
+      expect(convo.messages.at(-1)?.text).toBe("Recovered via DeepSeek");
+    });
+  });
+
+  it("exposes liveVoice, realtimeSession, transcribeVoice, and synthesizeVoice when a voice delegate is wired", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "harness-voice-"));
+    const store = new Store(":memory:");
+    const files = fileSigner(store.fileKeys(), undefined);
+    store.user({ id: "sam", name: "Sam", email: "sam@example.net" });
+    store.managedBots.upsertCredential({
+      id: "codex-sub",
+      label: "Codex sub",
+      kind: "subscription",
+      vendor: "openai",
+      ownerId: "sam",
+      osUser: owner,
+      allowedHarnesses: ["codex"],
+    });
+    const codex = new FakeDriver("codex", true);
+    const runtime = createHarnessRuntime({
+      store,
+      files,
+      workspaceRoot: join(directory, "sandbox"),
+      drivers: { codex },
+      voice: {
+        liveVoice: async () => ({ supported: true }),
+        realtimeSession: async (input) => ({
+          clientSecret: "ek_test_secret_123",
+          expiresAt: 1_900_000_000,
+          model: "gpt-realtime-2.1",
+          voice: input.voice,
+        }),
+        transcribeVoice: async () => ({ text: "hello voice", provider: "openai" }),
+        synthesizeVoice: async (_botId, _text, chosen) => ({
+          data: Buffer.from(`audio:${chosen ?? "default"}`),
+          mime: "audio/mpeg",
+          provider: "openai",
+        }),
+      },
+    });
+    cleanups.push(async () => {
+      await runtime.close();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const bot = await runtime.saveBot({
+      ...botInput,
+      name: "Voice Bot",
+      harness: "codex",
+      shared: true,
+    });
+    store.saveVoice(bot.id, "cedar");
+    expect((await runtime.capabilities(bot.id)).liveVoice).toEqual({ supported: true });
+    expect(
+      await runtime.realtimeSession!({ voice: "cedar", instructions: "Speak", tools: [] }),
+    ).toMatchObject({ clientSecret: "ek_test_secret_123", voice: "cedar" });
+    expect(
+      await runtime.transcribeVoice!(bot.id, { mime: "audio/webm", data: Buffer.from("abc") }),
+    ).toEqual({ text: "hello voice", provider: "openai" });
+    expect(await runtime.synthesizeVoice!(bot.id, "Hi there")).toMatchObject({
+      mime: "audio/mpeg",
+      data: Buffer.from("audio:cedar"),
     });
   });
 });

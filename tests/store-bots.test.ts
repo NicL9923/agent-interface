@@ -134,12 +134,17 @@ describe("credential ownership policy", () => {
     }
   });
 
-  it("refuses attaching a subscription to a shared bot", () => {
-    expectRefusal(
-      () => assertCredentialPolicy({ ...personalBot, shared: true }, subscription, configure),
-      InvalidInput,
-      "Use an API key credential for a shared bot.",
-    );
+  it("allows attaching a household subscription to a shared bot when the Unix account matches", () => {
+    expect(() =>
+      assertCredentialPolicy({ ...personalBot, shared: true }, subscription, configure),
+    ).not.toThrow();
+    expect(() =>
+      assertCredentialPolicy(
+        { ...personalBot, shared: true, ownerId: "" },
+        subscription,
+        configure,
+      ),
+    ).not.toThrow();
   });
 
   it("refuses attaching another member's subscription to a personal bot", () => {
@@ -159,50 +164,18 @@ describe("credential ownership policy", () => {
     );
   });
 
-  it("refuses use in a multi-user group chat and allows a single-member group chat", () => {
-    expectRefusal(
-      () =>
-        assertCredentialPolicy(personalBot, subscription, { kind: "group-chat", multiUser: true }),
-      Conflict,
-      "Use a bot with an API key credential in a group chat with other members.",
-    );
-    expect(() =>
-      assertCredentialPolicy(personalBot, subscription, { kind: "group-chat", multiUser: false }),
-    ).not.toThrow();
-  });
-
-  it("allows handoffs only when the source bot has the same owner as the subscription-backed bot", () => {
-    for (const sourceOwnerId of ["bob", undefined]) {
-      expectRefusal(
-        () => assertCredentialPolicy(personalBot, subscription, { kind: "handoff", sourceOwnerId }),
-        Conflict,
-        "Use a bot with an API key credential for handoffs between members' bots.",
-      );
+  it("allows household subscriptions in group chats, handoffs, and group routines", () => {
+    for (const use of [
+      { kind: "group-chat", multiUser: true },
+      { kind: "group-chat", multiUser: false },
+      { kind: "handoff", sourceOwnerId: "bob" },
+      { kind: "handoff", sourceOwnerId: undefined },
+      { kind: "handoff", sourceOwnerId: "alice" },
+      { kind: "routine", destination: "group" },
+      { kind: "routine", destination: "personal" },
+    ] as CredentialUse[]) {
+      expect(() => assertCredentialPolicy(personalBot, subscription, use)).not.toThrow();
     }
-    expect(() =>
-      assertCredentialPolicy(personalBot, subscription, {
-        kind: "handoff",
-        sourceOwnerId: "alice",
-      }),
-    ).not.toThrow();
-  });
-
-  it("refuses routine results delivered to a group chat and allows personal delivery", () => {
-    expectRefusal(
-      () =>
-        assertCredentialPolicy(personalBot, subscription, {
-          kind: "routine",
-          destination: "group",
-        }),
-      Conflict,
-      "Use a bot with an API key credential for routines that post to group chats.",
-    );
-    expect(() =>
-      assertCredentialPolicy(personalBot, subscription, {
-        kind: "routine",
-        destination: "personal",
-      }),
-    ).not.toThrow();
   });
 
   it("refuses an unknown context for a subscription", () => {
@@ -375,17 +348,15 @@ describe("managed bot repository", () => {
     expect(bots.listManagedBots()).toEqual([]);
   });
 
-  it("refuses widening a subscription bot but allows widening with an API key in the same edit", () => {
+  it("allows widening a subscription bot to shared when its Unix account matches", () => {
     const bots = open().managedBots;
     bots.upsertCredential(subscription);
     bots.upsertCredential(apiKey);
     bots.upsertManagedBot(personalBot);
-    expectRefusal(
-      () => bots.upsertManagedBot({ ...personalBot, shared: true }),
-      InvalidInput,
-      "Use an API key credential for a shared bot.",
-    );
-    expect(bots.getManagedBot(personalBot.id)).toEqual(personalBot);
+    expect(bots.upsertManagedBot({ ...personalBot, shared: true })).toMatchObject({
+      shared: true,
+      credentialId: subscription.id,
+    });
     expect(
       bots.upsertManagedBot({ ...personalBot, credentialId: apiKey.id, shared: true }),
     ).toMatchObject({
@@ -411,11 +382,16 @@ describe("managed bot repository", () => {
     expect(bots.getCredential(subscription.id)).toEqual(subscription);
 
     bots.upsertCredential(apiKey);
-    bots.upsertManagedBot({ ...personalBot, credentialId: apiKey.id, shared: true });
+    bots.upsertManagedBot({
+      ...personalBot,
+      credentialId: apiKey.id,
+      ownerOsUser: "other-user",
+      shared: true,
+    });
     expectRefusal(
       () => bots.upsertCredential({ ...subscription, id: apiKey.id }),
       InvalidInput,
-      "Use an API key credential for a shared bot.",
+      "Run this bot under the Unix account that owns the subscription login.",
     );
     expect(bots.getCredential(apiKey.id)).toEqual(apiKey);
   });

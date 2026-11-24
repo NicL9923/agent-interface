@@ -1,8 +1,9 @@
 import type { HarnessOption, Runtime } from "../shared/types.js";
 import type { ManagedBotRecord } from "../shared/harness.js";
 import type { Config } from "./config.js";
+import { createDirectVoiceService } from "./direct-voice.js";
 import type { HarnessDriver, HarnessDriverId, HarnessMcpServerSpec } from "./harness/driver.js";
-import { createDefaultHarnessDrivers } from "./harness/index.js";
+import { createDefaultHarnessDrivers, type HarnessVoiceDelegate } from "./harness/index.js";
 import { createCompositeRuntime, hermesOnlyForNew } from "./harness/wiring.js";
 import type { FileSigner } from "./hermes-files.js";
 import { createMacMcpTools, type MacLinkRelay } from "./mcp/mac-tools.js";
@@ -113,6 +114,33 @@ export async function composeServerRuntime({
     extraToolProviders: [memoryToolProvider(store.memory), createMacMcpTools({ store, relay })],
   });
   try {
+    const directVoice = createDirectVoiceService();
+    const voice: HarnessVoiceDelegate = directVoice.status().available
+      ? {
+          liveVoice: async () => ({ supported: true }),
+          realtimeSession: (input) => directVoice.realtimeSession(input),
+          transcribeVoice: (botId, input) => directVoice.transcribeVoice(botId, input),
+          synthesizeVoice: (botId, text, chosen) =>
+            directVoice.synthesizeVoice(botId, text, chosen),
+        }
+      : {
+          liveVoice: async () => {
+            try {
+              return (await hermes.capabilities()).liveVoice;
+            } catch {
+              return { supported: false, reason: "Live voice is unavailable right now." };
+            }
+          },
+          ...(hermes.realtimeSession
+            ? { realtimeSession: (input) => hermes.realtimeSession!(input) }
+            : {}),
+          ...(hermes.transcribeVoice
+            ? { transcribeVoice: (_botId, input) => hermes.transcribeVoice!("default", input) }
+            : {}),
+          ...(hermes.synthesizeVoice
+            ? { synthesizeVoice: (_botId, text) => hermes.synthesizeVoice!("default", text) }
+            : {}),
+        };
     const composite = createCompositeRuntime({
       store,
       hermes,
@@ -121,7 +149,17 @@ export async function composeServerRuntime({
       files,
       defaultMcpServers: (bot) => [wildbotsServer(mcp, bot)],
       startScheduler: true,
+      fallback: config.nativeHarness.fallback,
+      voice,
     });
+    if (directVoice.status().available) {
+      Object.defineProperty(composite.runtime, "realtimeSession", {
+        enumerable: true,
+        configurable: true,
+        value: (input: Parameters<typeof directVoice.realtimeSession>[0]) =>
+          directVoice.realtimeSession(input),
+      });
+    }
     return {
       runtime: composite.runtime,
       probeHarnesses: composite.probeHarnesses,

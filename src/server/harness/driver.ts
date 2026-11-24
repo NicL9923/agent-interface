@@ -5,12 +5,13 @@ import type { ModelProvider } from "../../shared/types.js";
  * `src/shared/harness.ts` currently uses `"claude"` in its registry enum; `normalizeHarnessId`
  * bridges both until unified.
  */
-export const HARNESS_DRIVER_IDS = ["codex", "claude-code", "grok", "pi"] as const;
+export const HARNESS_DRIVER_IDS = ["antigravity", "codex", "claude-code", "grok", "pi"] as const;
 export type HarnessDriverId = (typeof HARNESS_DRIVER_IDS)[number];
 
 export function normalizeHarnessId(id: string | undefined): HarnessDriverId | "hermes" | undefined {
   if (!id) return undefined;
   const trimmed = id.trim().toLowerCase();
+  if (trimmed === "agy" || trimmed === "antigravity") return "antigravity";
   if (trimmed === "claude" || trimmed === "claude-code") return "claude-code";
   if (trimmed === "codex" || trimmed === "grok" || trimmed === "pi" || trimmed === "hermes")
     return trimmed;
