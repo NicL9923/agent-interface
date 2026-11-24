@@ -280,6 +280,7 @@ export async function runMigrationCli(args: string[]) {
   }
   try {
     db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
+    const inactiveOnRead = new Set<string>();
     const result =
       flags.action === "rollback"
         ? await rollbackMigratedBot({
@@ -297,14 +298,27 @@ export async function runMigrationCli(args: string[]) {
                 jobs(botId),
                 profileTimezone(flags.profileDir),
               ]);
+              for (const record of records) {
+                const recordId = record.id ?? record.job_id;
+                if (
+                  recordId &&
+                  (record.enabled === false ||
+                    record.state === "paused" ||
+                    record.state === "completed") &&
+                  !record.live_execution &&
+                  !record.fire_claim &&
+                  !record.run_claim
+                )
+                  inactiveOnRead.add(recordId);
+              }
               return records.map((record) => toRoutine(botId, record, timezone, flags.profileDir));
             },
             disableHermesRoutine: async (botId, id) => {
-              await hermes().setRoutineEnabled!(botId, id, false);
+              if (!inactiveOnRead.has(id)) await hermes().setRoutineEnabled!(botId, id, false);
               const job = (await jobs(botId)).find((record) => (record.id ?? record.job_id) === id);
               if (
                 !job ||
-                (job.enabled !== false && job.state !== "paused") ||
+                (job.enabled !== false && job.state !== "paused" && job.state !== "completed") ||
                 job.live_execution ||
                 job.fire_claim ||
                 job.run_claim
