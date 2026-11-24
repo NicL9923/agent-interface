@@ -1118,18 +1118,36 @@ export function createHarnessRuntime({
       const ownerId = input.ownerId ?? store.presentation(botId).ownerId ?? previous?.ownerId ?? "";
       if (!input.shared && !ownerId)
         throw new InvalidInput("Choose an owner for this personal assistant.");
-      const configured = store.managedBots
-        .listCredentials()
-        .filter(
-          (credential) =>
-            credential.kind === "api_key" &&
-            credential.ownerId === undefined &&
-            credential.allowedHarnesses.includes(harness),
-        );
-      const credentialId =
-        input.credentialId ??
-        previous?.credentialId ??
-        (configured.length === 1 ? configured[0].id : null);
+      const allCredentials = store.managedBots.listCredentials();
+      const ownerSubscriptions =
+        !input.shared && ownerId
+          ? allCredentials.filter(
+              (credential) =>
+                credential.kind === "subscription" &&
+                credential.ownerId === ownerId &&
+                credential.allowedHarnesses.includes(harness),
+            )
+          : [];
+      const sharedApiKeys = allCredentials.filter(
+        (credential) =>
+          credential.kind === "api_key" &&
+          credential.ownerId === undefined &&
+          credential.allowedHarnesses.includes(harness),
+      );
+      const autoCredentialId =
+        ownerSubscriptions.length === 1
+          ? ownerSubscriptions[0].id
+          : sharedApiKeys.length === 1
+            ? sharedApiKeys[0].id
+            : null;
+      const reusablePrevious =
+        previous?.credentialId &&
+        allCredentials
+          .find((credential) => credential.id === previous.credentialId)
+          ?.allowedHarnesses.includes(harness)
+          ? previous.credentialId
+          : undefined;
+      const credentialId = input.credentialId ?? reusablePrevious ?? autoCredentialId;
       const credential =
         credentialId === null ? undefined : store.managedBots.getCredential(credentialId);
       const next: ManagedBotRecord = {
@@ -1139,7 +1157,11 @@ export function createHarnessRuntime({
         instructions: input.instructions,
         harness,
         model: input.model,
-        provider: input.provider ?? previous?.provider ?? "",
+        provider:
+          input.provider ??
+          (harness !== previous?.harness ? credential?.vendor : previous?.provider) ??
+          credential?.vendor ??
+          "",
         reasoning: previous?.reasoning ?? "none",
         speed: previous?.speed ?? "normal",
         ownerId,

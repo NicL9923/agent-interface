@@ -820,6 +820,29 @@ describe("native harness runtime", () => {
     await nextSession(codex, sent.runId);
     expect(codex.opened.at(-1)?.spec.systemPrompt).toContain("Nicolas prefers concise updates.");
     expect(codex.opened.at(-1)?.spec.systemPrompt).toContain("ops-check: Ops Check.");
+
+    // Creating and switching harnesses on a personal bot auto-selects the owner's subscription credential.
+    const autoBot = await runtime.saveBot({
+      ...botInput,
+      name: "Auto Sub",
+      harness: "claude-code",
+      ownerId: "sam",
+      shared: false,
+    });
+    expect(store.managedBots.getManagedBot(autoBot.id)).toMatchObject({
+      harness: "claude-code",
+      credentialId: "claude-subscription",
+      provider: "anthropic",
+    });
+    await runtime.saveBot(
+      { ...botInput, name: "Auto Sub", harness: "codex", ownerId: "sam", shared: false },
+      autoBot.id,
+    );
+    expect(store.managedBots.getManagedBot(autoBot.id)).toMatchObject({
+      harness: "codex",
+      credentialId: "codex-subscription",
+      provider: "openai",
+    });
   });
 });
 
