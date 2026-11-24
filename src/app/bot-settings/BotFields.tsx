@@ -6,14 +6,16 @@ import { Icon } from "../../components/Icon";
 import { ModelSelector } from "../../components/ModelSelector";
 import { SettingsConfirmation } from "../../components/SettingsConfirmation";
 import { interactiveReplyInstructions } from "../../shared/reply-cards";
-import type { Bootstrap, Bot, BotInput } from "../../shared/types";
+import { NativeSelect } from "../../components/ui/native-select";
+import type { Bootstrap, Bot } from "../../shared/types";
+import { harnessChoices, type BotForm } from "../harness";
 
 export function DescriptionField({
   form,
   setForm,
 }: {
-  form: BotInput;
-  setForm: (form: BotInput) => void;
+  form: BotForm;
+  setForm: (form: BotForm) => void;
 }) {
   return (
     <label htmlFor="assistant-description">
@@ -33,8 +35,8 @@ export function SharingField({
   form,
   setForm,
 }: {
-  form: BotInput;
-  setForm: (form: BotInput) => void;
+  form: BotForm;
+  setForm: (form: BotForm) => void;
 }) {
   return (
     <>
@@ -55,20 +57,77 @@ export function SharingField({
   );
 }
 
-/** Instructions and model, shared by creation's second step and the Behavior section. */
+/**
+ * The harness that runs this assistant's turns. Simple view leaves it out while Hermes is the only
+ * choice, as it is on a server from before harnesses, so nothing new appears there to decide.
+ */
+export function HarnessField({
+  form,
+  setForm,
+  saved,
+  bootstrap,
+  disabled,
+}: {
+  form: BotForm;
+  setForm: (form: BotForm) => void;
+  /** The harness the assistant runs on now; undefined while creating one. */
+  saved: string | undefined;
+  bootstrap: Bootstrap;
+  disabled: boolean;
+}) {
+  const choices = harnessChoices(bootstrap.harnesses, saved);
+  const advanced = bootstrap.preferences.presentation === "advanced";
+  if (!advanced && choices.filter((choice) => choice.available).length < 2) return null;
+  const chosen = choices.find((choice) => choice.id === form.harness);
+  const note =
+    chosen && !chosen.available
+      ? chosen.reason || `${chosen.label} is not available on this server.`
+      : saved && form.harness !== saved
+        ? "Switching starts a fresh session on the new harness. The chat history stays."
+        : "The agent that runs this assistant's turns. Each harness offers its own models.";
+  return (
+    <div className="harness-setting">
+      <label htmlFor="assistant-harness">
+        <span id="assistant-harness-label">Harness</span>
+        <NativeSelect
+          id="assistant-harness"
+          aria-labelledby="assistant-harness-label"
+          aria-describedby="assistant-harness-note"
+          value={form.harness ?? ""}
+          disabled={disabled}
+          onChange={(event) => setForm({ ...form, harness: event.target.value })}
+        >
+          {choices.map((choice) => (
+            <option key={choice.id} value={choice.id} disabled={!choice.available}>
+              {choice.available ? choice.label : `${choice.label} · not set up`}
+            </option>
+          ))}
+        </NativeSelect>
+      </label>
+      <p className="muted" id="assistant-harness-note">
+        {note}
+      </p>
+    </div>
+  );
+}
+
+/** Instructions, harness and model, shared by creation's second step and the Behavior section. */
 export function BehaviorFields({
   form,
   setForm,
   busy,
   profile,
+  savedHarness,
   bootstrap,
   onModelChange,
   onFavoritesSaved,
 }: {
-  form: BotInput;
-  setForm: (form: BotInput) => void;
+  form: BotForm;
+  setForm: (form: BotForm) => void;
   busy: boolean;
   profile: string | undefined;
+  /** The harness the assistant runs on now; undefined while creating one. */
+  savedHarness: string | undefined;
   bootstrap: Bootstrap;
   onModelChange: () => void;
   onFavoritesSaved: () => void;
@@ -106,6 +165,13 @@ export function BehaviorFields({
           apply them.
         </p>
       </div>
+      <HarnessField
+        form={form}
+        setForm={setForm}
+        saved={savedHarness}
+        bootstrap={bootstrap}
+        disabled={busy || !bootstrap.capabilities.botConfiguration.supported}
+      />
       <ModelSelector
         value={{ provider: form.provider || "", model: form.model }}
         profile={profile}

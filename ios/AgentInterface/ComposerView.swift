@@ -35,6 +35,7 @@ struct ComposerView: View {
     VStack(alignment: .leading, spacing: 8) {
       StatusDock(botId: bot.id, discardConfirm: $discardConfirm)
       TalkPanel(talk: talk, name: bot.name)
+      MessageQueuePanel(bot: bot)
       card.fixedSize(horizontal: false, vertical: true)
     }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
       .frame(maxWidth: 752).frame(maxWidth: .infinity)

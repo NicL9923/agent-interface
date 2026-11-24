@@ -1,11 +1,15 @@
 import type { AutomationRequester } from "../shared/automation.js";
 import { Conflict } from "../shared/errors.js";
 import type { ExperienceRequester } from "../shared/experience.js";
-import type { Runtime } from "../shared/types.js";
-import { isUnknownRoster, unknownRoster } from "./unknown-roster.js";
+import type { Bot, BotInput, Runtime } from "../shared/types.js";
+import { isUnknownRoster, partialAnswer, unknownRoster } from "./unknown-roster.js";
 
 /** The runtime ID Hermes is registered under. Its event cursor is the one stored before cursors were kept per runtime. */
 export const hermesRuntimeId = "hermes";
+
+/** An event ID from a runtime other than Hermes, prefixed with that runtime's ID once. */
+export const namespacedEventId = (runtimeId: string, eventId: string) =>
+  eventId.startsWith(`${runtimeId}:`) ? eventId : `${runtimeId}:${eventId}`;
 
 export interface RuntimeRoutes {
   /** Every runtime, by an ID that stays the same across releases: it keys the runtime's event cursor. */
@@ -14,6 +18,11 @@ export interface RuntimeRoutes {
   defaultRuntime: string;
   /** The ID of the runtime an assistant runs on. Undefined, or absent, means the default runtime. */
   runtimeOf?: (botId: string) => string | undefined;
+  /**
+   * The ID of the runtime that creates a new assistant, chosen from what it is asked to run on. Undefined, or
+   * absent, means the default runtime. It may throw to refuse a harness this server does not run.
+   */
+  runtimeForNew?: (input: BotInput) => string | undefined;
 }
 
 // Optional members a router offers only while a registered runtime has them, so `if (!runtime.x)` checks
@@ -62,13 +71,20 @@ void everyOptionalListed;
 
 /**
  * One `Runtime` over several, chosen per assistant. A call that names an assistant goes to the runtime that assistant
- * runs on. A call that names none goes to the default runtime, or to every runtime where the answer is a union:
+ * runs on. A new assistant goes to the runtime `runtimeForNew` picks from its harness. A call that names none goes
+ * to the default runtime, or to every runtime where the answer is a union:
  * the roster, routines, roster and turn watchers, a file's assistant, a receipt lookup without an assistant,
  * reconnecting and closing. Each runtime's events are read with its own cursor (`eventSources`).
  *
- * The roster and the routine inventory are all or nothing: one runtime's failure fails the whole answer, as a lone
- * runtime's failure does, because callers reconcile, prune and decide privacy by what an answer leaves out. Keeping
- * the other runtimes' assistants listed through one runtime's outage is step 2 work in docs/RuntimePlan.md.
+ * The roster and the routine inventory stay up while some runtimes fail. Each lists what the runtimes that answered
+ * listed, and the roster adds the last roster each failed runtime gave, marked disconnected. Either answer is then
+ * marked partial (`partialAnswer` in `unknown-roster.ts`), and a failed runtime that has not answered since this
+ * server started also leaves the roster unknown. Callers reconcile, prune and decide privacy by what an answer leaves
+ * out, so each checks `isIncomplete` or `mayOmit` before taking an absence as gone. When every runtime fails, the
+ * answer fails as a lone runtime's failure does.
+ *
+ * Every roster row names its runtime as `harness`. Event IDs from any runtime but Hermes are prefixed with the
+ * runtime's ID, so two runtimes' events never share a row in the event log; Hermes's stay as they were stored.
  *
  * An assistant whose runtime lacks an optional member another runtime has gets a 409 for it, nothing from a
  * synchronous read, and a watcher that never fires.
@@ -126,9 +142,28 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
   // Each runtime lists only the assistants that run on it, so no assistant appears twice or from the wrong runtime.
   const mine = <T>(id: string, rows: T[], botIdOf: (row: T) => string) =>
     rows.filter((row) => runtimeIdOf(botIdOf(row)) === id);
-  // All or nothing: callers reconcile and prune on this inventory, so one runtime's outage fails the whole answer.
-  const fanOut = async <T>(read: (runtime: Runtime) => Promise<T[]>, botIdOf: (row: T) => string) =>
-    (await Promise.all(ids.map(async (id) => mine(id, await read(byId(id)), botIdOf)))).flat();
+  // Each runtime's answer, or its failure. Only when every runtime fails does the whole read fail, with the first
+  // runtime's error, as a lone runtime's failure would.
+  type Answer<T> = { id: string; ok: true; value: T } | { id: string; ok: false; error: unknown };
+  const askEach = async <T>(read: (runtime: Runtime) => Promise<T>) => {
+    const answers = await Promise.all(
+      ids.map(async (id): Promise<Answer<T>> => {
+        try {
+          return { id, ok: true, value: await read(byId(id)) };
+        } catch (error) {
+          return { id, ok: false, error };
+        }
+      }),
+    );
+    const failed = new Set(answers.flatMap((answer) => (answer.ok ? [] : [answer.id])));
+    const first = answers[0];
+    if (failed.size === ids.length && first && !first.ok) throw first.error;
+    // An assistant on a runtime that failed may be missing from the answer, whatever else it lists.
+    const omits = (botId: string) => failed.has(runtimeIdOf(botId));
+    return { answers, failed, omits };
+  };
+  // The last roster each runtime answered with, so its assistants stay listed, disconnected, while it fails.
+  const lastRosters = new Map<string, Bot[]>();
 
   // Required, so a member added to Runtime fails to compile until the router dispatches it.
   const router: Required<Runtime> = {
@@ -165,17 +200,35 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
     capabilities: async (...args) => on(args[0]).capabilities(...args),
     canonicalSubmit: async (...args) => (await on(args[0]).canonicalSubmit?.(...args)) === true,
     listBots: async () => {
-      const lists = await Promise.all(
-        ids.map(async (id) => [id, await byId(id).listBots()] as const),
-      );
-      const rows = lists.flatMap(([id, bots]) => mine(id, bots, (bot) => bot.id));
-      // A runtime with no roster yet leaves the whole answer saying nothing about who is on it.
-      return lists.some(([, bots]) => isUnknownRoster(bots)) ? unknownRoster(rows) : rows;
+      const { answers, failed, omits } = await askEach((runtime) => runtime.listBots());
+      let unknown = false;
+      const rows = answers.flatMap((answer): Bot[] => {
+        if (answer.ok) {
+          const bots = mine(answer.id, answer.value, (bot) => bot.id).map((bot) => ({
+            ...bot,
+            harness: bot.harness ?? answer.id,
+          }));
+          // A runtime with no roster yet leaves the whole answer saying nothing about who is on it.
+          if (isUnknownRoster(answer.value)) unknown = true;
+          else lastRosters.set(answer.id, bots);
+          return bots;
+        }
+        const last = lastRosters.get(answer.id);
+        // A runtime that never answered since this server started says nothing about who runs on it.
+        if (!last) unknown = true;
+        return (last ?? []).map((bot) => ({ ...bot, activity: "disconnected" as const }));
+      });
+      if (unknown) unknownRoster(rows);
+      return failed.size ? partialAnswer(rows, omits) : rows;
     },
     botDetail: async (botId) => member(botId, "botDetail")(botId),
     watchRoster: (changed) => subscribe((runtime) => runtime.watchRoster?.(changed)),
-    // A new assistant is created on the default runtime.
-    saveBot: async (...args) => on(args[1]).saveBot(...args),
+    // A new assistant is created on the runtime its harness names, or the default runtime.
+    saveBot: async (...args) =>
+      (args[1] === undefined
+        ? byId(routes.runtimeForNew?.(args[0]) ?? routes.defaultRuntime)
+        : on(args[1])
+      ).saveBot(...args),
     deleteBot: async (id) => on(id).deleteBot(id),
     stop: async (...args) => on(args[0]).stop(...args),
     generatePortrait: async (...args) => on(args[0]).generatePortrait(...args),
@@ -223,21 +276,34 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
     setTools: async (...args) => on(args[0]).setTools(...args),
     skills: async (botId) => on(botId).skills(botId),
     setSkills: async (...args) => on(args[0]).setSkills(...args),
-    routines: async (...args) =>
-      args[0] === undefined
-        ? fanOut(
-            (runtime) => runtime.routines(),
-            (routine) => routine.botId,
-          )
-        : on(args[0]).routines(...args),
+    // A failed runtime's routines are left out, never listed from memory: a stale routine could be run or changed.
+    routines: async (...args) => {
+      if (args[0] !== undefined) return on(args[0]).routines(...args);
+      const { answers, failed, omits } = await askEach((runtime) => runtime.routines());
+      const rows = answers.flatMap((answer) =>
+        answer.ok ? mine(answer.id, answer.value, (routine) => routine.botId) : [],
+      );
+      return failed.size ? partialAnswer(rows, omits) : rows;
+    },
     saveRoutine: async (...args) => on(args[0].botId).saveRoutine(...args),
     deleteRoutine: async (...args) => on(args[1]).deleteRoutine(...args),
     // A runtime without durable events has nothing to resume from, so its discovery fails and holds up no other.
+    // Events from any runtime but Hermes get its ID as a prefix, so no two runtimes' events share an ID in the
+    // event log. Hermes's keep the IDs already stored for them.
     discoverEvents: async (cursor, source) => {
-      const runtime = byId(source ?? routes.defaultRuntime);
+      const id = source ?? routes.defaultRuntime;
+      const runtime = byId(id);
       const durable = (await runtime.capabilities()).durableEvents;
       if (!durable.supported) throw new Error(durable.reason ?? "Durable events are unavailable");
-      return runtime.discoverEvents(cursor);
+      const discovery = await runtime.discoverEvents(cursor);
+      if (id === hermesRuntimeId) return discovery;
+      return {
+        ...discovery,
+        events: discovery.events.map((event) => ({
+          ...event,
+          id: namespacedEventId(id, event.id),
+        })),
+      };
     },
     eventSources: () => ids,
     // The default runtime holds who each assistant may reach; hand-offs between runtimes go through the app.

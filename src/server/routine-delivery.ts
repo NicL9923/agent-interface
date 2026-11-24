@@ -1,9 +1,10 @@
 import type { GroupCatalog, GroupRoom } from "../shared/collaboration.js";
 import type { Routine, Runtime } from "../shared/types.js";
-import { visible } from "./bot-access.js";
+import { assistantsUnavailable, visible } from "./bot-access.js";
 import { httpError } from "./http-error.js";
 import { routineTargets } from "./delivery-targets.js";
 import type { Store } from "./store.js";
+import { isIncomplete, mayOmit } from "./unknown-roster.js";
 
 // Where routines post their results in group chats must never reach someone who cannot see the
 // routine's assistant. The rule is checked when a routine's rooms are chosen and again whenever an
@@ -13,13 +14,20 @@ export type Presentation = { shared?: boolean; ownerId?: string };
 
 /**
  * Who can see each current assistant, as every group route decides it: the app's record over what Hermes
- * reports. Undefined for an ID that is no assistant now, such as a deleted one.
+ * reports. Undefined for an ID that is no assistant now, such as a deleted one. An assistant the roster
+ * leaves out because its runtime did not answer is judged by the app's record alone, and without one
+ * the lookup fails (`assistantsUnavailable`): a room is neither reported gone nor opened on a guess.
  */
 export async function presentations(runtime: Pick<Runtime, "listBots">, store: Store) {
-  const bots = new Map((await runtime.listBots()).map((bot) => [bot.id, bot]));
+  const roster = await runtime.listBots();
+  const bots = new Map(roster.map((bot) => [bot.id, bot]));
   return (botId: string): Presentation | undefined => {
     const bot = bots.get(botId);
-    return bot && { shared: bot.shared, ownerId: bot.ownerId, ...store.presentation(botId) };
+    if (bot) return { shared: bot.shared, ownerId: bot.ownerId, ...store.presentation(botId) };
+    if (!mayOmit(roster, botId)) return undefined;
+    const recorded = store.presentation(botId);
+    if (recorded.shared === undefined) throw assistantsUnavailable();
+    return recorded;
   };
 }
 
@@ -91,12 +99,13 @@ export async function assertRoutinesStayPrivate(
       { code: "routine_rooms_unknown" },
     );
   let current: (botId: string) => Presentation | undefined;
+  let before: Presentation | undefined;
   try {
     current = await presentations(runtime, store);
+    before = current(botId);
   } catch {
     throw unreadable();
   }
-  const before = current(botId);
   // A sharing change that keeps who can see the assistant changes no room.
   if (
     before &&
@@ -107,9 +116,12 @@ export async function assertRoutinesStayPrivate(
   let routines: Routine[];
   let targets: Map<Routine, string[]>;
   try {
+    const all = await runtime.routines();
+    // A runtime that did not answer may hold a routine posting in one of these rooms.
+    if (isIncomplete(all)) throw unreadable();
     // Every room each routine posts in, from every delivery field Hermes honors (src/server/delivery-targets.ts).
     targets = new Map(
-      (await runtime.routines())
+      all
         .map((routine) => {
           const found = routineTargets(routine);
           if (found.unknown) throw unreadable();

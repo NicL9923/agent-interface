@@ -12,7 +12,7 @@ import type { GroupCatalogWatch } from "./group-catalog-watch.js";
 import type { GroupWatch } from "./group-watch.js";
 import { routePattern } from "./route-path.js";
 import { isUnknownRoster } from "./unknown-roster.js";
-import { changesRoster, type RuntimeSnapshots } from "./runtime-snapshot.js";
+import { changesRoster, withBotCapabilities, type RuntimeSnapshots } from "./runtime-snapshot.js";
 import { id } from "./schemas.js";
 import type { Store } from "./store.js";
 
@@ -78,7 +78,7 @@ export function installEventRoutes(
         rosterLast = Date.now();
         const began = snapshot.begin();
         void Promise.all([
-          runtime.listBots(),
+          runtime.listBots().then((bots) => withBotCapabilities(runtime, bots)),
           runtime.capabilities(),
           runtime.status().catch(() => undefined),
         ])

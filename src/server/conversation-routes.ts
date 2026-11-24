@@ -767,11 +767,18 @@ export function installConversationRoutes(
           "This retry doesn't match the failed turn. Reload the conversation and retry again.",
         );
     }
-    const steering =
+    let steering =
       explicitSteering ||
       ["thinking", "working", "waiting", "blocked"].includes(
         conversation?.activity.state ?? "idle",
       );
+    // A busy send to a runtime that cannot steer but keeps a queue waits there for the next turn. Asking to steer
+    // still needs steering, and so does a runtime that admits sends itself (`canonicalSubmit`).
+    if (steering && !explicitSteering && !fast) {
+      const capabilities = await runtime.capabilities(input.botId);
+      if (!capabilities.steering.supported && capabilities.queueManagement.supported)
+        steering = false;
+    }
     // Steering is the assistant's runtime's to support: one that queues messages for the next turn refuses it.
     if (steering || fast) await requireCapability("steering", input.botId);
     // The first retry of a failed turn claims it; any later one, from anyone, follows that request.
@@ -1039,7 +1046,10 @@ export function installConversationRoutes(
   // overwritten artifact keeps its URL, and a browser cache is shared by whoever signs in next.
   app.get("/api/files/:id", async (req, reply) => {
     // The ID's signature names its assistant, which the access hook already read into req.assistantId.
-    await requireCapability("generatedFiles", req.assistantId);
+    // A runtime that serves either its uploads or its generated files serves this download.
+    const capabilities = await runtime.capabilities(req.assistantId);
+    if (!capabilities.uploads.supported && !capabilities.generatedFiles.supported)
+      await requireCapability("generatedFiles", req.assistantId);
     const file = await runtime.download(
       (req.params as { id: string }).id,
       MAX_DOWNLOAD_BYTES,

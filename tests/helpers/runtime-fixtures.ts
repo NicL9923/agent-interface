@@ -67,6 +67,7 @@ export function capabilitiesFixture(changes: Partial<Capabilities> = {}): Capabi
   return {
     chat: unsupported,
     steering: unsupported,
+    queueManagement: unsupported,
     approvals: unsupported,
     uploads: unsupported,
     generatedFiles: unsupported,

@@ -5,6 +5,7 @@ import type { Bot, Message, Runtime, ToolCall } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
 import { httpError } from "./http-error.js";
 import type { Store } from "./store.js";
+import { failedRuntimeOmits, isIncomplete, isUnknownRoster, mayOmit } from "./unknown-roster.js";
 declare module "fastify" {
   interface FastifyRequest {
     privacyVersion?: number;
@@ -39,6 +40,59 @@ export async function visibleBots(
 export const notFound = { error: assistantNotFoundMessage, code: "assistant_not_found" } as const;
 
 /**
+ * The refusal for a read that would have to take an assistant for gone when its runtime did not answer. Clients
+ * keep what they showed, as for any failed read, so none clears the assistant, its rooms or its routines.
+ */
+export const assistantsUnavailable = () =>
+  httpError(503, "Some assistants can't be reached right now. Try again in a moment.", {
+    expose: true,
+    code: "assistants_unavailable",
+  });
+
+/**
+ * Whether this person sees each assistant, by a roster that may be incomplete. One the roster lists is judged by
+ * its sharing, with this app's record over the runtime's. One it leaves out is gone, unless its runtime did not
+ * answer: then this app's record decides, as every route that names the assistant decides, and without a record
+ * nobody can say, so the read fails rather than report it gone or let it through.
+ */
+export function seenOn(
+  bots: Bot[],
+  store: Pick<Store, "presentation">,
+  userId: string | undefined,
+) {
+  const listed = new Map(bots.map((bot) => [bot.id, bot]));
+  return (botId: string) => {
+    const bot = listed.get(botId);
+    if (bot) return visible({ ...bot, ...store.presentation(botId) }, userId);
+    if (!mayOmit(bots, botId)) return false;
+    const recorded = store.presentation(botId);
+    if (recorded.shared === undefined) throw assistantsUnavailable();
+    return visible(recorded, userId);
+  };
+}
+
+/**
+ * Refuses a list, such as the routine inventory, that may leave out the rows of an assistant this person sees,
+ * so no client takes them for gone. A list from every runtime passes untouched.
+ */
+export async function assertNothingOmittedFor(
+  rows: readonly object[],
+  runtime: Pick<Runtime, "listBots">,
+  store: Pick<Store, "presentation">,
+  userId: string,
+) {
+  if (!isIncomplete(rows)) return;
+  const bots = await runtime.listBots();
+  if (
+    isUnknownRoster(bots) ||
+    bots.some(
+      (bot) => mayOmit(rows, bot.id) && visible({ ...bot, ...store.presentation(bot.id) }, userId),
+    )
+  )
+    throw assistantsUnavailable();
+}
+
+/**
  * The routine a route that names only its ID acts on. Hermes lets two assistants hold jobs with the same
  * ID, so the ID alone can name several: it means the one this person can see, and Hermes is then told its
  * assistant. A copy they cannot see is never chosen or revealed, and two they can see are ambiguous.
@@ -52,6 +106,8 @@ export function routineById<T extends { id: string; botId: string }>(
   const seen = routines.filter(
     (routine) => routine.id === routineId && visibleTo(store, routine.botId, userId),
   );
+  // A runtime that did not answer may hold it: never report it gone.
+  if (!seen.length && isIncomplete(routines)) throw assistantsUnavailable();
   if (seen.length > 1)
     throw httpError(
       409,
@@ -82,12 +138,14 @@ export function fileBotId(runtime: Pick<Runtime, "fileBotId">, fileId: string) {
 /**
  * Body and query routes still answer a hidden ID differently from a made-up one; telling
  * them apart takes deliberate probing, a documented privacy limit.
- * The last roster Hermes reported. A route naming an assistant that is not on it answers
+ * The last roster the runtimes reported. A route naming an assistant that is not on it answers
  * the same 404 as a hidden one, so nobody can tell a private assistant from a made-up ID.
  * An ID missing from the cached roster refreshes it first, so a new assistant is never refused.
  */
 export class Roster {
   private bots?: Bot[];
+  /** The newest answer, whatever its shape, with its marks: it says which absences prove nothing. */
+  private latest?: Bot[];
   private at = 0;
   private refreshing?: Promise<void>;
   // Every name an assistant has had is stored, so an old agent message still matches after a rename or restart.
@@ -96,8 +154,10 @@ export class Roster {
     private store?: Pick<Store, "rememberNames" | "nameHistory">,
   ) {}
   note(bots: unknown) {
+    if (!Array.isArray(bots)) return;
+    this.latest = bots as Bot[];
     // A disconnected Hermes reports its last roster as disconnected; it proves nothing.
-    if (!Array.isArray(bots) || !bots.some((bot) => bot?.activity !== "disconnected")) return;
+    if (!bots.some((bot) => bot?.activity !== "disconnected")) return;
     this.bots = bots;
     this.at = Date.now();
     this.store?.rememberNames(bots as Bot[]);
@@ -121,17 +181,40 @@ export class Roster {
   private fresh() {
     return this.bots && Date.now() - this.at < 10_000;
   }
-  /** False only when Hermes's current roster lacks it. */
+  private listed(botId: string) {
+    return !!(
+      this.latest?.some((bot) => bot.id === botId) || this.bots?.some((bot) => bot.id === botId)
+    );
+  }
+  /**
+   * Whether the newest answer cannot say this assistant is gone: there is none yet, or the runtime the
+   * assistant runs on did not answer. A complete answer settles it, even one Hermes marked disconnected.
+   */
+  private unsure(botId: string) {
+    return !this.latest || mayOmit(this.latest, botId);
+  }
+  /**
+   * False when the runtimes' current roster lacks it. While the roster cannot say, only an assistant this app
+   * has listed before is let through, so a made-up ID is refused even with no roster at all.
+   */
   async exists(botId: string) {
     if (this.fresh() && this.bots!.some((bot) => bot.id === botId)) return true;
     if (typeof this.runtime.listBots !== "function") return true;
     await this.refresh();
-    return !this.bots || this.bots.some((bot) => bot.id === botId);
+    if (this.listed(botId)) return true;
+    return this.unsure(botId) && !!this.store?.nameHistory().has(botId);
   }
-  /** True only when Hermes's current roster has it. */
+  /** True only when the runtimes' current roster has it. */
   async has(botId: string) {
     if (typeof this.runtime.listBots === "function") await this.refresh();
     return !!this.bots?.some((bot) => bot.id === botId);
+  }
+  /**
+   * True when the newest roster may lack it only because the runtime it runs on failed, so it may exist
+   * there. Call after `has`, which reads the roster. Hermes alone never answers this way.
+   */
+  mayHold(botId: string) {
+    return !!this.latest && failedRuntimeOmits(this.latest, botId);
   }
   /** Each assistant's current and earlier names. */
   async names() {

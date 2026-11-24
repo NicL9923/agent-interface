@@ -1120,47 +1120,6 @@ describe("conversation state", () => {
     expect(container.querySelector("#usage-title")?.textContent).toBe("Usage");
   });
 
-  it("keeps one integrations dialog across repeated household refreshes", async () => {
-    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
-      configurable: true,
-      value: function (this: HTMLDialogElement) {
-        this.open = true;
-      },
-    });
-    Object.defineProperty(HTMLDialogElement.prototype, "close", {
-      configurable: true,
-      value: function (this: HTMLDialogElement) {
-        this.open = false;
-      },
-    });
-    const original = vi.mocked(api).getMockImplementation()!;
-    vi.mocked(api).mockImplementation(async <T>(path: string) =>
-      path.startsWith("/integrations")
-        ? ({ profile: "shared", canManage: true, connections: [] } as T)
-        : (original(path) as Promise<T>),
-    );
-    await render();
-    // The avatar opens the profile menu; Settings is one of its items.
-    await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
-    await act(async () =>
-      [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-        .find((item) => item.textContent === "Settings")!
-        .click(),
-    );
-    await loaded();
-    expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(0);
-    await act(async () =>
-      [...container.querySelectorAll<HTMLButtonElement>(".settings-row")]
-        .find((button) => button.textContent?.startsWith("Integrations"))!
-        .click(),
-    );
-    await loaded();
-    await advance(30_000);
-    expect(container.querySelectorAll(".integrations-panel")).toHaveLength(1);
-    // Rarely used screens stay unloaded until opened, and an opened one stays mounted.
-    expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(0);
-  });
-
   it("loads the Hermes updates panel when first opened and keeps it mounted for its running status", async () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
       configurable: true,

@@ -42,14 +42,6 @@ export function useAutomation(botId: string) {
           : cause;
       }
       if (!current()) return result;
-      const resume = (result as AutomationOverview | undefined)?.goals?.resume;
-      if (resume?.status === "uncertain") {
-        setUncertain(true);
-        action.setError(
-          "The goal's start is uncertain. Refresh status and review the conversation before trying again.",
-        );
-        return result;
-      }
       let next: AutomationOverview;
       try {
         next = await request("GET /bots/:id/automation", { params: { id: botId } });
@@ -65,72 +57,8 @@ export function useAutomation(botId: string) {
       if (!current()) return result;
       // Fresher than any load still running, which is dropped.
       overview.setData(next);
-      if (resume?.status === "rejected")
-        action.setError(
-          resume.message || "Hermes refused to start this goal. Review its status before resuming.",
-        );
-      else action.setNotice(successNotice);
+      action.setNotice(successNotice);
       return result;
-    });
-  };
-  const changeTask = <T,>(
-    send: () => Promise<T>,
-  ): Promise<
-    | {
-        kind: "saved" | "refused";
-        message: string;
-        overview: AutomationOverview;
-        refreshed?: boolean;
-        result?: T;
-      }
-    | undefined
-  > => {
-    if (uncertain || loading) return Promise.resolve(undefined);
-    return action.run(async ({ current }) => {
-      let refusal = "";
-      let result: T | undefined;
-      try {
-        result = await send();
-      } catch (cause) {
-        if (!current()) throw cause;
-        if (cause instanceof ApiError && cause.status < 500) refusal = cause.message;
-        else {
-          setUncertain(true);
-          throw new Error(
-            "We couldn't confirm this change. Refresh status and review it before trying again. Nothing will be sent again automatically.",
-          );
-        }
-      }
-      if (!current()) return undefined;
-      let next: AutomationOverview;
-      try {
-        next = await request("GET /bots/:id/automation", { params: { id: botId } });
-      } catch {
-        if (current()) {
-          setUncertain(true);
-          action.setError(
-            refusal
-              ? "Status could not refresh. Refresh status before making another change."
-              : "The change could not be confirmed because status could not refresh. Refresh status before making another change.",
-          );
-        }
-        if (refusal && value)
-          return {
-            kind: "refused" as const,
-            message: `${refusal} Status could not refresh.`,
-            overview: value,
-            refreshed: false,
-          };
-        return undefined;
-      }
-      if (!current()) return undefined;
-      overview.setData(next);
-      return {
-        kind: refusal ? ("refused" as const) : ("saved" as const),
-        message: refusal,
-        overview: next,
-        result,
-      };
     });
   };
   const refresh = () => {
@@ -141,7 +69,6 @@ export function useAutomation(botId: string) {
     value: value ?? undefined,
     botId,
     change,
-    changeTask,
     refresh,
     refreshCount,
     busy: action.busy,
@@ -155,24 +82,7 @@ export function useAutomation(botId: string) {
 }
 export type Controls = ReturnType<typeof useAutomation>;
 
-export function Status({ control, work = false }: { control: Controls; work?: boolean }) {
-  const receipt = work ? control.value?.goals.resume : undefined;
-  const rejectedMessage =
-    receipt?.status === "rejected"
-      ? receipt.message || "Hermes refused to start this goal. Review its status before resuming."
-      : undefined;
-  const receiptAnnounced = !!rejectedMessage && control.error === rejectedMessage;
-  const receiptAnnouncement =
-    receipt?.status === "rejected"
-      ? rejectedMessage
-      : receipt?.status === "uncertain"
-        ? receipt.message ||
-          "Hermes could not confirm this goal continuation. Review the conversation before trying again."
-        : "";
-  const receiptKey = receipt ? `${receipt.requestId}:${receipt.status}` : "";
-  const [resultKey, setResultKey] = useState("");
-  if (receiptAnnounced && resultKey !== receiptKey) setResultKey(receiptKey);
-  const statusText = receiptAnnounced || receiptKey === resultKey ? "" : receiptAnnouncement;
+export function Status({ control }: { control: Controls }) {
   return (
     <>
       <div className="automation-toolbar">
@@ -187,29 +97,7 @@ export function Status({ control, work = false }: { control: Controls; work?: bo
           {control.loading ? "Refreshing..." : "Refresh status"}
         </Button>
       </div>
-      {work && (
-        <>
-          <p
-            className="sr-only"
-            role="status"
-            aria-label="Resume status"
-            aria-live="polite"
-            aria-atomic="true"
-          >
-            {statusText}
-          </p>
-          <p
-            className="sr-only"
-            role="status"
-            aria-label="Resume result"
-            aria-live="polite"
-            aria-atomic="true"
-          >
-            {receiptAnnounced ? control.error : ""}
-          </p>
-        </>
-      )}
-      {control.error && !receiptAnnounced && (
+      {control.error && (
         <p className="form-error" role="alert">
           {control.error}
         </p>

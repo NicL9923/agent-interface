@@ -10,6 +10,8 @@ export type ErrorCode =
   // An approval or question already answered, by someone else or elsewhere, or one that expired.
   | "request_not_pending"
   | "assistants_changed"
+  // An assistant whose runtime did not answer, which a read would otherwise report gone.
+  | "assistants_unavailable"
   | "created_incomplete"
   | "draft_conflict"
   | "file_too_large"
@@ -35,6 +37,10 @@ export type ErrorCode =
   | "sharing_changed"
   // A request ID came back with different content: another tab or device already sent under it.
   | "submission_conflict"
+  | "conversation_changed"
+  | "queue_item_not_found"
+  | "queue_item_not_queued"
+  | "queue_item_not_running"
   // Approval scopes (Workstream B): a choice Hermes did not offer, settings an older add-on lacks, and policy guards.
   | "approval_choice_unavailable"
   | "approval_settings_unsupported"

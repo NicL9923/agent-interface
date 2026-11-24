@@ -15,7 +15,7 @@ import {
   type GroupState,
 } from "../shared/collaboration.js";
 import type { Store } from "./store.js";
-import { notFound, redactAgents, Roster, visible, visibleBots } from "./bot-access.js";
+import { notFound, redactAgents, Roster, seenOn, visible, visibleBots } from "./bot-access.js";
 import { httpError } from "./http-error.js";
 import { id } from "./schemas.js";
 import {
@@ -43,7 +43,8 @@ export function roomAccessible(room: GroupRoom, visible: (profile: string) => bo
   return (
     room.members?.length >= 2 &&
     room.members.every(
-      (member) => visible(member.profile) && (!member.target || member.target.kind === "local"),
+      // A remote member is never a local assistant, so its profile is not looked up.
+      (member) => (!member.target || member.target.kind === "local") && visible(member.profile),
     )
   );
 }
@@ -302,9 +303,10 @@ export async function installCollaborationRoutes(
   // A group with someone else's private assistant does not exist for this person: its
   // other assistants' replies would quote and answer the private one.
   const bots = (userId: string) => visibleBots(runtime, store, userId);
+  // Who this person sees, by a roster that may lack a failed runtime's assistants (see `seenOn`).
+  const sees = async (userId: string) => seenOn(await runtime.listBots(), store, userId);
   async function profile(userId: string, botId: string) {
-    if (!(await bots(userId)).some((bot) => bot.id === botId))
-      throw httpError(404, notFound.error, { code: notFound.code });
+    if (!(await sees(userId))(botId)) throw httpError(404, notFound.error, { code: notFound.code });
   }
   apiRoute(app, "GET /bots/:botId/routines/:routineId/results", {}, async (req) => {
     const p = z.object({ botId: id, routineId: id }).parse(req.params);
@@ -406,12 +408,10 @@ export async function installCollaborationRoutes(
       throw httpError(409, "Hosted group chats are unavailable on this Hermes integration.");
     return runtime.groupRequest(input);
   }
-  const accessible = (room: GroupRoom, allowed: Set<string>) =>
-    roomAccessible(room, (profile) => allowed.has(profile));
   async function room(userId: string, roomId: string) {
-    const allowed = new Set((await bots(userId)).map((bot) => bot.id));
+    const allowed = await sees(userId);
     const state = (await request({ operation: "state", roomId })) as GroupState;
-    if (!accessible(state.room, allowed)) throw httpError(404, "Group chat not found");
+    if (!roomAccessible(state.room, allowed)) throw httpError(404, "Group chat not found");
     return state;
   }
   // Labels each human message with the household member who sent it here, when one is on record.
@@ -471,9 +471,9 @@ export async function installCollaborationRoutes(
         reason: "Hosted group chats are unavailable on this Hermes integration.",
       } satisfies GroupCatalog;
     const userId = signedIn(req).id;
-    const allowed = new Set((await bots(userId)).map((bot) => bot.id));
+    const allowed = await sees(userId);
     const value = (await request({ operation: "list" })) as GroupCatalog;
-    const rooms = value.rooms.filter((room) => accessible(room, allowed));
+    const rooms = value.rooms.filter((room) => roomAccessible(room, allowed));
     await latest.refresh(rooms, value.rooms);
     return present(userId, value, rooms);
   });
@@ -488,15 +488,9 @@ export async function installCollaborationRoutes(
           runtime.listBots(),
           request({ operation: "list" }) as Promise<GroupCatalog>,
         ]);
-        const allowedFor = (userId: string) =>
-          new Set(
-            roster
-              .filter((bot) => visible({ ...bot, ...store.presentation(bot.id) }, userId))
-              .map((bot) => bot.id),
-          );
         const roomsFor = (userId: string) => {
-          const allowed = allowedFor(userId);
-          return value.rooms.filter((room) => accessible(room, allowed));
+          const allowed = seenOn(roster, store, userId);
+          return value.rooms.filter((room) => roomAccessible(room, allowed));
         };
         await latest.refresh(
           [...new Map(userIds.flatMap(roomsFor).map((room) => [room.room_id, room])).values()],

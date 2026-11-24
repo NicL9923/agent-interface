@@ -2,6 +2,7 @@ import { badgeCount, unreadSince } from "../shared/unread.js";
 import type { Bot, Runtime } from "../shared/types.js";
 import { visible } from "./bot-access.js";
 import type { Store } from "./store.js";
+import { isIncomplete } from "./unknown-roster.js";
 
 /** A notification about to reach this person, which the roster may not reflect yet. */
 export type Arriving = { botId?: string; kind?: string };
@@ -20,7 +21,9 @@ export function badgeFor(
   userId: string,
   arriving: Arriving[] = [],
 ) {
-  if (!bots || bots.some((bot) => bot.activity === "disconnected")) return undefined;
+  // A roster that may leave assistants out would count too few.
+  if (!bots || isIncomplete(bots) || bots.some((bot) => bot.activity === "disconnected"))
+    return undefined;
   const reads = store.chatReads(userId);
   const seen = bots.filter((bot) => visible({ ...bot, ...store.presentation(bot.id) }, userId));
   const lastAt = new Map(seen.map((bot) => [bot.id, bot.lastMessage?.at]));

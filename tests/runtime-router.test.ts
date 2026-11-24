@@ -162,9 +162,16 @@ describe("runtime router", () => {
     }
   });
 
-  it("fails the roster and the routine inventory whole when one runtime fails, since callers prune by what they leave out", async () => {
+  it("fails the roster and the routine inventory only when every runtime fails, with the first runtime's error", async () => {
     const router = routerOver(
-      { listBots: async () => [bot("ranch")], routines: async () => [routine("morning", "ranch")] },
+      {
+        listBots: async () => {
+          throw new Error("Hermes roster is unreachable");
+        },
+        routines: async () => {
+          throw new Error("Hermes is unreachable");
+        },
+      },
       {
         listBots: async () => {
           throw new Error("Codex roster is unreachable");
@@ -174,8 +181,8 @@ describe("runtime router", () => {
         },
       },
     );
-    await expect(router.listBots()).rejects.toThrow("Codex roster is unreachable");
-    await expect(router.routines()).rejects.toThrow("Codex is unreachable");
+    await expect(router.listBots()).rejects.toThrow("Hermes roster is unreachable");
+    await expect(router.routines()).rejects.toThrow("Hermes is unreachable");
   });
 
   it("undoes every watcher already registered when a later runtime refuses its own", () => {
@@ -351,8 +358,9 @@ describe("background discovery over several runtimes", () => {
       await worker.tick();
       expect(discovered).toHaveBeenCalledWith("codex-1");
       expect([store.cursor(), store.cursor("codex")]).toEqual(["hermes-9", "codex-2"]);
+      // Another runtime's event IDs carry its ID, so none can take a Hermes event's row.
       expect(store.db.prepare("SELECT id FROM notification_events").all()).toEqual([
-        { id: "barn-done" },
+        { id: "codex:barn-done" },
       ]);
     } finally {
       await worker.stop();

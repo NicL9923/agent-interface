@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createHermesRuntime } from "./hermes.js";
-import { createRuntimeRouter, hermesRuntimeId } from "./runtime-router.js";
+import { composeServerRuntime } from "./native-harness.js";
 import { Store, schemaVersion } from "./store.js";
 import { fileSigner } from "./hermes-files.js";
 import { safeError } from "./logging.js";
@@ -23,17 +23,20 @@ const hermes = createHermesRuntime({
   qualificationFile: config.hermesQualificationFile,
   files,
 });
-// Every assistant runs on Hermes until docs/RuntimePlan.md step 2 registers a second runtime and names its assistants.
-const runtime = createRuntimeRouter({
-  runtimes: { [hermesRuntimeId]: hermes },
-  defaultRuntime: hermesRuntimeId,
-});
+// Hermes stays the default runtime. Assistants on a native harness run beside it unless WILDBOTS_HARNESS_ENABLED=false.
+const server = await composeServerRuntime({ config, store, hermes, files });
 // pino writes JSON lines to stdout; systemd keeps them in journald.
-const { app, directRoutes } = await createApp(
+const { app, directRoutes, macs } = await createApp(
   { ...config, logLevel: config.logLevel ?? "info" },
-  runtime,
-  { store },
+  server.runtime,
+  { store, probeHarnesses: server.probeHarnesses, closeServices: () => server.close() },
 );
+server.attachMacs(macs);
+if (server.sweptQueueItems)
+  app.log.warn(
+    { sweptQueueItems: server.sweptQueueItems },
+    "Interrupted queued messages left running before the restart",
+  );
 if (references.upgraded)
   app.log.info(references, "Re-signed stored file identifiers with the app's file key");
 if (references.unreadable)

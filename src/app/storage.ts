@@ -55,7 +55,6 @@ export type Pending = {
 export const draftKey = (user: string, bot: string) => `agent-interface:draft:${user}:${bot}`;
 export const submissionKey = (user: string, bot: string) =>
   `agent-interface:submission:${user}:${bot}`;
-export const goalResumeKey = (user: string, bot: string) => `automation-goal-resume:${user}:${bot}`;
 /** In sessionStorage: a sign-in flow belongs to this tab. */
 export const integrationFlowKey = (user: string, profile: string) =>
   `integration-flow:${user ? `${user}:` : ""}${profile}`;

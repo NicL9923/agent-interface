@@ -60,7 +60,7 @@ struct OfflineLibrary: Codable {
     func saved(_ bot: Bot) -> Bot {
       Bot(id: bot.id, name: bot.name, description: bot.description, model: bot.model,
         provider: bot.provider, shared: bot.shared, ownerId: bot.ownerId, avatar: bot.avatar,
-        sessionId: bot.sessionId, activity: .disconnected, lastMessage: bot.lastMessage)
+        sessionId: bot.sessionId, activity: .disconnected, lastMessage: bot.lastMessage, harness: bot.harness)
     }
     copy.bootstrap = Bootstrap(user: live.user, household: [], preferences: live.preferences,
       bots: live.bots.map(saved), capabilities: [:], connection: RuntimeStatus(connected: false), nativeApp: live.nativeApp)

@@ -3,6 +3,10 @@ import { presenceTtl } from "./store-notifications.js";
 import type { PersonalRepository } from "./store-personal.js";
 import type { StoreDatabase } from "./store-database.js";
 import type { CheckInRepository } from "./store-check-ins.js";
+import type { QueueRepository } from "./store-queue.js";
+import type { TranscriptRepository } from "./store-transcripts.js";
+import type { MemorySkillsRepository } from "./store-memory.js";
+import type { NativeRoutineRepository } from "./store-native-routines.js";
 
 /** Removals that span every area: a deleted assistant's records, and rows past their retention. */
 export class RetentionRepository {
@@ -10,7 +14,11 @@ export class RetentionRepository {
     private readonly database: StoreDatabase,
     private readonly accounts: AccountRepository,
     private readonly personal: PersonalRepository,
+    private readonly queue: QueueRepository,
+    private readonly transcripts: TranscriptRepository,
     private readonly checkIns?: CheckInRepository,
+    private readonly memory?: Pick<MemorySkillsRepository, "forgetBot">,
+    private readonly nativeRoutines?: Pick<NativeRoutineRepository, "forgetBot">,
   ) {}
   private get db() {
     return this.database.db;
@@ -20,6 +28,11 @@ export class RetentionRepository {
   // reach former participants and followers, or attribute a reused ID's messages.
   forgetBot(botId: string) {
     this.database.transaction(() => {
+      this.transcripts.forgetBot(botId);
+      this.memory?.forgetBot(botId);
+      this.nativeRoutines?.forgetBot(botId);
+      // Secrets saved for this assistant alone; owner and household secrets serve others too.
+      this.db.prepare("DELETE FROM bot_secrets WHERE scope_kind='bot' AND scope_id=?").run(botId);
       const ids = (sql: string) =>
         (this.db.prepare(sql).all(botId, botId) as { id: string | null }[]).flatMap((row) =>
           row.id ? [row.id] : [],
@@ -63,8 +76,11 @@ export class RetentionRepository {
         "retry_claims",
         "routine_trials",
         "push_action_tokens",
+        "bot_queue",
       ])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
+      // A new assistant reusing this ID must reject actions written against its predecessor.
+      this.queue.bumpVersion(botId);
       for (const job of this.checkIns?.current().filter((job) => job.botId === botId) ?? [])
         this.checkIns!.removed(botId, job.jobId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);

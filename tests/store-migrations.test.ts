@@ -234,7 +234,7 @@ describe("rollback to the previous release", () => {
     expect(version(open(legacyDatabase()).db)).toBeLessThanOrEqual(previousRelease.schemaVersion);
   });
 
-  it("keeps every object of the previous schema and only adds new tables or plain non-unique indexes", () => {
+  it("keeps every object of the previous schema and confines new constraints to new tables", () => {
     const current = objects(open(legacyDatabase()).db);
     for (const object of previousRelease.objects) expect(current).toContainEqual(object);
     const known = new Set(previousRelease.objects.map((object) => object.name));
@@ -243,10 +243,29 @@ describe("rollback to the previous release", () => {
         .filter((object) => object.type === "table")
         .map((object) => object.name),
     );
+    const nativeRoutineIndexes = new Map([
+      ["native_routines_due", "native_routines"],
+      ["native_routine_single_flight", "native_routine_runs"],
+    ]);
     for (const added of current.filter((object) => !known.has(object.name))) {
+      if (added.type === "trigger" && /^transcript_fts_(insert|update|delete)$/.test(added.name)) {
+        expect(added.tableName).toBe("transcript_messages");
+        continue;
+      }
+      if (added.type === "table" && added.name === "transcript_fts") {
+        expect(added.sql).toMatch(/^CREATE VIRTUAL TABLE transcript_fts USING fts5\(/);
+        continue;
+      }
       if (added.type === "index") {
-        // Non-unique plain column indexes are maintained transparently by SQLite after a rollback.
-        expect(added.sql, added.name).toMatch(/^CREATE INDEX [a-z_]+ ON [a-z_]+\([a-z_, ]+\)$/);
+        const nativeTable = nativeRoutineIndexes.get(added.name);
+        if (nativeTable) {
+          // The previous release never writes either native routine table.
+          expect(added.tableName, added.name).toBe(nativeTable);
+          expect(oldTables.has(nativeTable), added.name).toBe(false);
+        } else {
+          // SQLite maintains plain, non-unique indexes transparently after rollback.
+          expect(added.sql, added.name).toMatch(/^CREATE INDEX [a-z_]+ ON [a-z_]+\([a-z_, ]+\)$/);
+        }
         continue;
       }
       expect(added.type, added.name).toBe("table");

@@ -11,7 +11,7 @@ const read = (path: string) => readFileSync(join(root, path));
 describe("the W3 event-trigger fixture", () => {
   const fixture = ".agents/fixtures/work-triggers.json";
   const digest = createHash("sha256").update(read(fixture)).digest("hex");
-  const pins = ["ScreenshotTourTests.swift", "AutomationFlowTests.swift"].map((file) => {
+  const pins = ["ScreenshotTourTests.swift"].map((file) => {
     const source = read(join("ios", "AgentInterfaceUITests", file)).toString("utf8");
     return {
       file,

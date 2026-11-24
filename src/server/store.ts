@@ -6,6 +6,7 @@ import { PersonalRepository } from "./store-personal.js";
 import { DraftRepository } from "./store-drafts.js";
 import { PresentationRepository } from "./store-presentation.js";
 import { SubmissionRepository } from "./store-submissions.js";
+import { QueueRepository } from "./store-queue.js";
 import { RoutineRepository } from "./store-routines.js";
 import { NotificationRepository } from "./store-notifications.js";
 import { EventRepository } from "./store-events.js";
@@ -13,6 +14,12 @@ import { RetentionRepository } from "./store-retention.js";
 import { CheckInRepository } from "./store-check-ins.js";
 import { MacRepository } from "./store-macs.js";
 import { FileKeyRepository } from "./store-files.js";
+import { ManagedBotRepository } from "./store-bots.js";
+import { TranscriptRepository } from "./store-transcripts.js";
+import { SecretRepository } from "./store-secrets.js";
+import { MemorySkillsRepository } from "./store-memory.js";
+import { NativeRoutineRepository } from "./store-native-routines.js";
+import { NativeGroupRepository } from "./group-coordinator.js";
 import type { FileSigner } from "./hermes-files.js";
 
 export { schemaVersion } from "./store-database.js";
@@ -46,6 +53,7 @@ export class Store {
   readonly drafts: DraftRepository;
   readonly presentations: PresentationRepository;
   readonly submissions: SubmissionRepository;
+  readonly queue: QueueRepository;
   readonly routines: RoutineRepository;
   readonly notifications: NotificationRepository;
   readonly events: EventRepository;
@@ -53,6 +61,12 @@ export class Store {
   readonly checkIns: CheckInRepository;
   readonly macs: MacRepository;
   readonly files: FileKeyRepository;
+  readonly managedBots: ManagedBotRepository;
+  readonly transcripts: TranscriptRepository;
+  readonly memory: MemorySkillsRepository;
+  readonly nativeRoutines: NativeRoutineRepository;
+  readonly nativeGroups: NativeGroupRepository;
+  private secretRepository?: SecretRepository;
   constructor(path: string) {
     this.database = new StoreDatabase(path);
     this.db = this.database.db;
@@ -65,6 +79,7 @@ export class Store {
     this.drafts = new DraftRepository(this.database);
     this.presentations = new PresentationRepository(this.database);
     this.submissions = new SubmissionRepository(this.database, this.drafts);
+    this.queue = new QueueRepository(this.database);
     this.routines = new RoutineRepository(this.database);
     this.checkIns = new CheckInRepository(this.database);
     this.notifications = new NotificationRepository(this.database, {
@@ -80,13 +95,29 @@ export class Store {
       this.presentations,
       this.checkIns,
     );
+    this.transcripts = new TranscriptRepository(this.database);
+    this.memory = new MemorySkillsRepository(this.database);
+    this.nativeRoutines = new NativeRoutineRepository(this.database);
     this.retention = new RetentionRepository(
       this.database,
       this.accounts,
       this.personalState,
+      this.queue,
+      this.transcripts,
       this.checkIns,
+      this.memory,
+      this.nativeRoutines,
     );
     this.macs = new MacRepository(this.database);
+    this.managedBots = new ManagedBotRepository(this.database);
+    this.nativeGroups = new NativeGroupRepository(this.database, this.managedBots);
+  }
+  /**
+   * The mini-vault. Opened on first use, because opening it derives the vault key from WILDBOTS_VAULT_KEY or
+   * saves a new one, and a database nothing asks for a secret should never gain a key.
+   */
+  get secrets(): SecretRepository {
+    return (this.secretRepository ??= new SecretRepository(this.database));
   }
   close() {
     this.database.close();

@@ -5,13 +5,14 @@ import staticFiles from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { RequireCapability, Runtime } from "../shared/types.js";
+import type { HarnessOption, RequireCapability, Runtime } from "../shared/types.js";
 import type { Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
 import { installBotAccess, redactAgents, visibleTo } from "./bot-access.js";
-import { BotDirectory, installBotRoutes } from "./bot-routes.js";
+import { installBotRoutes, BotDirectory } from "./bot-routes.js";
 import { installConversationRoutes } from "./conversation-routes.js";
+import { installQueueRoutes } from "./queue-routes.js";
 import { installPushRoutes } from "./push-routes.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
@@ -31,6 +32,7 @@ import { installMacLink, MAX_FRAME } from "./mac-link.js";
 import { installTerminalRequestRoutes } from "./terminal-requests.js";
 import { installCollaborationRoutes } from "./collaboration.js";
 import { installRoutineRoutes } from "./routine-routes.js";
+import { installMemoryRoutes } from "./memory-routes.js";
 import { installBootstrapRoutes, visiblePreferences } from "./bootstrap-routes.js";
 import { installMainAssistantRoutes, MainAssistants } from "./main-assistant.js";
 import { installClientErrorRoutes } from "./client-errors.js";
@@ -93,6 +95,10 @@ export async function createApp(
     statfs?: StatFs;
     /** Replaces interface discovery for direct routes, so tests choose the addresses. */
     directAddresses?: () => DirectAddress[];
+    /** The native harnesses new assistants can use, for `/api/bootstrap`. Absent on a server running only Hermes. */
+    probeHarnesses?: () => Promise<HarnessOption[]>;
+    /** Closes what the runtime's turns use, such as the WildBots MCP server, once the runtime has closed. */
+    closeServices?: () => Promise<void>;
   } = {},
 ) {
   const store = options.store ?? new Store(config.database);
@@ -156,7 +162,7 @@ export async function createApp(
   });
   await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
   await installTerminalRequestRoutes(app, config, store, runtime);
-  installMacLink(app, config, store);
+  const macs = installMacLink(app, config, store);
   await installExperienceRoutes(app, runtime, store, roster);
   await installAutomationRoutes(
     app,
@@ -176,7 +182,15 @@ export async function createApp(
     redact: async (message, userId) => (await redactAgents(store, roster, userId)).message(message),
   });
   const snapshot = runtimeSnapshots(runtime);
-  installBootstrapRoutes(app, { config, runtime, store, upgrades, directory, snapshot });
+  installBootstrapRoutes(app, {
+    config,
+    runtime,
+    store,
+    upgrades,
+    directory,
+    snapshot,
+    probeHarnesses: options.probeHarnesses,
+  });
   const mains = new MainAssistants(runtime, store, config, app.log);
   installMainAssistantRoutes(app, {
     runtime,
@@ -195,6 +209,7 @@ export async function createApp(
     streams,
     requireCapability,
   });
+  installQueueRoutes(app, { store, runtime, roster, requireCapability });
   installTalkRoutes(app, {
     runtime,
     store,
@@ -217,6 +232,7 @@ export async function createApp(
     streams,
   });
   installRoutineRoutes(app, { config, runtime, store, roster, requireCapability });
+  installMemoryRoutes(app, { store, memory: store.memory, roster });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.
   installPushRoutes(app, { config, runtime, store, live: () => worker.live });
   // Universal links and Handoff for the iOS app, whose bundle ID is the APNs topic. Only chat and Today
@@ -319,10 +335,14 @@ export async function createApp(
     eventLoop.stop();
     await mains.stop();
     await worker.stop();
-    await runtime.close();
+    try {
+      await runtime.close();
+    } finally {
+      await options.closeServices?.();
+    }
     store.close();
   });
-  return { app, store, worker, health, eventLoop, routes, directRoutes, mains, snapshot };
+  return { app, store, worker, health, eventLoop, routes, directRoutes, mains, macs, snapshot };
 }
 
 /** The association file Apple's CDN fetches for universal links and Handoff from Safari. */

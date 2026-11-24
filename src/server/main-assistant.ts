@@ -22,7 +22,7 @@ import type {
 import { withoutBotTag } from "../shared/event-copy.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
-import { notFound, visible } from "./bot-access.js";
+import { assistantsUnavailable, notFound, visible } from "./bot-access.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { httpError } from "./http-error.js";
 import { quietLog, type Log } from "./logging.js";
@@ -31,6 +31,7 @@ import { ownChatOnly } from "./collaboration.js";
 import { normalizeDeliver, routineTargets } from "./delivery-targets.js";
 import { id, timezone } from "./schemas.js";
 import type { Store } from "./store.js";
+import { isIncomplete, mayOmit } from "./unknown-roster.js";
 export { scheduleMinutes };
 
 // A member's main assistant and its check-ins. The member's preferences say what they want; this
@@ -243,13 +244,15 @@ export class MainAssistants {
     return run;
   }
 
-  /** The assistants with this app's sharing applied, or undefined while Hermes cannot say. */
+  /** The assistants with this app's sharing applied, or undefined while the runtimes cannot say. */
   private async roster(): Promise<Bot[] | undefined> {
     const status = await this.runtime.status();
     if (!status.connected) return undefined;
     const bots = await this.runtime.listBots();
-    // A disconnected Hermes reports its last roster as disconnected; it proves nothing.
-    if (bots.length && bots.every((bot) => bot.activity === "disconnected")) return undefined;
+    // A disconnected Hermes reports its last roster as disconnected; it proves nothing. Nor does a roster
+    // some runtime did not answer for: its assistants would lose their main status and hand-off reach.
+    if (isIncomplete(bots) || (bots.length && bots.every((bot) => bot.activity === "disconnected")))
+      return undefined;
     return bots.map((bot) => ({ ...bot, ...this.store.presentation(bot.id) }));
   }
 
@@ -257,7 +260,7 @@ export class MainAssistants {
     const bots = await this.roster();
     if (!bots)
       throw new ReconcileError(
-        [new Error("Hermes is unavailable, so check-ins were not reconciled.")],
+        [new Error("Some assistants are unavailable, so check-ins were not reconciled.")],
         new Set(),
         true,
       );
@@ -350,6 +353,11 @@ export class MainAssistants {
     failed: (userId: string, error: unknown) => void,
   ) {
     const jobs = await this.runtime.routines();
+    // A runtime that did not answer may still hold check-ins: none is taken for removed, or made again.
+    if (isIncomplete(jobs))
+      throw new Error(
+        "Some assistants' routines are unavailable, so check-ins were not reconciled.",
+      );
     const tracked = this.store.checkIns.current();
     const same = (job: Routine, row: { botId: string; jobId: string }) =>
       job.botId === row.botId && job.id === row.jobId;
@@ -495,6 +503,9 @@ export class MainAssistants {
     );
     if (!unknown.length) return;
     const jobs = await this.runtime.routines();
+    // Its assistant's routines may be missing, so whether it is a check-in waits for the next tick.
+    if (unknown.some((event) => mayOmit(jobs, event.botId)))
+      throw new Error("Some assistants' routines are unavailable.");
     for (const event of unknown) {
       const job = jobs.find((row) => row.botId === event.botId && row.id === event.routineId);
       const member = job && signedCheckInMember(this.store, job);
@@ -734,7 +745,9 @@ export function installMainAssistantRoutes(
 ) {
   const { runtime, store, mains, preferences, requireCapability } = collaborators;
   const eligibleBot = async (userId: string, botId: string) => {
-    const bot = (await runtime.listBots()).find((row) => row.id === botId);
+    const bots = await runtime.listBots();
+    const bot = bots.find((row) => row.id === botId);
+    if (!bot && mayOmit(bots, botId)) throw assistantsUnavailable();
     const shown = bot && { ...bot, ...store.presentation(bot.id) };
     if (!shown || !visible(shown, userId))
       throw httpError(404, notFound.error, { code: notFound.code });

@@ -10,6 +10,7 @@ import type { ActivityState, Bootstrap, Bot, Message, SubmissionReceipt } from "
 import type { VoiceState } from "../shared/voice";
 import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
+import { QueuePanel } from "../components/QueuePanel";
 import { TalkPanel } from "../components/TalkPanel";
 import { useTalk } from "./use-talk";
 import { request } from "../client-api";
@@ -536,6 +537,7 @@ export const Composer = memo(function Composer({
         )}
       <StatusDock items={notices} />
       <TalkPanel talk={talk} name={selected.name} />
+      <QueuePanel boot={boot} bot={selected} active={active} />
       <form
         className="composer"
         onSubmit={(event) => {

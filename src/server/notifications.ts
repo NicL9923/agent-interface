@@ -20,6 +20,7 @@ import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
 import { badgeFor, rosterOnce } from "./badge.js";
 import { digestCopy } from "../shared/event-copy.js";
 import { hermesRuntimeId } from "./runtime-router.js";
+import { isIncomplete } from "./unknown-roster.js";
 export type PushSender = (
   subscription: webpush.PushSubscription,
   payload: string,
@@ -295,9 +296,12 @@ export class BackgroundWorker {
           // Titles name the assistant; a roster failure keeps the previous names.
           if (discovery.events.length)
             try {
-              this.store.botNames = new Map(
-                (await this.runtime.listBots()).map((bot) => [bot.id, bot.name]),
-              );
+              const bots = await this.runtime.listBots();
+              // A runtime that did not answer keeps its assistants' previous names.
+              this.store.botNames = new Map([
+                ...(isIncomplete(bots) ? this.store.botNames : []),
+                ...bots.map((bot) => [bot.id, bot.name] as const),
+              ]);
             } catch {
               /* Fall back to the last known names. */
             }

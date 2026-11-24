@@ -111,6 +111,7 @@ const keys = [
   "portraitGeneration",
   "avatarMetadata",
   "liveVoice",
+  "queueManagement",
 ] as const;
 // The voice plugin's state changes outside this socket, as when someone enables it, so it is read again this often.
 const LIVE_VOICE_MS = 30_000;
@@ -1128,6 +1129,7 @@ export function createHermesRuntime(options: HermesOptions & { files: FileSigner
         connected && contract.extension,
         "The durable lifecycle journal add-on is required.",
       );
+      result.queueManagement = supported(false, "Hermes does not expose queued messages.");
       let image = false,
         probeTimedOut = false;
       if (connected)

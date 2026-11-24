@@ -120,6 +120,45 @@ const additions = `
   -- Macs linked with WildBots for Mac. The credential is stored as its SHA-256 only. A revoked Mac
   -- keeps its row with revoked_at set, so its ID and credential can never be used again.
   CREATE TABLE IF NOT EXISTS mac_devices(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,model TEXT,os_version TEXT,app_version TEXT,credential_hash TEXT NOT NULL,created_at INTEGER NOT NULL,last_seen_at INTEGER,revoked_at INTEGER);
+  -- BEGIN managed_bots
+  CREATE TABLE IF NOT EXISTS bot_credentials(
+    id TEXT PRIMARY KEY NOT NULL,
+    label TEXT NOT NULL,
+    vendor TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    owner_id TEXT,
+    allowed_harnesses TEXT NOT NULL,
+    env_var TEXT,
+    os_user TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS managed_bots(
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    harness TEXT NOT NULL,
+    model TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    reasoning TEXT NOT NULL,
+    speed TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    owner_os_user TEXT NOT NULL,
+    shared INTEGER NOT NULL CHECK(shared IN (0,1)),
+    credential_id TEXT REFERENCES bot_credentials(id) ON DELETE SET NULL,
+    enabled_tools TEXT NOT NULL,
+    enabled_skills TEXT NOT NULL,
+    enabled_mcp_servers TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    archived_at INTEGER,
+    CHECK(archived_at IS NOT NULL OR harness = 'hermes' OR credential_id IS NOT NULL)
+  );
+  CREATE INDEX IF NOT EXISTS managed_bots_credential ON managed_bots(credential_id,archived_at);
+  CREATE INDEX IF NOT EXISTS managed_bots_created ON managed_bots(created_at,id);
+  CREATE INDEX IF NOT EXISTS bot_credentials_created ON bot_credentials(created_at,id);
+  -- END managed_bots
   -- Plain B-tree indexes for hot polling, pruning, and lookup paths. Rollback-safe: SQLite maintains
   -- non-unique indexes automatically across releases without raising user_version.
   CREATE INDEX IF NOT EXISTS chat_presence_user_bot ON chat_presence(user_id,bot_id,updated_at);
@@ -136,6 +175,261 @@ const additions = `
   CREATE INDEX IF NOT EXISTS approval_attribution_created ON approval_attribution(created_at);
   CREATE INDEX IF NOT EXISTS retry_claims_created ON retry_claims(created_at);
   CREATE INDEX IF NOT EXISTS submissions_created ON submissions(created_at);
+  -- BEGIN bot_secrets
+  CREATE TABLE IF NOT EXISTS bot_secrets(
+    id TEXT PRIMARY KEY NOT NULL,
+    scope_kind TEXT NOT NULL CHECK(scope_kind IN ('bot','owner','household')),
+    scope_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    iv BLOB NOT NULL,
+    tag BLOB NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(scope_kind,scope_id,name)
+  );
+  -- END bot_secrets
+  -- BEGIN bot_queue
+  CREATE TABLE IF NOT EXISTS bot_queue(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    request_id TEXT NOT NULL UNIQUE,
+    sender_id TEXT NOT NULL,
+    sender_name TEXT NOT NULL,
+    text TEXT NOT NULL,
+    files TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued','running','completed','interrupted','cancelled')),
+    priority INTEGER NOT NULL CHECK(priority IN (0,1)),
+    conversation_version INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    run_id TEXT,
+    claimed_at INTEGER,
+    settled_at INTEGER,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS bot_queue_order ON bot_queue(bot_id,status,position);
+  CREATE TABLE IF NOT EXISTS bot_conversation_versions(bot_id TEXT PRIMARY KEY NOT NULL,version INTEGER NOT NULL);
+  -- END bot_queue
+  -- BEGIN transcripts
+  CREATE TABLE IF NOT EXISTS transcript_messages(
+    row_id INTEGER PRIMARY KEY,
+    bot_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    message_id TEXT NOT NULL,
+    run_id TEXT,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant','tool','system')),
+    text TEXT NOT NULL,
+    reasoning TEXT,
+    tool_name TEXT,
+    tool_call_json TEXT,
+    files_json TEXT,
+    sender_id TEXT,
+    sender_name TEXT,
+    origin_json TEXT,
+    steered INTEGER,
+    interim INTEGER,
+    created_at TEXT,
+    updated_at INTEGER NOT NULL,
+    source_runtime TEXT NOT NULL,
+    source_row_id TEXT,
+    UNIQUE(bot_id,message_id),
+    -- SQLite scans the bot's seq range backward for newest-first reads.
+    UNIQUE(bot_id,seq)
+  );
+  CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING fts5(
+    text, reasoning, tool_name, content='transcript_messages', content_rowid='row_id'
+  );
+  CREATE TRIGGER IF NOT EXISTS transcript_fts_insert AFTER INSERT ON transcript_messages BEGIN
+    INSERT INTO transcript_fts(rowid,text,reasoning,tool_name)
+    VALUES(new.row_id,new.text,new.reasoning,new.tool_name);
+  END;
+  CREATE TRIGGER IF NOT EXISTS transcript_fts_delete AFTER DELETE ON transcript_messages BEGIN
+    INSERT INTO transcript_fts(transcript_fts,rowid,text,reasoning,tool_name)
+    VALUES('delete',old.row_id,old.text,old.reasoning,old.tool_name);
+  END;
+  CREATE TRIGGER IF NOT EXISTS transcript_fts_update AFTER UPDATE ON transcript_messages
+  WHEN old.row_id IS NOT new.row_id OR old.text IS NOT new.text OR old.reasoning IS NOT new.reasoning OR old.tool_name IS NOT new.tool_name BEGIN
+    INSERT INTO transcript_fts(transcript_fts,rowid,text,reasoning,tool_name)
+    VALUES('delete',old.row_id,old.text,old.reasoning,old.tool_name);
+    INSERT INTO transcript_fts(rowid,text,reasoning,tool_name)
+    VALUES(new.row_id,new.text,new.reasoning,new.tool_name);
+  END;
+  CREATE TABLE IF NOT EXISTS transcript_sync(
+    bot_id TEXT PRIMARY KEY,
+    source_runtime TEXT NOT NULL,
+    canonical_source TEXT NOT NULL DEFAULT 'hermes' CHECK(canonical_source IN ('hermes','local')),
+    last_synced_at INTEGER,
+    last_message_id TEXT,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    last_allocated_seq INTEGER NOT NULL DEFAULT 0,
+    shadow_mismatch_count INTEGER NOT NULL DEFAULT 0,
+    last_mismatch_at INTEGER
+  );
+  -- END transcripts
+  -- BEGIN native_groups
+  -- Group chats among native assistants that WildBots runs itself, without Hermes. Member IDs are
+  -- a JSON array of managed bot IDs; a message's round is the bot turn that wrote it (0 for people).
+  CREATE TABLE IF NOT EXISTS native_group_rooms(
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    lead_bot_id TEXT NOT NULL,
+    member_bot_ids_json TEXT NOT NULL,
+    max_rounds INTEGER NOT NULL DEFAULT 4,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    archived_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS native_group_messages(
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    room_id TEXT NOT NULL REFERENCES native_group_rooms(id),
+    thread_id TEXT,
+    sender_kind TEXT NOT NULL CHECK(sender_kind IN ('human','bot','system')),
+    sender_id TEXT NOT NULL,
+    sender_name TEXT NOT NULL,
+    text TEXT NOT NULL,
+    mentions_json TEXT NOT NULL DEFAULT '[]',
+    round INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS native_group_rooms_created ON native_group_rooms(archived_at,created_at);
+  CREATE INDEX IF NOT EXISTS native_group_messages_room ON native_group_messages(room_id,thread_id,seq);
+  -- END native_groups
+  -- BEGIN native_routines
+  CREATE TABLE IF NOT EXISTS native_routines(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('cron','once','interval','heartbeat')),
+    schedule_expr TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    script_command TEXT,
+    model_override TEXT,
+    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+    try_once INTEGER NOT NULL CHECK(try_once IN (0,1)),
+    missed_policy TEXT NOT NULL CHECK(missed_policy IN ('skip','run_once')),
+    quiet_hours_json TEXT,
+    deliver_to_group_id TEXT,
+    next_run_at INTEGER,
+    last_run_at INTEGER,
+    last_status TEXT CHECK(last_status IN ('running','completed','suppressed','failed','interrupted')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS native_routines_due ON native_routines(next_run_at,id) WHERE enabled=1;
+  CREATE INDEX IF NOT EXISTS native_routines_bot ON native_routines(bot_id);
+  CREATE TABLE IF NOT EXISTS native_routine_runs(
+    id TEXT PRIMARY KEY NOT NULL,
+    routine_id TEXT NOT NULL REFERENCES native_routines(id) ON DELETE CASCADE,
+    bot_id TEXT NOT NULL,
+    trigger TEXT NOT NULL CHECK(trigger IN ('scheduled','manual','catchup')),
+    status TEXT NOT NULL CHECK(status IN ('running','completed','suppressed','failed','interrupted')),
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    output_text TEXT,
+    error TEXT,
+    delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1))
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS native_routine_single_flight ON native_routine_runs(routine_id) WHERE status='running';
+  CREATE INDEX IF NOT EXISTS native_routine_run_history ON native_routine_runs(routine_id,started_at);
+  -- END native_routines
+  -- BEGIN memory_skills
+  -- Each bot's memory entries and skills, versioned. A pending_review item has never been approved: its only
+  -- content is a pending proposal, and it is deleted when its last proposal is rejected.
+  CREATE TABLE IF NOT EXISTS bot_memory_entries(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('memory','user')),
+    key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source_task_id TEXT,
+    status TEXT NOT NULL CHECK(status IN ('active','pending_review','retired')),
+    version INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(bot_id,key)
+  );
+  -- Every change and every proposal, with the state before and after it. A pending row is a proposal for the
+  -- item's next version; it applies only while the item is still at the version before it. key is kept here
+  -- so a rejected proposal for a deleted pending_review entry still reads.
+  CREATE TABLE IF NOT EXISTS bot_memory_revisions(
+    id TEXT PRIMARY KEY NOT NULL,
+    entry_id TEXT NOT NULL,
+    bot_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('create','update','retire','restore','import','undo')),
+    status TEXT NOT NULL CHECK(status IN ('pending','applied','rejected')),
+    previous_content TEXT,
+    next_content TEXT NOT NULL,
+    previous_status TEXT,
+    next_status TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    source_task_id TEXT,
+    actor TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_by TEXT,
+    undoes TEXT,
+    undone_by TEXT
+  );
+  CREATE INDEX IF NOT EXISTS bot_memory_revisions_bot ON bot_memory_revisions(bot_id,created_at);
+  CREATE INDEX IF NOT EXISTS bot_memory_revisions_entry ON bot_memory_revisions(entry_id,status);
+  CREATE TABLE IF NOT EXISTS bot_skills(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    body_markdown TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('active','pending_review','retired')),
+    version INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(bot_id,slug)
+  );
+  CREATE TABLE IF NOT EXISTS bot_skill_revisions(
+    id TEXT PRIMARY KEY NOT NULL,
+    skill_id TEXT NOT NULL,
+    bot_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('create','update','retire','restore','import','undo')),
+    status TEXT NOT NULL CHECK(status IN ('pending','applied','rejected')),
+    previous_body TEXT,
+    next_body TEXT NOT NULL,
+    previous_title TEXT,
+    next_title TEXT NOT NULL,
+    previous_description TEXT,
+    next_description TEXT NOT NULL,
+    previous_status TEXT,
+    next_status TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    source_task_id TEXT,
+    actor TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_by TEXT,
+    undoes TEXT,
+    undone_by TEXT
+  );
+  CREATE INDEX IF NOT EXISTS bot_skill_revisions_bot ON bot_skill_revisions(bot_id,created_at);
+  CREATE INDEX IF NOT EXISTS bot_skill_revisions_skill ON bot_skill_revisions(skill_id,status);
+  -- A bot without a row here uses the defaults: review required, 12000 characters, 40 skills.
+  CREATE TABLE IF NOT EXISTS bot_learning_settings(
+    bot_id TEXT PRIMARY KEY NOT NULL,
+    auto_apply INTEGER NOT NULL DEFAULT 0 CHECK(auto_apply IN (0,1)),
+    memory_char_budget INTEGER NOT NULL DEFAULT 12000,
+    skill_count_budget INTEGER NOT NULL DEFAULT 40,
+    last_pruned_at INTEGER
+  );
+  -- END memory_skills
 `;
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {

@@ -298,38 +298,6 @@ import XCTest
     XCTAssertTrue(app.staticTexts["{\"query\":\"Texas ranch weather forecast\"}"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture native live activity and exposed tool details")
   }
-  func testNativeConnectionsCheckAndApplePermissionDenial() {
-    let app = app()
-    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    app.openAssistantSettings("Ranch hand")
-    selectSettingsTab(app, "Connections")
-    XCTAssertTrue(app.staticTexts["Configured · not checked"].waitForExistence(timeout: 10))
-    app.buttons.matching(identifier: "Check connection").firstMatch.tap()
-    XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 10))
-    screenshot(app, "Native integration accounts fixture")
-    for _ in 0..<6 {
-      if app.buttons["Apple Calendar & Reminders"].canTap { break }
-      app.swipeUp()
-    }
-    app.buttons["Apple Calendar & Reminders"].tap()
-    XCTAssertTrue(app.staticTexts["On this iPhone"].waitForExistence(timeout: 5))
-    if app.buttons["Allow calendar access"].exists {
-      addUIInterruptionMonitor(withDescription: "Calendar permission") { alert in
-        let deny = alert.buttons.labeled("Don't Allow")
-        if deny.exists { deny.tap(); return true }
-        return false
-      }
-      app.buttons["Allow calendar access"].tap()
-      let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-      // iOS 26 writes the label with a typographic apostrophe; `labeled` accepts either.
-      let deny = springboard.buttons.labeled("Don't Allow")
-      if deny.waitForExistence(timeout: 10) { deny.tap() }
-      else { app.tap() }
-      XCTAssertTrue(app.staticTexts["Permission denied"].waitForExistence(timeout: 10))
-    }
-    screenshot(app, "Native Apple data selection and permission status")
-    XCTAssertFalse(app.buttons["Share with Ranch hand"].exists)
-  }
   func testNativeFailedUpdateOffersGuardedRecovery() {
     let app = app(upgradeFailed: true)
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
@@ -350,19 +318,6 @@ import XCTest
     app.buttons["Yes, restart Hermes"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Restoring the connection"].waitForExistence(timeout: 5))
     screenshot(app, "Native service recovery progress fixture")
-  }
-  func testNativeDisconnectRefreshesAfterTheHermesFlowResponse() {
-    let app = app()
-    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    app.openAssistantSettings("Ranch hand")
-    selectSettingsTab(app, "Connections")
-    XCTAssertTrue(app.buttons["Disconnect"].waitForExistence(timeout: 10))
-    app.buttons["Disconnect"].tap()
-    let confirm = app.sheets.buttons["Disconnect"]
-    XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
-    XCTAssertTrue(app.staticTexts["Not connected"].waitForExistence(timeout: 10))
-    XCTAssertFalse(app.staticTexts["The connection change may have reached Hermes"].exists)
-    screenshot(app, "Native connection removed after confirmation")
   }
   private func screenshot(_ app: XCUIApplication, _ name: String) {
     let attachment = XCTAttachment(screenshot: app.screenshot())

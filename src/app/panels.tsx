@@ -11,11 +11,6 @@ export const RoutineResults = lazy(() =>
 export const UsagePanel = lazy(() =>
   import("../components/UsagePanel").then((module) => ({ default: module.UsagePanel })),
 );
-export const IntegrationsPanel = lazy(() =>
-  import("../components/IntegrationsPanel").then((module) => ({
-    default: module.IntegrationsPanel,
-  })),
-);
 export const ComputerPanel = lazy(() =>
   import("../components/ComputerPanel").then((module) => ({ default: module.ComputerPanel })),
 );

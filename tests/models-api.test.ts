@@ -29,6 +29,10 @@ async function setup() {
   }));
   const runtime = fakeRuntime({
     inferenceSettings,
+    // The access gate admits only an assistant the roster lists.
+    listBots: async () => [
+      { id: "house", name: "House", model: "test", shared: true, activity: "idle" as const },
+    ],
     capabilities: async () => capabilitiesFixture({ botConfiguration: { supported: true } }),
     modelOptions,
     close: async () => {},

@@ -15,7 +15,8 @@ activity" and its home section. Long-press (right-click on a computer) an assist
 on home to pin it or move it to a section. Phones open on home and push into a
 conversation; Back returns, and so do the browser's Back button and the system Back gesture
 (see "Back on a phone" below). The account button opens Settings, which also holds Hermes
-updates, Computer, Integrations, the assistants you follow and your home sections.
+updates while any assistant runs on Hermes, Computer, the assistants you follow and your
+home sections.
 Each assistant can be in one section. New assistants start with their name and look,
 then role and model. On the web, a new assistant's chat opens once it is created.
 
@@ -535,11 +536,9 @@ Hermes runs separately from this application. Guided setup saves `HERMES_URL` an
 HTTP is restricted to loopback. File links are signed with a key the app keeps in
 its own database, not with `HERMES_TOKEN`. Before rotating the token, read
 [Hosting](docs/Hosting.md#application-backups) for the order and what it covers.
-Provider credentials remain in Hermes. Open
-**Integrations** to inspect the selected profile's accounts, check their health,
-and connect or reconnect supported services. Connection changes require an
-integration administrator. An assistant that needs a service it lacks can ask in
-the chat: its card holds that connection's setup and continues once it is set up.
+Provider credentials remain in Hermes. An assistant on Hermes that needs a service
+it lacks can ask in the chat: its card holds that connection's setup and continues
+once it is set up. Connection changes require an integration administrator.
 See the [integration guide](docs/Integrations.md) for supported services, one-time
 hosting configuration and device limitations.
 
@@ -678,9 +677,11 @@ The native iPhone app includes a share extension for webpages, photos, PDFs, and
 The iPhone and iPad app also works with Siri, Shortcuts and Spotlight: ask WildBots to open an assistant or Today, or to put a question in an assistant's draft for you to review and send. Assistant names show in Spotlight search, and the Assistants widget can be edited to show only the assistants you choose. None of these hold your sign-in token, and they clear when you sign out. An iPad with a keyboard opens pinned assistants with Cmd+1 to 9 and any destination with Cmd+K.
 
 Assistant settings has five sections: **Profile** (name, description, sharing,
-avatar, live Talk voice), **Behavior** (instructions, model, tools and skills), **Access**
-(connections, logins and, in Advanced presentation, MCP servers), **Automation**
-(routines, goals, tasks and triggers) and **Memory & learning**. On a phone it
+avatar, live Talk voice), **Behavior** (instructions, harness, model, tools and skills),
+**Access** (logins, always-allowed commands and, in Advanced presentation, MCP servers),
+**Automation** (routines) and **Memory & learning**. The harness is the agent that runs
+the assistant's turns: Codex, Claude Code, Grok or Pi, with Hermes kept for assistants
+already on it. Simple presentation hides the choice while Hermes is the only one. On a phone it
 opens on that list. One **Save changes** saves everything in Profile, Behavior and
 Access; it stays visible on other sections while those changes are unsaved.
 Memory keeps its own Save, and list actions such as adding a routine or a login
@@ -720,7 +721,6 @@ controls, supported reply cards, voice requirements and recovery behavior.
 In Advanced presentation, routine **Advanced** options include skills,
 model/provider pins, toolsets, profile scripts, script-only runs and context from
 other routines; Simple presentation keeps saved overrides without showing them.
-**Automation** also manages standing goals, native tasks and event triggers.
 Behavior's skill rows read and lock installed skills, and **Memory & learning**
 reviews proposed skill changes. New work
 requires an explicit start. Memory edits apply to the canonical conversation at
@@ -890,13 +890,19 @@ buttons, about 112 pixels. A shorter area, as in landscape on a small iPhone whe
 bars take most of what the keyboard leaves, keeps the app at full height and lets Safari
 scroll the message box into view. A group chat's composer stays at the bottom of the chat as it
 scrolls and follows the same order. `.agents/tools/check-send-visible.mjs` checks both in Chromium.
+On a harness that cannot steer a running reply, a message sent during one waits in a
+queue above the message box. Each waiting message can be edited, moved, sent now or
+cancelled until its turn starts; the queue hides when it is empty and never shows for
+Hermes. See [native API](docs/native-api.md#harnesses-and-the-message-queue).
 Pressing Send or Stop leaves focus in the message box, so the keyboard stays up between
 messages. Attach and Talk switch to the file picker or your voice, so they let it close.
 
 ## Hermes updates and activity
 
 Open Hermes and updates in web Settings, or Hermes updates in iOS
-Preferences. Administrators can check the next official Hermes revision before
+Preferences. The entry disappears once a server that runs harnesses has no
+assistant left on Hermes; while the roster is unknown it stays, since it holds the
+restart that recovers Hermes. Administrators can check the next official Hermes revision before
 choosing to upgrade. Checking stages the exact source and tests it in a disposable
 home. It never installs an update. Progress survives closing the client and
 restarting the app server. An uncertain request is reconciled without replay.

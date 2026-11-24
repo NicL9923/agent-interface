@@ -839,6 +839,33 @@ pages (`GET /api/bots/:id/history/:sessionId`) carry them by the same rules, but
 line's `id` is one this app made up, so `POST /api/saved` refuses it with 400 and clients offer
 no Save reply on it. Absent or `false` means an ordinary message.
 
+## Harnesses and the message queue
+
+A bot names the agent harness it runs on in `harness`, such as `codex`, `claude-code`, `grok`,
+`pi` or `hermes`. A server from before harnesses omits it, and every bot there runs on Hermes.
+`GET /api/bootstrap` lists the native harnesses new bots can use in `harnesses`, each with
+`available` and, when unavailable, a `reason`. Clients send `harness` on `POST /api/bots`, and on
+`PATCH /api/bots/:id` only when the person changed it, because a change starts a fresh harness
+session. Clients offer Hermes only to a bot already on it, or while no native harness is available.
+Hermes updates stay in Settings while `harnesses` is absent, while `rosterUnknown` is true, or
+while any bot runs on Hermes.
+
+A bot's `capabilities` holds capabilities that differ from the bootstrap's for its harness. When
+`queueManagement` is supported for a bot that does not run on Hermes, messages sent during a turn
+wait in a queue that clients show above the message box while it holds at least one message:
+
+| Route                                       | Body                                 | Answer                                                                        |
+| ------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------- |
+| `GET /api/bots/:id/queue`                   |                                      | `{ items: [{ id, text, attachments?, senderId?, createdAt? }] }` in run order |
+| `PATCH /api/bots/:id/queue/:itemId`         | `{ text }`                           | The queue as it now stands                                                    |
+| `POST /api/bots/:id/queue/:itemId/reorder`  | `{ beforeItemId }`, null for the end | The queue as it now stands                                                    |
+| `POST /api/bots/:id/queue/:itemId/send-now` |                                      | The queue as it now stands                                                    |
+| `DELETE /api/bots/:id/queue/:itemId`        |                                      | The queue as it now stands                                                    |
+
+A message the runtime already claimed for a turn has left the queue: a change aimed at it answers
+409, and clients read the queue again and say so. Clients read the queue every 3 seconds while a
+turn runs or messages wait.
+
 ## Drafts
 
 Each person has one draft per assistant, shared by their devices.
