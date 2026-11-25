@@ -234,14 +234,14 @@ final class SettingsParityTests: XCTestCase {
       VaultSource(name: name, displayName: name, enabled: enabled, needsUnlock: true, unlocked: unlocked, installed: installed, canToggle: true, canUnlock: false, canLock: false)
     }
     XCTAssertEqual(source("bitwarden", installed: false).statusText, "CLI is not installed")
-    XCTAssertEqual(source("local", enabled: false).statusText, "Available to Hermes in this profile")
+    XCTAssertEqual(source("local", enabled: false).statusText, "Available to this assistant")
     XCTAssertEqual(source("bitwarden", enabled: false).statusText, "Disabled")
     XCTAssertEqual(source("bitwarden", unlocked: true).statusText, "Unlocked for this profile")
     XCTAssertEqual(source("bitwarden").statusText, "Locked")
     func login(_ backend: String) -> VaultLogin {
       VaultLogin(id: "i", kind: "login", label: "L", origin: "https://a.test", createdAt: "", identifier: "me", identifierType: "email", hasOtp: false, backend: backend, canRemove: true)
     }
-    XCTAssertEqual(login("local").backendLabel, "Hermes vault")
+    XCTAssertEqual(login("local").backendLabel, "WildBots vault")
     XCTAssertEqual(login("onepassword").backendLabel, "1Password")
     XCTAssertEqual(login("bitwarden").backendLabel, "Bitwarden")
   }
