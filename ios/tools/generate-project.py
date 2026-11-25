@@ -29,7 +29,7 @@ def settings(values):
 # One version for the app and every extension: App Store validation rejects extensions whose
 # versions differ from the app's.
 MARKETING_VERSION = "1.0"
-CURRENT_PROJECT_VERSION = "30"
+CURRENT_PROJECT_VERSION = "31"
 LINK_DOMAIN = "agentui.wildflowersranch.com"
 EXTENSIONS = [
     "AgentInterfaceShare",
