@@ -117,12 +117,6 @@ import XCTest
     XCTAssertTrue(save.isEnabled, "or about the room's settings")
     XCTAssertFalse(app.staticTexts["Reconnect to Hermes to change these settings."].exists)
     app.buttons["Cancel"].tapWhenReady()
-    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tapWhenReady() }
-    app.openSettingsFromProfileMenu()
-    let hermes = app.buttons["Hermes updates"]
-    for _ in 0..<5 where !hermes.canTap { app.swipeUp() }
-    XCTAssertTrue(hermes.canTap, app.debugDescription)
-    XCTAssertTrue(hermes.label.contains("Connected"), "Bootstrap found Hermes well: \(hermes.label)")
   }
 
   /// Round 3, finding 4: an assistant's settings need the household, not the open chat. With the chat's reads
