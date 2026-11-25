@@ -5,9 +5,9 @@
 
 ## Changes
 
-1. `.agents/tools/validate-ios.sh` defaults unfiltered `--allow-full-suite` runs to parallel simulator clones (`-parallel-testing-enabled YES -parallel-testing-worker-count 3`, overridable via `IOS_FULL_SUITE_WORKERS` or explicit `-parallel-testing-enabled NO`) under the whole-Mac lock, while keeping focused `-only-testing:` runs serial under `--sim`.
+1. `.agents/tools/validate-ios.sh` defaults unfiltered `--allow-full-suite` runs to parallel simulator clones (`-parallel-testing-enabled YES -parallel-testing-worker-count 4`, overridable via `IOS_FULL_SUITE_WORKERS` or explicit `-parallel-testing-enabled NO`) under the whole-Mac lock, while keeping focused `-only-testing:` runs serial under `--sim`.
 2. `.agents/tools/validate-ios.sh` resolves linked git worktrees' default `DerivedData` to `<main-checkout>/.private/ios-build-<SIMULATOR_UUID>` (still isolated per simulator and protected by the simulator/whole-Mac lock), so fresh worktrees reuse incremental Swift builds.
-3. `ios/AgentInterfaceUITests/ScreenshotTourTests.swift` splits the monolithic 31-test `ScreenshotTourTests` class into base class `ScreenshotTourTestCase` plus 9 balanced `XCTestCase` subclasses so XCTest distributes heavy design-review tours evenly across parallel simulator clones. `.agents/tools/ios-screenshot-tour.sh` lists all 9 subclasses.
+3. `ios/AgentInterfaceUITests/ScreenshotTourTests.swift` splits the monolithic 31-test `ScreenshotTourTests` class into base class `ScreenshotTourTestCase` plus 15 balanced `XCTestCase` subclasses (giving each multi-minute Memory and Work Tasks part its own class) so XCTest distributes heavy design-review tours evenly across parallel simulator clones. `.agents/tools/ios-screenshot-tour.sh` lists all 15 subclasses.
 
 ## Red-run proof
 

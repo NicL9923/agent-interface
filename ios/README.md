@@ -196,7 +196,7 @@ for test execution; the wrapper cleans it up only if it was shut down when that
 execution started. Pre-existing devices stay running. Focused runs (`-only-testing:...`)
 default to serial execution on one simulator so other jobs can share the Mac;
 full-suite runs (`test --allow-full-suite`) default to parallel simulator clones
-(`-parallel-testing-enabled YES -parallel-testing-worker-count 3`, overridable via
+(`-parallel-testing-enabled YES -parallel-testing-worker-count 4`, overridable via
 `IOS_FULL_SUITE_WORKERS` or explicit Xcode options) under the whole-Mac lock.
 Linked git worktrees share the main checkout's per-simulator `DerivedData` so fresh
 worktrees reuse incremental Swift builds. Tests default to Xcode test timeouts. Pass

@@ -59,7 +59,7 @@ if [[ $operation == test && ${allow_full_suite[0]-} == "" && $has_test_selection
   exit 2
 fi
 default_parallel=0
-full_suite_workers=${IOS_FULL_SUITE_WORKERS:-3}
+full_suite_workers=${IOS_FULL_SUITE_WORKERS:-4}
 if [[ $operation == test && ${allow_full_suite[0]-} == --allow-full-suite && $has_test_selection == 0 && -z "$explicit_parallel" ]]; then
   if [[ $has_worker_option == 0 && ! $full_suite_workers =~ ^[1-9][0-9]*$ ]]; then
     echo "IOS_FULL_SUITE_WORKERS must be a positive integer: $full_suite_workers" >&2

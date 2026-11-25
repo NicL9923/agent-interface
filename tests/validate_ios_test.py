@@ -318,7 +318,7 @@ class ValidateIosTests(unittest.TestCase):
                 "-parallel-testing-enabled",
                 "YES",
                 "-parallel-testing-worker-count",
-                "3",
+                "4",
                 "-test-timeouts-enabled",
                 "YES",
                 "-collect-test-diagnostics",
@@ -461,12 +461,12 @@ class ValidateIosTests(unittest.TestCase):
         self.assertEqual(self.calls(), [])
 
         custom = self.run_script(
-            "test", "--allow-full-suite", IOS_FULL_SUITE_WORKERS="4"
+            "test", "--allow-full-suite", IOS_FULL_SUITE_WORKERS="2"
         )
         self.assertEqual(custom.returncode, 0, custom.stderr)
         [test] = self.calls(phase="test-without-building")
         self.assertEqual(test[test.index("-parallel-testing-enabled") + 1], "YES")
-        self.assertEqual(test[test.index("-parallel-testing-worker-count") + 1], "4")
+        self.assertEqual(test[test.index("-parallel-testing-worker-count") + 1], "2")
 
         worktree = self.repo.parent / "linked-worktree"
         subprocess.run(

@@ -28,9 +28,15 @@ IOS_VALIDATION_FRESH=1 TEST_RUNNER_AGENT_INTERFACE_SCREENSHOT_DIR="$output_dir" 
     -only-testing:AgentInterfaceUITests/ConversationDesignTourTests \
     -only-testing:AgentInterfaceUITests/DetailsAndModelsDesignTourTests \
     -only-testing:AgentInterfaceUITests/WorkGoalAndTasksDesignTourTests \
-    -only-testing:AgentInterfaceUITests/WorkTasksRemainingDesignTourTests \
+    -only-testing:AgentInterfaceUITests/WorkTasksPartOneDesignTourTests \
+    -only-testing:AgentInterfaceUITests/WorkTasksPartTwoDesignTourTests \
+    -only-testing:AgentInterfaceUITests/WorkTasksPartThreeDesignTourTests \
+    -only-testing:AgentInterfaceUITests/WorkTasksPartFourDesignTourTests \
+    -only-testing:AgentInterfaceUITests/WorkTasksPartFiveDesignTourTests \
     -only-testing:AgentInterfaceUITests/WorkTriggersDesignTourTests \
     -only-testing:AgentInterfaceUITests/MemoryDesignTourTests \
+    -only-testing:AgentInterfaceUITests/MemoryPartTwoDesignTourTests \
+    -only-testing:AgentInterfaceUITests/MemoryPartThreeDesignTourTests \
     -only-testing:AgentInterfaceUITests/MemoryRemainingDesignTourTests \
     -only-testing:AgentInterfaceUITests/AvatarAndSettingsDesignTourTests
 ls "$output_dir"/*.png

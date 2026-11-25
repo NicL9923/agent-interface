@@ -2231,17 +2231,25 @@ import CryptoKit
       print("DESIGN_WORK_TASK_EDITOR_VARIANT \(variant) complete"); app.terminate()
     }
   }
+}
 
+@MainActor final class WorkTasksPartOneDesignTourTests: ScreenshotTourTestCase {
   func testWorkTaskDesignReview() throws { try workTaskDesignReview(part: 0) }
+}
 
+@MainActor final class WorkTasksPartTwoDesignTourTests: ScreenshotTourTestCase {
   func testWorkTaskDesignReviewPartTwo() throws { try workTaskDesignReview(part: 1) }
 }
 
-@MainActor final class WorkTasksRemainingDesignTourTests: ScreenshotTourTestCase {
+@MainActor final class WorkTasksPartThreeDesignTourTests: ScreenshotTourTestCase {
   func testWorkTaskDesignReviewPartThree() throws { try workTaskDesignReview(part: 2) }
+}
 
+@MainActor final class WorkTasksPartFourDesignTourTests: ScreenshotTourTestCase {
   func testWorkTaskDesignReviewPartFour() throws { try workTaskDesignReview(part: 3) }
+}
 
+@MainActor final class WorkTasksPartFiveDesignTourTests: ScreenshotTourTestCase {
   func testWorkTaskDesignReviewPartFive() throws { try workTaskDesignReview(part: 4) }
 }
 
@@ -3159,9 +3167,13 @@ import CryptoKit
 
 @MainActor final class MemoryDesignTourTests: ScreenshotTourTestCase {
   func testMemoryDesignReview() throws { try memoryDesignReview(part: 0) }
+}
 
+@MainActor final class MemoryPartTwoDesignTourTests: ScreenshotTourTestCase {
   func testMemoryDesignReviewPartTwo() throws { try memoryDesignReview(part: 1) }
+}
 
+@MainActor final class MemoryPartThreeDesignTourTests: ScreenshotTourTestCase {
   func testMemoryDesignReviewPartThree() throws { try memoryDesignReview(part: 2) }
 }
 
