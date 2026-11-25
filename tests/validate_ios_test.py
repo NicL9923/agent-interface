@@ -316,7 +316,9 @@ class ValidateIosTests(unittest.TestCase):
             shlex.split(default["test options"]),
             [
                 "-parallel-testing-enabled",
-                "NO",
+                "YES",
+                "-parallel-testing-worker-count",
+                "3",
                 "-test-timeouts-enabled",
                 "YES",
                 "-collect-test-diagnostics",
@@ -329,7 +331,7 @@ class ValidateIosTests(unittest.TestCase):
                 "-parallel-testing-worker-count",
                 "2",
                 "-parallel-testing-enabled",
-                "NO",
+                "YES",
                 "-test-timeouts-enabled",
                 "YES",
                 "-collect-test-diagnostics",
@@ -423,18 +425,23 @@ class ValidateIosTests(unittest.TestCase):
         self.assertGreater(shutdown_index, test_index)
 
     def test_the_lock_is_asked_for_what_the_run_uses(self):
-        # A test names its simulator and a build marks itself build-only, so each can share the Mac. A live run
-        # binds a fixed port, so it asks for the whole Mac by declaring nothing.
-        for operation, scope in [
-            ("test", ["--sim", SIMULATOR]),
-            ("build", ["--build"]),
-            ("live", []),
+        # A focused test names its simulator and a build marks itself build-only, so each can share the Mac.
+        # An unfiltered full-suite run defaults to parallel simulator clones, and a live run binds a fixed port,
+        # so both ask for the whole Mac by declaring nothing. Explicit serial full-suite runs keep --sim.
+        for operation, extra, scope in [
+            ("test", ["-only-testing:AgentInterfaceTests/Suite"], ["--sim", SIMULATOR]),
+            ("test", ["--allow-full-suite"], []),
+            (
+                "test",
+                ["--allow-full-suite", "-parallel-testing-enabled", "NO"],
+                ["--sim", SIMULATOR],
+            ),
+            ("build", [], ["--build"]),
+            ("live", [], []),
         ]:
-            with self.subTest(operation=operation):
+            with self.subTest(operation=operation, extra=extra):
                 self.log.unlink(missing_ok=True)
-                result = self.run_script(
-                    operation, *(["--allow-full-suite"] if operation == "test" else [])
-                )
+                result = self.run_script(operation, *extra)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.calls("mac-heavy-lock"), [scope])
                 # The ownership check before the request and the one after re-entry ask about the same scope.
@@ -442,6 +449,65 @@ class ValidateIosTests(unittest.TestCase):
                 checks = self.calls("mac-heavy-lock-check")
                 self.assertEqual([check for check in checks if check != scope], [])
                 self.assertGreaterEqual(len(checks), 2)
+
+    def test_full_suite_worker_env_and_worktree_derived_data_sharing(self):
+        invalid = self.run_script(
+            "test", "--allow-full-suite", IOS_FULL_SUITE_WORKERS="0"
+        )
+        self.assertEqual(invalid.returncode, 2)
+        self.assertIn(
+            "IOS_FULL_SUITE_WORKERS must be a positive integer", invalid.stderr
+        )
+        self.assertEqual(self.calls(), [])
+
+        custom = self.run_script(
+            "test", "--allow-full-suite", IOS_FULL_SUITE_WORKERS="4"
+        )
+        self.assertEqual(custom.returncode, 0, custom.stderr)
+        [test] = self.calls(phase="test-without-building")
+        self.assertEqual(test[test.index("-parallel-testing-enabled") + 1], "YES")
+        self.assertEqual(test[test.index("-parallel-testing-worker-count") + 1], "4")
+
+        worktree = self.repo.parent / "linked-worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "-q", "--detach", str(worktree)],
+            cwd=self.repo,
+            check=True,
+        )
+        (worktree / ".agents" / "tools").mkdir(parents=True, exist_ok=True)
+        for name in [
+            "validate-ios.sh",
+            "ios-validation-state.py",
+            "source-state.py",
+            "patch-xctestrun.py",
+        ]:
+            (worktree / ".agents" / "tools" / name).write_bytes(
+                (self.repo / ".agents" / "tools" / name).read_bytes()
+            )
+        (worktree / "ios").mkdir(exist_ok=True)
+        (worktree / "ios" / "Input.swift").write_text("fixture")
+        self.log.unlink(missing_ok=True)
+        wt_result = subprocess.run(
+            [
+                "bash",
+                str(worktree / ".agents/tools/validate-ios.sh"),
+                SIMULATOR,
+                "test",
+                "-only-testing:AgentInterfaceTests/Suite",
+            ],
+            check=False,
+            cwd=worktree,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(wt_result.returncode, 0, wt_result.stderr)
+        [build] = self.calls(phase="build-for-testing")
+        expected_derived = str(
+            self.repo.resolve() / ".private" / f"ios-build-{SIMULATOR}"
+        )
+        self.assertEqual(build[build.index("-derivedDataPath") + 1], expected_derived)
 
     def test_a_run_that_boots_other_devices_asks_for_the_whole_mac(self):
         # Parallel testing clones the simulator and another destination adds one. The lock cannot hold devices

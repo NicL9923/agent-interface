@@ -4,9 +4,9 @@ import CryptoKit
 /// Runs fixture-backed assertions and optionally captures the Debug fixture for visual review.
 /// Capture-only tours require AGENT_INTERFACE_SCREENSHOT_DIR, forwarded by xcodebuild
 /// from TEST_RUNNER_AGENT_INTERFACE_SCREENSHOT_DIR. Run with .agents/tools/ios-screenshot-tour.sh.
-@MainActor final class ScreenshotTourTests: XCTestCase {
-  private var directory: URL!
-  private var auditDirectory: URL!
+@MainActor class ScreenshotTourTestCase: XCTestCase {
+  fileprivate var directory: URL!
+  fileprivate var auditDirectory: URL!
 
   override func setUp() async throws {
     let path = ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] ?? ""
@@ -31,6 +31,522 @@ import CryptoKit
     try await super.tearDown()
   }
 
+  /// The gutter drag scrolls the form without sending the gesture into its nested TextEditor.
+  fileprivate func settingsReveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
+    // Profile's fixed preview and Save bar cover parts of its reported form frame.
+    if form.identifier == "settings.profile" {
+      revealFormControl(element, in: form, app: XCUIApplication(), up: up)
+      return
+    }
+    // Creation carries the whole shape picker, 54 tiles, between the name and the bottom Next.
+    let attempts = form.identifier == "assistantCreationForm" ? 30 : 10
+    for _ in 0..<attempts {
+      if element.hasFrame && element.frame.minY >= form.frame.minY + 12 && element.frame.maxY <= form.frame.maxY - 12 { return }
+      let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: up ? 0.8 : 0.3))
+      let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: up ? 0.3 : 0.8))
+      start.press(forDuration: 0.02, thenDragTo: end)
+    }
+    XCTAssertTrue(element.hasFrame && element.frame.intersects(form.frame), "The requested control must be visible in the settings form")
+  }
+
+  fileprivate func revealFormControl(_ element: XCUIElement, in form: XCUIElement, app: XCUIApplication, up: Bool = true) {
+    func cells() -> [String] {
+      form.cells.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map {
+        "\($0.label.prefix(64)):\(String(describing: $0.frame))"
+      }
+    }
+    // Memory documents and Profile's avatar/voice sections need more travel
+    // than the shorter Models forms, especially between Profile's fixed bars.
+    let attempts = ["memoryForm", "settings.profile"].contains(form.identifier) ? 24 : 12
+    // Check the position reached by the final permitted drag before reporting failure.
+    for attempt in 0...attempts {
+      let keyboard = app.keyboards.firstMatch
+      let navigationBottom = app.navigationBars.allElementsBoundByIndex
+        .filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
+      var top = max(form.frame.minY, navigationBottom) + 12
+      if form.identifier == "settings.profile" {
+        let preview = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
+        if preview.hasFrame { top = max(top, preview.frame.maxY + 8) }
+      }
+      // Form frames extend beneath the fixed Save bar. XCTest reports covered
+      // rows as hittable, so keep their whole frame above it before tapping.
+      let saveBar = app.descendants(matching: .any)["saveBar"].firstMatch
+      // Virtualized rows have no readable attributes until scrolling reveals them.
+      let isSaveButton = element.exists && element.identifier == "saveChanges"
+      let formBottom = saveBar.hasFrame && !isSaveButton
+        ? min(form.frame.maxY - 12, saveBar.frame.minY - 8) : form.frame.maxY - 12
+      let bottom = min(formBottom, keyboard.exists ? keyboard.frame.minY - 8 : formBottom)
+      print("DESIGN_MODELS_REVEAL target=\(element) attempt=\(attempt) exists=\(element.exists) frame=\(element.hasFrame ? String(describing: element.frame) : "none") band=\(top)...\(bottom) upHint=\(up)")
+      if element.hasFrame && element.frame.minY >= top && element.frame.maxY <= bottom {
+        print("DESIGN_MODELS_TARGET type=\(element.elementType.rawValue) frame=\(element.frame)"); return
+      }
+      if attempt == attempts { break }
+      let upward = element.hasFrame ? element.frame.maxY > bottom : up
+      let before = cells()
+      let height = max(40, bottom - top)
+      if element.hasFrame && element.frame.height > height {
+        XCTFail("Models target is taller than the usable viewport: \(element)"); return
+      }
+      let distance: CGFloat
+      if element.hasFrame {
+        let desiredTop = top + (height - element.frame.height) / 2
+        distance = min(height * 0.38, max(12, abs(element.frame.minY - desiredTop)))
+      } else { distance = height * 0.38 }
+      // Stay outside the inset cells. At accessibility sizes x=40 hits the
+      // inference menu, whose long press opens it instead of scrolling the form.
+      let start = form.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 4, dy: (upward ? top + height * 0.72 : top + height * 0.28) - form.frame.minY))
+      let end = start.withOffset(CGVector(dx: 0, dy: distance * (upward ? -1 : 1)))
+      start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+      if !before.isEmpty && before == cells() { print("DESIGN_REVEAL_NO_MOVEMENT target=\(element) attempt=\(attempt)") }
+    }
+    XCTFail("Models control did not fit within the visible form: \(element)")
+  }
+
+  fileprivate func workTaskDesignReview(part: Int) throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH"] ?? ""
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH to the W2 fixture."); return }
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let config = try XCTUnwrap(original["workFixture"] as? [String: Any])
+    XCTAssertEqual(config["gate"] as? String, "W2-tasks")
+    let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
+    guard ["before", "after"].contains(stage) else { XCTFail("Unknown Work stage: \(stage)"); return }
+    let variants = ["task-board", "task-board-dark", "task-board-large-text", "task-detail", "task-refused", "task-status-details", "task-empty", "task-unsupported", "task-create", "task-create-dark", "task-create-large-text", "task-create-uncertain", "task-edit"]
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let selected = selection.isEmpty ? variants : selection.components(separatedBy: ",")
+    guard !selected.isEmpty, Set(selected).count == selected.count, selected.allSatisfy(variants.contains) else { XCTFail("Unknown or duplicate Work task variants: \(selection)"); return }
+    let pad = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_DEVICE"] == "ipad"
+    let work = try XCTUnwrap(original["work"] as? [String: Any])
+    let taskSection = try XCTUnwrap(work["tasks"] as? [String: Any])
+    let tasks = try XCTUnwrap(taskSection["items"] as? [[String: Any]])
+    let newTask = try XCTUnwrap(config["newTask"] as? [String: Any])
+    let messages = try XCTUnwrap(original["workMessages"] as? [String: String])
+    func task(_ id: String) throws -> [String: Any] { try XCTUnwrap(tasks.first { $0["id"] as? String == id }) }
+    for (index, variant) in selected.enumerated() where (selection.isEmpty ? index % 5 == part : part == 0) {
+      var fixture = original
+      fixture["mode"] = variant == "task-empty" ? "empty" : variant == "task-unsupported" ? "sections-unsupported" : variant == "task-create-uncertain" ? "task-create-uncertain" : "loaded"
+      let auditURL = auditDirectory.appendingPathComponent("\(variant)-requests.jsonl")
+      try Data().write(to: auditURL, options: .atomic)
+      let app = launch(textSize: variant.contains("large-text") ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL", environment: [
+        "AGENT_INTERFACE_UI_THEME": variant.contains("dark") ? "dark" : "light",
+        "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self),
+        "AGENT_INTERFACE_UI_WORK_AUDIT_PATH": auditURL.path,
+      ])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Work")
+      XCTAssertTrue(app.collectionViews["automation.work"].exists)
+      let board = app.collectionViews["automation.work"]
+      XCTAssertTrue(board.waitForExistence(timeout: 5))
+      func events() throws -> [[String: Any]] {
+        try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+      }
+      func text(_ fragment: String, in container: XCUIElement) -> XCUIElement { container.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", fragment)).firstMatch }
+      func reveal(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { revealFormControl(element, in: form, app: app, up: up) }
+      func press(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { reveal(element, form, up: up); XCTAssertTrue(element.wait(until: "enabled == true")); element.tapWhenReady() }
+      func group(_ name: String) { press(board.buttons[name], board, up: name.hasPrefix("To do")) }
+      func open(_ name: String, _ id: String) {
+        let row = board.buttons["automation.task.\(id)"]
+        if name.hasPrefix("Done") { group(name) }
+        reveal(row, board, up: false); XCTAssertTrue(row.waitForExistence(timeout: 5)); XCTAssertTrue(row.wait(until: "enabled == true")); row.tapWhenReady()
+        XCTAssertTrue(app.collectionViews["automation.taskDetail"].waitForExistence(timeout: 5))
+      }
+      func toggle(_ label: String, _ form: XCUIElement) {
+        let hideKeyboard = app.buttons["automation.taskEditor.hideKeyboard"]
+        if hideKeyboard.exists { hideKeyboard.tapWhenReady() }
+        let row = form.switches.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@", label, label + ",")).firstMatch
+        reveal(row, form); XCTAssertTrue(row.waitForExistence(timeout: 5)); XCTAssertTrue(row.wait(until: "value == %@", "0"))
+        let control = row.switches.firstMatch; XCTAssertTrue(control.waitUntilHittable())
+        control.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).press(forDuration: 0.1, thenDragTo: control.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+        XCTAssertTrue(row.wait(until: "value == %@", "1"))
+      }
+      func chooseMenuItem(_ label: String) {
+        let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<10 {
+          let visible = query.allElementsBoundByIndex.filter { $0.canTap }
+          if visible.count == 1 { visible[0].tapWhenReady(); return }
+          usleep(100_000)
+        }
+        XCTFail("Expected exactly one hittable menu item: \(label)")
+      }
+      func fill(_ full: Bool, titleOnly: Bool = false) throws {
+        let editor = app.collectionViews["automation.taskEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let title = editor.textFields["automation.taskTitle"], body = editor.textFields["automation.taskBody"]
+        reveal(title, editor); title.tapWhenReady(); XCTAssertTrue(title.waitForKeyboardFocus()); title.waitForKeyboardLayout(); title.typeWhenFocused(try XCTUnwrap(newTask["title"] as? String))
+        if !titleOnly { reveal(body, editor); body.tapWhenReady(); XCTAssertTrue(body.waitForKeyboardFocus()); body.typeWhenFocused(try XCTUnwrap(newTask["body"] as? String)) }
+        if full {
+          let picker = editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assigned assistant,")).firstMatch; press(picker, editor); chooseMenuItem("Garden planner")
+          let increment = editor.buttons["Increment"]; reveal(increment, editor); increment.tapWhenReady(); increment.tapWhenReady()
+          for id in try XCTUnwrap(newTask["dependencies"] as? [String]) { toggle(try XCTUnwrap(task(id)["title"] as? String), editor) }
+        }
+      }
+      func save() { let button = app.buttons["automation.saveTask"]; XCTAssertTrue(button.wait(until: "enabled == true")); button.tapWhenReady() }
+      let heading = board.staticTexts["Task board"]
+      reveal(heading, board); XCTAssertTrue(heading.waitForExistence(timeout: 10))
+      let initial = try events(); XCTAssertEqual(initial.filter { $0["method"] as? String == "GET" }.count, 1); XCTAssertFalse(initial.contains { $0["method"] as? String != "GET" })
+      let headers = ["Blocked (2)", "Ready (1)", "Running (1)", "In review (1)", "Done (1)", "To do (1)"]
+      if !["task-empty", "task-unsupported"].contains(variant) {
+        var observed: [String] = []
+        for header in headers {
+          reveal(board.buttons[header], board); XCTAssertTrue(board.buttons[header].waitForExistence(timeout: 5))
+          for label in board.buttons.allElementsBoundByIndex.map(\.label) where label.range(of: "^[A-Za-z ]+ \\([0-9]+\\)$", options: .regularExpression) != nil {
+            if !observed.contains(label) { observed.append(label) }
+          }
+        }
+        XCTAssertEqual(Set(observed), Set(headers)); print("DESIGN_WORK_TASK_HEADERS \(observed)")
+      }
+      switch variant {
+      case "task-board":
+        reveal(heading, board, up: false); try capture("task-board")
+        group("Blocked (2)"); XCTAssertTrue(board.buttons["automation.task.t_00000005"].waitForDisappearance())
+        group("Blocked (2)"); reveal(board.buttons["automation.task.t_00000005"], board)
+        XCTAssertTrue(board.buttons["automation.task.t_00000005"].waitForExistence(timeout: 5))
+        group("To do (1)"); XCTAssertTrue(board.buttons["automation.task.t_00000007"].waitForDisappearance())
+        group("To do (1)"); reveal(board.buttons["automation.task.t_00000007"], board)
+        XCTAssertTrue(board.buttons["automation.task.t_00000007"].waitForExistence(timeout: 5)); XCTAssertTrue(board.buttons["automation.task.t_00000005"].waitForExistence(timeout: 5), "Blocked must remain expanded after To do opens"); try capture("task-board-expanded")
+      case "task-board-dark", "task-board-large-text":
+        reveal(board.buttons["automation.task.t_00000005"], board, up: false); XCTAssertTrue(board.buttons["automation.task.t_00000005"].waitForExistence(timeout: 5)); try capture(variant == "task-board-dark" ? "task-board-dark" : "task-board-large-text-board")
+        let row = board.buttons["automation.task.t_00000005"]; reveal(row, board, up: false); XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tapWhenReady()
+        let detail = app.collectionViews["automation.taskDetail"]; XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        try capture(variant == "task-board-dark" ? "task-detail-dark" : "task-board-large-text-detail-top")
+        if variant == "task-board-large-text" { reveal(detail.buttons["Start task"], detail); try capture("task-board-large-text-detail-actions") }
+      case "task-detail", "task-refused":
+        open("Blocked (2)", "t_00000005")
+        let detail = app.collectionViews["automation.taskDetail"]
+        if variant == "task-detail" {
+          XCTAssertEqual(detail.descendants(matching: .any).matching(identifier: "automation.taskStatus").firstMatch.value as? String, "Blocked"); try capture("task-detail-top")
+          reveal(detail.buttons["Start task"], detail); try capture("task-detail-actions")
+          if !pad { reveal(detail.buttons["Add dependency"], detail); try capture("task-detail-dependencies") }
+        } else {
+          press(detail.buttons["Start task"], detail)
+          if !pad { try capture("task-refused") }
+          let error = text(messages["refusedTransition"]!, in: detail); reveal(error, detail, up: false); XCTAssertTrue(error.waitForExistence(timeout: 10))
+          XCTAssertTrue(error.label.contains("Status refreshed.")); print("DESIGN_WORK_TASK_REFUSAL \(error.label)"); try capture("task-refused-banner")
+        }
+      case "task-status-details":
+        open("Running (1)", "t_00000006"); var detail = app.collectionViews["automation.taskDetail"]
+        let running = text("A Hermes worker is running this task", in: detail); reveal(running, detail)
+        XCTAssertTrue(running.exists); XCTAssertFalse(detail.buttons["Start task"].exists); try capture("task-running")
+        app.navigationBars["Task details"].buttons["Done"].tapWhenReady(); XCTAssertTrue(board.waitUntilHittable()); XCTAssertTrue(app.collectionViews["automation.work"].exists)
+        open("In review (1)", "t_00000003"); detail = app.collectionViews["automation.taskDetail"]; let hint = text("The reviewing assistant can request changes", in: detail); reveal(hint, detail); XCTAssertTrue(hint.waitForExistence(timeout: 5)); try capture("task-review")
+      case "task-empty", "task-unsupported": try capture(variant)
+      case "task-create", "task-create-dark", "task-create-large-text", "task-create-uncertain":
+        press(board.buttons["New task"], board); let editor = app.collectionViews["automation.taskEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        if variant == "task-create" && !pad { try capture("task-create-empty") }
+        try fill(variant == "task-create", titleOnly: variant == "task-create-large-text")
+        if variant == "task-create" { let last = try XCTUnwrap(task("t_00000003")["title"] as? String); reveal(editor.switches.matching(NSPredicate(format: "label BEGINSWITH %@", last)).firstMatch, editor); try capture("task-create-filled"); save(); XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); let created = board.buttons.matching(NSPredicate(format: "label CONTAINS %@", newTask["title"] as! String)).firstMatch; reveal(created, board, up: false); XCTAssertTrue(created.exists) }
+        else if variant == "task-create-dark" { press(editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assigned assistant,")).firstMatch, editor); chooseMenuItem("Garden planner"); try capture("task-create-dark") }
+        else if variant == "task-create-large-text" { try capture("task-create-large-text-top"); reveal(editor.switches.matching(NSPredicate(format: "label BEGINSWITH %@", try XCTUnwrap(task("t_00000003")["title"] as? String))).firstMatch, editor); try capture("task-create-large-text-bottom") }
+        else {
+          save(); let error = text("We couldn't confirm this change. Refresh status and review it before trying again.", in: editor); reveal(error, editor, up: false); XCTAssertTrue(error.waitForExistence(timeout: 10)); try capture("task-create-uncertain")
+          let refresh = editor.buttons["automation.refresh"]; press(refresh, editor, up: false)
+          let deadline = Date().addingTimeInterval(10); while Date() < deadline { let count = try events().filter { $0["method"] as? String == "GET" }.count; if count >= 2 { break }; usleep(100_000) }
+          let refreshed = try events(); XCTAssertEqual(refreshed.filter { $0["method"] as? String == "GET" }.count, 2); XCTAssertEqual(refreshed.filter { $0["method"] as? String != "GET" }.count, 1)
+          save(); XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); let created = board.buttons.matching(NSPredicate(format: "label CONTAINS %@", newTask["title"] as! String)); reveal(created.firstMatch, board, up: false); XCTAssertEqual(created.count, 1); try capture("task-create-retried")
+        }
+      case "task-edit":
+        open("Ready (1)", "t_00000002"); let detail = app.collectionViews["automation.taskDetail"]; press(detail.buttons["Edit task"], detail)
+        let editor = app.collectionViews["automation.taskEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 5)); press(editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assigned assistant,")).firstMatch, editor); chooseMenuItem("Unassigned"); try capture("task-edit"); save()
+        XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); XCTAssertTrue(detail.waitForExistence(timeout: 5)); XCTAssertTrue(detail.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Unassigned", "Unassigned")).firstMatch.waitForExistence(timeout: 5)); if !pad { try capture("task-edit-saved") }
+      default: XCTFail("Unknown Work task variant \(variant)")
+      }
+      let recorded = try events(), writes = recorded.filter { $0["method"] as? String != "GET" }
+      if ["task-board", "task-board-dark", "task-board-large-text", "task-detail", "task-status-details", "task-empty", "task-unsupported", "task-create-dark", "task-create-large-text"].contains(variant) { XCTAssertTrue(writes.isEmpty) }
+      if variant == "task-refused" { XCTAssertEqual(writes.count, 1); XCTAssertEqual(writes.first?["path"] as? String, "/tasks/t_00000005/actions"); let body = try XCTUnwrap(writes.first?["body"] as? [String: String]); XCTAssertEqual(body, ["action":"start"]) }
+      if variant == "task-create" || variant == "task-create-uncertain" {
+        XCTAssertEqual(writes.count, 1)
+        let bodies = try writes.map { try XCTUnwrap($0["body"] as? [String: Any]) }
+        for (index, body) in bodies.enumerated() {
+          XCTAssertEqual(writes[index]["method"] as? String, "POST"); XCTAssertEqual(writes[index]["path"] as? String, "/tasks")
+          XCTAssertEqual(Set(body.keys), Set(["requestId", "title", "body", "priority", "assignee", "dependencies"])); XCTAssertNotNil(UUID(uuidString: body["requestId"] as? String ?? ""))
+          XCTAssertEqual(body["title"] as? String, newTask["title"] as? String); XCTAssertEqual(body["body"] as? String, newTask["body"] as? String)
+          if variant == "task-create" { XCTAssertEqual(body["priority"] as? Int, newTask["priority"] as? Int); XCTAssertEqual(body["assignee"] as? String, newTask["assignee"] as? String); XCTAssertEqual(body["dependencies"] as? [String], newTask["dependencies"] as? [String]) }
+        }
+        if variant == "task-create-uncertain" { XCTAssertEqual(recorded.filter { $0["method"] as? String == "GET" }.count, 2) }
+      }
+      if variant == "task-edit" {
+        XCTAssertEqual(writes.count, 1); XCTAssertEqual(writes.first?["method"] as? String, "PATCH"); XCTAssertEqual(writes.first?["path"] as? String, "/tasks/t_00000002")
+        let body = try XCTUnwrap(writes.first?["body"] as? [String: Any]), originalTask = try task("t_00000002")
+        XCTAssertEqual(Set(body.keys), Set(["title", "body", "priority", "assignee"])); XCTAssertTrue(body["assignee"] is NSNull); XCTAssertEqual(body["title"] as? String, originalTask["title"] as? String); XCTAssertEqual(body["body"] as? String, originalTask["body"] as? String); XCTAssertEqual(body["priority"] as? Int, originalTask["priority"] as? Int)
+      }
+      print("DESIGN_WORK_TASK_VARIANT \(variant) complete"); app.terminate()
+    }
+  }
+
+  fileprivate func memoryDesignReview(part: Int) throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MEMORY_PATH"] ?? ""
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_MEMORY_PATH to capture Memory."); return }
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let config = try XCTUnwrap(original["memoryFixture"] as? [String: String])
+    let messages = try XCTUnwrap(original["memoryMessages"] as? [String: String])
+    let savedDocuments = try XCTUnwrap((original["memory"] as? [String: Any])?["documents"] as? [[String: Any]])
+    let firstDocument = try XCTUnwrap(savedDocuments.first)
+    let savedEntries = try XCTUnwrap(firstDocument["entries"] as? [[String: String]])
+    let firstSavedText = try XCTUnwrap(savedEntries.first?["text"])
+    let after = (ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "after") == "after"
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let variants = ["loaded", "dark", "large-text", "loading", "load-error", "conflict", "paused", "discard", "disabled", "empty", "too-long"] + (after ? ["reload-error", "conflict-large-text"] : [])
+    let selected = selection.components(separatedBy: ",")
+    guard selection.isEmpty || selected.allSatisfy(variants.contains) else { XCTFail("Unknown Memory variant: \(selection)"); return }
+    for (index, variant) in variants.enumerated() where (selection.isEmpty ? index % 5 == part : part == 0 && selected.contains(variant)) {
+      var fixture = original
+      fixture["mode"] = variant == "discard" ? "paused" : variant == "conflict-large-text" ? "conflict" : variant
+      if after && variant == "loaded" { fixture["memoryWriteDelayMs"] = 8000 }
+      let app = launch(textSize: variant.contains("large-text") ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL",
+        environment: ["AGENT_INTERFACE_UI_THEME": variant == "dark" ? "dark" : "light",
+          "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Memory")
+      let form = app.collectionViews["memoryForm"]
+      XCTAssertTrue(form.waitForExistence(timeout: 5))
+      func field(_ target: String, _ index: Int = 1) -> XCUIElement {
+        let identifier = "memoryEntry.\(target).\(index)"
+        if !after { return app.textFields[identifier] }
+        return app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND elementType IN %@", identifier,
+          [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue, XCUIElement.ElementType.staticText.rawValue])).firstMatch
+      }
+      func reveal(_ element: XCUIElement, up: Bool = true) { revealFormControl(element, in: form, app: app, up: up) }
+      func save(_ target: String = "memory") -> XCUIElement { app.buttons["memorySave.\(target)"] }
+      func error(_ text: String) -> XCUIElement {
+        if after { return app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
+        return app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+      }
+      var editedEntry = ""
+      func editFirst() {
+        let first = field("memory"); reveal(first, up: !["loaded", "large-text"].contains(variant))
+        let previous = first.value as? String ?? ""
+        first.typeWhenFocused(" Updated.")
+        editedEntry = first.value as? String ?? ""
+        XCTAssertNotEqual(editedEntry, previous, "The edited note must change before saving")
+        XCTAssertTrue(editedEntry.contains(" Updated."), "The note must include the typed edit")
+      }
+      let name = "memory-" + variant
+      if variant == "loading" {
+        let loading = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Loading profile memory…")).firstMatch
+        XCTAssertTrue(loading.waitForExistence(timeout: 5)); try capture(name); XCTAssertTrue(loading.exists)
+        app.terminate(); continue
+      }
+      if variant == "load-error" {
+        let failed = error(messages["loadError"]!); XCTAssertTrue(failed.waitForExistence(timeout: 5)); try capture(name)
+        app.buttons["Try loading again"].tapWhenReady()
+        XCTAssertTrue(field("memory").waitForExistence(timeout: 5)); XCTAssertFalse(failed.exists); try capture("memory-retried")
+        app.terminate(); continue
+      }
+      if variant == "empty" {
+        XCTAssertTrue(app.staticTexts["Nothing saved here yet. Add a fact you want this profile to remember."].firstMatch.waitForExistence(timeout: 5)); try capture(name)
+        app.terminate(); continue
+      }
+      let profile = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Shared profile: ranch")).firstMatch
+      XCTAssertTrue(profile.waitForExistence(timeout: 5))
+      if ["loaded", "dark", "large-text"].contains(variant) {
+        try capture(name)
+        reveal(field("user")); try capture(name + "-profile")
+      }
+      if variant == "loaded" {
+        editFirst()
+        let add = app.buttons["memoryAdd.memory"]; reveal(add); add.tapWhenReady()
+        let added = field("memory", 4)
+        if after {
+          XCTAssertTrue(added.waitForExistence(timeout: 5)); XCTAssertTrue(added.waitForKeyboardFocus(), "Add memory focuses its new field")
+        } else { reveal(added) }
+        added.typeWhenFocused(config["newEntry"]!)
+        reveal(save()); XCTAssertTrue(save().isEnabled); try capture("memory-dirty")
+        if after {
+          app.buttons["Close"].tapWhenReady()
+          XCTAssertTrue(app.buttons["confirmationKeep"].waitForExistence(timeout: 5)); try capture("memory-close-confirmation")
+          app.buttons["confirmationKeep"].tapWhenReady(); reveal(added, up: false)
+          XCTAssertTrue(added.wait(until: "value == %@", config["newEntry"]!)); reveal(save())
+        }
+        save().tapWhenReady()
+        if after {
+          let progress = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving memories in Hermes…")).firstMatch
+          XCTAssertTrue(progress.waitForExistence(timeout: 3)); try capture("memory-saving"); XCTAssertTrue(progress.exists)
+          XCTAssertFalse(app.buttons["Close"].isEnabled); XCTAssertFalse(app.buttons["memoryBack"].isEnabled)
+        }
+        XCTAssertTrue(app.buttons["memoryDiscard.memory"].waitForDisappearance())
+        reveal(added, up: false); XCTAssertTrue(added.wait(until: "value == %@", config["newEntry"]!))
+        let refreshed = app.staticTexts["memorySaved.memory"]
+        reveal(refreshed)
+        XCTAssertTrue(refreshed.wait(until: "label == %@", messages["nextTurn"]!)); try capture("memory-saved")
+        let forget = app.buttons["memoryForget.user.1"]; reveal(forget); forget.tapWhenReady()
+        XCTAssertTrue(app.buttons["Forget entry"].waitForExistence(timeout: 5)); try capture("memory-forget-confirmation")
+        let userEntries = try XCTUnwrap(savedDocuments[1]["entries"] as? [[String: String]])
+        let forgottenText = try XCTUnwrap(userEntries.first?["text"])
+        if after {
+          XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "\"\(forgottenText)\"")).firstMatch.exists)
+          app.buttons["confirmationKeep"].tapWhenReady()
+        } else if app.buttons["Cancel"].exists { app.buttons["Cancel"].tapWhenReady() }
+        else if app.otherElements["PopoverDismissRegion"].firstMatch.exists { app.otherElements["PopoverDismissRegion"].firstMatch.tap() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).tap() }
+        XCTAssertTrue(app.buttons["Forget entry"].waitForDisappearance())
+        XCTAssertTrue(field("user").exists)
+        XCTAssertEqual(field("user").value as? String, forgottenText)
+        reveal(forget); forget.tapWhenReady(); app.buttons["Forget entry"].tapWhenReady()
+        let user = try XCTUnwrap((original["memory"] as? [String: Any])?["documents"] as? [[String: Any]])[1]
+        let remaining = try XCTUnwrap(user["entries"] as? [[String: String]])[1]["text"]!
+        XCTAssertTrue(field("user").wait(until: "value == %@", remaining))
+      } else if ["conflict", "paused", "discard", "reload-error", "conflict-large-text"].contains(variant) {
+        editFirst(); reveal(save()); save().tapWhenReady()
+        let failed = error(messages[variant.contains("conflict") ? "conflict" : "paused"]!)
+        XCTAssertTrue(failed.waitForExistence(timeout: 5)); reveal(failed)
+        if variant != "discard" { try capture(name) }
+        reveal(field("memory"), up: false)
+        print("DESIGN_MEMORY_CONFLICT variant=\(variant) fieldEnabled=\(field("memory").isEnabled) draft=\(String(describing: field("memory").value))")
+        XCTAssertEqual(field("memory").value as? String, editedEntry)
+        if after { XCTAssertFalse(app.textFields["memoryEntry.memory.1"].exists, "The conflicted draft is read-only text") }
+        if variant == "discard" {
+          let discard = app.buttons["memoryDiscard.memory"]; reveal(discard); discard.tapWhenReady()
+          XCTAssertTrue(discard.waitForDisappearance()); reveal(field("memory"), up: false); try capture(name)
+          print("DESIGN_MEMORY_DISCARD fieldEnabled=\(field("memory").isEnabled)")
+        } else {
+          let reload = app.buttons["Reload profile memory"]; reveal(reload); reload.tapWhenReady()
+          if after {
+            XCTAssertTrue(app.buttons["confirmationAccept"].waitForExistence(timeout: 5))
+            if variant == "paused" { try capture("memory-reload-confirmation") }
+            app.buttons["confirmationAccept"].tapWhenReady()
+          }
+          if variant == "reload-error" {
+            let readError = error(messages["loadError"]!); XCTAssertTrue(readError.waitForExistence(timeout: 5))
+            let navigationBottom = app.navigationBars.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
+            XCTAssertGreaterThanOrEqual(readError.frame.minY, max(form.frame.minY, navigationBottom), "Failed reload clears the navigation bar")
+            XCTAssertLessThanOrEqual(readError.frame.maxY, form.frame.maxY, "Failed reload keeps the entire error visible")
+            try capture("memory-reload-failed")
+            reveal(field("memory")); XCTAssertTrue(field("memory").wait(until: "value == %@", editedEntry))
+            let retry = app.buttons["Try loading again"]; reveal(retry, up: false); retry.tapWhenReady()
+            app.buttons["confirmationAccept"].tapWhenReady()
+          }
+          XCTAssertTrue(failed.waitForDisappearance(timeout: 5))
+          reveal(field("memory"), up: false)
+          XCTAssertTrue(app.textFields["memoryEntry.memory.1"].wait(until: "enabled == true"))
+          print("DESIGN_MEMORY_RELOAD variant=\(variant) draft=\(String(describing: field("memory").value))")
+          XCTAssertEqual(field("memory").value as? String, firstSavedText)
+          if variant.contains("conflict") { reveal(field("memory", 4)); XCTAssertTrue(field("memory", 4).wait(until: "value == %@", config["externalEntry"]!)) }
+        }
+      } else if variant == "disabled" {
+        let note = app.staticTexts[after ? "Editing is disabled in this Hermes profile. You can still read and copy these notes." : "This memory is disabled in the Hermes profile."]
+        reveal(note); XCTAssertTrue(note.exists)
+        if after {
+          reveal(field("user")); XCTAssertFalse(app.textFields["memoryEntry.user.1"].exists)
+          let documents = try XCTUnwrap((original["memory"] as? [String: Any])?["documents"] as? [[String: Any]])
+          let entries = try XCTUnwrap(documents[1]["entries"] as? [[String: String]])
+          XCTAssertEqual(field("user").value as? String, entries[0]["text"])
+        }
+        else { XCTAssertFalse(field("user").isEnabled) }
+        try capture(name)
+      } else if variant == "too-long" {
+        let edited = field("memory", 2); reveal(edited)
+        let previous = try XCTUnwrap(edited.value as? String)
+        edited.typeWhenFocused(config["limitEditSuffix"]!)
+        let expected = edited.value as? String ?? ""
+        XCTAssertEqual(expected.count, previous.count + config["limitEditSuffix"]!.count)
+        XCTAssertTrue(expected.contains(config["limitEditSuffix"]!))
+        print("DESIGN_MEMORY_LIMIT previousScalars=\(previous.unicodeScalars.count) editedScalars=\(expected.unicodeScalars.count) aggregateExpected=2206")
+        reveal(save())
+        if after {
+          XCTAssertFalse(save().isEnabled)
+          let limit = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "6 characters over the limit")).firstMatch
+          reveal(limit, up: false); XCTAssertTrue(limit.exists); try capture(name)
+          app.terminate(); continue
+        }
+        XCTAssertTrue(save().isEnabled); save().tapWhenReady()
+        let failed = error(messages["tooLong"]!)
+        if !failed.waitForExistence(timeout: 5) {
+          let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.name = "memory-limit-response"; screenshot.lifetime = .keepAlways; add(screenshot)
+          let tree = XCTAttachment(string: app.debugDescription); tree.name = "memory-limit-response-hierarchy"; tree.lifetime = .keepAlways; add(tree)
+        }
+        reveal(failed); XCTAssertTrue(failed.exists); try capture(name)
+      }
+      if after && variant == "large-text" {
+        editFirst()
+        app.buttons["memoryBack"].tapWhenReady()
+        XCTAssertTrue(app.buttons["confirmationKeep"].waitForExistence(timeout: 5)); try capture("memory-large-text-leave")
+        app.buttons["confirmationKeep"].tapWhenReady(); XCTAssertTrue(app.buttons["memoryBack"].waitForExistence(timeout: 5))
+      }
+      if after && variant == "reload-error" { try capture("memory-reload-recovered") }
+      app.terminate()
+    }
+  }
+
+  fileprivate func launch(liveActivity: Bool = false, textSize: String? = nil, environment: [String: String] = [:]) -> XCUIApplication {
+    let app = XCUIApplication()
+    for (key, value) in environment { app.launchEnvironment[key] = value }
+    if let textSize { app.launchArguments += ["-UIPreferredContentSizeCategoryName", textSize] }
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    if liveActivity { app.launchEnvironment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] = "1" }
+    app.launch()
+    return app
+  }
+
+  fileprivate func goToAssistantList(_ app: XCUIApplication) {
+    if app.profileMenu.exists { return }
+    let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
+    if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
+    XCTAssertTrue(app.profileMenu.waitForExistence(timeout: 5))
+  }
+
+  fileprivate func openPreferences(_ app: XCUIApplication) {
+    goToAssistantList(app)
+    app.openSettingsFromProfileMenu()
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+  }
+
+  fileprivate func openPreferencesLink(_ app: XCUIApplication, _ title: String) {
+    let link = app.buttons[title]
+    scrollUntilHittable(app, link)
+    link.tap()
+    XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+  }
+
+  fileprivate func back(_ app: XCUIApplication, from title: String) {
+    app.navigationBars[title].buttons.firstMatch.tap()
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+  }
+
+  fileprivate func scrollUntilHittable(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true, in scroller: XCUIElement? = nil) {
+    let area = scroller ?? app
+    func bounds() -> (top: CGFloat, bottom: CGFloat) {
+      let overlay = app.descendants(matching: .any)["composerArea"].firstMatch
+      return (max(area.frame.minY, app.navigationBars.firstMatch.frame.maxY) + 10,
+              min(area.frame.maxY, overlay.exists ? overlay.frame.minY : area.frame.maxY) - 10)
+    }
+    func ready() -> Bool {
+      guard element.canTap else { return false }
+      guard area.identifier == "conversationTranscript" else { return true }
+      let visible = bounds()
+      return element.frame.minY >= visible.top && element.frame.maxY <= visible.bottom
+    }
+    for _ in 0..<8 {
+      if ready() { return }
+      if area.identifier == "conversationTranscript" {
+        let visible = bounds()
+        let upward = element.hasFrame ? element.frame.maxY > visible.bottom : up
+        let gap = element.hasFrame ? (upward ? element.frame.maxY - visible.bottom : visible.top - element.frame.minY) : visible.bottom - visible.top
+        let distance = min((visible.bottom - visible.top) * 0.6, max(24, gap + 8))
+        let startY = upward ? visible.bottom : visible.top
+        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: area.frame.midX, dy: startY))
+        let end = start.withOffset(CGVector(dx: 0, dy: upward ? -distance : distance))
+        start.press(forDuration: 0.05, thenDragTo: end)
+      } else if up { area.swipeUp() } else { area.swipeDown() }
+    }
+    XCTAssertTrue(ready(), "\(element) never became hittable clear of the navigation bar and message box")
+  }
+
+  /// Waits for transitions to settle, then writes the full-screen PNG and attaches it to the result.
+  fileprivate func capture(_ name: String) throws {
+    guard let directory else { return }
+    Thread.sleep(forTimeInterval: 1.0)
+    let screenshot = XCUIScreen.main.screenshot()
+    try screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"))
+    let attachment = XCTAttachment(screenshot: screenshot)
+    attachment.name = name
+    attachment.lifetime = .keepAlways
+    add(attachment)
+  }
+}
+
+@MainActor final class ScreenshotTourTests: ScreenshotTourTestCase {
   /// Focused captures for the screen-by-screen design gate, using the same data as the web.
   func testTodayDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_TODAY_PATH"] ?? ""
@@ -123,6 +639,246 @@ import CryptoKit
     }
   }
 
+  /// Home with an assistant of each kind of shape, including a white mug that needs help, whose
+  /// exclamation mark keeps the light body's soft edge.
+  func testVariedRosterHome() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the roster.")
+    for theme in ["light", "dark"] {
+      let app = launch(environment: ["AGENT_INTERFACE_UI_ROSTER": "varied", "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      goToAssistantList(app)
+      XCTAssertTrue(app.buttons["bot.coffee"].waitForExistence(timeout: 5))
+      try capture("01b-home-roster-\(theme)")
+      app.terminate()
+    }
+  }
+
+  /// The avatar editor's shape groups and the Debug specimen's groups, for review.
+  func testAvatarShapesReview() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the shapes.")
+    let app = launch()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+    // Drags `scroller` until `element` sits just below `top`, so its group's heading shows above it.
+    func bring(_ element: XCUIElement, in scroller: XCUIElement, below top: () -> CGFloat) {
+      for _ in 0..<40 {
+        let target = top() + 56
+        if element.exists && element.hasFrame && abs(element.frame.minY - target) <= 40 { return }
+        let shift = element.exists && element.hasFrame ? element.frame.minY - target : 260
+        let distance = max(-260, min(260, shift))
+        let start = scroller.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.62))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -distance)),
+          withVelocity: .slow, thenHoldForDuration: 0.3)
+      }
+      XCTAssertTrue(element.exists, "\(element) came into view")
+    }
+    app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Profile")
+    let form = app.collectionViews["settings.profile"]
+    XCTAssertTrue(form.waitForExistence(timeout: 5))
+    let bar = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
+    let belowBar = { bar.exists ? bar.frame.maxY : form.frame.minY }
+    for (tile, name) in [("blob", "classic"), ("cloud", "objects"), ("ghost", "creatures"), ("pumpkin", "seasonal")] {
+      bring(app.buttons["avatarTile.shape.\(tile)"], in: form, below: belowBar)
+      try capture("20-avatar-shapes-\(name)")
+    }
+    app.buttons["Close"].tapWhenReady()
+    if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
+    goToAssistantList(app)
+    openPreferences(app)
+    openPreferencesLink(app, "Avatar specimen")
+    XCTAssertTrue(app.switches["Reduced motion"].waitForExistence(timeout: 5))
+    let scroller = app.scrollViews.firstMatch
+    let belowNav = { app.navigationBars.firstMatch.frame.maxY }
+    bring(app.descendants(matching: .any)["avatarMatrix"], in: scroller, below: belowNav)
+    try capture("21-specimen-matrix")
+    for (group, first) in [("classic", "blob"), ("objects", "cloud"), ("creatures", "ghost")] {
+      bring(app.buttons["specimenShape.\(first)"], in: scroller, below: belowNav)
+      try capture("22-specimen-\(group)")
+      // Home shows a blocked assistant's state in words, so the white mug's edged exclamation mark
+      // is checked in the specimen's state grid, which shows the tapped shape.
+      if group == "objects" { app.buttons["specimenShape.mug"].tapWhenReady() }
+    }
+    for _ in 0..<12 where !app.switches["Reduced motion"].canTap { scroller.swipeDown() }
+    try capture("23-specimen-white-mug-states")
+    app.swipeUp()
+    try capture("23b-specimen-white-mug-states")
+  }
+
+  func testScreenshotTour() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the tour.")
+    var app = launch()
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+
+    goToAssistantList(app)
+    XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
+    try capture("01-home")
+
+    for (identifier, name, ready) in [
+      ("openToday", "17-today", "todayOverview"),
+      ("openDiscovery", "19-search", "Search conversations"),
+    ] {
+      app.buttons[identifier].tap()
+      XCTAssertTrue(app.descendants(matching: .any)[ready].waitForExistence(timeout: 10))
+      try capture(name)
+      goToAssistantList(app)
+    }
+    // Group chats are made from the New menu, and the sheet is their only page without a room.
+    app.buttons["newMenu"].tapWhenReady()
+    let newGroup = app.buttons["newGroup"]
+    XCTAssertTrue(newGroup.waitForExistence(timeout: 10))
+    XCTAssertTrue(newGroup.wait(until: "enabled == true"))
+    newGroup.tap()
+    XCTAssertTrue(app.textFields["Group name"].waitForExistence(timeout: 10))
+    try capture("18-group-create")
+    app.buttons["Close"].tap()
+    goToAssistantList(app)
+    app.buttons["openDiscovery"].tap()
+    XCTAssertTrue(app.buttons["Saved items"].waitForExistence(timeout: 10))
+    app.buttons["Saved items"].tap()
+    XCTAssertTrue(app.buttons["savedItem-saved-1"].waitForExistence(timeout: 10))
+    try capture("19b-search-saved")
+    goToAssistantList(app)
+
+    openPreferences(app)
+    scrollUntilHittable(app, app.descendants(matching: .any)["sharedComputer"])
+    try capture("06b-shared-computer")
+    app.buttons["Close"].tap()
+
+    app.buttons["bot.ranch"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 5))
+    try capture("02-conversation")
+    app.textViews["messageComposer"].tap()
+    XCTAssertTrue(app.buttons["hideKeyboard"].waitForExistence(timeout: 5))
+    try capture("02c-composer-focused")
+    app.buttons["hideKeyboard"].tap()
+
+    app.openBotProfile("Ranch hand")
+    try capture("02b-assistant-card")
+    app.buttons["profileSettings"].tap()
+    XCTAssertTrue(app.buttons["Avatar"].waitForExistence(timeout: 5))
+    app.buttons["Avatar"].tap()
+    XCTAssertTrue(app.buttons["previewState.idle"].waitForExistence(timeout: 5))
+    try capture("04-avatar-editor")
+    app.buttons["previewState.done"].tap()
+    app.swipeUp()
+    try capture("04b-avatar-editor-tiles")
+    scrollUntilHittable(app, app.buttons["Save avatar"])
+    try capture("05-avatar-editor-controls")
+    // The shape picker's later groups, under their headings.
+    scrollUntilHittable(app, app.buttons["avatarTile.shape.cloud"], up: false)
+    try capture("05b-avatar-editor-objects")
+    scrollUntilHittable(app, app.buttons["avatarTile.shape.snowman"])
+    try capture("05c-avatar-editor-creatures-seasonal")
+    app.buttons["Close"].tap()
+    if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
+
+    openPreferences(app)
+    try capture("06-preferences")
+
+    openPreferencesLink(app, "Integrations")
+    XCTAssertTrue(app.staticTexts["Google Workspace"].waitForExistence(timeout: 10))
+    try capture("07-integrations")
+    back(app, from: "Integrations")
+
+    openPreferencesLink(app, "Hermes updates")
+    XCTAssertTrue(app.buttons["checkHermesUpdate"].waitForExistence(timeout: 10))
+    try capture("08-hermes-updates")
+    back(app, from: "Hermes updates")
+
+    openPreferencesLink(app, "Avatar specimen")
+    XCTAssertTrue(app.switches["Reduced motion"].waitForExistence(timeout: 5))
+    try capture("09-specimen-geometric")
+    app.swipeUp()
+    try capture("10-specimen-shapes")
+    scrollUntilHittable(app, app.buttons["specimenShape.snowman"])
+    try capture("11-specimen-groups")
+    for _ in 0..<6 where !app.buttons["Portrait"].canTap { app.swipeDown() }
+    app.buttons["Portrait"].tap()
+    try capture("12-specimen-portrait")
+    app.buttons["Character"].tap()
+    app.switches["Reduced motion"].tap()
+    try capture("13-specimen-reduced-motion")
+    let matrix = app.descendants(matching: .any)["avatarMatrix"]
+    scrollUntilHittable(app, matrix)
+    // Short drags bring the whole matrix just below the navigation bar.
+    for _ in 0..<12 where matrix.frame.minY > 160 {
+      app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+        .press(
+          forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)),
+          withVelocity: .slow, thenHoldForDuration: 0.3)
+    }
+    try capture("16-specimen-matrix")
+    back(app, from: "Avatar specimen")
+    // Back on Settings, scrolled to the bottom where the home sections and About rows sit.
+    try capture("06c-preferences-scrolled")
+    app.swipeDown()
+    try capture("06d-preferences-sections")
+
+    // Dark mode through the app's own theme preference, which drives preferredColorScheme.
+    // The picker's element type varies by iOS release; its label stays stable.
+    // Swiping down at the top of the sheet dismisses it, so reopen Preferences at the top instead.
+    app.buttons["Close"].tap()
+    openPreferences(app)
+    let theme = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Appearance")).firstMatch
+    XCTAssertTrue(theme.waitForExistence(timeout: 5) && theme.canTap, app.debugDescription)
+    theme.tap()
+    let dark = app.descendants(matching: .any).matching(NSPredicate(
+      format: "label == %@ AND elementType IN %@", "Dark",
+      [XCUIElement.ElementType.button.rawValue, XCUIElement.ElementType.menuItem.rawValue])).firstMatch
+    XCTAssertTrue(dark.waitForExistence(timeout: 5), app.debugDescription)
+    dark.tap()
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+    app.buttons["Close"].tap()
+    goToAssistantList(app)
+    XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
+    try capture("14-home-dark")
+    app.buttons["bot.ranch"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 5))
+    try capture("15-conversation-dark")
+    app.openBotProfile("Ranch hand")
+    try capture("15b-assistant-card-dark")
+
+    // A fresh launch with the working fixture shows the activity avatar and live activity row.
+    app.terminate()
+    app = launch(liveActivity: true)
+    XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 15))
+    try capture("03-conversation-working")
+    goToAssistantList(app)
+    XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
+    try capture("03b-home-working")
+
+    // Transcript states: a finished turn's folded work with a colored code block and a table, the
+    // question card, and a failed turn offering Retry.
+    for (environment, ready, name) in [
+      (["AGENT_INTERFACE_UI_WORK": "1"], "turnWork", "21-conversation-work"),
+      (["AGENT_INTERFACE_UI_QUESTION": "2"], "Send answers", "22-question-card"),
+      (["AGENT_INTERFACE_UI_RETRY": "1"], "retryTurn", "23-failed-turn-retry"),
+    ] {
+      app.terminate()
+      app = launch(environment: environment)
+      XCTAssertTrue(app.buttons[ready].waitForExistence(timeout: 15))
+      try capture(name)
+    }
+
+    // Without the fixture, a reset launch shows the first-run connection screen.
+    app.terminate()
+    let fresh = XCUIApplication()
+    fresh.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    fresh.launch()
+    XCTAssertTrue(fresh.textFields["serverAddress"].waitForExistence(timeout: 15))
+    try capture("00-sign-in")
+
+    // The chat header and card at a large accessibility text size.
+    fresh.terminate()
+    app = launch(textSize: "UICTContentSizeCategoryAccessibilityL")
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+    try capture("20-conversation-large-text")
+    app.openBotProfile("Ranch hand")
+    try capture("20b-assistant-card-large-text")
+  }
+}
+
+@MainActor final class ConversationDesignTourTests: ScreenshotTourTestCase {
   func testConversationDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_CONVERSATION_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_CONVERSATION_PATH to capture conversation."); return }
@@ -432,7 +1188,9 @@ import CryptoKit
       app.terminate()
     }
   }
+}
 
+@MainActor final class DetailsAndModelsDesignTourTests: ScreenshotTourTestCase {
   func testDetailsDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_DETAILS_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_DETAILS_PATH to capture assistant details."); return }
@@ -536,77 +1294,6 @@ import CryptoKit
     }
   }
 
-  /// The gutter drag scrolls the form without sending the gesture into its nested TextEditor.
-  private func settingsReveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
-    // Profile's fixed preview and Save bar cover parts of its reported form frame.
-    if form.identifier == "settings.profile" {
-      revealFormControl(element, in: form, app: XCUIApplication(), up: up)
-      return
-    }
-    // Creation carries the whole shape picker, 54 tiles, between the name and the bottom Next.
-    let attempts = form.identifier == "assistantCreationForm" ? 30 : 10
-    for _ in 0..<attempts {
-      if element.hasFrame && element.frame.minY >= form.frame.minY + 12 && element.frame.maxY <= form.frame.maxY - 12 { return }
-      let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: up ? 0.8 : 0.3))
-      let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: up ? 0.3 : 0.8))
-      start.press(forDuration: 0.02, thenDragTo: end)
-    }
-    XCTAssertTrue(element.hasFrame && element.frame.intersects(form.frame), "The requested control must be visible in the settings form")
-  }
-
-  private func revealFormControl(_ element: XCUIElement, in form: XCUIElement, app: XCUIApplication, up: Bool = true) {
-    func cells() -> [String] {
-      form.cells.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map {
-        "\($0.label.prefix(64)):\(String(describing: $0.frame))"
-      }
-    }
-    // Memory documents and Profile's avatar/voice sections need more travel
-    // than the shorter Models forms, especially between Profile's fixed bars.
-    let attempts = ["memoryForm", "settings.profile"].contains(form.identifier) ? 24 : 12
-    // Check the position reached by the final permitted drag before reporting failure.
-    for attempt in 0...attempts {
-      let keyboard = app.keyboards.firstMatch
-      let navigationBottom = app.navigationBars.allElementsBoundByIndex
-        .filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
-      var top = max(form.frame.minY, navigationBottom) + 12
-      if form.identifier == "settings.profile" {
-        let preview = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
-        if preview.hasFrame { top = max(top, preview.frame.maxY + 8) }
-      }
-      // Form frames extend beneath the fixed Save bar. XCTest reports covered
-      // rows as hittable, so keep their whole frame above it before tapping.
-      let saveBar = app.descendants(matching: .any)["saveBar"].firstMatch
-      // Virtualized rows have no readable attributes until scrolling reveals them.
-      let isSaveButton = element.exists && element.identifier == "saveChanges"
-      let formBottom = saveBar.hasFrame && !isSaveButton
-        ? min(form.frame.maxY - 12, saveBar.frame.minY - 8) : form.frame.maxY - 12
-      let bottom = min(formBottom, keyboard.exists ? keyboard.frame.minY - 8 : formBottom)
-      print("DESIGN_MODELS_REVEAL target=\(element) attempt=\(attempt) exists=\(element.exists) frame=\(element.hasFrame ? String(describing: element.frame) : "none") band=\(top)...\(bottom) upHint=\(up)")
-      if element.hasFrame && element.frame.minY >= top && element.frame.maxY <= bottom {
-        print("DESIGN_MODELS_TARGET type=\(element.elementType.rawValue) frame=\(element.frame)"); return
-      }
-      if attempt == attempts { break }
-      let upward = element.hasFrame ? element.frame.maxY > bottom : up
-      let before = cells()
-      let height = max(40, bottom - top)
-      if element.hasFrame && element.frame.height > height {
-        XCTFail("Models target is taller than the usable viewport: \(element)"); return
-      }
-      let distance: CGFloat
-      if element.hasFrame {
-        let desiredTop = top + (height - element.frame.height) / 2
-        distance = min(height * 0.38, max(12, abs(element.frame.minY - desiredTop)))
-      } else { distance = height * 0.38 }
-      // Stay outside the inset cells. At accessibility sizes x=40 hits the
-      // inference menu, whose long press opens it instead of scrolling the form.
-      let start = form.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 4, dy: (upward ? top + height * 0.72 : top + height * 0.28) - form.frame.minY))
-      let end = start.withOffset(CGVector(dx: 0, dy: distance * (upward ? -1 : 1)))
-      start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
-      if !before.isEmpty && before == cells() { print("DESIGN_REVEAL_NO_MOVEMENT target=\(element) attempt=\(attempt)") }
-    }
-    XCTFail("Models control did not fit within the visible form: \(element)")
-  }
-
   /// Only states affected by moving guidance outside disabled controls. Other captures stay valid.
   func testModelsCaptionDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MODELS_PATH"] ?? ""
@@ -668,6 +1355,225 @@ import CryptoKit
     }
   }
 
+  /// Shared production-shaped model and capability data, with explicit recoverable failures.
+  func testModelsDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MODELS_PATH"] ?? ""
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_MODELS_PATH to capture Models."); return }
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let after = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] == "after"
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let variants = [
+      ("models-loaded", "light", "UICTContentSizeCategoryL"),
+      ("models-dark", "dark", "UICTContentSizeCategoryL"),
+      ("models-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+      ("models-errors", "light", "UICTContentSizeCategoryL"),
+      ("models-empty", "light", "UICTContentSizeCategoryL"),
+      ("models-unavailable", "light", "UICTContentSizeCategoryL"),
+      ("models-missing", "light", "UICTContentSizeCategoryL"),
+    ]
+    let selections = selection.components(separatedBy: ",")
+    guard selection.isEmpty || selections.allSatisfy({ value in variants.contains { $0.0 == value } }) else {
+      XCTFail("Unknown Models variant: \(selection)"); return
+    }
+    for (name, theme, size) in variants where selection.isEmpty || selections.contains(name) {
+      var fixture = original
+      if name == "models-loaded" {
+        fixture["failFavorite"] = true; fixture["failInference"] = true
+        fixture["failCapability"] = "save-skills"; fixture["settingsModelError"] = true
+      }
+      if name == "models-errors" { fixture["failModels"] = true; fixture["failCapability"] = "load-tools" }
+      if name == "models-empty" {
+        var catalog = try XCTUnwrap(fixture["catalog"] as? [String: Any]); catalog["providers"] = []
+        fixture["catalog"] = catalog; fixture["skills"] = []
+      }
+      if name == "models-unavailable" { fixture["catalogUnsupported"] = true }
+      if name == "models-missing" {
+        var bots = try XCTUnwrap(fixture["bots"] as? [[String: Any]])
+        bots[0]["model"] = "retired-house-model"; fixture["bots"] = bots
+      }
+      let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+      func reveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
+        revealFormControl(element, in: form, app: app, up: up)
+      }
+      func bannerVisible(_ element: XCUIElement) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        let window = app.windows.firstMatch.frame
+        XCTAssertTrue(element.hasFrame && window.contains(element.frame), "The banner must be visible in its sheet, outside the scrolling form")
+      }
+      func settings(_ kind: String) -> XCUIElement {
+        app.openAssistantSettings("Ranch hand")
+        app.selectSettingsTab(kind == "Details" ? "Behavior" : kind)
+        return app.collectionViews["settings.behavior"]
+      }
+      if name == "models-unavailable" {
+        let form = settings("Tools")
+        let reason = app.staticTexts[original["capabilityUnsupportedReason"] as! String].firstMatch
+        reveal(reason, in: form); XCTAssertTrue(reason.exists)
+        XCTAssertFalse(app.buttons["saveChanges"].isEnabled)
+        try capture(name + "-tools"); app.terminate(); continue
+      }
+      if name == "models-loaded" {
+        let settingsForm = settings("Details")
+        let model = app.buttons["assistantModel"]; reveal(model, in: settingsForm); model.tapWhenReady()
+        XCTAssertTrue(app.textFields["modelSearch"].waitForExistence(timeout: 5))
+        try capture(name + "-settings-regression")
+        app.navigationBars["Model"].buttons.firstMatch.tapWhenReady()
+        app.buttons["Close"].firstMatch.tapWhenReady()
+      }
+      var composerOpen = true
+      app.buttons["chatModel"].tapWhenReady()
+      let form = app.descendants(matching: .any)["chatModelForm"].firstMatch
+      let search = app.textFields["modelSearch"]
+      // iPad virtualizes the provider row below the fold. Its favorite has the provider in its label.
+      let loadedModel = app.buttons.matching(NSPredicate(
+        format: "label == %@ OR label BEGINSWITH %@", "daily-planner", "daily-planner,")).firstMatch
+      if !size.contains("Accessibility") { XCTAssertTrue(search.waitForExistence(timeout: 10)) }
+      if size.contains("Accessibility") {
+        XCTAssertTrue(form.waitForExistence(timeout: 5))
+        if after {
+          XCTAssertFalse(app.segmentedControls["inferenceSpeed"].exists, "Accessibility text uses a scalable menu instead of fixed-size segments")
+          XCTAssertTrue(app.descendants(matching: .any)["inferenceSpeed"].firstMatch.waitForExistence(timeout: 5))
+        }
+        try capture(name + "-composer")
+        reveal(search, in: form)
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        let catalog = try XCTUnwrap(original["catalog"] as? [String: Any])
+        let providers = try XCTUnwrap(catalog["providers"] as? [[String: Any]])
+        let models = try XCTUnwrap(providers.first?["models"] as? [[String: Any]])
+        let longName = try XCTUnwrap(models.first(where: { ($0["id"] as? String)?.contains("/") == true })?["name"] as? String)
+        let longRow = app.buttons[longName].firstMatch
+        reveal(longRow, in: form); try capture(name + "-catalog")
+      } else if name == "models-errors" {
+        let error = app.staticTexts[original["catalogError"] as! String]
+        reveal(error, in: form); XCTAssertTrue(error.waitForExistence(timeout: 5)); try capture(name + "-catalog")
+        let retry = app.buttons["Retry loading models"]; reveal(retry, in: form); retry.tapWhenReady()
+        XCTAssertTrue(loadedModel.waitForExistence(timeout: 5))
+        XCTAssertFalse(error.exists); try capture(name + "-retried")
+      } else if name == "models-empty" {
+        let empty = app.staticTexts["No connected models were reported. Connect a provider in Hermes, then retry."]
+        reveal(empty, in: form); XCTAssertTrue(empty.exists); try capture(name + "-catalog")
+      } else if name == "models-missing" {
+        let kept = app.staticTexts["Your saved model is kept. Hermes did not include it in the current catalog."]
+        reveal(kept, in: form); XCTAssertTrue(kept.exists); try capture(name + "-catalog")
+      } else {
+        XCTAssertTrue(loadedModel.waitForExistence(timeout: 5))
+        try capture(name + "-composer")
+      }
+      if name == "models-loaded" {
+        reveal(search, in: form); search.typeWhenFocused("field")
+        let field = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "field-planner")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5)); XCTAssertFalse(field.isEnabled)
+        try capture(name + "-search")
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "zzz")
+        XCTAssertTrue(app.staticTexts["No models match your search."].waitForExistence(timeout: 5)); try capture(name + "-no-results")
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 3) + "\n")
+        let star = app.buttons["Add quick-reply to favorites"]
+        reveal(star, in: form); star.tapWhenReady()
+        let favoriteError = app.staticTexts[original["favoriteError"] as! String]
+        reveal(favoriteError, in: form); XCTAssertTrue(favoriteError.exists); try capture(name + "-favorite-error")
+        XCTAssertFalse(app.buttons["Remove quick-reply from favorites"].exists)
+        reveal(star, in: form); star.tapWhenReady()
+        XCTAssertTrue(app.buttons["Remove quick-reply from favorites"].firstMatch.waitForExistence(timeout: 5))
+        reveal(search, in: form, up: false); try capture(name + "-favorite-saved")
+        let reasoning = app.descendants(matching: .any)["inferenceReasoning"].firstMatch
+        reveal(reasoning, in: form, up: false); reasoning.tapWhenReady()
+        let ultra = app.descendants(matching: .any).matching(NSPredicate(
+          format: "label == %@ AND elementType IN %@", "Ultra",
+          [XCUIElement.ElementType.button.rawValue, XCUIElement.ElementType.menuItem.rawValue])).firstMatch
+        if after {
+          XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Extra high")).firstMatch.exists)
+        }
+        ultra.tapWhenReady()
+        let inferenceError = app.staticTexts[original["inferenceError"] as! String]
+        reveal(inferenceError, in: form, up: false); XCTAssertTrue(inferenceError.exists); try capture(name + "-inference-error")
+        let speed = app.segmentedControls["inferenceSpeed"]
+        reveal(speed, in: form, up: false); speed.buttons["Fast"].tapWhenReady()
+        XCTAssertTrue(speed.buttons["Fast"].wait(until: "selected == true")); try capture(name + "-inference-saved")
+        let choice = app.buttons["quick-reply"].firstMatch
+        reveal(choice, in: form); choice.tapWhenReady()
+        XCTAssertTrue(app.buttons["Use this model"].waitForExistence(timeout: 5))
+        if after {
+          XCTAssertTrue(app.staticTexts["Use this model?"].exists)
+          let warning = app.staticTexts.matching(NSPredicate(format: "label == %@", original["modelWarning"] as! String)).firstMatch
+          XCTAssertTrue(warning.waitForExistence(timeout: 5))
+          let keep = app.buttons["confirmationKeep"]
+          XCTAssertEqual(keep.label, "Keep current model")
+          XCTAssertTrue(keep.wait(until: "hittable == true"))
+        }
+        try capture(name + "-confirmation")
+        if after { app.buttons["confirmationKeep"].tapWhenReady() }
+        else if app.buttons["Cancel"].exists { app.buttons["Cancel"].tapWhenReady() }
+        else if app.otherElements["PopoverDismissRegion"].firstMatch.exists {
+          app.otherElements["PopoverDismissRegion"].firstMatch.tap()
+        }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).tap() }
+        XCTAssertTrue(app.buttons["Use this model"].wait(until: "exists == false"))
+        XCTAssertTrue(app.buttons["Close"].isEnabled)
+        reveal(choice, in: form); choice.tapWhenReady()
+        if after { app.buttons["confirmationAccept"].tapWhenReady() }
+        else { app.buttons["Use this model"].tapWhenReady() }
+        XCTAssertTrue(app.buttons["chatModel"].wait(until: "label == %@", "Model: quick-reply"))
+        app.buttons["chatModel"].tapWhenReady()
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        reveal(speed, in: form, up: false); XCTAssertTrue(speed.buttons["Fast"].isSelected)
+        let savedFavorite = app.buttons["Remove quick-reply from favorites"].firstMatch
+        reveal(savedFavorite, in: form); XCTAssertTrue(savedFavorite.exists)
+        app.buttons["Close"].firstMatch.tapWhenReady(); composerOpen = false
+      }
+      if composerOpen { app.buttons["Close"].firstMatch.tapWhenReady() }
+      XCTAssertTrue(app.buttons["chatModel"].waitForExistence(timeout: 5))
+      if name == "models-missing" { app.terminate(); continue }
+      if name == "models-loaded" || name == "models-errors" {
+        let toolsForm = settings("Tools")
+        if name == "models-errors" {
+          let error = app.staticTexts[original["capabilityLoadError"] as! String]
+          bannerVisible(error); try capture(name + "-tools")
+          XCTAssertFalse(app.buttons["saveChanges"].isEnabled)
+          let retry = app.buttons["Retry loading tools"]; reveal(retry, in: toolsForm); retry.tapWhenReady()
+          XCTAssertTrue(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Web search")).firstMatch.waitForExistence(timeout: 5))
+          XCTAssertFalse(error.exists, "A successful retry must remove the previous capability-load failure")
+          try capture(name + "-tools-retried")
+        } else { try capture(name + "-tools") }
+        app.buttons["Close"].firstMatch.tapWhenReady()
+      }
+      if name == "models-errors" { app.terminate(); continue }
+      let skillsForm = settings("Skills")
+      if name == "models-empty" {
+        let emptySkills = app.staticTexts["No skills were reported by Hermes."]
+        reveal(emptySkills, in: skillsForm); XCTAssertTrue(emptySkills.waitForExistence(timeout: 5)); try capture(name + "-skills")
+      } else {
+        let required = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "weekly-plan")).firstMatch
+        revealFormControl(required, in: skillsForm, app: app)
+      XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertFalse(required.isEnabled)
+        XCTAssertEqual(required.value as? String, "1")
+        try capture(name + "-skills")
+        if name == "models-loaded" {
+          let packing = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "packing-list")).firstMatch
+          reveal(packing, in: skillsForm)
+          XCTAssertEqual(packing.value as? String, "0")
+          packing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+          XCTAssertTrue(packing.wait(until: "value == %@", "1"), "The switch must change before Save tests draft retention")
+          print("DESIGN_CATALOG_DRAFT beforeSave=\(packing.value ?? "nil")")
+          let save = app.buttons["saveChanges"]; reveal(save, in: skillsForm); save.tapWhenReady()
+          let error = app.staticTexts[original["skillSaveError"] as! String]
+          bannerVisible(error); try capture(name + "-skills-save-error")
+          XCTAssertEqual(packing.value as? String, "1")
+          reveal(save, in: skillsForm); save.tapWhenReady()
+          XCTAssertTrue(app.staticTexts["Saved"].firstMatch.waitForExistence(timeout: 5)); try capture(name + "-skills-saved")
+          app.buttons["Close"].firstMatch.tapWhenReady(); _ = settings("Skills")
+          revealFormControl(packing, in: skillsForm, app: app)
+        XCTAssertTrue(packing.waitForExistence(timeout: 5)); XCTAssertEqual(packing.value as? String, "1")
+          XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertEqual(required.value as? String, "1")
+        }
+      }
+      app.terminate()
+    }
+  }
+}
+
+@MainActor final class WorkGoalAndTasksDesignTourTests: ScreenshotTourTestCase {
   /// Memory baseline and final comparisons share the production-shaped two-document fixture.
   /// W1 only. Each variant starts a new fixture process with a fresh account scope.
   func testWorkGoalDesignReview() throws {
@@ -1327,182 +2233,19 @@ import CryptoKit
   }
 
   func testWorkTaskDesignReview() throws { try workTaskDesignReview(part: 0) }
+
   func testWorkTaskDesignReviewPartTwo() throws { try workTaskDesignReview(part: 1) }
+}
+
+@MainActor final class WorkTasksRemainingDesignTourTests: ScreenshotTourTestCase {
   func testWorkTaskDesignReviewPartThree() throws { try workTaskDesignReview(part: 2) }
+
   func testWorkTaskDesignReviewPartFour() throws { try workTaskDesignReview(part: 3) }
+
   func testWorkTaskDesignReviewPartFive() throws { try workTaskDesignReview(part: 4) }
+}
 
-  private func workTaskDesignReview(part: Int) throws {
-    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH"] ?? ""
-    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH to the W2 fixture."); return }
-    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
-    let config = try XCTUnwrap(original["workFixture"] as? [String: Any])
-    XCTAssertEqual(config["gate"] as? String, "W2-tasks")
-    let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
-    guard ["before", "after"].contains(stage) else { XCTFail("Unknown Work stage: \(stage)"); return }
-    let variants = ["task-board", "task-board-dark", "task-board-large-text", "task-detail", "task-refused", "task-status-details", "task-empty", "task-unsupported", "task-create", "task-create-dark", "task-create-large-text", "task-create-uncertain", "task-edit"]
-    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
-    let selected = selection.isEmpty ? variants : selection.components(separatedBy: ",")
-    guard !selected.isEmpty, Set(selected).count == selected.count, selected.allSatisfy(variants.contains) else { XCTFail("Unknown or duplicate Work task variants: \(selection)"); return }
-    let pad = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_DEVICE"] == "ipad"
-    let work = try XCTUnwrap(original["work"] as? [String: Any])
-    let taskSection = try XCTUnwrap(work["tasks"] as? [String: Any])
-    let tasks = try XCTUnwrap(taskSection["items"] as? [[String: Any]])
-    let newTask = try XCTUnwrap(config["newTask"] as? [String: Any])
-    let messages = try XCTUnwrap(original["workMessages"] as? [String: String])
-    func task(_ id: String) throws -> [String: Any] { try XCTUnwrap(tasks.first { $0["id"] as? String == id }) }
-    for (index, variant) in selected.enumerated() where (selection.isEmpty ? index % 5 == part : part == 0) {
-      var fixture = original
-      fixture["mode"] = variant == "task-empty" ? "empty" : variant == "task-unsupported" ? "sections-unsupported" : variant == "task-create-uncertain" ? "task-create-uncertain" : "loaded"
-      let auditURL = auditDirectory.appendingPathComponent("\(variant)-requests.jsonl")
-      try Data().write(to: auditURL, options: .atomic)
-      let app = launch(textSize: variant.contains("large-text") ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL", environment: [
-        "AGENT_INTERFACE_UI_THEME": variant.contains("dark") ? "dark" : "light",
-        "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self),
-        "AGENT_INTERFACE_UI_WORK_AUDIT_PATH": auditURL.path,
-      ])
-      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
-      app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Work")
-      XCTAssertTrue(app.collectionViews["automation.work"].exists)
-      let board = app.collectionViews["automation.work"]
-      XCTAssertTrue(board.waitForExistence(timeout: 5))
-      func events() throws -> [[String: Any]] {
-        try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
-      }
-      func text(_ fragment: String, in container: XCUIElement) -> XCUIElement { container.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", fragment)).firstMatch }
-      func reveal(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { revealFormControl(element, in: form, app: app, up: up) }
-      func press(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { reveal(element, form, up: up); XCTAssertTrue(element.wait(until: "enabled == true")); element.tapWhenReady() }
-      func group(_ name: String) { press(board.buttons[name], board, up: name.hasPrefix("To do")) }
-      func open(_ name: String, _ id: String) {
-        let row = board.buttons["automation.task.\(id)"]
-        if name.hasPrefix("Done") { group(name) }
-        reveal(row, board, up: false); XCTAssertTrue(row.waitForExistence(timeout: 5)); XCTAssertTrue(row.wait(until: "enabled == true")); row.tapWhenReady()
-        XCTAssertTrue(app.collectionViews["automation.taskDetail"].waitForExistence(timeout: 5))
-      }
-      func toggle(_ label: String, _ form: XCUIElement) {
-        let hideKeyboard = app.buttons["automation.taskEditor.hideKeyboard"]
-        if hideKeyboard.exists { hideKeyboard.tapWhenReady() }
-        let row = form.switches.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@", label, label + ",")).firstMatch
-        reveal(row, form); XCTAssertTrue(row.waitForExistence(timeout: 5)); XCTAssertTrue(row.wait(until: "value == %@", "0"))
-        let control = row.switches.firstMatch; XCTAssertTrue(control.waitUntilHittable())
-        control.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).press(forDuration: 0.1, thenDragTo: control.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
-        XCTAssertTrue(row.wait(until: "value == %@", "1"))
-      }
-      func chooseMenuItem(_ label: String) {
-        let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
-        XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
-        for _ in 0..<10 {
-          let visible = query.allElementsBoundByIndex.filter { $0.canTap }
-          if visible.count == 1 { visible[0].tapWhenReady(); return }
-          usleep(100_000)
-        }
-        XCTFail("Expected exactly one hittable menu item: \(label)")
-      }
-      func fill(_ full: Bool, titleOnly: Bool = false) throws {
-        let editor = app.collectionViews["automation.taskEditor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        let title = editor.textFields["automation.taskTitle"], body = editor.textFields["automation.taskBody"]
-        reveal(title, editor); title.tapWhenReady(); XCTAssertTrue(title.waitForKeyboardFocus()); title.waitForKeyboardLayout(); title.typeWhenFocused(try XCTUnwrap(newTask["title"] as? String))
-        if !titleOnly { reveal(body, editor); body.tapWhenReady(); XCTAssertTrue(body.waitForKeyboardFocus()); body.typeWhenFocused(try XCTUnwrap(newTask["body"] as? String)) }
-        if full {
-          let picker = editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assigned assistant,")).firstMatch; press(picker, editor); chooseMenuItem("Garden planner")
-          let increment = editor.buttons["Increment"]; reveal(increment, editor); increment.tapWhenReady(); increment.tapWhenReady()
-          for id in try XCTUnwrap(newTask["dependencies"] as? [String]) { toggle(try XCTUnwrap(task(id)["title"] as? String), editor) }
-        }
-      }
-      func save() { let button = app.buttons["automation.saveTask"]; XCTAssertTrue(button.wait(until: "enabled == true")); button.tapWhenReady() }
-      let heading = board.staticTexts["Task board"]
-      reveal(heading, board); XCTAssertTrue(heading.waitForExistence(timeout: 10))
-      let initial = try events(); XCTAssertEqual(initial.filter { $0["method"] as? String == "GET" }.count, 1); XCTAssertFalse(initial.contains { $0["method"] as? String != "GET" })
-      let headers = ["Blocked (2)", "Ready (1)", "Running (1)", "In review (1)", "Done (1)", "To do (1)"]
-      if !["task-empty", "task-unsupported"].contains(variant) {
-        var observed: [String] = []
-        for header in headers {
-          reveal(board.buttons[header], board); XCTAssertTrue(board.buttons[header].waitForExistence(timeout: 5))
-          for label in board.buttons.allElementsBoundByIndex.map(\.label) where label.range(of: "^[A-Za-z ]+ \\([0-9]+\\)$", options: .regularExpression) != nil {
-            if !observed.contains(label) { observed.append(label) }
-          }
-        }
-        XCTAssertEqual(Set(observed), Set(headers)); print("DESIGN_WORK_TASK_HEADERS \(observed)")
-      }
-      switch variant {
-      case "task-board":
-        reveal(heading, board, up: false); try capture("task-board")
-        group("Blocked (2)"); XCTAssertTrue(board.buttons["automation.task.t_00000005"].waitForDisappearance())
-        group("Blocked (2)"); reveal(board.buttons["automation.task.t_00000005"], board)
-        XCTAssertTrue(board.buttons["automation.task.t_00000005"].waitForExistence(timeout: 5))
-        group("To do (1)"); XCTAssertTrue(board.buttons["automation.task.t_00000007"].waitForDisappearance())
-        group("To do (1)"); reveal(board.buttons["automation.task.t_00000007"], board)
-        XCTAssertTrue(board.buttons["automation.task.t_00000007"].waitForExistence(timeout: 5)); XCTAssertTrue(board.buttons["automation.task.t_00000005"].waitForExistence(timeout: 5), "Blocked must remain expanded after To do opens"); try capture("task-board-expanded")
-      case "task-board-dark", "task-board-large-text":
-        reveal(board.buttons["automation.task.t_00000005"], board, up: false); XCTAssertTrue(board.buttons["automation.task.t_00000005"].waitForExistence(timeout: 5)); try capture(variant == "task-board-dark" ? "task-board-dark" : "task-board-large-text-board")
-        let row = board.buttons["automation.task.t_00000005"]; reveal(row, board, up: false); XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tapWhenReady()
-        let detail = app.collectionViews["automation.taskDetail"]; XCTAssertTrue(detail.waitForExistence(timeout: 5))
-        try capture(variant == "task-board-dark" ? "task-detail-dark" : "task-board-large-text-detail-top")
-        if variant == "task-board-large-text" { reveal(detail.buttons["Start task"], detail); try capture("task-board-large-text-detail-actions") }
-      case "task-detail", "task-refused":
-        open("Blocked (2)", "t_00000005")
-        let detail = app.collectionViews["automation.taskDetail"]
-        if variant == "task-detail" {
-          XCTAssertEqual(detail.descendants(matching: .any).matching(identifier: "automation.taskStatus").firstMatch.value as? String, "Blocked"); try capture("task-detail-top")
-          reveal(detail.buttons["Start task"], detail); try capture("task-detail-actions")
-          if !pad { reveal(detail.buttons["Add dependency"], detail); try capture("task-detail-dependencies") }
-        } else {
-          press(detail.buttons["Start task"], detail)
-          if !pad { try capture("task-refused") }
-          let error = text(messages["refusedTransition"]!, in: detail); reveal(error, detail, up: false); XCTAssertTrue(error.waitForExistence(timeout: 10))
-          XCTAssertTrue(error.label.contains("Status refreshed.")); print("DESIGN_WORK_TASK_REFUSAL \(error.label)"); try capture("task-refused-banner")
-        }
-      case "task-status-details":
-        open("Running (1)", "t_00000006"); var detail = app.collectionViews["automation.taskDetail"]
-        let running = text("A Hermes worker is running this task", in: detail); reveal(running, detail)
-        XCTAssertTrue(running.exists); XCTAssertFalse(detail.buttons["Start task"].exists); try capture("task-running")
-        app.navigationBars["Task details"].buttons["Done"].tapWhenReady(); XCTAssertTrue(board.waitUntilHittable()); XCTAssertTrue(app.collectionViews["automation.work"].exists)
-        open("In review (1)", "t_00000003"); detail = app.collectionViews["automation.taskDetail"]; let hint = text("The reviewing assistant can request changes", in: detail); reveal(hint, detail); XCTAssertTrue(hint.waitForExistence(timeout: 5)); try capture("task-review")
-      case "task-empty", "task-unsupported": try capture(variant)
-      case "task-create", "task-create-dark", "task-create-large-text", "task-create-uncertain":
-        press(board.buttons["New task"], board); let editor = app.collectionViews["automation.taskEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        if variant == "task-create" && !pad { try capture("task-create-empty") }
-        try fill(variant == "task-create", titleOnly: variant == "task-create-large-text")
-        if variant == "task-create" { let last = try XCTUnwrap(task("t_00000003")["title"] as? String); reveal(editor.switches.matching(NSPredicate(format: "label BEGINSWITH %@", last)).firstMatch, editor); try capture("task-create-filled"); save(); XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); let created = board.buttons.matching(NSPredicate(format: "label CONTAINS %@", newTask["title"] as! String)).firstMatch; reveal(created, board, up: false); XCTAssertTrue(created.exists) }
-        else if variant == "task-create-dark" { press(editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assigned assistant,")).firstMatch, editor); chooseMenuItem("Garden planner"); try capture("task-create-dark") }
-        else if variant == "task-create-large-text" { try capture("task-create-large-text-top"); reveal(editor.switches.matching(NSPredicate(format: "label BEGINSWITH %@", try XCTUnwrap(task("t_00000003")["title"] as? String))).firstMatch, editor); try capture("task-create-large-text-bottom") }
-        else {
-          save(); let error = text("We couldn't confirm this change. Refresh status and review it before trying again.", in: editor); reveal(error, editor, up: false); XCTAssertTrue(error.waitForExistence(timeout: 10)); try capture("task-create-uncertain")
-          let refresh = editor.buttons["automation.refresh"]; press(refresh, editor, up: false)
-          let deadline = Date().addingTimeInterval(10); while Date() < deadline { let count = try events().filter { $0["method"] as? String == "GET" }.count; if count >= 2 { break }; usleep(100_000) }
-          let refreshed = try events(); XCTAssertEqual(refreshed.filter { $0["method"] as? String == "GET" }.count, 2); XCTAssertEqual(refreshed.filter { $0["method"] as? String != "GET" }.count, 1)
-          save(); XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); let created = board.buttons.matching(NSPredicate(format: "label CONTAINS %@", newTask["title"] as! String)); reveal(created.firstMatch, board, up: false); XCTAssertEqual(created.count, 1); try capture("task-create-retried")
-        }
-      case "task-edit":
-        open("Ready (1)", "t_00000002"); let detail = app.collectionViews["automation.taskDetail"]; press(detail.buttons["Edit task"], detail)
-        let editor = app.collectionViews["automation.taskEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 5)); press(editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assigned assistant,")).firstMatch, editor); chooseMenuItem("Unassigned"); try capture("task-edit"); save()
-        XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); XCTAssertTrue(detail.waitForExistence(timeout: 5)); XCTAssertTrue(detail.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Unassigned", "Unassigned")).firstMatch.waitForExistence(timeout: 5)); if !pad { try capture("task-edit-saved") }
-      default: XCTFail("Unknown Work task variant \(variant)")
-      }
-      let recorded = try events(), writes = recorded.filter { $0["method"] as? String != "GET" }
-      if ["task-board", "task-board-dark", "task-board-large-text", "task-detail", "task-status-details", "task-empty", "task-unsupported", "task-create-dark", "task-create-large-text"].contains(variant) { XCTAssertTrue(writes.isEmpty) }
-      if variant == "task-refused" { XCTAssertEqual(writes.count, 1); XCTAssertEqual(writes.first?["path"] as? String, "/tasks/t_00000005/actions"); let body = try XCTUnwrap(writes.first?["body"] as? [String: String]); XCTAssertEqual(body, ["action":"start"]) }
-      if variant == "task-create" || variant == "task-create-uncertain" {
-        XCTAssertEqual(writes.count, 1)
-        let bodies = try writes.map { try XCTUnwrap($0["body"] as? [String: Any]) }
-        for (index, body) in bodies.enumerated() {
-          XCTAssertEqual(writes[index]["method"] as? String, "POST"); XCTAssertEqual(writes[index]["path"] as? String, "/tasks")
-          XCTAssertEqual(Set(body.keys), Set(["requestId", "title", "body", "priority", "assignee", "dependencies"])); XCTAssertNotNil(UUID(uuidString: body["requestId"] as? String ?? ""))
-          XCTAssertEqual(body["title"] as? String, newTask["title"] as? String); XCTAssertEqual(body["body"] as? String, newTask["body"] as? String)
-          if variant == "task-create" { XCTAssertEqual(body["priority"] as? Int, newTask["priority"] as? Int); XCTAssertEqual(body["assignee"] as? String, newTask["assignee"] as? String); XCTAssertEqual(body["dependencies"] as? [String], newTask["dependencies"] as? [String]) }
-        }
-        if variant == "task-create-uncertain" { XCTAssertEqual(recorded.filter { $0["method"] as? String == "GET" }.count, 2) }
-      }
-      if variant == "task-edit" {
-        XCTAssertEqual(writes.count, 1); XCTAssertEqual(writes.first?["method"] as? String, "PATCH"); XCTAssertEqual(writes.first?["path"] as? String, "/tasks/t_00000002")
-        let body = try XCTUnwrap(writes.first?["body"] as? [String: Any]), originalTask = try task("t_00000002")
-        XCTAssertEqual(Set(body.keys), Set(["title", "body", "priority", "assignee"])); XCTAssertTrue(body["assignee"] is NSNull); XCTAssertEqual(body["title"] as? String, originalTask["title"] as? String); XCTAssertEqual(body["body"] as? String, originalTask["body"] as? String); XCTAssertEqual(body["priority"] as? Int, originalTask["priority"] as? Int)
-      }
-      print("DESIGN_WORK_TASK_VARIANT \(variant) complete"); app.terminate()
-    }
-  }
-
+@MainActor final class WorkTriggersDesignTourTests: ScreenshotTourTestCase {
   func testWorkTriggerDesignReview() throws {
     let environment = ProcessInfo.processInfo.environment
     let source = environment["AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH"] ?? ""
@@ -2412,424 +3155,23 @@ import CryptoKit
     } else { XCTAssertTrue(writes.isEmpty) }
     print("DESIGN_WORK_TRIGGER_AFTER_VARIANT \(variant) complete")
   }
+}
 
+@MainActor final class MemoryDesignTourTests: ScreenshotTourTestCase {
   func testMemoryDesignReview() throws { try memoryDesignReview(part: 0) }
+
   func testMemoryDesignReviewPartTwo() throws { try memoryDesignReview(part: 1) }
+
   func testMemoryDesignReviewPartThree() throws { try memoryDesignReview(part: 2) }
+}
+
+@MainActor final class MemoryRemainingDesignTourTests: ScreenshotTourTestCase {
   func testMemoryDesignReviewPartFour() throws { try memoryDesignReview(part: 3) }
+
   func testMemoryDesignReviewPartFive() throws { try memoryDesignReview(part: 4) }
+}
 
-  private func memoryDesignReview(part: Int) throws {
-    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MEMORY_PATH"] ?? ""
-    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_MEMORY_PATH to capture Memory."); return }
-    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
-    let config = try XCTUnwrap(original["memoryFixture"] as? [String: String])
-    let messages = try XCTUnwrap(original["memoryMessages"] as? [String: String])
-    let savedDocuments = try XCTUnwrap((original["memory"] as? [String: Any])?["documents"] as? [[String: Any]])
-    let firstDocument = try XCTUnwrap(savedDocuments.first)
-    let savedEntries = try XCTUnwrap(firstDocument["entries"] as? [[String: String]])
-    let firstSavedText = try XCTUnwrap(savedEntries.first?["text"])
-    let after = (ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "after") == "after"
-    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
-    let variants = ["loaded", "dark", "large-text", "loading", "load-error", "conflict", "paused", "discard", "disabled", "empty", "too-long"] + (after ? ["reload-error", "conflict-large-text"] : [])
-    let selected = selection.components(separatedBy: ",")
-    guard selection.isEmpty || selected.allSatisfy(variants.contains) else { XCTFail("Unknown Memory variant: \(selection)"); return }
-    for (index, variant) in variants.enumerated() where (selection.isEmpty ? index % 5 == part : part == 0 && selected.contains(variant)) {
-      var fixture = original
-      fixture["mode"] = variant == "discard" ? "paused" : variant == "conflict-large-text" ? "conflict" : variant
-      if after && variant == "loaded" { fixture["memoryWriteDelayMs"] = 8000 }
-      let app = launch(textSize: variant.contains("large-text") ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL",
-        environment: ["AGENT_INTERFACE_UI_THEME": variant == "dark" ? "dark" : "light",
-          "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)])
-      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
-      app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Memory")
-      let form = app.collectionViews["memoryForm"]
-      XCTAssertTrue(form.waitForExistence(timeout: 5))
-      func field(_ target: String, _ index: Int = 1) -> XCUIElement {
-        let identifier = "memoryEntry.\(target).\(index)"
-        if !after { return app.textFields[identifier] }
-        return app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND elementType IN %@", identifier,
-          [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue, XCUIElement.ElementType.staticText.rawValue])).firstMatch
-      }
-      func reveal(_ element: XCUIElement, up: Bool = true) { revealFormControl(element, in: form, app: app, up: up) }
-      func save(_ target: String = "memory") -> XCUIElement { app.buttons["memorySave.\(target)"] }
-      func error(_ text: String) -> XCUIElement {
-        if after { return app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
-        return app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
-      }
-      var editedEntry = ""
-      func editFirst() {
-        let first = field("memory"); reveal(first, up: !["loaded", "large-text"].contains(variant))
-        let previous = first.value as? String ?? ""
-        first.typeWhenFocused(" Updated.")
-        editedEntry = first.value as? String ?? ""
-        XCTAssertNotEqual(editedEntry, previous, "The edited note must change before saving")
-        XCTAssertTrue(editedEntry.contains(" Updated."), "The note must include the typed edit")
-      }
-      let name = "memory-" + variant
-      if variant == "loading" {
-        let loading = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Loading profile memory…")).firstMatch
-        XCTAssertTrue(loading.waitForExistence(timeout: 5)); try capture(name); XCTAssertTrue(loading.exists)
-        app.terminate(); continue
-      }
-      if variant == "load-error" {
-        let failed = error(messages["loadError"]!); XCTAssertTrue(failed.waitForExistence(timeout: 5)); try capture(name)
-        app.buttons["Try loading again"].tapWhenReady()
-        XCTAssertTrue(field("memory").waitForExistence(timeout: 5)); XCTAssertFalse(failed.exists); try capture("memory-retried")
-        app.terminate(); continue
-      }
-      if variant == "empty" {
-        XCTAssertTrue(app.staticTexts["Nothing saved here yet. Add a fact you want this profile to remember."].firstMatch.waitForExistence(timeout: 5)); try capture(name)
-        app.terminate(); continue
-      }
-      let profile = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Shared profile: ranch")).firstMatch
-      XCTAssertTrue(profile.waitForExistence(timeout: 5))
-      if ["loaded", "dark", "large-text"].contains(variant) {
-        try capture(name)
-        reveal(field("user")); try capture(name + "-profile")
-      }
-      if variant == "loaded" {
-        editFirst()
-        let add = app.buttons["memoryAdd.memory"]; reveal(add); add.tapWhenReady()
-        let added = field("memory", 4)
-        if after {
-          XCTAssertTrue(added.waitForExistence(timeout: 5)); XCTAssertTrue(added.waitForKeyboardFocus(), "Add memory focuses its new field")
-        } else { reveal(added) }
-        added.typeWhenFocused(config["newEntry"]!)
-        reveal(save()); XCTAssertTrue(save().isEnabled); try capture("memory-dirty")
-        if after {
-          app.buttons["Close"].tapWhenReady()
-          XCTAssertTrue(app.buttons["confirmationKeep"].waitForExistence(timeout: 5)); try capture("memory-close-confirmation")
-          app.buttons["confirmationKeep"].tapWhenReady(); reveal(added, up: false)
-          XCTAssertTrue(added.wait(until: "value == %@", config["newEntry"]!)); reveal(save())
-        }
-        save().tapWhenReady()
-        if after {
-          let progress = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving memories in Hermes…")).firstMatch
-          XCTAssertTrue(progress.waitForExistence(timeout: 3)); try capture("memory-saving"); XCTAssertTrue(progress.exists)
-          XCTAssertFalse(app.buttons["Close"].isEnabled); XCTAssertFalse(app.buttons["memoryBack"].isEnabled)
-        }
-        XCTAssertTrue(app.buttons["memoryDiscard.memory"].waitForDisappearance())
-        reveal(added, up: false); XCTAssertTrue(added.wait(until: "value == %@", config["newEntry"]!))
-        let refreshed = app.staticTexts["memorySaved.memory"]
-        reveal(refreshed)
-        XCTAssertTrue(refreshed.wait(until: "label == %@", messages["nextTurn"]!)); try capture("memory-saved")
-        let forget = app.buttons["memoryForget.user.1"]; reveal(forget); forget.tapWhenReady()
-        XCTAssertTrue(app.buttons["Forget entry"].waitForExistence(timeout: 5)); try capture("memory-forget-confirmation")
-        let userEntries = try XCTUnwrap(savedDocuments[1]["entries"] as? [[String: String]])
-        let forgottenText = try XCTUnwrap(userEntries.first?["text"])
-        if after {
-          XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "\"\(forgottenText)\"")).firstMatch.exists)
-          app.buttons["confirmationKeep"].tapWhenReady()
-        } else if app.buttons["Cancel"].exists { app.buttons["Cancel"].tapWhenReady() }
-        else if app.otherElements["PopoverDismissRegion"].firstMatch.exists { app.otherElements["PopoverDismissRegion"].firstMatch.tap() }
-        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).tap() }
-        XCTAssertTrue(app.buttons["Forget entry"].waitForDisappearance())
-        XCTAssertTrue(field("user").exists)
-        XCTAssertEqual(field("user").value as? String, forgottenText)
-        reveal(forget); forget.tapWhenReady(); app.buttons["Forget entry"].tapWhenReady()
-        let user = try XCTUnwrap((original["memory"] as? [String: Any])?["documents"] as? [[String: Any]])[1]
-        let remaining = try XCTUnwrap(user["entries"] as? [[String: String]])[1]["text"]!
-        XCTAssertTrue(field("user").wait(until: "value == %@", remaining))
-      } else if ["conflict", "paused", "discard", "reload-error", "conflict-large-text"].contains(variant) {
-        editFirst(); reveal(save()); save().tapWhenReady()
-        let failed = error(messages[variant.contains("conflict") ? "conflict" : "paused"]!)
-        XCTAssertTrue(failed.waitForExistence(timeout: 5)); reveal(failed)
-        if variant != "discard" { try capture(name) }
-        reveal(field("memory"), up: false)
-        print("DESIGN_MEMORY_CONFLICT variant=\(variant) fieldEnabled=\(field("memory").isEnabled) draft=\(String(describing: field("memory").value))")
-        XCTAssertEqual(field("memory").value as? String, editedEntry)
-        if after { XCTAssertFalse(app.textFields["memoryEntry.memory.1"].exists, "The conflicted draft is read-only text") }
-        if variant == "discard" {
-          let discard = app.buttons["memoryDiscard.memory"]; reveal(discard); discard.tapWhenReady()
-          XCTAssertTrue(discard.waitForDisappearance()); reveal(field("memory"), up: false); try capture(name)
-          print("DESIGN_MEMORY_DISCARD fieldEnabled=\(field("memory").isEnabled)")
-        } else {
-          let reload = app.buttons["Reload profile memory"]; reveal(reload); reload.tapWhenReady()
-          if after {
-            XCTAssertTrue(app.buttons["confirmationAccept"].waitForExistence(timeout: 5))
-            if variant == "paused" { try capture("memory-reload-confirmation") }
-            app.buttons["confirmationAccept"].tapWhenReady()
-          }
-          if variant == "reload-error" {
-            let readError = error(messages["loadError"]!); XCTAssertTrue(readError.waitForExistence(timeout: 5))
-            let navigationBottom = app.navigationBars.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
-            XCTAssertGreaterThanOrEqual(readError.frame.minY, max(form.frame.minY, navigationBottom), "Failed reload clears the navigation bar")
-            XCTAssertLessThanOrEqual(readError.frame.maxY, form.frame.maxY, "Failed reload keeps the entire error visible")
-            try capture("memory-reload-failed")
-            reveal(field("memory")); XCTAssertTrue(field("memory").wait(until: "value == %@", editedEntry))
-            let retry = app.buttons["Try loading again"]; reveal(retry, up: false); retry.tapWhenReady()
-            app.buttons["confirmationAccept"].tapWhenReady()
-          }
-          XCTAssertTrue(failed.waitForDisappearance(timeout: 5))
-          reveal(field("memory"), up: false)
-          XCTAssertTrue(app.textFields["memoryEntry.memory.1"].wait(until: "enabled == true"))
-          print("DESIGN_MEMORY_RELOAD variant=\(variant) draft=\(String(describing: field("memory").value))")
-          XCTAssertEqual(field("memory").value as? String, firstSavedText)
-          if variant.contains("conflict") { reveal(field("memory", 4)); XCTAssertTrue(field("memory", 4).wait(until: "value == %@", config["externalEntry"]!)) }
-        }
-      } else if variant == "disabled" {
-        let note = app.staticTexts[after ? "Editing is disabled in this Hermes profile. You can still read and copy these notes." : "This memory is disabled in the Hermes profile."]
-        reveal(note); XCTAssertTrue(note.exists)
-        if after {
-          reveal(field("user")); XCTAssertFalse(app.textFields["memoryEntry.user.1"].exists)
-          let documents = try XCTUnwrap((original["memory"] as? [String: Any])?["documents"] as? [[String: Any]])
-          let entries = try XCTUnwrap(documents[1]["entries"] as? [[String: String]])
-          XCTAssertEqual(field("user").value as? String, entries[0]["text"])
-        }
-        else { XCTAssertFalse(field("user").isEnabled) }
-        try capture(name)
-      } else if variant == "too-long" {
-        let edited = field("memory", 2); reveal(edited)
-        let previous = try XCTUnwrap(edited.value as? String)
-        edited.typeWhenFocused(config["limitEditSuffix"]!)
-        let expected = edited.value as? String ?? ""
-        XCTAssertEqual(expected.count, previous.count + config["limitEditSuffix"]!.count)
-        XCTAssertTrue(expected.contains(config["limitEditSuffix"]!))
-        print("DESIGN_MEMORY_LIMIT previousScalars=\(previous.unicodeScalars.count) editedScalars=\(expected.unicodeScalars.count) aggregateExpected=2206")
-        reveal(save())
-        if after {
-          XCTAssertFalse(save().isEnabled)
-          let limit = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "6 characters over the limit")).firstMatch
-          reveal(limit, up: false); XCTAssertTrue(limit.exists); try capture(name)
-          app.terminate(); continue
-        }
-        XCTAssertTrue(save().isEnabled); save().tapWhenReady()
-        let failed = error(messages["tooLong"]!)
-        if !failed.waitForExistence(timeout: 5) {
-          let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.name = "memory-limit-response"; screenshot.lifetime = .keepAlways; add(screenshot)
-          let tree = XCTAttachment(string: app.debugDescription); tree.name = "memory-limit-response-hierarchy"; tree.lifetime = .keepAlways; add(tree)
-        }
-        reveal(failed); XCTAssertTrue(failed.exists); try capture(name)
-      }
-      if after && variant == "large-text" {
-        editFirst()
-        app.buttons["memoryBack"].tapWhenReady()
-        XCTAssertTrue(app.buttons["confirmationKeep"].waitForExistence(timeout: 5)); try capture("memory-large-text-leave")
-        app.buttons["confirmationKeep"].tapWhenReady(); XCTAssertTrue(app.buttons["memoryBack"].waitForExistence(timeout: 5))
-      }
-      if after && variant == "reload-error" { try capture("memory-reload-recovered") }
-      app.terminate()
-    }
-  }
-
-  /// Shared production-shaped model and capability data, with explicit recoverable failures.
-  func testModelsDesignReview() throws {
-    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MODELS_PATH"] ?? ""
-    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_MODELS_PATH to capture Models."); return }
-    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
-    let after = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] == "after"
-    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
-    let variants = [
-      ("models-loaded", "light", "UICTContentSizeCategoryL"),
-      ("models-dark", "dark", "UICTContentSizeCategoryL"),
-      ("models-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
-      ("models-errors", "light", "UICTContentSizeCategoryL"),
-      ("models-empty", "light", "UICTContentSizeCategoryL"),
-      ("models-unavailable", "light", "UICTContentSizeCategoryL"),
-      ("models-missing", "light", "UICTContentSizeCategoryL"),
-    ]
-    let selections = selection.components(separatedBy: ",")
-    guard selection.isEmpty || selections.allSatisfy({ value in variants.contains { $0.0 == value } }) else {
-      XCTFail("Unknown Models variant: \(selection)"); return
-    }
-    for (name, theme, size) in variants where selection.isEmpty || selections.contains(name) {
-      var fixture = original
-      if name == "models-loaded" {
-        fixture["failFavorite"] = true; fixture["failInference"] = true
-        fixture["failCapability"] = "save-skills"; fixture["settingsModelError"] = true
-      }
-      if name == "models-errors" { fixture["failModels"] = true; fixture["failCapability"] = "load-tools" }
-      if name == "models-empty" {
-        var catalog = try XCTUnwrap(fixture["catalog"] as? [String: Any]); catalog["providers"] = []
-        fixture["catalog"] = catalog; fixture["skills"] = []
-      }
-      if name == "models-unavailable" { fixture["catalogUnsupported"] = true }
-      if name == "models-missing" {
-        var bots = try XCTUnwrap(fixture["bots"] as? [[String: Any]])
-        bots[0]["model"] = "retired-house-model"; fixture["bots"] = bots
-      }
-      let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
-      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme])
-      XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
-      func reveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
-        revealFormControl(element, in: form, app: app, up: up)
-      }
-      func bannerVisible(_ element: XCUIElement) {
-        XCTAssertTrue(element.waitForExistence(timeout: 5))
-        let window = app.windows.firstMatch.frame
-        XCTAssertTrue(element.hasFrame && window.contains(element.frame), "The banner must be visible in its sheet, outside the scrolling form")
-      }
-      func settings(_ kind: String) -> XCUIElement {
-        app.openAssistantSettings("Ranch hand")
-        app.selectSettingsTab(kind == "Details" ? "Behavior" : kind)
-        return app.collectionViews["settings.behavior"]
-      }
-      if name == "models-unavailable" {
-        let form = settings("Tools")
-        let reason = app.staticTexts[original["capabilityUnsupportedReason"] as! String].firstMatch
-        reveal(reason, in: form); XCTAssertTrue(reason.exists)
-        XCTAssertFalse(app.buttons["saveChanges"].isEnabled)
-        try capture(name + "-tools"); app.terminate(); continue
-      }
-      if name == "models-loaded" {
-        let settingsForm = settings("Details")
-        let model = app.buttons["assistantModel"]; reveal(model, in: settingsForm); model.tapWhenReady()
-        XCTAssertTrue(app.textFields["modelSearch"].waitForExistence(timeout: 5))
-        try capture(name + "-settings-regression")
-        app.navigationBars["Model"].buttons.firstMatch.tapWhenReady()
-        app.buttons["Close"].firstMatch.tapWhenReady()
-      }
-      var composerOpen = true
-      app.buttons["chatModel"].tapWhenReady()
-      let form = app.descendants(matching: .any)["chatModelForm"].firstMatch
-      let search = app.textFields["modelSearch"]
-      // iPad virtualizes the provider row below the fold. Its favorite has the provider in its label.
-      let loadedModel = app.buttons.matching(NSPredicate(
-        format: "label == %@ OR label BEGINSWITH %@", "daily-planner", "daily-planner,")).firstMatch
-      if !size.contains("Accessibility") { XCTAssertTrue(search.waitForExistence(timeout: 10)) }
-      if size.contains("Accessibility") {
-        XCTAssertTrue(form.waitForExistence(timeout: 5))
-        if after {
-          XCTAssertFalse(app.segmentedControls["inferenceSpeed"].exists, "Accessibility text uses a scalable menu instead of fixed-size segments")
-          XCTAssertTrue(app.descendants(matching: .any)["inferenceSpeed"].firstMatch.waitForExistence(timeout: 5))
-        }
-        try capture(name + "-composer")
-        reveal(search, in: form)
-        XCTAssertTrue(search.waitForExistence(timeout: 5))
-        let catalog = try XCTUnwrap(original["catalog"] as? [String: Any])
-        let providers = try XCTUnwrap(catalog["providers"] as? [[String: Any]])
-        let models = try XCTUnwrap(providers.first?["models"] as? [[String: Any]])
-        let longName = try XCTUnwrap(models.first(where: { ($0["id"] as? String)?.contains("/") == true })?["name"] as? String)
-        let longRow = app.buttons[longName].firstMatch
-        reveal(longRow, in: form); try capture(name + "-catalog")
-      } else if name == "models-errors" {
-        let error = app.staticTexts[original["catalogError"] as! String]
-        reveal(error, in: form); XCTAssertTrue(error.waitForExistence(timeout: 5)); try capture(name + "-catalog")
-        let retry = app.buttons["Retry loading models"]; reveal(retry, in: form); retry.tapWhenReady()
-        XCTAssertTrue(loadedModel.waitForExistence(timeout: 5))
-        XCTAssertFalse(error.exists); try capture(name + "-retried")
-      } else if name == "models-empty" {
-        let empty = app.staticTexts["No connected models were reported. Connect a provider in Hermes, then retry."]
-        reveal(empty, in: form); XCTAssertTrue(empty.exists); try capture(name + "-catalog")
-      } else if name == "models-missing" {
-        let kept = app.staticTexts["Your saved model is kept. Hermes did not include it in the current catalog."]
-        reveal(kept, in: form); XCTAssertTrue(kept.exists); try capture(name + "-catalog")
-      } else {
-        XCTAssertTrue(loadedModel.waitForExistence(timeout: 5))
-        try capture(name + "-composer")
-      }
-      if name == "models-loaded" {
-        reveal(search, in: form); search.typeWhenFocused("field")
-        let field = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "field-planner")).firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5)); XCTAssertFalse(field.isEnabled)
-        try capture(name + "-search")
-        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "zzz")
-        XCTAssertTrue(app.staticTexts["No models match your search."].waitForExistence(timeout: 5)); try capture(name + "-no-results")
-        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 3) + "\n")
-        let star = app.buttons["Add quick-reply to favorites"]
-        reveal(star, in: form); star.tapWhenReady()
-        let favoriteError = app.staticTexts[original["favoriteError"] as! String]
-        reveal(favoriteError, in: form); XCTAssertTrue(favoriteError.exists); try capture(name + "-favorite-error")
-        XCTAssertFalse(app.buttons["Remove quick-reply from favorites"].exists)
-        reveal(star, in: form); star.tapWhenReady()
-        XCTAssertTrue(app.buttons["Remove quick-reply from favorites"].firstMatch.waitForExistence(timeout: 5))
-        reveal(search, in: form, up: false); try capture(name + "-favorite-saved")
-        let reasoning = app.descendants(matching: .any)["inferenceReasoning"].firstMatch
-        reveal(reasoning, in: form, up: false); reasoning.tapWhenReady()
-        let ultra = app.descendants(matching: .any).matching(NSPredicate(
-          format: "label == %@ AND elementType IN %@", "Ultra",
-          [XCUIElement.ElementType.button.rawValue, XCUIElement.ElementType.menuItem.rawValue])).firstMatch
-        if after {
-          XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Extra high")).firstMatch.exists)
-        }
-        ultra.tapWhenReady()
-        let inferenceError = app.staticTexts[original["inferenceError"] as! String]
-        reveal(inferenceError, in: form, up: false); XCTAssertTrue(inferenceError.exists); try capture(name + "-inference-error")
-        let speed = app.segmentedControls["inferenceSpeed"]
-        reveal(speed, in: form, up: false); speed.buttons["Fast"].tapWhenReady()
-        XCTAssertTrue(speed.buttons["Fast"].wait(until: "selected == true")); try capture(name + "-inference-saved")
-        let choice = app.buttons["quick-reply"].firstMatch
-        reveal(choice, in: form); choice.tapWhenReady()
-        XCTAssertTrue(app.buttons["Use this model"].waitForExistence(timeout: 5))
-        if after {
-          XCTAssertTrue(app.staticTexts["Use this model?"].exists)
-          let warning = app.staticTexts.matching(NSPredicate(format: "label == %@", original["modelWarning"] as! String)).firstMatch
-          XCTAssertTrue(warning.waitForExistence(timeout: 5))
-          let keep = app.buttons["confirmationKeep"]
-          XCTAssertEqual(keep.label, "Keep current model")
-          XCTAssertTrue(keep.wait(until: "hittable == true"))
-        }
-        try capture(name + "-confirmation")
-        if after { app.buttons["confirmationKeep"].tapWhenReady() }
-        else if app.buttons["Cancel"].exists { app.buttons["Cancel"].tapWhenReady() }
-        else if app.otherElements["PopoverDismissRegion"].firstMatch.exists {
-          app.otherElements["PopoverDismissRegion"].firstMatch.tap()
-        }
-        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).tap() }
-        XCTAssertTrue(app.buttons["Use this model"].wait(until: "exists == false"))
-        XCTAssertTrue(app.buttons["Close"].isEnabled)
-        reveal(choice, in: form); choice.tapWhenReady()
-        if after { app.buttons["confirmationAccept"].tapWhenReady() }
-        else { app.buttons["Use this model"].tapWhenReady() }
-        XCTAssertTrue(app.buttons["chatModel"].wait(until: "label == %@", "Model: quick-reply"))
-        app.buttons["chatModel"].tapWhenReady()
-        XCTAssertTrue(search.waitForExistence(timeout: 5))
-        reveal(speed, in: form, up: false); XCTAssertTrue(speed.buttons["Fast"].isSelected)
-        let savedFavorite = app.buttons["Remove quick-reply from favorites"].firstMatch
-        reveal(savedFavorite, in: form); XCTAssertTrue(savedFavorite.exists)
-        app.buttons["Close"].firstMatch.tapWhenReady(); composerOpen = false
-      }
-      if composerOpen { app.buttons["Close"].firstMatch.tapWhenReady() }
-      XCTAssertTrue(app.buttons["chatModel"].waitForExistence(timeout: 5))
-      if name == "models-missing" { app.terminate(); continue }
-      if name == "models-loaded" || name == "models-errors" {
-        let toolsForm = settings("Tools")
-        if name == "models-errors" {
-          let error = app.staticTexts[original["capabilityLoadError"] as! String]
-          bannerVisible(error); try capture(name + "-tools")
-          XCTAssertFalse(app.buttons["saveChanges"].isEnabled)
-          let retry = app.buttons["Retry loading tools"]; reveal(retry, in: toolsForm); retry.tapWhenReady()
-          XCTAssertTrue(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Web search")).firstMatch.waitForExistence(timeout: 5))
-          XCTAssertFalse(error.exists, "A successful retry must remove the previous capability-load failure")
-          try capture(name + "-tools-retried")
-        } else { try capture(name + "-tools") }
-        app.buttons["Close"].firstMatch.tapWhenReady()
-      }
-      if name == "models-errors" { app.terminate(); continue }
-      let skillsForm = settings("Skills")
-      if name == "models-empty" {
-        let emptySkills = app.staticTexts["No skills were reported by Hermes."]
-        reveal(emptySkills, in: skillsForm); XCTAssertTrue(emptySkills.waitForExistence(timeout: 5)); try capture(name + "-skills")
-      } else {
-        let required = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "weekly-plan")).firstMatch
-        revealFormControl(required, in: skillsForm, app: app)
-      XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertFalse(required.isEnabled)
-        XCTAssertEqual(required.value as? String, "1")
-        try capture(name + "-skills")
-        if name == "models-loaded" {
-          let packing = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "packing-list")).firstMatch
-          reveal(packing, in: skillsForm)
-          XCTAssertEqual(packing.value as? String, "0")
-          packing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
-          XCTAssertTrue(packing.wait(until: "value == %@", "1"), "The switch must change before Save tests draft retention")
-          print("DESIGN_CATALOG_DRAFT beforeSave=\(packing.value ?? "nil")")
-          let save = app.buttons["saveChanges"]; reveal(save, in: skillsForm); save.tapWhenReady()
-          let error = app.staticTexts[original["skillSaveError"] as! String]
-          bannerVisible(error); try capture(name + "-skills-save-error")
-          XCTAssertEqual(packing.value as? String, "1")
-          reveal(save, in: skillsForm); save.tapWhenReady()
-          XCTAssertTrue(app.staticTexts["Saved"].firstMatch.waitForExistence(timeout: 5)); try capture(name + "-skills-saved")
-          app.buttons["Close"].firstMatch.tapWhenReady(); _ = settings("Skills")
-          revealFormControl(packing, in: skillsForm, app: app)
-        XCTAssertTrue(packing.waitForExistence(timeout: 5)); XCTAssertEqual(packing.value as? String, "1")
-          XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertEqual(required.value as? String, "1")
-        }
-      }
-      app.terminate()
-    }
-  }
-
+@MainActor final class AvatarAndSettingsDesignTourTests: ScreenshotTourTestCase {
   /// Captures the real editor with fixture-backed writes and refresh readback.
   func testAvatarDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_AVATAR_PATH"] ?? ""
@@ -3251,321 +3593,5 @@ import CryptoKit
       }
       app.terminate()
     }
-  }
-
-  /// Home with an assistant of each kind of shape, including a white mug that needs help, whose
-  /// exclamation mark keeps the light body's soft edge.
-  func testVariedRosterHome() throws {
-    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the roster.")
-    for theme in ["light", "dark"] {
-      let app = launch(environment: ["AGENT_INTERFACE_UI_ROSTER": "varied", "AGENT_INTERFACE_UI_THEME": theme])
-      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
-      goToAssistantList(app)
-      XCTAssertTrue(app.buttons["bot.coffee"].waitForExistence(timeout: 5))
-      try capture("01b-home-roster-\(theme)")
-      app.terminate()
-    }
-  }
-
-  /// The avatar editor's shape groups and the Debug specimen's groups, for review.
-  func testAvatarShapesReview() throws {
-    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the shapes.")
-    let app = launch()
-    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
-    // Drags `scroller` until `element` sits just below `top`, so its group's heading shows above it.
-    func bring(_ element: XCUIElement, in scroller: XCUIElement, below top: () -> CGFloat) {
-      for _ in 0..<40 {
-        let target = top() + 56
-        if element.exists && element.hasFrame && abs(element.frame.minY - target) <= 40 { return }
-        let shift = element.exists && element.hasFrame ? element.frame.minY - target : 260
-        let distance = max(-260, min(260, shift))
-        let start = scroller.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.62))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -distance)),
-          withVelocity: .slow, thenHoldForDuration: 0.3)
-      }
-      XCTAssertTrue(element.exists, "\(element) came into view")
-    }
-    app.openAssistantSettings("Ranch hand")
-    app.selectSettingsTab("Profile")
-    let form = app.collectionViews["settings.profile"]
-    XCTAssertTrue(form.waitForExistence(timeout: 5))
-    let bar = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
-    let belowBar = { bar.exists ? bar.frame.maxY : form.frame.minY }
-    for (tile, name) in [("blob", "classic"), ("cloud", "objects"), ("ghost", "creatures"), ("pumpkin", "seasonal")] {
-      bring(app.buttons["avatarTile.shape.\(tile)"], in: form, below: belowBar)
-      try capture("20-avatar-shapes-\(name)")
-    }
-    app.buttons["Close"].tapWhenReady()
-    if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
-    goToAssistantList(app)
-    openPreferences(app)
-    openPreferencesLink(app, "Avatar specimen")
-    XCTAssertTrue(app.switches["Reduced motion"].waitForExistence(timeout: 5))
-    let scroller = app.scrollViews.firstMatch
-    let belowNav = { app.navigationBars.firstMatch.frame.maxY }
-    bring(app.descendants(matching: .any)["avatarMatrix"], in: scroller, below: belowNav)
-    try capture("21-specimen-matrix")
-    for (group, first) in [("classic", "blob"), ("objects", "cloud"), ("creatures", "ghost")] {
-      bring(app.buttons["specimenShape.\(first)"], in: scroller, below: belowNav)
-      try capture("22-specimen-\(group)")
-      // Home shows a blocked assistant's state in words, so the white mug's edged exclamation mark
-      // is checked in the specimen's state grid, which shows the tapped shape.
-      if group == "objects" { app.buttons["specimenShape.mug"].tapWhenReady() }
-    }
-    for _ in 0..<12 where !app.switches["Reduced motion"].canTap { scroller.swipeDown() }
-    try capture("23-specimen-white-mug-states")
-    app.swipeUp()
-    try capture("23b-specimen-white-mug-states")
-  }
-
-  func testScreenshotTour() throws {
-    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the tour.")
-    var app = launch()
-    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
-
-    goToAssistantList(app)
-    XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
-    try capture("01-home")
-
-    for (identifier, name, ready) in [
-      ("openToday", "17-today", "todayOverview"),
-      ("openDiscovery", "19-search", "Search conversations"),
-    ] {
-      app.buttons[identifier].tap()
-      XCTAssertTrue(app.descendants(matching: .any)[ready].waitForExistence(timeout: 10))
-      try capture(name)
-      goToAssistantList(app)
-    }
-    // Group chats are made from the New menu, and the sheet is their only page without a room.
-    app.buttons["newMenu"].tapWhenReady()
-    let newGroup = app.buttons["newGroup"]
-    XCTAssertTrue(newGroup.waitForExistence(timeout: 10))
-    XCTAssertTrue(newGroup.wait(until: "enabled == true"))
-    newGroup.tap()
-    XCTAssertTrue(app.textFields["Group name"].waitForExistence(timeout: 10))
-    try capture("18-group-create")
-    app.buttons["Close"].tap()
-    goToAssistantList(app)
-    app.buttons["openDiscovery"].tap()
-    XCTAssertTrue(app.buttons["Saved items"].waitForExistence(timeout: 10))
-    app.buttons["Saved items"].tap()
-    XCTAssertTrue(app.buttons["savedItem-saved-1"].waitForExistence(timeout: 10))
-    try capture("19b-search-saved")
-    goToAssistantList(app)
-
-    openPreferences(app)
-    scrollUntilHittable(app, app.descendants(matching: .any)["sharedComputer"])
-    try capture("06b-shared-computer")
-    app.buttons["Close"].tap()
-
-    app.buttons["bot.ranch"].tap()
-    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 5))
-    try capture("02-conversation")
-    app.textViews["messageComposer"].tap()
-    XCTAssertTrue(app.buttons["hideKeyboard"].waitForExistence(timeout: 5))
-    try capture("02c-composer-focused")
-    app.buttons["hideKeyboard"].tap()
-
-    app.openBotProfile("Ranch hand")
-    try capture("02b-assistant-card")
-    app.buttons["profileSettings"].tap()
-    XCTAssertTrue(app.buttons["Avatar"].waitForExistence(timeout: 5))
-    app.buttons["Avatar"].tap()
-    XCTAssertTrue(app.buttons["previewState.idle"].waitForExistence(timeout: 5))
-    try capture("04-avatar-editor")
-    app.buttons["previewState.done"].tap()
-    app.swipeUp()
-    try capture("04b-avatar-editor-tiles")
-    scrollUntilHittable(app, app.buttons["Save avatar"])
-    try capture("05-avatar-editor-controls")
-    // The shape picker's later groups, under their headings.
-    scrollUntilHittable(app, app.buttons["avatarTile.shape.cloud"], up: false)
-    try capture("05b-avatar-editor-objects")
-    scrollUntilHittable(app, app.buttons["avatarTile.shape.snowman"])
-    try capture("05c-avatar-editor-creatures-seasonal")
-    app.buttons["Close"].tap()
-    if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
-
-    openPreferences(app)
-    try capture("06-preferences")
-
-    openPreferencesLink(app, "Integrations")
-    XCTAssertTrue(app.staticTexts["Google Workspace"].waitForExistence(timeout: 10))
-    try capture("07-integrations")
-    back(app, from: "Integrations")
-
-    openPreferencesLink(app, "Hermes updates")
-    XCTAssertTrue(app.buttons["checkHermesUpdate"].waitForExistence(timeout: 10))
-    try capture("08-hermes-updates")
-    back(app, from: "Hermes updates")
-
-    openPreferencesLink(app, "Avatar specimen")
-    XCTAssertTrue(app.switches["Reduced motion"].waitForExistence(timeout: 5))
-    try capture("09-specimen-geometric")
-    app.swipeUp()
-    try capture("10-specimen-shapes")
-    scrollUntilHittable(app, app.buttons["specimenShape.snowman"])
-    try capture("11-specimen-groups")
-    for _ in 0..<6 where !app.buttons["Portrait"].canTap { app.swipeDown() }
-    app.buttons["Portrait"].tap()
-    try capture("12-specimen-portrait")
-    app.buttons["Character"].tap()
-    app.switches["Reduced motion"].tap()
-    try capture("13-specimen-reduced-motion")
-    let matrix = app.descendants(matching: .any)["avatarMatrix"]
-    scrollUntilHittable(app, matrix)
-    // Short drags bring the whole matrix just below the navigation bar.
-    for _ in 0..<12 where matrix.frame.minY > 160 {
-      app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-        .press(
-          forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)),
-          withVelocity: .slow, thenHoldForDuration: 0.3)
-    }
-    try capture("16-specimen-matrix")
-    back(app, from: "Avatar specimen")
-    // Back on Settings, scrolled to the bottom where the home sections and About rows sit.
-    try capture("06c-preferences-scrolled")
-    app.swipeDown()
-    try capture("06d-preferences-sections")
-
-    // Dark mode through the app's own theme preference, which drives preferredColorScheme.
-    // The picker's element type varies by iOS release; its label stays stable.
-    // Swiping down at the top of the sheet dismisses it, so reopen Preferences at the top instead.
-    app.buttons["Close"].tap()
-    openPreferences(app)
-    let theme = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Appearance")).firstMatch
-    XCTAssertTrue(theme.waitForExistence(timeout: 5) && theme.canTap, app.debugDescription)
-    theme.tap()
-    let dark = app.descendants(matching: .any).matching(NSPredicate(
-      format: "label == %@ AND elementType IN %@", "Dark",
-      [XCUIElement.ElementType.button.rawValue, XCUIElement.ElementType.menuItem.rawValue])).firstMatch
-    XCTAssertTrue(dark.waitForExistence(timeout: 5), app.debugDescription)
-    dark.tap()
-    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-    app.buttons["Close"].tap()
-    goToAssistantList(app)
-    XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
-    try capture("14-home-dark")
-    app.buttons["bot.ranch"].tap()
-    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 5))
-    try capture("15-conversation-dark")
-    app.openBotProfile("Ranch hand")
-    try capture("15b-assistant-card-dark")
-
-    // A fresh launch with the working fixture shows the activity avatar and live activity row.
-    app.terminate()
-    app = launch(liveActivity: true)
-    XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 15))
-    try capture("03-conversation-working")
-    goToAssistantList(app)
-    XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
-    try capture("03b-home-working")
-
-    // Transcript states: a finished turn's folded work with a colored code block and a table, the
-    // question card, and a failed turn offering Retry.
-    for (environment, ready, name) in [
-      (["AGENT_INTERFACE_UI_WORK": "1"], "turnWork", "21-conversation-work"),
-      (["AGENT_INTERFACE_UI_QUESTION": "2"], "Send answers", "22-question-card"),
-      (["AGENT_INTERFACE_UI_RETRY": "1"], "retryTurn", "23-failed-turn-retry"),
-    ] {
-      app.terminate()
-      app = launch(environment: environment)
-      XCTAssertTrue(app.buttons[ready].waitForExistence(timeout: 15))
-      try capture(name)
-    }
-
-    // Without the fixture, a reset launch shows the first-run connection screen.
-    app.terminate()
-    let fresh = XCUIApplication()
-    fresh.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
-    fresh.launch()
-    XCTAssertTrue(fresh.textFields["serverAddress"].waitForExistence(timeout: 15))
-    try capture("00-sign-in")
-
-    // The chat header and card at a large accessibility text size.
-    fresh.terminate()
-    app = launch(textSize: "UICTContentSizeCategoryAccessibilityL")
-    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
-    try capture("20-conversation-large-text")
-    app.openBotProfile("Ranch hand")
-    try capture("20b-assistant-card-large-text")
-  }
-
-  private func launch(liveActivity: Bool = false, textSize: String? = nil, environment: [String: String] = [:]) -> XCUIApplication {
-    let app = XCUIApplication()
-    for (key, value) in environment { app.launchEnvironment[key] = value }
-    if let textSize { app.launchArguments += ["-UIPreferredContentSizeCategoryName", textSize] }
-    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
-    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
-    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
-    if liveActivity { app.launchEnvironment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] = "1" }
-    app.launch()
-    return app
-  }
-
-  private func goToAssistantList(_ app: XCUIApplication) {
-    if app.profileMenu.exists { return }
-    let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
-    if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
-    XCTAssertTrue(app.profileMenu.waitForExistence(timeout: 5))
-  }
-
-  private func openPreferences(_ app: XCUIApplication) {
-    goToAssistantList(app)
-    app.openSettingsFromProfileMenu()
-    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-  }
-
-  private func openPreferencesLink(_ app: XCUIApplication, _ title: String) {
-    let link = app.buttons[title]
-    scrollUntilHittable(app, link)
-    link.tap()
-    XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
-  }
-
-  private func back(_ app: XCUIApplication, from title: String) {
-    app.navigationBars[title].buttons.firstMatch.tap()
-    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-  }
-
-  private func scrollUntilHittable(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true, in scroller: XCUIElement? = nil) {
-    let area = scroller ?? app
-    func bounds() -> (top: CGFloat, bottom: CGFloat) {
-      let overlay = app.descendants(matching: .any)["composerArea"].firstMatch
-      return (max(area.frame.minY, app.navigationBars.firstMatch.frame.maxY) + 10,
-              min(area.frame.maxY, overlay.exists ? overlay.frame.minY : area.frame.maxY) - 10)
-    }
-    func ready() -> Bool {
-      guard element.canTap else { return false }
-      guard area.identifier == "conversationTranscript" else { return true }
-      let visible = bounds()
-      return element.frame.minY >= visible.top && element.frame.maxY <= visible.bottom
-    }
-    for _ in 0..<8 {
-      if ready() { return }
-      if area.identifier == "conversationTranscript" {
-        let visible = bounds()
-        let upward = element.hasFrame ? element.frame.maxY > visible.bottom : up
-        let gap = element.hasFrame ? (upward ? element.frame.maxY - visible.bottom : visible.top - element.frame.minY) : visible.bottom - visible.top
-        let distance = min((visible.bottom - visible.top) * 0.6, max(24, gap + 8))
-        let startY = upward ? visible.bottom : visible.top
-        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: area.frame.midX, dy: startY))
-        let end = start.withOffset(CGVector(dx: 0, dy: upward ? -distance : distance))
-        start.press(forDuration: 0.05, thenDragTo: end)
-      } else if up { area.swipeUp() } else { area.swipeDown() }
-    }
-    XCTAssertTrue(ready(), "\(element) never became hittable clear of the navigation bar and message box")
-  }
-
-  /// Waits for transitions to settle, then writes the full-screen PNG and attaches it to the result.
-  private func capture(_ name: String) throws {
-    guard let directory else { return }
-    Thread.sleep(forTimeInterval: 1.0)
-    let screenshot = XCUIScreen.main.screenshot()
-    try screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"))
-    let attachment = XCTAttachment(screenshot: screenshot)
-    attachment.name = name
-    attachment.lifetime = .keepAlways
-    add(attachment)
   }
 }
