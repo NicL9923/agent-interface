@@ -25,30 +25,19 @@ export interface Config {
   vapidPublicKey: string;
   vapidPrivateKey: string;
   vapidSubject: string;
-  hermesUrl?: string;
-  hermesToken?: string;
-  hermesAuthMode: "static" | "service";
-  hermesQualificationFile?: string;
   /** Unset in embedded and test servers, which stay silent; the entrypoint defaults to info. */
   logLevel?: LogLevel;
   backupDirectory?: string;
   integrationAdmins?: string[];
   computerTerminalAdmins?: string[];
   computerTerminal?: { stateDirectory: string; cwd: string; python: string };
-  hermesUpgrade?: {
-    stateDirectory: string;
-    workerConfig: string;
-    python: string;
-    adminEmails: string[];
-  };
   /** Optional LAN and tailnet listeners the iOS app prefers when it can reach them. */
   directRoutes?: DirectRoutesConfig;
-  /** Shared with the Hermes add-on, which uses it to ask linked Macs to act. Unset turns Mac links off. */
+  /** Shared secret authenticating Mac link relay requests. Unset turns Mac links off. */
   macLinkKey?: string;
   /**
-   * Native agent harnesses (Antigravity, Codex, Claude Code, Grok, Pi) beside Hermes, with their workspaces and uploads under
-   * `workspaceRoot`. On unless WILDBOTS_HARNESS_ENABLED=false, and off for an in-memory database, which has no
-   * directory to keep them beside.
+   * Native agent harnesses (Antigravity, Codex, Claude Code, Grok, Pi) with their workspaces and uploads under
+   * `workspaceRoot`. Present whenever the database is on disk or `WILDBOTS_WORKSPACE_ROOT` is set.
    */
   nativeHarness?: { workspaceRoot: string; fallback?: HarnessFallbackConfig };
   /** The newest distributed iOS build and where to get it, for the app's update banner. */
@@ -91,10 +80,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     vapidPublicKey: env.VAPID_PUBLIC_KEY ?? "",
     vapidPrivateKey: env.VAPID_PRIVATE_KEY ?? "",
     vapidSubject: env.VAPID_SUBJECT ?? "",
-    hermesUrl: env.HERMES_URL,
-    hermesToken: env.HERMES_TOKEN,
-    hermesAuthMode: (env.HERMES_AUTH_MODE || "static") as "static" | "service",
-    hermesQualificationFile: env.HERMES_QUALIFICATION_FILE || undefined,
     logLevel: (env.LOG_LEVEL || undefined) as LogLevel | undefined,
     backupDirectory: env.APP_BACKUP_DIR || undefined,
     macLinkKey: env.MAC_LINK_KEY || undefined,
@@ -117,65 +102,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       python: env.COMPUTER_PYTHON!,
     };
   }
-  if (env.HERMES_UPGRADE_ENABLED && !["true", "false"].includes(env.HERMES_UPGRADE_ENABLED))
-    throw new Error("HERMES_UPGRADE_ENABLED must be true or false");
-  if (env.HERMES_UPGRADE_ENABLED === "true") {
-    const adminEmails = (env.HERMES_UPGRADE_ADMINS ?? "")
-      .split(",")
-      .map((x) => x.trim().toLowerCase())
-      .filter(Boolean);
-    if (
-      !adminEmails.length ||
-      !env.HERMES_UPGRADE_CONFIG ||
-      !env.HERMES_UPGRADE_STATE_DIR ||
-      !env.HERMES_UPGRADE_PYTHON
-    )
-      throw new Error(
-        "Hermes upgrades require explicit administrators, private worker configuration, state directory and Python interpreter",
-      );
-    if (
-      ![env.HERMES_UPGRADE_CONFIG, env.HERMES_UPGRADE_STATE_DIR, env.HERMES_UPGRADE_PYTHON].every(
-        (x) => x!.startsWith("/"),
-      )
-    )
-      throw new Error("Hermes upgrade paths must be absolute");
-    config.hermesUpgrade = {
-      adminEmails,
-      workerConfig: env.HERMES_UPGRADE_CONFIG,
-      stateDirectory: env.HERMES_UPGRADE_STATE_DIR,
-      python: env.HERMES_UPGRADE_PYTHON,
-    };
-  }
-  if (!["static", "service"].includes(config.hermesAuthMode))
-    throw new Error("HERMES_AUTH_MODE must be static or service");
-  if (
-    config.hermesAuthMode === "service" &&
-    config.hermesToken &&
-    !/^[A-Za-z0-9_-]{43}$/.test(config.hermesToken)
-  )
-    throw new Error(
-      "HERMES_TOKEN must be the private 32-byte base64url service key in service mode",
-    );
-  if (
-    config.macLinkKey !== undefined &&
-    (!/^[A-Za-z0-9_-]{43}$/.test(config.macLinkKey) || config.macLinkKey === config.hermesToken)
-  )
-    throw new Error(
-      "MAC_LINK_KEY must be its own generated 32-byte base64url key, different from HERMES_TOKEN",
-    );
+  if (config.macLinkKey !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(config.macLinkKey))
+    throw new Error("MAC_LINK_KEY must be a generated 32-byte base64url key");
   config.production = config.production || !loopback(config.host) || !loopback(origin.hostname);
-  if (
-    config.hermesUpgrade &&
-    config.production &&
-    config.hermesUpgrade.adminEmails.some((email) => !config.householdEmails.includes(email))
-  )
-    throw new Error("Hermes upgrade administrators must belong to the household allowlist");
+  const rawIntegrationAdmins = env.INTEGRATION_ADMINS ?? env.HERMES_INTEGRATION_ADMINS;
   config.integrationAdmins =
-    env.HERMES_INTEGRATION_ADMINS === undefined
-      ? (config.hermesUpgrade?.adminEmails ?? [])
+    rawIntegrationAdmins === undefined
+      ? []
       : [
           ...new Set(
-            env.HERMES_INTEGRATION_ADMINS.split(",")
+            rawIntegrationAdmins
+              .split(",")
               .map((email) => email.trim().toLowerCase())
               .filter(Boolean),
           ),
@@ -261,10 +198,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     config.directRoutes = { kinds: kinds as DirectRoutesConfig["kinds"], port, stateDirectory };
   } else if (env.DIRECT_PORT || env.DIRECT_TLS_DIR)
     throw new Error("DIRECT_PORT and DIRECT_TLS_DIR require DIRECT_ROUTES");
-  if (env.WILDBOTS_HARNESS_ENABLED && !["true", "false"].includes(env.WILDBOTS_HARNESS_ENABLED))
-    throw new Error("WILDBOTS_HARNESS_ENABLED must be true or false");
-  if (env.WILDBOTS_HARNESS_ENABLED !== "false" && config.database !== ":memory:") {
-    const root = env.WILDBOTS_WORKSPACE_ROOT?.trim();
+  const workspaceRoot =
+    env.WILDBOTS_WORKSPACE_ROOT?.trim() ||
+    (config.database === ":memory:" ? undefined : join(dirname(config.database), "harness"));
+  if (workspaceRoot) {
     const fallbackDisabled =
       env.WILDBOTS_FALLBACK_ENABLED === "false" ||
       env.WILDBOTS_FALLBACK_MODEL?.trim().toLowerCase() === "off";
@@ -289,7 +226,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       };
     }
     config.nativeHarness = {
-      workspaceRoot: root || join(dirname(config.database), "harness"),
+      workspaceRoot,
       ...(fallback ? { fallback } : {}),
     };
   }

@@ -13,8 +13,6 @@ import type { IconName } from "../components/Icon";
 import { NotificationSettings } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
 import { useFinePointer, type InstallEvent } from "./use-browser";
-import { hermesVersionLabel, revisionDate } from "./hermes-version";
-import { showsHermesUpdates } from "./harness";
 import {
   addSection,
   checkSectionName,
@@ -45,8 +43,6 @@ const assistants = (count: number) => (count === 1 ? "1 assistant" : `${count} a
 /** Account and app settings as grouped rows, opened from the home screen's account button. */
 export function PreferencesDialog({
   boot,
-  connectionLost,
-  offline,
   editPreferences,
   saveRefusal,
   notifications,
@@ -57,14 +53,13 @@ export function PreferencesDialog({
   onSignOut,
   signOutOnDeviceOnly = false,
   onComputer,
-  onUpgrade,
   onShortcuts,
   closer,
 }: {
   boot: Bootstrap;
   destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" };
-  connectionLost: boolean;
-  offline: boolean;
+  connectionLost?: boolean;
+  offline?: boolean;
   editPreferences: EditPreferences;
   /** Why the last preferences save was refused; its change has already left the screen. */
   saveRefusal?: Refusal | null;
@@ -75,7 +70,6 @@ export function PreferencesDialog({
   onSignOut: () => Promise<void>;
   signOutOnDeviceOnly?: boolean;
   onComputer: () => void;
-  onUpgrade: () => void;
   onShortcuts: () => void;
   /** Where this sheet offers its own close to the app. See close-request.ts. */
   closer?: RefObject<SheetClose | null>;
@@ -85,7 +79,6 @@ export function PreferencesDialog({
   const commit = (...args: Parameters<EditPreferences>) => void editPreferences(...args);
   const finePointer = useFinePointer();
   const bots = boot.bots;
-  const hermesUpdates = showsHermesUpdates(boot);
   // A control's update names the fields it set, so its save carries them whatever the queue holds.
   const save = (update: Partial<Pick<Preferences, PreferenceField>>) =>
     commit(
@@ -115,12 +108,6 @@ export function PreferencesDialog({
     setQuietError("");
     notify({ [field]: value });
   };
-  const { version, revisionDate: builtOn } = boot.connection;
-  const hermes = revisionDate(builtOn)
-    ? `Hermes released ${revisionDate(builtOn)}`
-    : version
-      ? `Hermes ${hermesVersionLabel(version, undefined)}`
-      : "";
   // Following and each home section open as their own page in the sheet, like a phone's settings.
   const [page, setPage] = useState<Page>(
     destination && destination.kind !== "signout" ? destination : { kind: "main" },
@@ -238,28 +225,6 @@ export function PreferencesDialog({
             </div>
 
             <div className="settings-group">
-              {hermesUpdates && (
-                <NavRow
-                  icon="upgrade"
-                  label="Hermes and updates"
-                  onClick={onUpgrade}
-                  detail={
-                    connectionLost
-                      ? offline
-                        ? "Offline"
-                        : "Reconnecting"
-                      : hermes
-                        ? `Connected · ${hermes}`
-                        : "Connected"
-                  }
-                  badge={
-                    <span
-                      className={`row-status${connectionLost ? " attention" : ""}`}
-                      aria-hidden="true"
-                    />
-                  }
-                />
-              )}
               <NavRow
                 icon="computer"
                 label="Computer"
@@ -477,7 +442,6 @@ export function PreferencesDialog({
                 w.
               </span>
               <strong>WildBots</strong>
-              {hermesUpdates && hermes && <small>{hermes}</small>}
             </footer>
           </>
         )}

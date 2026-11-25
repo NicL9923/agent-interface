@@ -177,7 +177,7 @@ struct RootView: View {
     if DebugFixtures.captureApplePage { captureAppleOpen = true; return }
     if DebugFixtures.captureUsagePage { usageOpen = true; return }
     if DebugFixtures.captureConnectionPage { captureConnectionOpen = true; return }
-    if DebugFixtures.capturePreferencesPage || DebugFixtures.captureComputerPage || DebugFixtures.captureUpgradePage || DebugFixtures.captureNotificationsPage { preferencesOpen = true; return }
+    if DebugFixtures.capturePreferencesPage || DebugFixtures.captureComputerPage || DebugFixtures.captureNotificationsPage { preferencesOpen = true; return }
     if DebugFixtures.captureGroupPage {
       if let room = store.groupCatalog?.rooms.first { open(room) } else { captureRoomWhenListed = true }
       return

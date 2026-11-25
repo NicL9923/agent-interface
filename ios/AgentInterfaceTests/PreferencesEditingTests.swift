@@ -76,37 +76,3 @@ final class PreferencesEditingTests: XCTestCase {
     XCTAssertEqual(HomeSummary.assistants(2), "2 assistants")
   }
 }
-
-final class HermesRevisionTextTests: XCTestCase {
-  private let revision = "3f9c2a71b0d4e8f6a5c3b2d1e0f9a8b7c6d5e4f3"
-  private let us = Locale(identifier: "en_US")
-  private let utc = TimeZone(identifier: "UTC")!
-
-  func testDateLeadsAndTheShortHashStaysAsDetail() {
-    let date = HermesRevisionText.date("2026-10-20T18:05:00Z", locale: us, timeZone: utc)
-    XCTAssertEqual(date, "Oct 20, 2026")
-    XCTAssertEqual(HermesRevisionText.title(revision: revision, version: nil, date: date), "Released Oct 20, 2026")
-    XCTAssertEqual(HermesRevisionText.detail(revision: revision, version: nil, date: date), "3f9c2a7")
-    XCTAssertEqual(HermesRevisionText.detail(revision: revision, version: "0.9.5", date: date), "0.9.5 · 3f9c2a7")
-  }
-
-  func testWithoutADateTheVersionOrShortHashStandsIn() {
-    XCTAssertNil(HermesRevisionText.date(nil))
-    XCTAssertNil(HermesRevisionText.date("not a date"))
-    XCTAssertEqual(HermesRevisionText.title(revision: revision, version: "0.9.5", date: nil), "0.9.5")
-    XCTAssertEqual(HermesRevisionText.title(revision: revision, version: nil, date: nil), "3f9c2a7")
-    XCTAssertNil(HermesRevisionText.detail(revision: revision, version: nil, date: nil))
-  }
-
-  func testOlderServersDecodeAndTheFooterFallsBackToTheShortHash() throws {
-    let old = try JSONDecoder().decode(RuntimeStatus.self, from: Data(#"{"connected":true,"version":"\#(revision)"}"#.utf8))
-    XCTAssertEqual(old.hermesLabel, "Hermes 3f9c2a7")
-    XCTAssertNil(old.hermesDetail)
-    let dated = try JSONDecoder().decode(RuntimeStatus.self, from: Data(#"{"connected":true,"version":"\#(revision)","revisionDate":"2026-10-14T16:20:00Z"}"#.utf8))
-    XCTAssertEqual(dated.hermesDetail, "3f9c2a7")
-    XCTAssertTrue(dated.hermesLabel?.hasPrefix("Hermes released ") == true)
-    let revision = try JSONDecoder().decode(UpgradeRevision.self, from: Data(#"{"revision":"\#(revision)","committedAt":"2026-10-20T18:05:00.000Z"}"#.utf8))
-    XCTAssertNotNil(revision.releaseDate)
-    XCTAssertEqual(revision.displayDetail, "3f9c2a7")
-  }
-}

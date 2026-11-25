@@ -189,7 +189,7 @@ export async function installComputerRoutes(
       running: false,
       browserReady: false,
       label: "Household computer",
-      reason: "The shared desktop is not available from the connected Hermes installation.",
+      reason: "The shared desktop is not configured yet.",
       control: { kind: "idle" },
       terminal: { available: false, target: "" },
     };

@@ -670,7 +670,6 @@ def remove_container(podman, name):
 # `load_source` argument, a literal glob, or a relative literal given to `open` or `Path(...).read_text()`. A path
 # that is computed at run time is not seen, so a test that builds one is on its author to list the directory here.
 PYTHON_INPUT_DIRS = (
-    "src/hermes/",
     "scripts/",
     ".agents/tools/",
     "src/shared/",

@@ -5,13 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, schemaVersion } from "../src/server/store.js";
 import type { TranscriptMessageInput } from "../src/server/store-transcripts.js";
-import {
-  backfillBotTranscript,
-  compareShadowPage,
-  persistedHermesMessages,
-} from "../src/server/transcript-sync.js";
-import type { Conversation, Message, Runtime } from "../src/shared/types.js";
-import { conversationFixture } from "./helpers/runtime-fixtures.js";
+import type { Message } from "../src/shared/types.js";
 
 const stores: Store[] = [];
 const directories: string[] = [];
@@ -44,12 +38,6 @@ const ids = (messages: readonly Message[]) => messages.map(({ id }) => id);
 
 function checkIndex(store: Store) {
   store.db.exec("INSERT INTO transcript_fts(transcript_fts,rank) VALUES('integrity-check',1)");
-}
-
-function pendingConversation() {
-  let resolve!: (value: Conversation) => void;
-  const promise = new Promise<Conversation>((done) => (resolve = done));
-  return { promise, resolve };
 }
 
 describe("transcript repository", () => {
@@ -417,167 +405,5 @@ describe("transcript repository", () => {
     expect(reopened.transcripts.search([bot], "stored", { limit: 10 })[0]?.messageId).toBe(
       "stored",
     );
-  });
-});
-
-describe("Hermes transcript shadow", () => {
-  it("backfills a complete raw history, dropping the live request session's synthetic reply", async () => {
-    const store = open();
-    const history = [
-      message("stored-inflight", { role: "user" }),
-      message("progress", { interim: true }),
-      message("saved"),
-      message("live-inflight"),
-    ];
-    const conversation = vi.fn<Runtime["conversation"]>(async () =>
-      conversationFixture({
-        botId: bot,
-        sessionId: "stored",
-        requestSessionId: "live",
-        messages: history,
-      }),
-    );
-    expect(await backfillBotTranscript(store, { conversation }, bot)).toMatchObject({
-      sourceRuntime: hermes,
-      canonicalSource: "hermes",
-      messageCount: 3,
-      lastMessageId: "saved",
-    });
-    expect(conversation).toHaveBeenCalledExactlyOnceWith(bot);
-    const rows = store.transcripts.listPage(bot, { limit: 10 }).messages;
-    expect(ids(rows)).toEqual(["stored-inflight", "progress", "saved"]);
-    expect(compareShadowPage(rows, persistedHermesMessages(await conversation(bot))).matches).toBe(
-      true,
-    );
-    expect(ids(persistedHermesMessages({ sessionId: "live", messages: history }))).toEqual(
-      ids(rows),
-    );
-    expect(ids(persistedHermesMessages({ messages: history }))).toEqual(ids(history));
-  });
-
-  it("rejects partial, disconnected, mismatched, and failed reads before replacing the shadow", async () => {
-    const store = open();
-    const previous = store.transcripts.appendMessages(bot, [message("keep")], hermes);
-    const cases: [Partial<Conversation>, string][] = [
-      [{ window: { earlier: 3, context: [] } }, "from a partial window"],
-      [{ activity: { state: "disconnected" } }, "while Hermes is disconnected"],
-      [{ botId: otherBot }, "from another bot"],
-    ];
-    for (const [changes, reason] of cases) {
-      const conversation = async () => conversationFixture({ botId: bot, ...changes });
-      await expect(backfillBotTranscript(store, { conversation }, bot)).rejects.toThrow(reason);
-    }
-    await expect(
-      backfillBotTranscript(
-        store,
-        {
-          conversation: async () => {
-            throw new Error("Transport closed");
-          },
-        },
-        bot,
-      ),
-    ).rejects.toThrow("Transport closed");
-    expect(store.transcripts.syncState(bot)).toEqual(previous);
-    expect(ids(store.transcripts.listPage(bot, { limit: 10 }).messages)).toEqual(["keep"]);
-    await expect(
-      backfillBotTranscript(
-        store,
-        {
-          conversation: async () => conversationFixture({ botId: bot }),
-        },
-        bot,
-      ),
-    ).resolves.toMatchObject({ messageCount: 0, lastMessageId: null });
-  });
-
-  it("shares concurrent backfills and discards a snapshot overtaken by a write", async () => {
-    const store = open();
-    const response = pendingConversation();
-    const conversation = vi.fn<Runtime["conversation"]>(() => response.promise);
-    const first = backfillBotTranscript(store, { conversation }, bot);
-    const second = backfillBotTranscript(store, { conversation }, bot);
-    expect(second).toBe(first);
-    await Promise.resolve();
-    expect(conversation).toHaveBeenCalledExactlyOnceWith(bot);
-    const latest = store.transcripts.appendMessages(bot, [message("latest")], hermes);
-    response.resolve(conversationFixture({ botId: bot, messages: [message("older")] }));
-    await expect(first).resolves.toEqual(latest);
-    expect(ids(store.transcripts.listPage(bot, { limit: 10 }).messages)).toEqual(["latest"]);
-  });
-
-  it("does not publish a pending Hermes read after bot deletion or local cutover", async () => {
-    const store = open();
-    const response = pendingConversation();
-    const conversation = vi.fn<Runtime["conversation"]>((botId) =>
-      response.promise.then((result) => ({ ...result, botId })),
-    );
-    const deleted = backfillBotTranscript(store, { conversation }, bot);
-    const switched = backfillBotTranscript(store, { conversation }, otherBot);
-    await Promise.resolve();
-    store.forgetBot(bot);
-    store.transcripts.markCanonicalLocal(otherBot);
-    response.resolve(conversationFixture({ messages: [message("old")] }));
-    await expect(deleted).resolves.toBeUndefined();
-    await expect(switched).resolves.toMatchObject({ canonicalSource: "local", messageCount: 0 });
-    await expect(
-      backfillBotTranscript(
-        store,
-        {
-          conversation: async () => {
-            throw new Error("Local history must not call Hermes");
-          },
-        },
-        otherBot,
-      ),
-    ).resolves.toMatchObject({ canonicalSource: "local" });
-    expect(store.transcripts.listPage(bot, { limit: 10 }).messages).toEqual([]);
-    expect(store.transcripts.listPage(otherBot, { limit: 10 }).messages).toEqual([]);
-  });
-
-  it("distinguishes omitted, extra, moved and changed rows without counting a shifted page twice", () => {
-    const msg = message("one", {
-      files: [{ id: "file", name: "notes", mime: "text/plain", size: undefined }],
-      origin: { visibility: "conversation", kind: "human" },
-    });
-    const two = message("two"),
-      three = message("three");
-    const equivalent = message("one", {
-      files: [{ mime: "text/plain", name: "notes", id: "file" }],
-      origin: { kind: "human", visibility: "conversation" },
-    });
-    const local = [{ ...msg, seq: 42, sourceRuntime: hermes, updatedAt: 123 }, two, three];
-    expect(compareShadowPage(local, [equivalent, two, three])).toMatchObject({
-      matches: true,
-      diffCount: 0,
-    });
-    expect(compareShadowPage([two, three], [msg, two, three])).toEqual({
-      matches: false,
-      diffCount: 1,
-      missingFromLocal: ["one"],
-      extraInLocal: [],
-      mutated: [],
-      reordered: [],
-      duplicateIds: [],
-    });
-    expect(
-      compareShadowPage(
-        [three, msg, message("extra")],
-        [msg, two, { ...three, reasoning: "different" }],
-      ),
-    ).toEqual({
-      matches: false,
-      diffCount: 4,
-      missingFromLocal: ["two"],
-      extraInLocal: ["extra"],
-      mutated: ["three"],
-      reordered: ["three", "one"],
-      duplicateIds: [],
-    });
-    expect(compareShadowPage([msg, two], [msg, two, two])).toMatchObject({
-      matches: false,
-      diffCount: 1,
-      duplicateIds: ["two"],
-    });
   });
 });

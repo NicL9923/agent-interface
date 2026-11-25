@@ -17,8 +17,6 @@ import { installPushRoutes } from "./push-routes.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import type { LiveActivitySender } from "./live-activity.js";
-import { HermesUpgrades } from "./upgrades.js";
-import { installMaintenanceGate, installUpgradeRoutes } from "./upgrade-routes.js";
 import { installIntegrationsRoutes } from "./integrations.js";
 import { installVaultRoutes } from "./vault.js";
 import { registerVoiceRoutes } from "./voice.js";
@@ -85,7 +83,6 @@ export async function createApp(
     verifyGoogle?: Parameters<typeof installAuth>[3];
     sendApns?: ApnsSender;
     sendLiveActivity?: LiveActivitySender;
-    upgrades?: HermesUpgrades;
     logStream?: { write(line: string): void };
     clientRoot?: string;
     /** The file the deploy tooling writes to name the previous release's assets; tests name theirs. Without a clientRoot it is dist/previous-release.json. */
@@ -95,7 +92,7 @@ export async function createApp(
     statfs?: StatFs;
     /** Replaces interface discovery for direct routes, so tests choose the addresses. */
     directAddresses?: () => DirectAddress[];
-    /** The native harnesses new assistants can use, for `/api/bootstrap`. Absent on a server running only Hermes. */
+    /** The native harnesses new assistants can use, for `/api/bootstrap`. */
     probeHarnesses?: () => Promise<HarnessOption[]>;
     /** Closes what the runtime's turns use, such as the WildBots MCP server, once the runtime has closed. */
     closeServices?: () => Promise<void>;
@@ -129,9 +126,6 @@ export async function createApp(
   });
   await installAuth(app, store, config, options.verifyGoogle);
   const roster = installBotAccess(app, store, runtime);
-  const upgrades = options.upgrades ?? new HermesUpgrades(config, runtime);
-  upgrades.visibleTo = (botId, userId) => visibleTo(store, botId, userId);
-  installMaintenanceGate(app, upgrades);
   app.setErrorHandler(errorHandler({ production: config.production }));
   // Asked of the runtime the assistant runs on. A route that acts on no assistant passes undefined, for the default runtime.
   const requireCapability: RequireCapability = async (key, botId) => {
@@ -152,7 +146,6 @@ export async function createApp(
     );
   apiRoute(app, "GET /native/routes", {}, async () => ({ routes: directRoutes?.routes() ?? [] }));
   installClientErrorRoutes(app);
-  installUpgradeRoutes(app, upgrades);
   const canManageIntegrations = (req: FastifyRequest) =>
     (config.localDevAuth && !config.production) ||
     Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase()));
@@ -160,17 +153,11 @@ export async function createApp(
     origin: config.origin,
     canManage: canManageIntegrations,
   });
-  await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
+  await installComputerRoutes(app, config, store, runtime, () => false);
   await installTerminalRequestRoutes(app, config, store, runtime);
   const macs = installMacLink(app, config, store);
   await installExperienceRoutes(app, runtime, store, roster);
-  await installAutomationRoutes(
-    app,
-    runtime,
-    store,
-    () => upgrades.maintenance(),
-    canManageIntegrations,
-  );
+  await installAutomationRoutes(app, runtime, store, () => false, canManageIntegrations);
   await installDiscoveryRoutes(app, runtime, store, roster);
   await installAccountUsageRoutes(app, runtime, store);
   const collaboration = await installCollaborationRoutes(app, runtime, store, roster);
@@ -186,7 +173,6 @@ export async function createApp(
     config,
     runtime,
     store,
-    upgrades,
     directory,
     snapshot,
     probeHarnesses: options.probeHarnesses,
@@ -311,10 +297,8 @@ export async function createApp(
   worker.identify = (events) => mains.identify(events);
   const health = new HealthMonitor({
     store,
-    runtime,
     worker,
     config,
-    maintenance: () => upgrades.maintenance(),
     log: app.log,
     metadataProbe: options.metadataProbe ?? defaultMetadataProbe(config),
     statfs: options.statfs,

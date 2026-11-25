@@ -13,16 +13,10 @@ import type {
   HarnessSessionSpec,
   HarnessTurnInput,
 } from "../src/server/harness/driver.js";
-import { fileSigner } from "../src/server/hermes-files.js";
+import { fileSigner } from "../src/server/file-signer.js";
 import { composeServerRuntime } from "../src/server/native-harness.js";
 import { Store } from "../src/server/store.js";
-import type { Bootstrap, Bot, Runtime } from "../src/shared/types.js";
-import { fakeRuntime } from "./helpers/fake-runtime.js";
-import {
-  botFixture,
-  capabilitiesFixture,
-  conversationFixture,
-} from "./helpers/runtime-fixtures.js";
+import type { Bootstrap, Bot } from "../src/shared/types.js";
 import { localLogin } from "./helpers/server.js";
 
 /** One harness session whose turns finish only when the test says so. */
@@ -124,7 +118,7 @@ async function until(check: () => boolean | Promise<boolean>, what: string) {
   throw new Error(`Timed out waiting for ${what}.`);
 }
 
-async function boot(hermesCapabilities?: Parameters<typeof capabilitiesFixture>[0]) {
+async function boot() {
   const directory = await mkdtemp(join(tmpdir(), "native-harness-e2e-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   vi.stubEnv("WILDBOTS_VAULT_KEY", undefined);
@@ -149,25 +143,12 @@ async function boot(hermesCapabilities?: Parameters<typeof capabilitiesFixture>[
       envVar,
       allowedHarnesses: [harness],
     });
-  const hermesSaves: unknown[] = [];
-  const hermes: Runtime = fakeRuntime({
-    status: async () => ({ connected: true }),
-    capabilities: async () => capabilitiesFixture(hermesCapabilities),
-    listBots: async () => [botFixture({ id: "barn", name: "Barn" })],
-    conversation: async (botId) => conversationFixture({ botId }),
-    saveBot: async (input) => {
-      hermesSaves.push(input);
-      throw new Error("Hermes was asked to create an assistant.");
-    },
-    close: async () => {},
-  });
   const claude = new ScriptedDriver("claude-code", false);
   const codex = new ScriptedDriver("codex", true);
   const server = await composeServerRuntime({
     config,
     store,
-    hermes,
-    files: fileSigner(store.fileKeys(), undefined),
+    files: fileSigner(store.fileKeys()),
     drivers: { "claude-code": claude, codex },
   });
   const { app, macs } = await createApp(config, server.runtime, {
@@ -197,14 +178,13 @@ async function boot(hermesCapabilities?: Parameters<typeof capabilitiesFixture>[
       headers,
       payload: { requestId: randomUUID(), text, attachments },
     });
-  return { app, store, headers, claude, codex, hermesSaves, create, send };
+  return { app, store, headers, claude, codex, create, send };
 }
 
 describe("native harnesses in the live server", () => {
   it("creates a Claude Code assistant natively, queues a busy send, edits it and drains it after the first turn", async () => {
-    const { app, store, headers, claude, hermesSaves, create, send } = await boot();
+    const { app, store, headers, claude, create, send } = await boot();
     const scout = await create("Scout", "claude-code");
-    expect(hermesSaves).toEqual([]);
     expect(store.managedBots.getManagedBot(scout.id)).toMatchObject({
       harness: "claude-code",
       ownerId: "local-one",
@@ -218,7 +198,6 @@ describe("native harnesses in the live server", () => {
       { id: "claude-code", available: true },
     ]);
     expect(bootstrap.bots.map(({ id, harness }) => ({ id, harness }))).toEqual([
-      { id: "barn", harness: "hermes" },
       { id: scout.id, harness: "claude-code" },
     ]);
     expect(bootstrap.bots.find((bot) => bot.id === scout.id)?.capabilities).toMatchObject({
@@ -393,8 +372,8 @@ describe("native harnesses in the live server", () => {
     ]);
   });
 
-  it("refuses an unknown harness instead of creating a Hermes profile", async () => {
-    const { app, headers, hermesSaves } = await boot();
+  it("refuses an unknown harness", async () => {
+    const { app, headers } = await boot();
     const response = await app.inject({
       method: "POST",
       url: "/api/bots",
@@ -409,11 +388,10 @@ describe("native harnesses in the live server", () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: "Choose a registered native harness." });
-    expect(hermesSaves).toEqual([]);
   });
 
-  it("preserves a native bot's saved SQLite avatar even when Hermes reports avatarMetadata supported", async () => {
-    const { app, store, headers, create } = await boot({ avatarMetadata: { supported: true } });
+  it("preserves a native bot's saved SQLite avatar", async () => {
+    const { app, store, headers, create } = await boot();
     const scout = await create("Avatar Scout", "claude-code");
     const savedAvatar = {
       mode: "geometric" as const,
@@ -429,7 +407,7 @@ describe("native harnesses in the live server", () => {
 });
 
 describe("native harness configuration", () => {
-  it("keeps workspaces beside the database unless switched off or in memory, and rejects other values", () => {
+  it("keeps workspaces beside the database unless in memory, and configures fallback when OPENROUTER_API_KEY is set", () => {
     expect(loadConfig({ APP_DATABASE: "/srv/wildbots/app.sqlite" }).nativeHarness).toEqual({
       workspaceRoot: "/srv/wildbots/harness",
     });
@@ -441,10 +419,6 @@ describe("native harness configuration", () => {
     ).toEqual({
       workspaceRoot: "/var/lib/wildbots/harness",
     });
-    expect(
-      loadConfig({ APP_DATABASE: "/srv/wildbots/app.sqlite", WILDBOTS_HARNESS_ENABLED: "false" })
-        .nativeHarness,
-    ).toBeUndefined();
     expect(loadConfig({ APP_DATABASE: ":memory:" }).nativeHarness).toBeUndefined();
     expect(
       loadConfig({
@@ -468,32 +442,18 @@ describe("native harness configuration", () => {
     ).toEqual({
       workspaceRoot: "/srv/wildbots/harness",
     });
-    expect(() => loadConfig({ WILDBOTS_HARNESS_ENABLED: "off" })).toThrow(
-      "WILDBOTS_HARNESS_ENABLED must be true or false",
-    );
   });
 
-  it("refuses a native assistant on a server running only Hermes, before Hermes hears of it", async () => {
+  it("requires WILDBOTS_WORKSPACE_ROOT when running with an in-memory database", async () => {
     const store = new Store(":memory:");
-    const saveBot = vi.fn<Runtime["saveBot"]>(async () => botFixture({ id: "barn" }));
-    const server = await composeServerRuntime({
-      config: {},
-      store,
-      hermes: fakeRuntime({ saveBot, close: async () => {} }),
-      files: fileSigner(store.fileKeys(), undefined),
-      drivers: { "claude-code": new ScriptedDriver("claude-code", false) },
-    });
-    cleanups.push(async () => {
-      await server.runtime.close();
-      store.close();
-    });
-    expect(server.probeHarnesses).toBeUndefined();
-    const input = { name: "Scout", instructions: "", model: "model-1", shared: true };
-    await expect(server.runtime.saveBot({ ...input, harness: "claude-code" })).rejects.toThrow(
-      "This server runs only Hermes assistants.",
-    );
-    expect(saveBot).not.toHaveBeenCalled();
-    await server.runtime.saveBot({ ...input, harness: "hermes" });
-    expect(saveBot).toHaveBeenCalledWith({ ...input, harness: "hermes" });
+    cleanups.push(() => store.close());
+    await expect(
+      composeServerRuntime({
+        config: {},
+        store,
+        files: fileSigner(store.fileKeys()),
+        drivers: { "claude-code": new ScriptedDriver("claude-code", false) },
+      }),
+    ).rejects.toThrow("WILDBOTS_WORKSPACE_ROOT is required");
   });
 });

@@ -1722,7 +1722,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         retryCheckDelays retryCheckKey retryChecks revokeWait rosterFromCache rosterTask routineResult scheduledDraftSave
         scope searchFocusPending selectedBotId selectionGeneration selections senderAvatars sending sendingRequests
         sessionExpired signingIn spotlight staleRosterSince stayHome streamHeardAt submissionChecks suspended todayRequest
-        transcript turns unconfirmedDepartures upgrade uploads viewingBotId widgetSnapshotURL windowGeneration uploads.items
+        transcript turns unconfirmedDepartures uploads viewingBotId widgetSnapshotURL windowGeneration uploads.items
         """.split(whereSeparator: \.isWhitespace).map(String.init))
     /// Each stored property of the store as text. Tasks and closures are handles, not state. Identities, clocks
     /// and dates differ between any two stores, so for those only whether one is set counts.
@@ -3480,67 +3480,6 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(value.bootstrap?.user.id, "two")
     }
 
-    func testHermesUpgradeUsesAuthenticatedAPIAndRejectsAChangedCandidate() async throws {
-        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        await value.upgrade.refresh()
-        XCTAssertEqual(value.upgrade.status?.candidate?.revision, "candidate")
-        XCTAssertEqual(server.requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-native-session")
-        await value.upgrade.install(candidateRevision: "stale-candidate")
-        XCTAssertFalse(server.requests.contains { $0.url?.path == "/api/hermes/upgrade/install" })
-        await value.upgrade.check()
-        XCTAssertEqual(server.requests.last?.url?.path, "/api/hermes/upgrade/check")
-        XCTAssertEqual(server.requests.last?.httpMethod, "POST")
-        await value.upgrade.install(candidateRevision: "candidate")
-        let request = try XCTUnwrap(server.requests.last)
-        XCTAssertEqual(request.url?.path, "/api/hermes/upgrade/install")
-        let body = try XCTUnwrap(FakeExchange.body(request))
-        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
-        XCTAssertEqual(payload["candidateRevision"], "candidate")
-        XCTAssertNotNil(UUID(uuidString: payload["requestId"] ?? ""))
-    }
-
-    func testUncertainUpgradeInstallRequiresAStatusReadAndOlderServersGetUsefulGuidance() async throws {
-        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        await value.upgrade.refresh()
-        server.setUpgradeResponseStatus(503)
-        await value.upgrade.install(candidateRevision: "candidate")
-        XCTAssertTrue(value.upgrade.installUncertain)
-        let requests = server.requests.count
-        await value.upgrade.install(candidateRevision: "candidate")
-        XCTAssertEqual(server.requests.count, requests, "Do not replay an uncertain install")
-        server.setUpgradeResponseStatus(200)
-        await value.upgrade.refresh()
-        XCTAssertFalse(value.upgrade.installUncertain)
-        server.setUpgradeResponseStatus(404)
-        await value.upgrade.refresh()
-        XCTAssertTrue(value.upgrade.error?.contains("update the app server") == true)
-        XCTAssertEqual(value.draft.text, "Send this")
-    }
-
-    func testUpgradeRecoveryFencesStaleOperationsAndDoesNotReplayUncertainRequests() async throws {
-        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        await value.upgrade.refresh()
-        let initialCount = server.requests.count
-        await value.upgrade.control("restart_service", operationId: "stale")
-        await value.upgrade.control("cancel", operationId: "failed-update")
-        XCTAssertEqual(server.requests.count, initialCount)
-        server.setUpgradeResponseStatus(503)
-        await value.upgrade.control("restart_service", operationId: "failed-update")
-        let request = try XCTUnwrap(server.requests.last)
-        XCTAssertEqual(request.url?.path, "/api/hermes/upgrade/control")
-        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(FakeExchange.body(request))) as? [String: String])
-        XCTAssertEqual(payload["action"], "restart_service")
-        XCTAssertEqual(payload["operationId"], "failed-update")
-        XCTAssertNotNil(UUID(uuidString: payload["requestId"] ?? ""))
-        XCTAssertTrue(value.upgrade.installUncertain)
-        let count = server.requests.count
-        await value.upgrade.control("retry", operationId: "failed-update")
-        XCTAssertEqual(server.requests.count, count)
-        server.setUpgradeResponseStatus(200)
-        await value.upgrade.refresh()
-        XCTAssertFalse(value.upgrade.installUncertain)
-    }
-
     func testSelectedAppleSnapshotUsesUploadAndPreservesExistingDraft() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         let snapshot = AppleDeviceSnapshot(capturedAt: Date(), windowStart: Date(), windowEnd: Date(), events: [], reminders: [])
@@ -3639,18 +3578,6 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
             XCTAssertEqual(error.code, "INVALID_RESPONSE"); XCTAssertEqual(error.status, 502)
             XCTAssertTrue(error.message.contains("unreadable response")); XCTAssertEqual(error.detail, "user is missing")
         }
-    }
-
-    func testDelayedUpgradeStatusCannotLeakAcrossAnIdentityChange() async throws {
-        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        let path = "/api/hermes/upgrade"; server.hold(path)
-        let operation = Task { await value.upgrade.refresh() }
-        try await server.waitForHeld(path)
-        server.user = "two"; await value.refreshBootstrap()
-        XCTAssertFalse(value.upgrade.busy)
-        server.release(path); await operation.value
-        XCTAssertNil(value.upgrade.status)
-        XCTAssertNil(value.upgrade.error)
     }
 }
 

@@ -140,12 +140,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var sending: Bool { selectedBotId.map { sendingRequests[$0] != nil } ?? false }
   /// Files on their way into drafts; see `AttachmentUploads.swift`.
   let uploads = AttachmentUploads()
-  /// The household's Hermes update; see `HermesUpgrade.swift`.
-  let upgrade = HermesUpgrade()
   override init() {
     super.init()
     uploads.store = self
-    upgrade.store = self
   }
   var appUnavailable = false { didSet { updateActivity() } }
   /// The open chat whose latest conversation read failed. A fact at once, so actions that need the

@@ -321,7 +321,7 @@ describe("harness", () => {
     ],
   };
 
-  it("stays out of Simple view while Hermes is the only choice, and Advanced shows why", async () => {
+  it("stays out of Simple view while no native harness is available, and Advanced shows all native harnesses", async () => {
     await click("Behavior");
     expect(field()).toBeNull();
     await render({
@@ -333,12 +333,11 @@ describe("harness", () => {
       ["claude-code", true],
       ["grok", true],
       ["pi", true],
-      ["hermes", false],
     ]);
-    expect(field()!.value).toBe("hermes");
+    expect(field()!.value).toBe("antigravity");
   });
 
-  it("keeps a Hermes assistant on Hermes and sends a harness only once it changes", async () => {
+  it("keeps a bot on its current harness and sends a harness only once it changes", async () => {
     await render({ bootstrap: native });
     await click("Behavior");
     expect(options()).toEqual([
@@ -347,9 +346,8 @@ describe("harness", () => {
       ["claude-code", false],
       ["grok", true],
       ["pi", true],
-      ["hermes", false],
     ]);
-    expect(field()!.value).toBe("hermes");
+    expect(field()!.value).toBe("antigravity");
     await editInstructions("New instructions");
     await click("Save changes");
     expect(vi.mocked(write).mock.calls[0][1]).not.toHaveProperty("harness");
@@ -924,7 +922,7 @@ describe("phone navigation", () => {
       ]),
     ).toEqual([
       ["Profile", "Shared with your household"],
-      ["Behavior", "test"],
+      ["Behavior", "Antigravity · test"],
       ["Access", "Logins and approvals"],
       ["Automation", "Scheduled routines"],
       ["Memory & learning", "What it remembers and learns"],

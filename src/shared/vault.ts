@@ -26,7 +26,7 @@ export interface ProfileVault {
   botId: string;
   profile: string;
   scope: "profile";
-  owner: "Hermes";
+  owner: string;
   notice: string;
   items: VaultLogin[];
   sources: VaultSource[];
@@ -72,7 +72,7 @@ export type SecureRequestAnswer = SecureRequestOwner &
   );
 export type VaultRequest =
   | { operation: "overview"; profile: string }
-  | { operation: "add_login"; profile: string; login: AddVaultLogin }
+  | { operation: "add_login"; profile: string; login: AddVaultLogin; actor?: string }
   | { operation: "remove_login"; profile: string; itemId: string }
   | { operation: "source"; profile: string; source: "onepassword" | "bitwarden"; enabled: boolean }
   | { operation: "unlock"; profile: string; source: "onepassword" | "bitwarden"; password: string }

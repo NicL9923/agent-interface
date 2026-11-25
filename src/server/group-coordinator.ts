@@ -499,6 +499,8 @@ export class GroupCoordinator {
       executeTurn: GroupTurnExecutor;
       now?: () => number;
       contextMessages?: number;
+      defaultRecipients?: (room: NativeGroupRoom) => string[];
+      replyThreadId?: (message: NativeGroupMessage) => string | null;
     },
   ) {
     this.now = options.now ?? Date.now;
@@ -600,9 +602,11 @@ export class GroupCoordinator {
     signal: AbortSignal,
   ): Promise<GroupRoundResult> {
     const byId = new Map(members.map((bot) => [bot.id, bot]));
-    const threadId = message.threadId;
+    const threadId = this.options.replyThreadId?.(message) ?? message.threadId;
     const queue: { botId: string; trigger: NativeGroupMessage }[] = (
-      message.mentions.length ? message.mentions : [room.leadBotId]
+      message.mentions.length
+        ? message.mentions
+        : (this.options.defaultRecipients?.(room) ?? [room.leadBotId])
     ).map((botId) => ({ botId, trigger: message }));
     const replies: NativeGroupMessage[] = [];
     let turns = 0;

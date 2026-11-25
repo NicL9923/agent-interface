@@ -5,7 +5,7 @@ import {
   type FileKey,
   type FileKeys,
   type FileSigner,
-} from "./hermes-files.js";
+} from "./file-signer.js";
 import type { StoreDatabase } from "./store-database.js";
 
 const CURRENT = "file_key_current";

@@ -26,10 +26,6 @@
       ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
         && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_TRIGGER_SECRET"] == "1"
     }
-    static var captureUpgradePage: Bool {
-      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
-        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_UPGRADE"] == "1"
-    }
     static var captureConnectionPage: Bool {
       ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
         && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_CONNECTION"] == "1"
@@ -1128,60 +1124,6 @@
         Self.computerControl = body["action"] as? String == "take" ? ["kind": "human", "name": "Local test member", "mine": true] : ["kind": "idle"]
         object = ["available": true, "running": true, "browserReady": true, "label": "Fixture host", "reason": NSNull(),
           "control": Self.computerControl, "terminal": Self.terminalStatus]
-      } else if path.hasPrefix("/api/hermes/upgrade") {
-        if path.hasSuffix("/control") {
-          Self.upgradePhase = "recovering"
-          Self.upgradeReadsRemaining = 1
-        } else if path.hasSuffix("/check") {
-          Self.upgradeOperation = "check"
-          Self.upgradePhase = "qualifying"
-          Self.upgradeReadsRemaining = 1
-        } else if path.hasSuffix("/install") {
-          Self.upgradeOperation = "install"
-          Self.upgradePhase = "installing"
-          Self.upgradeReadsRemaining = 3
-          if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_UNCERTAIN"] == "1" {
-            status = 503
-          }
-        } else if Self.upgradeReadsRemaining > 0 {
-          Self.upgradeReadsRemaining -= 1
-        } else {
-          switch Self.upgradePhase {
-          case "qualifying": Self.upgradePhase = "ready"
-          case "installing": Self.upgradePhase = "verifying"; Self.upgradeReadsRemaining = 1
-          case "verifying": Self.upgradePhase = "succeeded"
-          case "recovering": Self.upgradePhase = "cancelled"
-          default: break
-          }
-        }
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_FAILED"] == "1", Self.upgradePhase == "idle" { Self.upgradePhase = "failed"; Self.upgradeOperation = "install" }
-        let phase = Self.upgradePhase
-        let fixtureChecks: [[String: Any]] = phase == "idle" ? [] : [["id": phase == "failed" ? "restart" : "compatibility", "label": phase == "failed" ? "Restart and verify Hermes" : "App compatibility", "status": phase == "failed" ? "failed" : phase == "qualifying" ? "running" : "passed", "detail": "Explicit simulator fixture, not a real Hermes upgrade."]]
-        let fixtureMessage: String
-        switch phase {
-        case "idle": fixtureMessage = "Check the shared installation for a compatible update."
-        case "succeeded": fixtureMessage = "Fixture update verified. Conversations are preserved."
-        case "ready": fixtureMessage = "The candidate passed compatibility checks."
-        case "failed": fixtureMessage = "The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection."
-        default: fixtureMessage = "The server is \(phase) the fixture installation."
-        }
-        // Real revisions are commit hashes with commit dates; the app leads with the date.
-        let oldRevision: [String: Any] = ["revision": Self.currentRevision, "committedAt": "2026-10-14T16:20:00Z"]
-        let newRevision: [String: Any] = ["revision": Self.candidateRevision, "committedAt": "2026-10-20T18:05:00Z", "notesUrl": "https://example.com/hermes/releases"]
-        let upgrade: [String: Any] = [
-          "available": true, "phase": phase,
-          "current": phase == "succeeded" ? newRevision : oldRevision,
-          "candidate": newRevision,
-          "message": fixtureMessage,
-          "checks": fixtureChecks,
-          "canCheck": ["idle", "ready", "succeeded"].contains(phase),
-          "canInstall": phase == "ready", "canRetry": phase == "failed", "canCancel": phase == "failed" || phase == "qualifying", "canRestartService": phase == "failed", "operationId": "fixture-update", "operation": Self.upgradeOperation, "busyBots": [],
-        ]
-        if status == 503 {
-          object = ["error": "Fixture connection lost during update admission"]
-        } else {
-          object = upgrade
-        }
       } else if path.hasSuffix("/draft") {
         if method == "PUT" { Self.draft = body }
         object = Self.draft

@@ -121,10 +121,24 @@ export interface GroupCatalog {
 }
 export type GroupRequest =
   | { operation: "list" }
-  | { operation: "create"; roomId: string; name: string; members: GroupMember[] }
+  | {
+      operation: "create";
+      roomId: string;
+      name: string;
+      members: GroupMember[];
+      actorId?: string;
+    }
   | { operation: "state"; roomId: string }
   | { operation: "log"; roomId: string; since: number }
-  | { operation: "send"; roomId: string; requestId: string; text: string; threadId: string }
+  | {
+      operation: "send";
+      roomId: string;
+      requestId: string;
+      text: string;
+      threadId: string;
+      actorId?: string;
+      actorName?: string;
+    }
   | { operation: "stop"; roomId: string; requestId: string }
   | {
       operation: "approve";

@@ -431,11 +431,6 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "GET /api/mac/link": "none",
   "DELETE /api/mac/link": "none",
   "POST /api/agent-link/mac": "none",
-  // Busy assistants block an update; another member's private one is not named.
-  "GET /api/hermes/upgrade": "list",
-  "POST /api/hermes/upgrade/check": "list",
-  "POST /api/hermes/upgrade/install": "list",
-  "POST /api/hermes/upgrade/control": "list",
   "POST /api/push/subscriptions/status": "none",
   "POST /api/push/subscriptions": "none",
   "DELETE /api/push/subscriptions": "none",

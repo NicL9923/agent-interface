@@ -13,7 +13,6 @@ import {
 } from "../src/server/bot-access.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
-import { HermesUpgrades } from "../src/server/upgrades.js";
 import { defaultPreferences, type Runtime } from "../src/shared/types.js";
 import { IncompleteCreationError } from "../src/shared/errors.js";
 import { localLogin } from "./helpers/server.js";
@@ -171,16 +170,10 @@ async function setup() {
   const config = loadConfig({
     LOCAL_DEV_AUTH: "true",
     APP_DATABASE: ":memory:",
-    HERMES_UPGRADE_ENABLED: "true",
-    HERMES_UPGRADE_ADMINS: "one@localhost.invalid,two@localhost.invalid",
-    HERMES_UPGRADE_CONFIG: join(directory, "worker.json"),
-    HERMES_UPGRADE_STATE_DIR: directory,
-    HERMES_UPGRADE_PYTHON: "/usr/bin/python3",
   });
   const runtime = runtimeDouble(calls);
   const created = await createApp(config, runtime, {
     background: false,
-    upgrades: new HermesUpgrades(config, runtime, () => {}),
   });
   apps.push(created.app);
   const owner = await localLogin(created.app, origin, "one"),
@@ -417,14 +410,8 @@ describe("private assistants", () => {
         "/api/groups",
         "/api/groups/:roomId",
         "/api/computer",
-        "/api/hermes/upgrade",
       ]),
     );
-    const busy = (await s.app.inject({ url: "/api/hermes/upgrade", headers: s.member })).json()
-      .busyBots;
-    expect(busy, "a private assistant still blocks an update, without its name").toEqual([
-      "An assistant",
-    ]);
     const preferences = (await s.app.inject({ url: "/api/bootstrap", headers: s.member })).json()
       .preferences;
     expect(preferences).toMatchObject({
@@ -804,22 +791,6 @@ describe("private assistants under concurrency and side channels", () => {
     });
     expect([receipt.statusCode, receipt.json().error]).toEqual([404, "Routine not found"]);
     expect(s.calls).toEqual([]);
-  });
-
-  it("names no private assistant's busy state, however many are busy", async () => {
-    const s = await setup();
-    makePrivate(s.store, "legacy");
-    s.runtime.listBots = async () =>
-      Object.entries(names).map(([id, name]) => ({
-        id,
-        name,
-        model: "test",
-        shared: id === "family",
-        activity: id === "family" ? "idle" : "working",
-      }));
-    expect(
-      (await s.app.inject({ url: "/api/hermes/upgrade", headers: s.member })).json().busyBots,
-    ).toEqual(["An assistant"]);
   });
 
   it("refuses routine recipients who would never receive a private assistant's results", async () => {

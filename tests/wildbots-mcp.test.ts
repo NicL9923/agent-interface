@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertBotHandoffAllowed } from "../src/server/credential-policy.js";
-import { fileSigner } from "../src/server/hermes-files.js";
+import { fileSigner } from "../src/server/file-signer.js";
 import {
   createWildbotsMcpServer,
   type McpToolResult,
@@ -58,20 +58,30 @@ function deferred<T>() {
 }
 
 function register(bot: typeof personal, configuration: Partial<ManagedBotRecord> = {}) {
+  if (!store.managedBots.getCredential("mcp-test-key")) {
+    store.managedBots.upsertCredential({
+      id: "mcp-test-key",
+      label: "Test API key",
+      vendor: "openai",
+      kind: "api_key",
+      allowedHarnesses: ["codex", "pi", "claude-code", "grok", "antigravity"],
+      envVar: "OPENAI_API_KEY",
+    });
+  }
   return store.managedBots.upsertManagedBot({
     id: bot.botId,
     name: bot.botId,
     description: "",
     instructions: "",
-    harness: "hermes",
-    model: "",
-    provider: "",
+    harness: "codex",
+    model: "gpt-5.4",
+    provider: "openai",
     reasoning: "",
     speed: "",
     ownerId: bot.ownerId,
     ownerOsUser: "wildbots",
     shared: bot.shared,
-    credentialId: null,
+    credentialId: "mcp-test-key",
     enabledTools: [],
     enabledSkills: [],
     enabledMcpServers: [],

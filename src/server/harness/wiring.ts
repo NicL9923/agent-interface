@@ -1,10 +1,7 @@
-import { InvalidInput } from "../../shared/errors.js";
-import type { BotInput, HarnessOption, Runtime } from "../../shared/types.js";
+import type { HarnessOption, Runtime } from "../../shared/types.js";
 import type { HarnessFallbackConfig } from "../config.js";
-import type { FileSigner } from "../hermes-files.js";
-import { createRuntimeRouter, hermesRuntimeId } from "../runtime-router.js";
+import type { FileSigner } from "../file-signer.js";
 import type { Store } from "../store.js";
-import { asksForNativeHarness } from "../../shared/harness.js";
 import type { HarnessDriver, HarnessDriverId } from "./driver.js";
 import {
   createHarnessRuntime,
@@ -13,25 +10,14 @@ import {
   type HarnessVoiceDelegate,
 } from "./runtime.js";
 
-/** The router ID native harness bots run under. `ManagedBotRepository.runtimeIdForBot` returns it. */
+/** The runtime ID native harness bots run under. */
 export const harnessRuntimeId = "harness";
-
-/**
- * For a server running only Hermes: refuses a new assistant that asks for a native harness, which Hermes would
- * otherwise create as one of its own profiles.
- */
-export const hermesOnlyForNew = (input: BotInput): undefined => {
-  if (asksForNativeHarness(input.harness))
-    throw new InvalidInput("This server runs only Hermes assistants.");
-  return undefined;
-};
 
 /** How long one round of harness probes answers `/api/bootstrap` before the binaries run again. */
 export const HARNESS_PROBE_TTL_MS = 30_000;
 
-export interface CompositeRuntimeOptions {
+export interface ServerHarnessRuntimeOptions {
   store: Store;
-  hermes: Runtime;
   drivers: Partial<Record<HarnessDriverId, HarnessDriver>>;
   workspaceRoot: string;
   files: FileSigner;
@@ -48,8 +34,7 @@ export interface CompositeRuntimeOptions {
   voice?: HarnessVoiceDelegate;
 }
 
-export interface CompositeRuntime {
-  /** Hermes and the native harnesses behind one `Runtime`, routed per assistant. Its `close()` closes both. */
+export interface ServerHarnessRuntime {
   runtime: Runtime;
   harnessRuntime: HarnessRuntime;
   /**
@@ -57,18 +42,16 @@ export interface CompositeRuntime {
    * so it can be handed to a route on its own.
    */
   probeHarnesses: () => Promise<HarnessOption[]>;
-  /** Running queue rows no runtime recovered at startup and the sweep marked interrupted. */
+  /** Running queue rows nothing recovered at startup and the sweep marked interrupted. */
   sweptQueueItems: number;
 }
 
 /**
- * Composes the server's runtime: Hermes stays the default, and every assistant whose managed record names a native
- * harness runs on `HarnessRuntime`. `index.ts` replaces its single-runtime router with `composite.runtime` and hands
- * `composite.probeHarnesses` to the bootstrap route.
+ * Builds the server's native `HarnessRuntime`, sweeps orphaned running queue rows left behind by a
+ * previous crash, and wraps `harnessOptions()` with a short TTL cache for `/api/bootstrap`.
  */
-export function createCompositeRuntime({
+export function createServerHarnessRuntime({
   store,
-  hermes,
   drivers,
   workspaceRoot,
   files,
@@ -78,8 +61,8 @@ export function createCompositeRuntime({
   startScheduler = false,
   fallback,
   voice,
-}: CompositeRuntimeOptions): CompositeRuntime {
-  // Construction recovers each native assistant's claimed row from its recorded outcome, synchronously.
+}: ServerHarnessRuntimeOptions): ServerHarnessRuntime {
+  // Construction recovers each assistant's claimed row from its recorded outcome, synchronously.
   const harnessRuntime = createHarnessRuntime({
     store,
     drivers,
@@ -90,31 +73,19 @@ export function createCompositeRuntime({
     fallback,
     voice,
   });
-  // Whatever is still running belongs to no live dispatcher: an archived assistant, one moved to Hermes, or a row
-  // from before a crash that nothing else reads. Each would hold its assistant's queue shut forever, because a claim
-  // waits for no running row. This runs before the drains the runtime queued as microtasks, so it never touches a
-  // row claimed in this process.
+  // Whatever is still running belongs to no live dispatcher: an archived assistant or a row from before
+  // a crash. Each would hold its assistant's queue shut forever, because a claim waits for no running row.
   const sweptQueueItems = store.queue.markRunningInterrupted();
-
-  const runtime = createRuntimeRouter({
-    runtimes: { [hermesRuntimeId]: hermes, [harnessRuntimeId]: harnessRuntime },
-    defaultRuntime: hermesRuntimeId,
-    runtimeOf: (botId) => store.managedBots.runtimeIdForBot(botId),
-    // An unknown harness goes to HarnessRuntime too, which refuses it, so it never becomes a Hermes profile.
-    runtimeForNew: (input) => (asksForNativeHarness(input.harness) ? harnessRuntimeId : undefined),
-  });
 
   let cached: { at: number; options: HarnessOption[] } | undefined;
   let pending: Promise<HarnessOption[]> | undefined;
 
   return {
-    runtime,
+    runtime: harnessRuntime,
     harnessRuntime,
     sweptQueueItems,
     probeHarnesses: () => {
       if (cached && now() - cached.at < probeTtlMs) return Promise.resolve(cached.options);
-      // Concurrent page loads share one round. A probe that throws comes back as unavailable with a
-      // reason (`HarnessRuntime.harnessOptions`), so a broken binary is cached like any answer.
       pending ??= harnessRuntime
         .harnessOptions()
         .then((options) => {

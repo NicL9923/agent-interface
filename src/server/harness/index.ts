@@ -17,11 +17,11 @@ export {
   type HarnessVoiceDelegate,
 } from "./runtime.js";
 export {
-  createCompositeRuntime,
+  createServerHarnessRuntime,
   harnessRuntimeId,
   HARNESS_PROBE_TTL_MS,
-  type CompositeRuntime,
-  type CompositeRuntimeOptions,
+  type ServerHarnessRuntime,
+  type ServerHarnessRuntimeOptions,
 } from "./wiring.js";
 export * from "./session-coordinator.js";
 export * from "./process-spawn.js";

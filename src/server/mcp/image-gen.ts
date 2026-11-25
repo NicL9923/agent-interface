@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { Conflict } from "../../shared/errors.js";
 import type { FileRef } from "../../shared/types.js";
 import { MAX_UPLOAD_BYTES } from "../../shared/uploads.js";
-import type { FileSigner } from "../hermes-files.js";
+import type { FileSigner } from "../file-signer.js";
 
 export interface ImageGenerationOptions {
   apiKey: string;

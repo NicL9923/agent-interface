@@ -3,24 +3,23 @@ import type { ManagedBotRecord } from "../shared/harness.js";
 import { isGrokTalkVoice } from "../shared/voice.js";
 import type { Config } from "./config.js";
 import { createDirectVoiceService, createGrokVoiceService } from "./direct-voice.js";
+import type { FileSigner } from "./file-signer.js";
 import type { HarnessDriver, HarnessDriverId, HarnessMcpServerSpec } from "./harness/driver.js";
 import { createDefaultHarnessDrivers, type HarnessVoiceDelegate } from "./harness/index.js";
-import { createCompositeRuntime, hermesOnlyForNew } from "./harness/wiring.js";
-import type { FileSigner } from "./hermes-files.js";
+import { createServerHarnessRuntime } from "./harness/wiring.js";
 import { createMacMcpTools, type MacLinkRelay } from "./mcp/mac-tools.js";
 import { createWildbotsMcpServer, type McpToolProvider } from "./mcp/wildbots-mcp.js";
 import { createMemoryMcpTools } from "./memory-learning.js";
-import { createRuntimeRouter, hermesRuntimeId } from "./runtime-router.js";
 import type { MemorySkillsRepository } from "./store-memory.js";
 import type { Store } from "./store.js";
 
 type WildbotsMcp = Awaited<ReturnType<typeof createWildbotsMcpServer>>;
 
-/** The server's runtime and what `createApp` and `index.ts` need from the native harnesses beside it. */
+/** The server's native runtime and what `createApp` and `index.ts` need beside it. */
 export interface ServerRuntime {
   runtime: Runtime;
-  /** For `/api/bootstrap`'s `harnesses`. Absent while native harnesses are off. */
-  probeHarnesses?: () => Promise<HarnessOption[]>;
+  /** For `/api/bootstrap`'s `harnesses`. */
+  probeHarnesses: () => Promise<HarnessOption[]>;
   /** Hands the app's Mac link broker to the Mac tools, which the MCP server needed before the app existed. */
   attachMacs(relay: MacLinkRelay): void;
   /** Running queue rows nothing recovered at startup, for the start-up log. */
@@ -73,35 +72,22 @@ function wildbotsServer(mcp: WildbotsMcp, bot: ManagedBotRecord): HarnessMcpServ
 }
 
 /**
- * Composes the runtime the server runs on. Hermes stays the default. With native harnesses on
- * (`config.nativeHarness`), assistants created on a native harness run on `HarnessRuntime`, which attaches the
- * WildBots MCP server with the memory and Mac tools to each turn. With them off, a new assistant that asks for one
- * is refused instead of becoming a Hermes profile.
+ * Composes the native WildBots runtime: `HarnessRuntime` with the WildBots MCP server (memory, skills,
+ * secrets, Mac tools) and direct OpenAI / xAI Grok voice services.
  */
 export async function composeServerRuntime({
   config,
   store,
-  hermes,
   files,
   drivers = createDefaultHarnessDrivers(),
 }: {
   config: Pick<Config, "nativeHarness">;
   store: Store;
-  hermes: Runtime;
   files: FileSigner;
   drivers?: Partial<Record<HarnessDriverId, HarnessDriver>>;
 }): Promise<ServerRuntime> {
   if (!config.nativeHarness)
-    return {
-      runtime: createRuntimeRouter({
-        runtimes: { [hermesRuntimeId]: hermes },
-        defaultRuntime: hermesRuntimeId,
-        runtimeForNew: hermesOnlyForNew,
-      }),
-      attachMacs: () => {},
-      sweptQueueItems: 0,
-      close: async () => {},
-    };
+    throw new Error("WILDBOTS_WORKSPACE_ROOT is required when running with an in-memory database.");
   let macs: MacLinkRelay | undefined;
   const relay: MacLinkRelay = {
     invoke: async (request) => {
@@ -121,40 +107,24 @@ export async function composeServerRuntime({
     const grokAvailable = grokVoice.status().available;
     const mintRealtime = (input: RealtimeSessionInput) => {
       if (isGrokTalkVoice(input.voice)) return grokVoice.realtimeSession(input);
-      if (openAiDirect) return directVoice.realtimeSession(input);
-      if (hermes.realtimeSession) return hermes.realtimeSession(input);
       return directVoice.realtimeSession(input);
     };
     const voice: HarnessVoiceDelegate = {
-      liveVoice: async () => {
-        if (openAiDirect || grokAvailable) return { supported: true };
-        try {
-          return (await hermes.capabilities()).liveVoice;
-        } catch {
-          return { supported: false, reason: "Live voice is unavailable right now." };
-        }
-      },
-      ...(openAiDirect || grokAvailable || hermes.realtimeSession
-        ? { realtimeSession: mintRealtime }
-        : {}),
+      liveVoice: async () =>
+        openAiDirect || grokAvailable
+          ? { supported: true }
+          : { supported: false, reason: "Configure OPENAI_API_KEY or XAI_API_KEY for live voice." },
+      ...(openAiDirect || grokAvailable ? { realtimeSession: mintRealtime } : {}),
       ...(openAiDirect
         ? {
             transcribeVoice: (botId, input) => directVoice.transcribeVoice(botId, input),
             synthesizeVoice: (botId, text, chosen) =>
               directVoice.synthesizeVoice(botId, text, chosen),
           }
-        : {
-            ...(hermes.transcribeVoice
-              ? { transcribeVoice: (_botId, input) => hermes.transcribeVoice!("default", input) }
-              : {}),
-            ...(hermes.synthesizeVoice
-              ? { synthesizeVoice: (_botId, text) => hermes.synthesizeVoice!("default", text) }
-              : {}),
-          }),
+        : {}),
     };
-    const composite = createCompositeRuntime({
+    const server = createServerHarnessRuntime({
       store,
-      hermes,
       drivers,
       workspaceRoot: config.nativeHarness.workspaceRoot,
       files,
@@ -163,20 +133,13 @@ export async function composeServerRuntime({
       fallback: config.nativeHarness.fallback,
       voice,
     });
-    if (openAiDirect || grokAvailable || hermes.realtimeSession) {
-      Object.defineProperty(composite.runtime, "realtimeSession", {
-        enumerable: true,
-        configurable: true,
-        value: mintRealtime,
-      });
-    }
     return {
-      runtime: composite.runtime,
-      probeHarnesses: composite.probeHarnesses,
+      runtime: server.runtime,
+      probeHarnesses: server.probeHarnesses,
       attachMacs: (broker) => {
         macs = broker;
       },
-      sweptQueueItems: composite.sweptQueueItems,
+      sweptQueueItems: server.sweptQueueItems,
       close: () => mcp.close(),
     };
   } catch (error) {

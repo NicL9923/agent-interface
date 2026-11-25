@@ -353,7 +353,7 @@ extension AppStore {
     sessionExpired = false
     dismissedPolls = []
     renewalAttemptedAt = nil
-    upgrade.reset(); computerStatus = nil; openComputer = nil; openTerminal = nil
+    computerStatus = nil; openComputer = nil; openTerminal = nil
     resetPreferenceSaves()
     listenRequest = nil
     routineResult = nil

@@ -152,6 +152,48 @@ export class SecretRepository {
     return { ...record, scope, name };
   }
 
+  /** Deletes a single stored secret in `scope`. Returns true when a row was removed. */
+  deleteSecret(scope: SecretScope, name: string): boolean {
+    if ((scope.kind === "household" ? scope.id !== "" : !scope.id.trim()) || !name.trim())
+      throw new InvalidInput("A secret requires a scope and name.");
+    return (
+      Number(
+        this.db
+          .prepare("DELETE FROM bot_secrets WHERE scope_kind=? AND scope_id=? AND name=?")
+          .run(scope.kind, scope.id, name).changes,
+      ) > 0
+    );
+  }
+
+  /** Lists and decrypts secrets belonging directly to `scope`, optionally filtered by a name prefix. */
+  listScopeSecrets(
+    scope: SecretScope,
+    prefix?: string,
+  ): { name: string; value: string; createdAt: number; updatedAt: number }[] {
+    if (scope.kind === "household" ? scope.id !== "" : !scope.id.trim())
+      throw new InvalidInput("A secret scope requires an identifier.");
+    const rows = this.db
+      .prepare(
+        "SELECT name,ciphertext,iv,tag,created_at AS createdAt,updated_at AS updatedAt FROM bot_secrets WHERE scope_kind=? AND scope_id=? ORDER BY created_at,name",
+      )
+      .all(scope.kind, scope.id) as (SecretRow & {
+      name: string;
+      createdAt: number;
+      updatedAt: number;
+    })[];
+    const result: { name: string; value: string; createdAt: number; updatedAt: number }[] = [];
+    for (const row of rows) {
+      if (prefix !== undefined && !row.name.startsWith(prefix)) continue;
+      result.push({
+        name: row.name,
+        value: this.decrypt(row, scope, row.name),
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      });
+    }
+    return result;
+  }
+
   private decrypt(row: SecretRow, scope: SecretScope, name: string): string {
     const decipher = createDecipheriv("aes-256-gcm", this.key, row.iv, { authTagLength: 16 });
     decipher.setAAD(associatedData(scope, name));

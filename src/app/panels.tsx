@@ -14,11 +14,6 @@ export const UsagePanel = lazy(() =>
 export const ComputerPanel = lazy(() =>
   import("../components/ComputerPanel").then((module) => ({ default: module.ComputerPanel })),
 );
-export const HermesUpgradePanel = lazy(() =>
-  import("../components/HermesUpgradePanel").then((module) => ({
-    default: module.HermesUpgradePanel,
-  })),
-);
 export const BotDetails = lazy(() =>
   import("./BotDetails").then((module) => ({ default: module.BotDetails })),
 );

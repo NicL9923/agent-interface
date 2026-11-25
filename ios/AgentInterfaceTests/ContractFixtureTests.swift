@@ -235,10 +235,6 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual(overview.frontier, "1"); XCTAssertFalse(overview.hasMore)
     },
     "today-seen": check([String: Bool].self) { XCTAssertEqual($0["ok"], true) },
-    "upgrade": check(UpgradeStatus.self) {
-      XCTAssertEqual($0.title, "Update tested and ready"); XCTAssertEqual($0.candidate?.displayVersion, "0.9.5")
-      XCTAssertEqual($0.checks.first?.status, "passed"); XCTAssertEqual($0.busyBots, ["Household"])
-    },
     "usage-accounts": check(UsageOverview.self) {
       XCTAssertEqual($0.accounts.map(\.provider), ["openai-codex", "openrouter", "custom"]); XCTAssertEqual($0.unavailableBots, ["archive"])
       XCTAssertEqual($0.accounts[0].plan, "Pro"); XCTAssertEqual($0.accounts[0].bankedResets, 2); XCTAssertEqual($0.accounts[0].botIds, ["household", "garden"])

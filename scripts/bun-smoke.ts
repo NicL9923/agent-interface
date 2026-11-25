@@ -63,7 +63,6 @@ try {
     const ready = await (await request("/api/health/ready")).json();
     assert.equal(ready.ok, true);
     assert.equal(ready.checks?.database?.status, "ok");
-    assert.equal(ready.checks?.hermes?.status, "ok");
 
     const { db } = store;
     assert.equal(db.prepare("PRAGMA journal_mode").get()?.journal_mode, "wal");

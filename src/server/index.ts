@@ -3,28 +3,17 @@ import { loadEnvFile } from "node:process";
 import { existsSync } from "node:fs";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { createHermesRuntime } from "./hermes.js";
+import { fileSigner } from "./file-signer.js";
 import { composeServerRuntime } from "./native-harness.js";
 import { Store, schemaVersion } from "./store.js";
-import { fileSigner } from "./hermes-files.js";
 import { safeError } from "./logging.js";
 import { SHUTDOWN_EXIT_MS } from "./shutdown.js";
 if (existsSync(".env")) loadEnvFile(".env");
 const config = loadConfig();
 const store = new Store(config.database);
-// File identifiers are signed with the database's own key. The Hermes token only verifies older ones,
-// and stored ones are re-signed here, before anything reads them, so a token rotation leaves them working.
-const files = fileSigner(store.fileKeys(), config.hermesToken);
+const files = fileSigner(store.fileKeys());
 const references = store.upgradeFileReferences(files);
-const hermes = createHermesRuntime({
-  url: config.hermesUrl,
-  token: config.hermesToken,
-  authMode: config.hermesAuthMode,
-  qualificationFile: config.hermesQualificationFile,
-  files,
-});
-// Hermes stays the default runtime. Assistants on a native harness run beside it unless WILDBOTS_HARNESS_ENABLED=false.
-const server = await composeServerRuntime({ config, store, hermes, files });
+const server = await composeServerRuntime({ config, store, files });
 // pino writes JSON lines to stdout; systemd keeps them in journald.
 const { app, directRoutes, macs } = await createApp(
   { ...config, logLevel: config.logLevel ?? "info" },
