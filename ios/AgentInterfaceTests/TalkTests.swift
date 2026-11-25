@@ -290,6 +290,9 @@ final class TalkPlaybackTests: XCTestCase {
     let request = RealtimeSocket.request(secret: "ek_test", model: "gpt-realtime-2.1")
     XCTAssertEqual(request.url?.absoluteString, "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1")
     XCTAssertEqual(request.allHTTPHeaderFields, ["Authorization": "Bearer ek_test"])
+    let grok = RealtimeSocket.request(secret: "xai_test", model: "grok-voice-latest", wsUrl: "wss://api.x.ai/v1/realtime?model=grok-voice-latest", provider: "xai")
+    XCTAssertEqual(grok.url?.absoluteString, "wss://api.x.ai/v1/realtime?model=grok-voice-latest")
+    XCTAssertEqual(grok.allHTTPHeaderFields, ["Authorization": "Bearer xai_test"])
   }
 }
 

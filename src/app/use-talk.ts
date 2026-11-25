@@ -1,8 +1,46 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, request } from "../client-api";
-import { STOP_SPEECH } from "../shared/voice";
+import { GROK_TALK_WS_URL, STOP_SPEECH } from "../shared/voice";
 import { setTalkLive } from "./talk-live";
 import { TalkLoop, type TalkCaptions, type TalkPhase } from "./talk-loop";
+
+const PCM_SAMPLE_RATE = 24_000;
+
+function downsampleToPcm16(input: Float32Array, inputRate: number): Uint8Array {
+  const ratio = inputRate / PCM_SAMPLE_RATE;
+  const length = Math.max(1, Math.floor(input.length / ratio));
+  const bytes = new Uint8Array(length * 2);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < length; i++) {
+    const start = Math.floor(i * ratio);
+    const end = Math.min(input.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
+    let sum = 0;
+    for (let j = start; j < end; j++) sum += input[j]!;
+    const sample = Math.max(-1, Math.min(1, sum / (end - start)));
+    view.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+  return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+  return btoa(binary);
+}
+
+function base64ToPcmFloats(encoded: string): Float32Array {
+  const binary = atob(encoded);
+  const count = Math.floor(binary.length / 2);
+  const floats = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const lo = binary.charCodeAt(i * 2);
+    const hi = binary.charCodeAt(i * 2 + 1);
+    const raw = lo | (hi << 8);
+    const signed = raw >= 0x8000 ? raw - 0x10000 : raw;
+    floats[i] = signed / 0x8000;
+  }
+  return floats;
+}
 
 export type TalkStatus = "idle" | "connecting" | TalkPhase;
 export interface Talk {
@@ -52,6 +90,13 @@ export function useTalk(botId: string, name: string): Talk {
   const parts = useRef<{
     pc?: RTCPeerConnection;
     channel?: RTCDataChannel;
+    socket?: WebSocket;
+    audioContext?: AudioContext;
+    processor?: ScriptProcessorNode;
+    sourceNode?: MediaStreamAudioSourceNode;
+    playingNodes?: Set<AudioBufferSourceNode>;
+    nextPlayTime?: number;
+    muted?: boolean;
     stream?: MediaStream;
     audio?: HTMLAudioElement;
     loop?: TalkLoop;
@@ -70,6 +115,30 @@ export function useTalk(botId: string, name: string): Talk {
       current.channel.onmessage = current.channel.onclose = null;
       current.channel.close();
     }
+    if (current.socket) {
+      current.socket.onopen =
+        current.socket.onmessage =
+        current.socket.onclose =
+        current.socket.onerror =
+          null;
+      current.socket.close();
+    }
+    if (current.playingNodes) {
+      for (const node of current.playingNodes) {
+        try {
+          node.stop();
+        } catch {
+          /* Already ended. */
+        }
+      }
+      current.playingNodes.clear();
+    }
+    if (current.processor) {
+      current.processor.onaudioprocess = null;
+      current.processor.disconnect();
+    }
+    current.sourceNode?.disconnect();
+    if (current.audioContext) void current.audioContext.close().catch(() => {});
     if (current.pc) {
       current.pc.onconnectionstatechange = current.pc.ontrack = null;
       current.pc.close();
@@ -133,6 +202,132 @@ export function useTalk(botId: string, name: string): Talk {
       }
       const session = await request("POST /bots/:id/talk/session", { params: { id: botId } });
       if (stale()) return;
+      const startLimits = () => {
+        current.started = current.heard = Date.now();
+        current.timer = setInterval(() => {
+          const now = Date.now();
+          if (now - current.started >= TALK_MAX_MS)
+            end("Talk ended after 30 minutes. Start it again to keep talking.");
+          else if (now - current.heard >= TALK_IDLE_MS) end("Talk ended after five quiet minutes.");
+        }, 10_000);
+      };
+      if (session.provider === "xai" || session.wsUrl) {
+        if (typeof WebSocket === "undefined" || typeof AudioContext === "undefined") {
+          fail("Grok Voice needs a browser with WebSocket and Web Audio support.");
+          return;
+        }
+        const wsUrl =
+          session.wsUrl ?? `${GROK_TALK_WS_URL}?model=${encodeURIComponent(session.model)}`;
+        const socket = (current.socket = new WebSocket(wsUrl, [
+          `xai-client-secret.${session.clientSecret}`,
+        ]));
+        const playingNodes = (current.playingNodes = new Set<AudioBufferSourceNode>());
+        current.nextPlayTime = 0;
+        const stopPlayback = () => {
+          for (const node of playingNodes) {
+            try {
+              node.stop();
+            } catch {
+              /* Already ended. */
+            }
+          }
+          playingNodes.clear();
+          current.nextPlayTime = 0;
+        };
+        const loop = (current.loop = new TalkLoop(
+          {
+            send: (event) => {
+              if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
+            },
+            ask: (requestId, text, signal, heard) =>
+              request("POST /bots/:id/talk/ask", {
+                params: { id: botId },
+                body: { requestId, request: text, ...(heard.length ? { heard: [...heard] } : {}) },
+                signal,
+              }),
+            phase: (phase) => {
+              if (!stale()) setStatus(phase);
+            },
+            captions: (next) => {
+              if (!stale()) setCaptions(next);
+            },
+            activity: () => {
+              current.heard = Date.now();
+            },
+            problem: (message) => {
+              if (!stale()) setError(message);
+            },
+            newId: () => crypto.randomUUID(),
+          },
+          name,
+        ));
+        socket.onopen = () => {
+          if (stale()) return;
+          if (session.sessionUpdateJson) socket.send(session.sessionUpdateJson);
+          else if (session.sessionUpdate) socket.send(JSON.stringify(session.sessionUpdate));
+          const ctx = (current.audioContext = new AudioContext({ sampleRate: PCM_SAMPLE_RATE }));
+          void ctx.resume().catch(() => {});
+          const source = (current.sourceNode = ctx.createMediaStreamSource(current.stream!));
+          const processor = (current.processor = ctx.createScriptProcessor(2048, 1, 1));
+          processor.onaudioprocess = (audioEvent) => {
+            if (stale() || current.muted || socket.readyState !== WebSocket.OPEN) return;
+            const samples = audioEvent.inputBuffer.getChannelData(0);
+            const pcm = downsampleToPcm16(samples, ctx.sampleRate);
+            socket.send(
+              JSON.stringify({ type: "input_audio_buffer.append", audio: bytesToBase64(pcm) }),
+            );
+          };
+          source.connect(processor);
+          processor.connect(ctx.destination);
+          setStatus("listening");
+          startLimits();
+        };
+        socket.onmessage = (event) => {
+          if (stale()) return;
+          try {
+            const parsed = JSON.parse(String(event.data)) as {
+              type?: unknown;
+              delta?: unknown;
+              [key: string]: unknown;
+            };
+            if (parsed.type === "input_audio_buffer.speech_started") stopPlayback();
+            if (
+              (parsed.type === "response.output_audio.delta" ||
+                parsed.type === "response.audio.delta") &&
+              typeof parsed.delta === "string" &&
+              current.audioContext
+            ) {
+              const ctx = current.audioContext;
+              const floats = base64ToPcmFloats(parsed.delta);
+              if (floats.length > 0) {
+                const buffer = ctx.createBuffer(1, floats.length, PCM_SAMPLE_RATE);
+                buffer.getChannelData(0).set(floats);
+                const node = ctx.createBufferSource();
+                node.buffer = buffer;
+                node.connect(ctx.destination);
+                const at = Math.max(ctx.currentTime, current.nextPlayTime ?? 0);
+                node.start(at);
+                current.nextPlayTime = at + buffer.duration;
+                playingNodes.add(node);
+                node.onended = () => playingNodes.delete(node);
+              }
+            }
+            loop.handle(parsed);
+          } catch {
+            /* A malformed event changes nothing. */
+          }
+        };
+        socket.onerror = () => {
+          if (!stale())
+            fail(
+              "Could not reach xAI for Grok Voice. Check your connection, then start Talk again.",
+            );
+        };
+        socket.onclose = () => {
+          if (!stale()) fail("The Grok Voice connection closed. Start Talk again.");
+        };
+        return;
+      }
       const pc = (current.pc = new RTCPeerConnection());
       const audio = (current.audio = new Audio());
       audio.autoplay = true;
@@ -215,13 +410,7 @@ export function useTalk(botId: string, name: string): Talk {
       }
       await pc.setRemoteDescription({ type: "answer", sdp: await response.text() });
       if (stale()) return;
-      current.started = current.heard = Date.now();
-      current.timer = setInterval(() => {
-        const now = Date.now();
-        if (now - current.started >= TALK_MAX_MS)
-          end("Talk ended after 30 minutes. Start it again to keep talking.");
-        else if (now - current.heard >= TALK_IDLE_MS) end("Talk ended after five quiet minutes.");
-      }, 10_000);
+      startLimits();
     } catch (cause) {
       if (stale()) return;
       fail(
@@ -256,6 +445,7 @@ export function useTalk(botId: string, name: string): Talk {
     if (!tracks.length) return;
     const next = tracks[0]!.enabled;
     for (const track of tracks) track.enabled = !next;
+    parts.current.muted = next;
     setMuted(next);
   }, []);
   const actions = useMemo(

@@ -24,6 +24,12 @@ struct TalkSession: Decodable, Equatable {
   var expiresAt: Int
   var model: String
   var voice: String
+  /// Voice provider ("openai" or "xai"). Omitted by older servers (defaults to OpenAI).
+  var provider: String? = nil
+  /// Explicit WebSocket URL for WebSocket-based providers such as xAI Grok Voice.
+  var wsUrl: String? = nil
+  /// JSON-encoded `session.update` event sent immediately after opening a Grok Voice WebSocket.
+  var sessionUpdateJson: String? = nil
 }
 /// What the person sees: who is talking, or what the assistant is doing.
 enum TalkPhase: Equatable { case listening, thinking, working, speaking }
@@ -113,10 +119,10 @@ struct TalkCaptions: Equatable {
       you = Self.string(event["transcript"]).trimmingCharacters(in: .whitespacesAndNewlines); assistant = ""; show()
     case "response.created":
       active = true; host.phase(.thinking)
-    case "response.output_audio_transcript.delta":
+    case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
       if assistant.isEmpty || assistantDone { assistant = ""; assistantDone = false }
       assistant += Self.string(event["delta"]); host.phase(.speaking); show()
-    case "response.output_audio_transcript.done":
+    case "response.output_audio_transcript.done", "response.audio_transcript.done":
       if let transcript = event["transcript"] as? String { assistant = transcript }
       assistantDone = true; host.activity(); show()
     case "response.done":

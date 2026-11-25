@@ -5,6 +5,30 @@
   .voice-picker > .muted {
     margin-bottom: 14px;
   }
+  .voice-providers {
+    display: inline-flex;
+    gap: 4px;
+    padding: 3px;
+    margin-bottom: 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--raised);
+  }
+  .voice-providers button {
+    min-height: 36px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .voice-providers button[aria-selected="true"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
   .voice-options {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));

@@ -1,7 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDirectVoiceService, DIRECT_VOICE_UNCONFIGURED } from "../src/server/direct-voice.js";
+import {
+  createDirectVoiceService,
+  createGrokVoiceService,
+  DIRECT_VOICE_UNCONFIGURED,
+  GROK_VOICE_UNCONFIGURED,
+} from "../src/server/direct-voice.js";
 import {
   GroupCoordinator,
   NativeGroupRepository,
@@ -278,6 +283,66 @@ describe("direct OpenAI voice", () => {
       refusal(502, "OpenAI did not return a supported audio reply under 8 MB."),
     );
     expect(JSON.parse(openai.requests[0]!.body.toString()).voice).toBe("marin");
+  });
+});
+
+describe("xAI Grok Voice service", () => {
+  const xai = new FakeOpenAI();
+  const xaiKey = "xai-test-voice-key-5678";
+  const grokSession: RealtimeSessionInput = {
+    voice: "eve",
+    instructions: "You are the speaking voice of Scout.",
+    tools: session.tools,
+  };
+  beforeEach(async () => {
+    xai.requests = [];
+    xai.unexpected = [];
+    xai.routes.clear();
+    await xai.start();
+  });
+  afterEach(async () => {
+    await xai.stop();
+    expect(xai.unexpected).toEqual([]);
+  });
+
+  it("reports unavailable without XAI_API_KEY and refuses before contacting xAI", async () => {
+    const voice = createGrokVoiceService({ env: { XAI_API_KEY: " " }, baseUrl: xai.baseUrl });
+    expect(voice.status()).toEqual({ available: false, reason: GROK_VOICE_UNCONFIGURED });
+    await expect(voice.realtimeSession(grokSession)).rejects.toEqual(
+      refusal(409, GROK_VOICE_UNCONFIGURED),
+    );
+    expect(xai.requests).toEqual([]);
+  });
+
+  it("mints a Grok Voice client secret and returns provider, wsUrl, and sessionUpdate", async () => {
+    xai.routes.set(
+      "POST /v1/realtime/client_secrets",
+      json(200, { value: "xai_ephemeral_secret", expires_at: 1_900_000_500 }),
+    );
+    const voice = createGrokVoiceService({ apiKey: xaiKey, baseUrl: `${xai.baseUrl}/` });
+    const talk = await voice.realtimeSession(grokSession);
+    expect(talk).toMatchObject({
+      clientSecret: "xai_ephemeral_secret",
+      expiresAt: 1_900_000_500,
+      model: "grok-voice-latest",
+      voice: "eve",
+      provider: "xai",
+      wsUrl: "wss://api.x.ai/v1/realtime?model=grok-voice-latest",
+    });
+    expect(talk.sessionUpdate).toMatchObject({
+      type: "session.update",
+      session: {
+        voice: "eve",
+        instructions: grokSession.instructions,
+        turn_detection: { type: "server_vad" },
+        tools: grokSession.tools,
+      },
+    });
+    expect(JSON.parse(talk.sessionUpdateJson!)).toEqual(talk.sessionUpdate);
+    expect(xai.requests[0]!.headers.authorization).toBe(`Bearer ${xaiKey}`);
+    await expect(voice.realtimeSession({ ...grokSession, voice: "marin" })).rejects.toEqual(
+      refusal(400, "Choose one of the supported voices."),
+    );
   });
 });
 

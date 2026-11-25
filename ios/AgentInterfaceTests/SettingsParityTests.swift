@@ -263,7 +263,11 @@ final class SettingsParityTests: XCTestCase {
   }
   func testTalkVoicesMatchTheWebListWithMarinTheDefault() {
     XCTAssertEqual(TalkVoice.all, ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"])
+    XCTAssertEqual(TalkVoice.grokAll, ["eve", "ara", "rex", "sal", "leo"])
     XCTAssertEqual(TalkVoice.default, "marin")
+    XCTAssertEqual(TalkVoice.grokDefault, "eve")
+    XCTAssertEqual(TalkVoice.provider(for: "eve"), .xai)
+    XCTAssertEqual(TalkVoice.provider(for: "marin"), .openai)
     XCTAssertEqual(TalkVoice.title("shimmer"), "Shimmer")
   }
   func testUnavailableLiveTalkNoteNamesTheReasonAndOnlyShowsWhenUnsupported() {

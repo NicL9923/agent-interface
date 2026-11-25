@@ -112,6 +112,7 @@ export class TalkLoop {
         this.host.phase("thinking");
         break;
       case "response.output_audio_transcript.delta":
+      case "response.audio_transcript.delta":
         if (!this.assistant || this.assistantDone) {
           this.assistant = "";
           this.assistantDone = false;
@@ -121,6 +122,7 @@ export class TalkLoop {
         this.show();
         break;
       case "response.output_audio_transcript.done":
+      case "response.audio_transcript.done":
         this.assistant = primitiveText(event.transcript, this.assistant);
         this.assistantDone = true;
         this.host.activity();

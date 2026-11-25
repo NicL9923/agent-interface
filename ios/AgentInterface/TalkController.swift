@@ -94,14 +94,17 @@ import Foundation
     }
   }
 
+  @ObservationIgnored private var pendingSessionUpdate: String?
+
   private func connect(_ session: TalkSession, name: String, run: Int) {
     guard let api else { return }
     let transport = makeTransport()
     let host = Host(controller: self, api: api, botId: botId, run: run, transport: transport)
     self.transport = transport
     self.host = host
+    pendingSessionUpdate = session.sessionUpdateJson
     loop = TalkLoop(host: host, name: name, now: now, sleep: sleep)
-    transport.open(secret: session.clientSecret, model: session.model,
+    transport.open(session: session,
       event: { [weak self] text in self?.receive(text, run: run) },
       closed: { [weak self] message in
         guard let self, generation == run else { return }
@@ -153,13 +156,17 @@ import Foundation
       let event = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     else { return }
     switch event["type"] as? String {
-    case "session.created":
+    case "session.created", "conversation.created":
+      if let update = pendingSessionUpdate {
+        pendingSessionUpdate = nil
+        transport?.send(update)
+      }
       open(run: run)
     case "response.created":
       if let id = (event["response"] as? [String: Any])?["id"] as? String { activeResponses.insert(id) }
     case "response.done":
       if let id = (event["response"] as? [String: Any])?["id"] as? String { activeResponses.remove(id) }
-    case "response.output_audio.delta":
+    case "response.output_audio.delta", "response.audio.delta":
       // Audio still arriving for an item already cut would play its end after a gap.
       let item = event["item_id"] as? String ?? ""
       if let response = event["response_id"] as? String, !item.isEmpty { itemResponses[item] = response }
@@ -199,7 +206,7 @@ import Foundation
     starting?.cancel(); starting = nil
     timer?.cancel(); timer = nil
     loop?.dispose(); loop = nil
-    cutItems = []; itemResponses = [:]; activeResponses = []
+    cutItems = []; itemResponses = [:]; activeResponses = []; pendingSessionUpdate = nil
     host = nil
     transport?.close(); transport = nil
     audio?.stop(); audio = nil
