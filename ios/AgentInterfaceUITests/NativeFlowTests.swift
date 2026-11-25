@@ -180,7 +180,7 @@ import XCTest
     app.openAssistantSettings("Ranch hand")
     XCTAssertFalse(app.buttons["settingsMore"].exists, "No overflow menu")
     let sections = [("profile", "Profile", "Shared with your household"), ("behavior", "Behavior", ""),
-      ("access", "Access", "Connections and logins"), ("automation", "Automation", "Routines, goals, tasks and triggers"),
+      ("access", "Access", "Logins and approvals"), ("automation", "Automation", "Scheduled routines"),
       ("memory", "Memory & learning", "What it remembers and learns")]
     for (id, title, summary) in sections {
       app.showSettingsSections()

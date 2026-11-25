@@ -24,6 +24,8 @@ if [[ "$operation" == live ]]; then
 fi
 # Test selection, repetition and parallelism options apply when the tests run; everything else is a build option.
 has_test_selection=0
+explicit_parallel=""
+has_worker_option=0
 while [[ $operation != build && $# -gt 0 ]]; do
   case "$1" in
     -only-testing:*)
@@ -43,6 +45,10 @@ while [[ $operation != build && $# -gt 0 ]]; do
       if [[ $# -lt 2 ]]; then echo "$1 needs a value" >&2; exit 2; fi
       if [[ $1 == -only-testing && $2 != [-@]* && $2 == *[![:space:]]* ]]; then
         has_test_selection=1
+      elif [[ $1 == -parallel-testing-enabled ]]; then
+        explicit_parallel=$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]')
+      elif [[ $1 == -parallel-testing-worker-count || $1 == -maximum-parallel-testing-workers ]]; then
+        has_worker_option=1
       fi
       test_options+=("$1" "$2"); shift 2 ;;
     *) build_options+=("$1"); shift ;;
@@ -51,6 +57,15 @@ done
 if [[ $operation == test && ${allow_full_suite[0]-} == "" && $has_test_selection == 0 ]]; then
   echo 'iOS test needs an inline test selection. Pass -only-testing:Target/Class/test or --allow-full-suite immediately after test.' >&2
   exit 2
+fi
+default_parallel=0
+full_suite_workers=${IOS_FULL_SUITE_WORKERS:-4}
+if [[ $operation == test && ${allow_full_suite[0]-} == --allow-full-suite && $has_test_selection == 0 && -z "$explicit_parallel" ]]; then
+  if [[ $has_worker_option == 0 && ! $full_suite_workers =~ ^[1-9][0-9]*$ ]]; then
+    echo "IOS_FULL_SUITE_WORKERS must be a positive integer: $full_suite_workers" >&2
+    exit 2
+  fi
+  default_parallel=1
 fi
 cd "$repo_dir"
 # Forward shared fixtures to XCTest, while allowing callers to select an alternate fixture.
@@ -78,6 +93,9 @@ case "$operation" in
   test) lock_scope=(--sim "$simulator_id") ;;
   build) lock_scope=(--build) ;;
 esac
+if [[ $default_parallel == 1 ]]; then
+  lock_scope=()
+fi
 for ((i = 0; i < ${#request_options[@]}; i++)); do
   case "${request_options[i]}" in
     -destination | -parallel-testing-worker-count | -maximum-parallel-testing-workers \
@@ -128,12 +146,25 @@ trap cleanup EXIT
 run_id="${operation}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 result_path=".private/ios-${run_id}.xcresult"
 # Two runs that share derived data delete each other's test plans and overwrite each other's products. The machine
-# lock runs tests on different simulators together, so a test builds in its own simulator's directory. Builds run
-# one at a time on the Mac, and a live run has the Mac to itself. IOS_DERIVED_DATA overrides the choice.
+# lock runs tests on different simulators together, so a test builds in its own simulator's directory. Linked git
+# worktrees share the main checkout's per-simulator directory so fresh worktrees reuse incremental Swift builds
+# under the same simulator lock. Builds run one at a time on the Mac, and a live run has the Mac to itself.
+# IOS_DERIVED_DATA overrides the choice.
+git_common=$(git rev-parse --git-common-dir 2>/dev/null || true)
+common_root="$repo_dir"
+if [[ -n "$git_common" ]]; then
+  if [[ "$git_common" != /* ]]; then git_common="$repo_dir/$git_common"; fi
+  common_root=$(cd "$git_common/.." && pwd)
+fi
+if [[ "$common_root" != "$repo_dir" ]]; then
+  derived_base="$common_root/.private"
+else
+  derived_base=".private"
+fi
 case "$operation" in
-  test) derived_data=${IOS_DERIVED_DATA:-.private/ios-build-$simulator_id} ;;
-  live) derived_data=${IOS_DERIVED_DATA:-.private/ios-live-build} ;;
-  *) derived_data=${IOS_DERIVED_DATA:-.private/ios-build} ;;
+  test) derived_data=${IOS_DERIVED_DATA:-$derived_base/ios-build-$simulator_id} ;;
+  live) derived_data=${IOS_DERIVED_DATA:-$derived_base/ios-live-build} ;;
+  *) derived_data=${IOS_DERIVED_DATA:-$derived_base/ios-build} ;;
 esac
 destination="platform=iOS Simulator,id=$simulator_id"
 if [[ "$operation" == build ]]; then
@@ -148,10 +179,18 @@ if [[ "$operation" == live ]]; then
   # This smoke check refuses non-loopback hosts and servers without explicit local test auth.
   node .agents/tools/native-smoke.mjs http://127.0.0.1:3004
 fi
-# Respect explicit caller settings. Enable Xcode's built-in per-test allowance
-# instead of choosing an unmeasured custom limit for legitimate long tests.
-if [[ " ${test_options[*]-} " != *" -parallel-testing-enabled "* ]]; then
-  test_options+=(-parallel-testing-enabled NO)
+# Respect explicit caller settings. Full-suite runs fan out across cloned simulators by default; focused
+# runs stay serial to avoid simulator clone overhead and keep per-simulator lock sharing. Enable Xcode's
+# built-in per-test allowance instead of choosing an unmeasured custom limit for legitimate long tests.
+if [[ -z "$explicit_parallel" ]]; then
+  if [[ $default_parallel == 1 ]]; then
+    test_options+=(-parallel-testing-enabled YES)
+    if [[ $has_worker_option == 0 ]]; then
+      test_options+=(-parallel-testing-worker-count "$full_suite_workers")
+    fi
+  else
+    test_options+=(-parallel-testing-enabled NO)
+  fi
 fi
 if [[ " ${test_options[*]-} " != *" -test-timeouts-enabled "* ]]; then
   test_options+=(-test-timeouts-enabled YES)

@@ -24,5 +24,12 @@ cd "$repo_dir"
 # diagnostic limits and selected-device cleanup instead of duplicating them.
 IOS_VALIDATION_FRESH=1 TEST_RUNNER_AGENT_INTERFACE_SCREENSHOT_DIR="$output_dir" \
   bash "$repo_dir/.agents/tools/validate-ios.sh" "$simulator_id" test \
-    -only-testing:AgentInterfaceUITests/ScreenshotTourTests
+    -only-testing:AgentInterfaceUITests/ScreenshotTourTests \
+    -only-testing:AgentInterfaceUITests/ConversationDesignTourTests \
+    -only-testing:AgentInterfaceUITests/DetailsAndModelsDesignTourTests \
+    -only-testing:AgentInterfaceUITests/MemoryDesignTourTests \
+    -only-testing:AgentInterfaceUITests/MemoryPartTwoDesignTourTests \
+    -only-testing:AgentInterfaceUITests/MemoryPartThreeDesignTourTests \
+    -only-testing:AgentInterfaceUITests/MemoryRemainingDesignTourTests \
+    -only-testing:AgentInterfaceUITests/AvatarAndSettingsDesignTourTests
 ls "$output_dir"/*.png
