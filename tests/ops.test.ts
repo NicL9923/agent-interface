@@ -1,20 +1,12 @@
 import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { statfs } from "node:fs/promises";
 import { createServer, Socket, type AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import * as webpush from "web-push";
 import { createApp } from "../src/server/app.js";
 import { loadConfig, type Config } from "../src/server/config.js";
@@ -29,7 +21,6 @@ import {
   type StatFs,
 } from "../src/server/health.js";
 import { FailureTracker } from "../src/server/logging.js";
-import type { HermesUpgrades } from "../src/server/upgrades.js";
 import type { Runtime, RuntimeStatus } from "../src/shared/types.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
 
@@ -90,17 +81,14 @@ async function setup(
   env: Record<string, string> = {},
   options: {
     runtime?: Runtime;
-    maintenance?: boolean;
     lines?: string[];
     metadataProbe?: MetadataProbe;
     statfs?: StatFs;
   } = {},
 ) {
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", ...env });
-  const upgrades = { maintenance: () => options.maintenance ?? false } as unknown as HermesUpgrades;
   const result = await createApp(config, options.runtime ?? runtime().value, {
     background: false,
-    upgrades,
     logStream: options.lines
       ? {
           write: (line) => {
@@ -135,13 +123,12 @@ describe("health", () => {
       ok: true,
       checks: {
         database: { status: "ok", detail: "Responding" },
-        hermes: { status: "ok", detail: "Connected" },
         worker: { status: "ok", detail: "Starting" },
         push: { status: "unconfigured", detail: expect.any(String) },
         backup: { status: "unconfigured", detail: "APP_BACKUP_DIR is not set" },
         disk: {
           status: "ok",
-          detail: `100 GB free at ${process.cwd()}; a Hermes update check needs 20 GB`,
+          detail: `100 GB free at ${process.cwd()}; minimum 5 GB`,
         },
         metadataFloor: { status: "unconfigured", detail: "Checked only in production" },
       },
@@ -205,39 +192,6 @@ describe("health", () => {
     expect(response.json().checks.database).toEqual({ status: "fail", detail: "disk I/O error" });
   });
 
-  it("tolerates a short Hermes disconnect and any maintenance window", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const hermes = runtime();
-    hermes.status = { connected: false, detail: "Hermes gateway is restarting." };
-    const { app, worker } = await setup({}, { runtime: hermes.value });
-    let response = await app.inject("/api/health/ready");
-    expect(response.statusCode).toBe(200);
-    expect(response.json().checks.hermes).toEqual({
-      status: "warn",
-      detail: "Disconnected for 0 s: Hermes gateway is restarting.",
-    });
-    vi.setSystemTime(Date.now() + 4 * minute);
-    worker.loop.success();
-    expect((await app.inject("/api/health/ready")).statusCode).toBe(200);
-    vi.setSystemTime(Date.now() + 2 * minute);
-    worker.loop.success();
-    response = await app.inject("/api/health/ready");
-    expect(response.statusCode).toBe(503);
-    expect(response.json().checks.hermes.detail).toMatch(/^Disconnected for 6 min/);
-    hermes.status = { connected: true };
-    expect((await app.inject("/api/health/ready")).statusCode).toBe(200);
-
-    const draining = runtime();
-    draining.status = { connected: false };
-    const { app: maintained } = await setup({}, { runtime: draining.value, maintenance: true });
-    response = await maintained.inject("/api/health/ready");
-    expect(response.statusCode).toBe(200);
-    expect(response.json().checks.hermes).toEqual({
-      status: "unconfigured",
-      detail: "A Hermes update is in progress",
-    });
-  });
-
   it("warns about push failures without failing readiness", async () => {
     const keys = webpush.generateVAPIDKeys();
     const { app, worker } = await setup({
@@ -293,57 +247,45 @@ describe("health", () => {
   });
 
   describe("free disk space", () => {
-    const upgradeEnv = (workerConfig: string) => ({
-      HERMES_UPGRADE_ENABLED: "true",
-      HERMES_UPGRADE_ADMINS: "one@example.test",
-      HOUSEHOLD_EMAILS: "one@example.test",
-      HERMES_UPGRADE_CONFIG: workerConfig,
-      HERMES_UPGRADE_STATE_DIR: join(dirname(workerConfig), "state"),
-      HERMES_UPGRADE_PYTHON: "/usr/bin/python3",
-    });
-    const workerConfig = (contents: string) => {
-      const path = join(temporary(), "worker.json");
-      writeFileSync(path, contents, { mode: 0o600 });
-      return path;
-    };
-
-    it("warns below the worker's own floor on its stage root's filesystem, and alerts administrators", async () => {
+    it("warns below the minimum floor on the database filesystem, and alerts administrators", async () => {
       const directory = temporary();
-      const config = workerConfig(
-        JSON.stringify({ minimumFreeBytes: 30 * GiB, stageRoot: join(directory, "stages") }),
-      );
-      let free = 30 * GiB - 1;
+      const dataDir = join(directory, "data");
+      let free = 5 * GiB - 1;
       const measured: string[] = [];
-      const { app, store, worker, health } = await setup(upgradeEnv(config), {
-        statfs: freeSpace(() => free, measured),
-      });
+      const { app, store, worker, health } = await setup(
+        {
+          APP_DATABASE: join(dataDir, "app.sqlite"),
+          HOUSEHOLD_EMAILS: "one@example.test",
+          INTEGRATION_ADMINS: "one@example.test",
+        },
+        {
+          statfs: freeSpace(() => free, measured),
+        },
+      );
       store.user({ id: "one", name: "One", email: "one@example.test" });
       const ready = async () => {
         worker.loop.success();
         const response = await app.inject("/api/health/ready");
         return [response.statusCode, response.json().checks.disk] as const;
       };
-      // The worker has not created its stage root yet, so the check measures the parent it will be made in.
       expect(await ready()).toEqual([
         200,
-        { status: "warn", detail: `30 GB free at ${directory}; a Hermes update check needs 30 GB` },
+        { status: "warn", detail: `5 GB free at ${dataDir}; minimum 5 GB` },
       ]);
-      expect(measured).toEqual([directory]);
-      // The worker refuses only below its floor.
-      free = 30 * GiB;
+      expect(measured).toEqual([dataDir]);
+      free = 5 * GiB;
       expect((await ready())[1].status).toBe("ok");
-      free = 31.5 * GiB;
-      mkdirSync(join(directory, "stages"));
+      free = 12.5 * GiB;
       expect(await ready()).toEqual([
         200,
         {
           status: "ok",
-          detail: `31.5 GB free at ${join(directory, "stages")}; a Hermes update check needs 30 GB`,
+          detail: `12.5 GB free at ${dataDir}; minimum 5 GB`,
         },
       ]);
 
       // Low disk reaches the same administrators as push and backup problems.
-      free = 9.5 * GiB;
+      free = 2.5 * GiB;
       const start = Date.now();
       const at = async (offset: number) => {
         worker.loop.success(start + offset);
@@ -358,7 +300,7 @@ describe("health", () => {
         [`health:disk:${start}`, "one"],
       ]);
       expect(JSON.parse(alerts[0].payload).body).toBe(
-        `Free disk space needs attention. 9.5 GB free at ${join(directory, "stages")}; a Hermes update check needs 30 GB`,
+        `Free disk space needs attention. 2.5 GB free at ${dataDir}; minimum 5 GB`,
       );
     });
 
@@ -376,31 +318,6 @@ describe("health", () => {
       expect(response.json().checks.disk).toEqual({
         status: "warn",
         detail: `Cannot measure free space at ${process.cwd()}: EIO`,
-      });
-    });
-
-    it.each([
-      [
-        "is unreadable",
-        () => {
-          const path = workerConfig("{}");
-          chmodSync(path, 0o000);
-          return path;
-        },
-        "EACCES",
-      ],
-      ["is not JSON", () => workerConfig("{"), "it is not valid JSON"],
-      ["is not an object", () => workerConfig("null"), "it is not a JSON object"],
-      [
-        "sets a floor that is not a number",
-        () => workerConfig(JSON.stringify({ minimumFreeBytes: "20000000000", stageRoot: "/" })),
-        "its minimumFreeBytes is not a number",
-      ],
-    ])("warns with the default floor when the worker's configuration %s", async (_, path, why) => {
-      const { app } = await setup(upgradeEnv(path()));
-      expect((await app.inject("/api/health/ready")).json().checks.disk).toEqual({
-        status: "warn",
-        detail: `Cannot read the Hermes update worker's configuration (${why}), so this assumes its 20 GB default. 100 GB free at ${process.cwd()}; a Hermes update check needs 20 GB`,
       });
     });
   });
@@ -512,16 +429,15 @@ describe("health", () => {
   });
 
   it("alerts administrators once after ten minutes and again on recovery", async () => {
-    const hermes = runtime();
-    hermes.status = { connected: false, detail: "Hermes is unreachable." };
+    let free = 2 * GiB;
     const lines: string[] = [];
     const { store, worker, health } = await setup(
       {
         HOUSEHOLD_EMAILS: "one@example.test,two@example.test",
-        HERMES_INTEGRATION_ADMINS: "one@example.test",
+        INTEGRATION_ADMINS: "one@example.test",
         LOG_LEVEL: "info",
       },
-      { runtime: hermes.value, lines },
+      { lines, statfs: freeSpace(() => free) },
     );
     for (const id of ["one", "two"]) store.user({ id, name: id, email: `${id}@example.test` });
     const alerts = () =>
@@ -541,31 +457,24 @@ describe("health", () => {
     await at(10 * minute);
     await at(11 * minute);
     expect(alerts().map((row) => [row.event_id, row.user_id])).toEqual([
-      [`health:hermes:${start}`, "one"],
+      [`health:disk:${start}`, "one"],
     ]);
     expect(JSON.parse(alerts()[0].payload)).toMatchObject({
       title: "WildBots needs attention",
       url: "/",
       kind: "failed",
-      body: expect.stringMatching(
-        /^The Hermes connection needs attention\. Disconnected for 10 min: Hermes is unreachable\./,
-      ),
+      body: expect.stringMatching(/^Free disk space needs attention\. 2 GB free/),
     });
-    // A maintenance window cannot close an existing incident.
-    const maintenance = vi.spyOn(health["deps"], "maintenance").mockReturnValue(true);
-    await at(12 * minute);
-    expect(alerts()).toHaveLength(1);
-    maintenance.mockReturnValue(false);
-    hermes.status = { connected: true };
+    free = 100 * GiB;
     await at(12 * minute);
     await at(13 * minute);
     expect(alerts().map((row) => row.event_id)).toEqual([
-      `health:hermes:${start}`,
-      `health:hermes:${start}:recovered`,
+      `health:disk:${start}`,
+      `health:disk:${start}:recovered`,
     ]);
     expect(JSON.parse(alerts()[1].payload)).toMatchObject({
       title: "WildBots recovered",
-      body: "The Hermes connection is working again.",
+      body: "Free disk space is working again.",
       kind: "failed",
     });
     const messages = lines.map((line) => JSON.parse(line).msg);
@@ -575,14 +484,14 @@ describe("health", () => {
       "Readiness check recovered",
     ]);
     // A later outage is a new incident with its own alert.
-    hermes.status = { connected: false };
+    free = 2 * GiB;
     await at(20 * minute);
     await at(30 * minute);
     expect(
       alerts()
         .map((row) => row.event_id)
         .at(-1),
-    ).toBe(`health:hermes:${start + 20 * minute}`);
+    ).toBe(`health:disk:${start + 20 * minute}`);
   });
 });
 

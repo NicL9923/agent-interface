@@ -127,12 +127,10 @@ describe("configuration", () => {
   it("accepts only a generated key of its own", () => {
     expect(loadConfig({}).macLinkKey).toBeUndefined();
     expect(loadConfig({ MAC_LINK_KEY: key }).macLinkKey).toBe(key);
-    for (const env of [
-      { MAC_LINK_KEY: "short" },
-      { MAC_LINK_KEY: key.slice(0, 42) + "!" },
-      { MAC_LINK_KEY: key, HERMES_TOKEN: key },
-    ])
-      expect(() => loadConfig(env)).toThrow("MAC_LINK_KEY must be its own");
+    for (const env of [{ MAC_LINK_KEY: "short" }, { MAC_LINK_KEY: key.slice(0, 42) + "!" }])
+      expect(() => loadConfig(env)).toThrow(
+        "MAC_LINK_KEY must be a generated 32-byte base64url key",
+      );
   });
 });
 

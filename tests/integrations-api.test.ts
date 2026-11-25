@@ -3,7 +3,6 @@ import { randomBytes } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
-import { HermesUpgrades } from "../src/server/upgrades.js";
 import type { IntegrationRequest } from "../src/shared/integrations.js";
 import { fakeRuntime, signIn } from "./helpers/server.js";
 
@@ -32,14 +31,12 @@ async function setup() {
         },
   );
   const runtime = fakeRuntime({ integrationRequest, close: async () => {} });
-  const upgrades = new HermesUpgrades(config, runtime);
-  const result = await createApp(config, runtime, { background: false, upgrades });
+  const result = await createApp(config, runtime, { background: false });
   apps.push(result.app);
   return {
     ...result,
     runtime,
     integrationRequest,
-    upgrades,
     admin: signIn(result.store, origin, "admin"),
     member: signIn(result.store, origin, "member"),
   };
@@ -189,23 +186,6 @@ it("accepts the public Google return only as a fixed-origin callback and never e
   ).toBe(400);
 });
 
-it("keeps inventory readable during updates while stopping connection changes before dispatch", async () => {
-  const s = await setup();
-  vi.spyOn(s.upgrades, "maintenance").mockReturnValue(true);
-  expect(
-    (await s.app.inject({ url: "/api/integrations?profile=ranch", headers: s.admin })).statusCode,
-  ).toBe(200);
-  const response = await s.app.inject({
-    method: "POST",
-    url: "/api/integrations/google_workspace/disconnect",
-    headers: s.admin,
-    payload: { profile: "ranch" },
-  });
-  expect(response.statusCode).toBe(409);
-  expect(response.json().code).toBe("hermes_maintenance");
-  expect(s.integrationRequest).toHaveBeenCalledTimes(1);
-});
-
 it("explains a missing integration add-on without attempting a connection change", async () => {
   const s = await setup();
   delete s.runtime.integrationRequest;
@@ -242,8 +222,7 @@ describe("assistant connection requests", () => {
         { id: "ranch", name: "Ranch hand", shared: true, model: "test", activity: "idle" },
       ],
     });
-    const upgrades = new HermesUpgrades(config, runtime);
-    const result = await createApp(config, runtime, { background: false, upgrades });
+    const result = await createApp(config, runtime, { background: false });
     apps.push(result.app);
     return {
       ...result,
@@ -334,38 +313,5 @@ describe("assistant connection requests", () => {
       ).statusCode,
     ).toBe(404);
     expect(s.connectionRequest).not.toHaveBeenCalled();
-  });
-
-  it("matches the Hermes add-on's method and requestable IDs, and keeps the ask open", async () => {
-    const { readFile } = await import("node:fs/promises");
-    const { connectionRequestMethod, requestableConnectionId } =
-      await import("../src/shared/integrations.js");
-    const source = await readFile(
-      new URL("../src/hermes/integrations.py", import.meta.url),
-      "utf8",
-    );
-    expect(source).toContain(`CONNECTION_REQUEST = "${connectionRequestMethod}"`);
-    // The Python formatter wraps the long pattern onto its own line.
-    expect(source.replace(/re\.compile\(\s+/g, "re.compile(").replace(/"\s+\)/g, '")')).toContain(
-      `REQUESTABLE = re.compile(r"${requestableConnectionId.source.slice(1, -1)}")`,
-    );
-    expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(
-      `CONNECTION_REQUEST = "${connectionRequestMethod}"`,
-    );
-    const { applyFrame, emptyLiveState } = await import("../src/server/hermes-mapping.js");
-    const state = emptyLiveState();
-    expect(
-      applyFrame(
-        state,
-        {
-          jsonrpc: "2.0",
-          id: "srq-conn",
-          method: connectionRequestMethod,
-          params: { session_id: "s", connection: "github", reason: "r" },
-        },
-        1,
-      ),
-    ).toBe(true);
-    expect(state.state).toBe("blocked");
   });
 });

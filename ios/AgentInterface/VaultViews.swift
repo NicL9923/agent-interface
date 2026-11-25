@@ -14,7 +14,7 @@ struct VaultLogin: Codable, Identifiable {
 }
 extension VaultLogin {
   /// Where the login lives, worded like the web panel.
-  var backendLabel: String { backend == "local" ? "Hermes vault" : backend == "onepassword" ? "1Password" : "Bitwarden" }
+  var backendLabel: String { backend == "local" ? "WildBots vault" : backend == "onepassword" ? "1Password" : "Bitwarden" }
 }
 struct VaultSource: Codable, Identifiable {
   var name: String
@@ -29,7 +29,7 @@ struct VaultSource: Codable, Identifiable {
   var id: String { name }
   var statusText: String {
     if !installed { return "CLI is not installed" }
-    if name == "local" { return "Available to Hermes in this profile" }
+    if name == "local" { return "Available to this assistant" }
     if !enabled { return "Disabled" }
     return unlocked ? "Unlocked for this profile" : "Locked"
   }

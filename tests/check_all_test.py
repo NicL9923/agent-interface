@@ -567,7 +567,6 @@ class PythonDecisionTest(TempCase):
     def test_which_paths_count_as_python(self):
         cases = [
             ("a Python file", ["tests/x_test.py"], True),
-            ("the Hermes add-on", ["src/hermes/journal.txt"], True),
             ("a script", ["scripts/build-worker.mjs"], True),
             (
                 "a web-only change",
@@ -1009,10 +1008,9 @@ class PythonInputsTest(unittest.TestCase):
         self.assertGreaterEqual(
             set(reads),
             {
-                "src/shared/voice.ts",
-                "public/voice-previews",
                 ".agents/tools/validate-ios.sh",
-                "src/hermes/voice.py",
+                ".agents/tools/metadata-egress-floor.py",
+                "scripts/run-python-tests.py",
             },
         )
         uncovered = []

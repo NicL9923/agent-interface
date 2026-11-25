@@ -199,45 +199,6 @@ import XCTest
     XCTAssertTrue(app.buttons["avatarPreviewState"].canTap, "The avatar stays in view while scrolling")
     XCTAssertTrue(app.buttons["saveChanges"].exists)
   }
-  func testNativeUpgradeQualificationAndUncertainInstallRecovery() {
-    let app = app(upgradeUncertain: true)
-    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
-    app.openSettingsFromProfileMenu()
-    for _ in 0..<5 {
-      if app.buttons["Hermes updates"].canTap { break }
-      app.swipeUp()
-    }
-    app.buttons["Hermes updates"].tap()
-    XCTAssertTrue(app.buttons["checkHermesUpdate"].waitForExistence(timeout: 10))
-    XCTAssertFalse(app.buttons["installHermesUpdate"].exists)
-    app.buttons["checkHermesUpdate"].tap()
-    XCTAssertTrue(app.staticTexts["Testing the update"].waitForExistence(timeout: 5))
-    XCTAssertEqual(app.descendants(matching: .any)["upgradeStep.Test in a copy"].label, "Test in a copy: in progress")
-    XCTAssertEqual(app.descendants(matching: .any)["upgradeStep.Install"].label, "Install: not started")
-    XCTAssertTrue(app.buttons["stopHermesCheck"].exists, "A running check can be stopped without confirmation")
-    XCTAssertFalse(app.buttons["cancelHermesUpdate"].exists, "Cancel and retry belong to installs")
-    screenshot(app, "Fixture native Hermes qualification")
-    XCTAssertTrue(app.buttons["installHermesUpdate"].waitForExistence(timeout: 10))
-    screenshot(app, "Fixture native Hermes update ready")
-    app.buttons["installHermesUpdate"].tap()
-    XCTAssertTrue(app.staticTexts["Update the household's Hermes installation?"].waitForExistence(timeout: 5))
-    // The dialog's own button: the one that opened it has the same label and stays in the tree behind it.
-    let install = app.sheets.buttons["Install update"]
-    XCTAssertTrue(install.waitForExistence(timeout: 5)); install.tap()
-    // The form is lazy, and the error's row sits below the version list and the actions, past the fold.
-    let refresh = app.buttons["refreshHermesUpdate"]
-    for _ in 0..<6 { if refresh.waitForExistence(timeout: 1) { break }; app.swipeUp() }
-    XCTAssertTrue(refresh.exists)
-    XCTAssertFalse(app.buttons["installHermesUpdate"].isEnabled)
-    screenshot(app, "Fixture native uncertain Hermes update")
-    app.buttons["refreshHermesUpdate"].tap()
-    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label IN %@", ["Installing the update", "Making sure everything works"])).firstMatch.waitForExistence(timeout: 5))
-    screenshot(app, "Fixture native Hermes install progress")
-    XCTAssertTrue(app.staticTexts["Hermes is up to date"].waitForExistence(timeout: 15))
-    XCTAssertFalse(app.buttons["installHermesUpdate"].exists)
-    screenshot(app, "Fixture native Hermes verified")
-  }
   func testComposerAttachMenuAndAdvancedModelSwitch() {
     var app = app()
     let composer = app.textViews["messageComposer"]
@@ -297,27 +258,6 @@ import XCTest
     app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "web_search")).firstMatch.tapWhenReady()
     XCTAssertTrue(app.staticTexts["{\"query\":\"Texas ranch weather forecast\"}"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture native live activity and exposed tool details")
-  }
-  func testNativeFailedUpdateOffersGuardedRecovery() {
-    let app = app(upgradeFailed: true)
-    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
-    app.openSettingsFromProfileMenu()
-    for _ in 0..<6 { if app.buttons["Hermes updates"].canTap { break }; app.swipeUp() }
-    app.buttons["Hermes updates"].tap()
-    XCTAssertTrue(app.buttons["restartHermesService"].waitForExistence(timeout: 10))
-    XCTAssertTrue(app.staticTexts["The update couldn't finish"].exists)
-    XCTAssertTrue(app.buttons["retryHermesUpdate"].exists, "Retry is offered for a failed install")
-    XCTAssertEqual(app.descendants(matching: .any)["upgradeStep.Install"].label, "Install: stopped")
-    // The failed check is the restart that should have brought Hermes back.
-    for _ in 0..<5 { if app.staticTexts["Restart and verify Hermes"].exists { break }; app.swipeUp() }
-    XCTAssertTrue(app.staticTexts["Restart and verify Hermes"].exists, "Test details open on their own after a failure")
-    screenshot(app, "Native failed update recovery fixture")
-    app.buttons["restartHermesService"].tap()
-    XCTAssertTrue(app.staticTexts["Restart the Hermes service and check the connection? This may briefly disconnect everyone."].waitForExistence(timeout: 5))
-    app.buttons["Yes, restart Hermes"].tapWhenReady()
-    XCTAssertTrue(app.staticTexts["Restoring the connection"].waitForExistence(timeout: 5))
-    screenshot(app, "Native service recovery progress fixture")
   }
   private func screenshot(_ app: XCUIApplication, _ name: String) {
     let attachment = XCTAttachment(screenshot: app.screenshot())

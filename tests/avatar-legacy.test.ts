@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { bot } from "../src/server/hermes-mapping";
 import { Store } from "../src/server/store";
 import { currentAvatar, legacyMascots } from "../src/shared/avatar-legacy";
 import { avatarShapes, type Avatar } from "../src/shared/types";
@@ -83,14 +82,6 @@ it("returns anything that is not a mascot exactly as it was", () => {
   const portrait = { mode: "portrait", src: "/api/files/a", origin: "uploaded" };
   for (const value of [geometric, portrait, undefined, null, "mascot", 7, { mode: "hologram" }])
     expect(currentAvatar(value)).toBe(value);
-});
-
-// The two places a mascot is still stored: Hermes profile metadata, and this app's own store for
-// a Hermes that keeps none. Both hand it to every client as its shape.
-it("reads a mascot kept in Hermes profile metadata as its shape", () => {
-  const row = { name: "garden", ui_meta: { agent_interface: { avatar: mascot("sprout") } } };
-  expect(bot(row, "idle").avatar).toMatchObject({ mode: "geometric", shape: "sprout" });
-  expect(bot({ name: "plain" }, "idle").avatar).toBeUndefined();
 });
 
 it("reads a mascot kept in the app's store as its shape", () => {

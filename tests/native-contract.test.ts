@@ -16,7 +16,6 @@ import { isDeepStrictEqual } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
-import type { HermesUpgrades } from "../src/server/upgrades.js";
 import type {
   GroupCatalog,
   GroupContext,
@@ -51,7 +50,6 @@ import type {
   Tool,
   ToolCall,
 } from "../src/shared/types.js";
-import type { UpgradeStatus } from "../src/shared/upgrades.js";
 import type { ProfileVault } from "../src/shared/vault.js";
 import type { VoiceTranscript } from "../src/shared/voice.js";
 import { requireSecondLoopback, SECOND_LOOPBACK } from "./helpers/loopback.js";
@@ -841,41 +839,6 @@ const transcript = {
   text: " Add basil to the list. ",
   provider: "whisper",
 } satisfies VoiceTranscript;
-const upgrade = {
-  available: true,
-  phase: "ready",
-  message: "Hermes 0.9.5 passed qualification.",
-  canCheck: true,
-  canInstall: true,
-  canRetry: false,
-  canCancel: true,
-  canRestartService: false,
-  current: {
-    revision: "1".repeat(40),
-    version: "0.9.4",
-    notesUrl: "https://hermes.example.test/releases/0.9.4",
-  },
-  candidate: {
-    revision: "2".repeat(40),
-    version: "0.9.5",
-    notesUrl: "https://hermes.example.test/releases/0.9.5",
-  },
-  checks: [
-    {
-      id: "integration",
-      label: "Real integration",
-      status: "passed",
-      detail: "All add-on checks passed.",
-    },
-  ],
-  controlRequestId: ids.control,
-  controlAction: "cancel",
-  operationId: ids.operation,
-  error: "previous_attempt_failed",
-  checkedAt: at("11:45"),
-  updatedAt: at("11:46"),
-  busyBots: ["Household"],
-} satisfies UpgradeStatus;
 const event = {
   id: "event-dinner",
   botId: "household",
@@ -1105,11 +1068,6 @@ const runtime = {
   }),
   close: async () => {},
 } satisfies Runtime;
-const upgrades: Pick<HermesUpgrades, "status" | "maintenance" | "revisionDate"> = {
-  status: async () => upgrade,
-  maintenance: () => false,
-  revisionDate: () => undefined,
-};
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Replaces values that differ per run. The frozen clock already fixes server timestamps. */
@@ -1160,7 +1118,6 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
   const { app, store, directRoutes } = await createApp(config, runtime, {
     background: false,
     sendApns: async () => {},
-    upgrades: upgrades as HermesUpgrades,
     directAddresses: () => [
       { kind: "tailnet", address: SECOND_LOOPBACK },
       { kind: "lan", address: "127.0.0.1" },
@@ -1483,7 +1440,6 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
       token: "fixture-token",
     });
 
-    await record("upgrade", "GET", "/api/hermes/upgrade");
     await record("push-config", "GET", "/api/native/push/config");
     // Listeners take any free port and make a new key each run, so both are normalized.
     await record("native-routes", "GET", "/api/native/routes");

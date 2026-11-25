@@ -26,8 +26,7 @@
   `tests/workflows.test.ts` allows no other image and fails when its version is not the installed
   `@playwright/test` or its digest is not the one `.github/playwright-image-digests.json` records for
   that version. A Playwright upgrade adds the new digest there and changes the tag and digest in `checks.yml`.
-- CI does not replace `check-all`: the Mac mini still runs the native iOS checks, and CI never
-  runs the `scripts/spike/*` probes that host qualification runs.
+- CI does not replace `check-all`: the Mac mini still runs the native iOS checks.
 
 # Staged checks
 
@@ -58,15 +57,3 @@ The global Testing rules apply in full. The ones this repo has tripped on, resta
   goes red before it is committed. Record the run in `docs/ledger/`.
 - Python red runs go through `python3 .agents/tools/mutate-py.py`. It clears the stale
   bytecode that a hand edit and `git checkout` leave behind, and restores the file byte for byte.
-
-# Production host
-
-- Read Hermes source on the production host with `cat`, `sed` or `grep` only.
-  Never run `git` in its Hermes checkout (`~/.hermes/hermes-agent`), not even
-  `git log` or `git show`. It is a `tree:0` partial clone: a history command
-  fetches missing objects lazily and can start an automatic repack, and the
-  host's git 2.43 drops objects from such a repack. Release qualification then
-  fails on the missing objects. This happened on October 14 and again on
-  November 9, when a reviewer's history read removed 42 objects and blocked a
-  release until they were restored. Read history from a local clone of
-  upstream instead.

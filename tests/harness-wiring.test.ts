@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import type {
@@ -9,15 +9,9 @@ import type {
   HarnessDriverId,
   HarnessProbeResult,
 } from "../src/server/harness/driver.js";
-import { createCompositeRuntime } from "../src/server/harness/wiring.js";
-import { fileSigner } from "../src/server/hermes-files.js";
+import { createServerHarnessRuntime } from "../src/server/harness/wiring.js";
+import { fileSigner } from "../src/server/file-signer.js";
 import { Store } from "../src/server/store.js";
-import { fakeRuntime } from "./helpers/fake-runtime.js";
-import {
-  botFixture,
-  capabilitiesFixture,
-  conversationFixture,
-} from "./helpers/runtime-fixtures.js";
 import { localLogin } from "./helpers/server.js";
 
 /** A native harness that only answers probes. Opening a session means the test routed a turn it should not have. */
@@ -60,7 +54,7 @@ afterEach(async () => {
 });
 
 /** With `appOwnsStore`, the test hands the store to `createApp`, whose `close()` closes it and the runtime. */
-async function setup(hermesMembers: Parameters<typeof fakeRuntime>[0] = {}, appOwnsStore = false) {
+async function setup(appOwnsStore = false) {
   const directory = await mkdtemp(join(tmpdir(), "harness-wiring-"));
   const store = new Store(":memory:");
   cleanups.push(async () => {
@@ -71,17 +65,16 @@ async function setup(hermesMembers: Parameters<typeof fakeRuntime>[0] = {}, appO
   const grok = new ProbeOnlyDriver("grok");
   let clock = 1_000;
   const compose = () => {
-    const composite = createCompositeRuntime({
+    const server = createServerHarnessRuntime({
       store,
-      hermes: fakeRuntime({ close: async () => {}, ...hermesMembers }),
       drivers: { codex, grok },
       workspaceRoot: join(directory, "sandbox"),
-      files: fileSigner(store.fileKeys(), undefined),
+      files: fileSigner(store.fileKeys()),
       probeTtlMs: 30_000,
       now: () => clock,
     });
-    if (!appOwnsStore) cleanups.push(() => composite.runtime.close());
-    return composite;
+    if (!appOwnsStore) cleanups.push(() => server.runtime.close());
+    return server;
   };
   const advance = (ms: number) => {
     clock += ms;
@@ -92,7 +85,7 @@ async function setup(hermesMembers: Parameters<typeof fakeRuntime>[0] = {}, appO
 /** A personal Codex assistant owned by `ownerId`, saved through the native runtime the way the app saves one. */
 async function nativeBot(
   store: Store,
-  harnessRuntime: ReturnType<typeof createCompositeRuntime>["harnessRuntime"],
+  harnessRuntime: ReturnType<typeof createServerHarnessRuntime>["harnessRuntime"],
   ownerId: string,
 ) {
   store.user({ id: ownerId, name: ownerId, email: `${ownerId}@example.invalid` });
@@ -121,7 +114,7 @@ function claim(store: Store, botId: string, requestId: string, runId: string) {
   return store.queue.claimNext(botId, runId);
 }
 
-describe("createCompositeRuntime startup", () => {
+describe("createServerHarnessRuntime startup", () => {
   it("interrupts a running row no runtime recovers, so the next message on that queue can start", async () => {
     const { store, compose } = await setup();
     expect(claim(store, "barn", "crashed", "crashed-run")).toMatchObject({ status: "running" });
@@ -169,18 +162,9 @@ describe("createCompositeRuntime startup", () => {
   });
 });
 
-describe("createCompositeRuntime routing", () => {
-  it("lists Hermes and native assistants on /bots and sends each assistant's calls to its own runtime", async () => {
-    const conversation = vi.fn(async (botId: string) => conversationFixture({ botId }));
-    const { store, compose } = await setup(
-      {
-        status: async () => ({ connected: true }),
-        capabilities: async () => capabilitiesFixture(),
-        listBots: async () => [botFixture({ id: "barn", name: "Barn" })],
-        conversation,
-      },
-      true,
-    );
+describe("createServerHarnessRuntime routing", () => {
+  it("lists native assistants on /bots and reads their conversations", async () => {
+    const { store, compose } = await setup(true);
     const { runtime, harnessRuntime } = compose();
     const { app } = await createApp(
       loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
@@ -198,22 +182,15 @@ describe("createCompositeRuntime routing", () => {
         id,
         harness,
       })),
-    ).toEqual([
-      { id: "barn", harness: "hermes" },
-      { id: planner.id, harness: "codex" },
-    ]);
+    ).toEqual([{ id: planner.id, harness: "codex" }]);
 
-    const hermesChat = await app.inject({ url: "/api/bots/barn/conversation", headers });
-    expect(hermesChat.statusCode).toBe(200);
     const nativeChat = await app.inject({ url: `/api/bots/${planner.id}/conversation`, headers });
     expect(nativeChat.statusCode).toBe(200);
     expect(nativeChat.json()).toMatchObject({ botId: planner.id, messages: [] });
-    // Hermes heard only about its own assistant.
-    expect(conversation.mock.calls.map(([botId]) => botId)).toEqual(["barn"]);
   });
 });
 
-describe("createCompositeRuntime probeHarnesses", () => {
+describe("createServerHarnessRuntime probeHarnesses", () => {
   it("probes each registered harness once per cache window, sharing one round between concurrent reads", async () => {
     const { codex, grok, compose, advance } = await setup();
     grok.result = { available: false, reason: "Grok is not signed in." };

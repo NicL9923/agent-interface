@@ -25,7 +25,11 @@
     font-weight: 600;
     cursor: pointer;
   }
-  .voice-providers button[aria-selected="true"] {
+  .voice-providers button:hover:enabled {
+    background: transparent;
+  }
+  .voice-providers button[aria-selected="true"],
+  .voice-providers button[aria-selected="true"]:hover:enabled {
     background: var(--accent-soft);
     color: var(--accent);
   }

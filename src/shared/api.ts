@@ -48,7 +48,6 @@ import type {
   IntegrationFlow,
 } from "./integrations.js";
 import type { LegacyMascotAvatar } from "./avatar-legacy.js";
-import type { UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "./upgrades.js";
 import type { AddVaultLogin, ProfileVault, SecureRequestAnswer, VaultResponse } from "./vault.js";
 import type { RoutineRunPage } from "./routine-runs.js";
 import type { LinkedMacs } from "./mac.js";
@@ -516,12 +515,6 @@ export interface ApiRoutes {
 
   // --- Voice speech ---
   "POST /bots/:id/voice/speak": { body: { messageId: string }; response: VoicePlayback };
-
-  // --- Hermes upgrades ---
-  "GET /hermes/upgrade": { response: UpgradeStatus };
-  "POST /hermes/upgrade/check": { body: Record<string, never>; response: UpgradeStatus };
-  "POST /hermes/upgrade/install": { body: UpgradeInstallRequest; response: UpgradeStatus };
-  "POST /hermes/upgrade/control": { body: UpgradeControlRequest; response: UpgradeStatus };
 
   // --- Computer & terminal requests ---
   "GET /computer": { response: ComputerStatus };

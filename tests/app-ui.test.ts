@@ -1120,41 +1120,6 @@ describe("conversation state", () => {
     expect(container.querySelector("#usage-title")?.textContent).toBe("Usage");
   });
 
-  it("loads the Hermes updates panel when first opened and keeps it mounted for its running status", async () => {
-    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
-      configurable: true,
-      value: function (this: HTMLDialogElement) {
-        this.open = true;
-      },
-    });
-    Object.defineProperty(HTMLDialogElement.prototype, "close", {
-      configurable: true,
-      value: function (this: HTMLDialogElement) {
-        this.open = false;
-      },
-    });
-    await render();
-    // The avatar opens the profile menu; Settings is one of its items.
-    await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
-    await act(async () =>
-      [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-        .find((item) => item.textContent === "Settings")!
-        .click(),
-    );
-    await loaded();
-    await act(async () =>
-      [...container.querySelectorAll<HTMLButtonElement>(".settings-row")]
-        .find((button) => button.textContent?.startsWith("Hermes and updates"))!
-        .click(),
-    );
-    await loaded();
-    expect(container.querySelector<HTMLDialogElement>(".hermes-upgrade-panel")?.open).toBe(true);
-    await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Close Hermes updates"]')!.click(),
-    );
-    expect(container.querySelector<HTMLDialogElement>(".hermes-upgrade-panel")?.open).toBe(false);
-  });
-
   it("does not re-render the app when bootstrap and conversation reads find nothing new", async () => {
     await render();
     // Live streams: each greets as it connects and is up once it pings again 10 seconds later.

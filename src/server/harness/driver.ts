@@ -8,13 +8,12 @@ import type { ModelProvider } from "../../shared/types.js";
 export const HARNESS_DRIVER_IDS = ["antigravity", "codex", "claude-code", "grok", "pi"] as const;
 export type HarnessDriverId = (typeof HARNESS_DRIVER_IDS)[number];
 
-export function normalizeHarnessId(id: string | undefined): HarnessDriverId | "hermes" | undefined {
+export function normalizeHarnessId(id: string | undefined): HarnessDriverId | undefined {
   if (!id) return undefined;
   const trimmed = id.trim().toLowerCase();
   if (trimmed === "agy" || trimmed === "antigravity") return "antigravity";
   if (trimmed === "claude" || trimmed === "claude-code") return "claude-code";
-  if (trimmed === "codex" || trimmed === "grok" || trimmed === "pi" || trimmed === "hermes")
-    return trimmed;
+  if (trimmed === "codex" || trimmed === "grok" || trimmed === "pi") return trimmed;
   return undefined;
 }
 

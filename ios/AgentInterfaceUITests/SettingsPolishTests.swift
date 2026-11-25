@@ -338,23 +338,4 @@ import XCTest
     XCTAssertFalse(app.switches["mcpServer.existing-calendar"].exists)
   }
 
-  func testHermesShowsReleaseDatesWithTheHashAsDetail() throws {
-    let app = launch()
-    openSettings(app)
-    waitFor("label CONTAINS 'Hermes released Oct 14, 2026'", app.buttons["Hermes updates"])
-    let footer = app.staticTexts["Hermes released Oct 14, 2026"]
-    reveal(app, footer)
-    XCTAssertTrue(app.staticTexts["3f9c2a7"].exists)
-    try capture("after-settings-footer")
-    reveal(app, app.buttons["Hermes updates"], up: false)
-    app.buttons["Hermes updates"].tap()
-    XCTAssertTrue(app.buttons["checkHermesUpdate"].waitForExistence(timeout: 10))
-    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Released Oct 14, 2026")).firstMatch.exists, app.debugDescription)
-    try capture("after-hermes-updates")
-    app.buttons["checkHermesUpdate"].tap()
-    XCTAssertTrue(app.buttons["installHermesUpdate"].waitForExistence(timeout: 20))
-    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Released Oct 20, 2026")).firstMatch.exists, app.debugDescription)
-    XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "8e1d4c7b2a9f")).firstMatch.exists)
-    try capture("after-hermes-ready")
-  }
 }

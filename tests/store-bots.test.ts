@@ -281,10 +281,10 @@ describe("managed bot repository", () => {
     expect(bots.getCredential(subscription.id)).toBeUndefined();
   });
 
-  it("routes unregistered and Hermes bots to Hermes and keeps native bot IDs on the harness runtime", () => {
+  it("routes all bots on the native harness runtime", () => {
     const bots = open().managedBots;
     const id = personalBot.id;
-    expect(bots.runtimeIdForBot(id)).toBe("hermes");
+    expect(bots.runtimeIdForBot(id)).toBe("harness");
     bots.upsertCredential(apiKey);
     bots.upsertManagedBot({ ...personalBot, credentialId: apiKey.id, shared: true });
     expect(bots.runtimeIdForBot(id)).toBe("harness");
@@ -297,13 +297,6 @@ describe("managed bot repository", () => {
       updatedAt: 30,
     });
     expect(bots.runtimeIdForBot(id)).toBe("harness");
-    expect(bots.setBotHarness(id, "hermes", "hermes-model", 40)).toMatchObject({
-      harness: "hermes",
-      model: "hermes-model",
-      credentialId: null,
-      updatedAt: 40,
-    });
-    expect(bots.runtimeIdForBot(id)).toBe("hermes");
     bots.upsertManagedBot({ ...personalBot, credentialId: apiKey.id, archivedAt: 50 });
     expect(bots.runtimeIdForBot(id)).toBe("harness");
   });
@@ -322,7 +315,7 @@ describe("managed bot repository", () => {
     expect(bots.getManagedBot(id)).toEqual(personalBot);
   });
 
-  it("refuses unknown harnesses, missing credentials, and a native credential on Hermes", () => {
+  it("refuses unknown harnesses and missing credentials", () => {
     const bots = open().managedBots;
     expectRefusal(
       () => bots.upsertManagedBot({ ...personalBot, harness: "unknown" as never }),
@@ -338,12 +331,6 @@ describe("managed bot repository", () => {
       () => bots.upsertManagedBot({ ...personalBot, credentialId: null }),
       InvalidInput,
       "Choose a credential for this native harness.",
-    );
-    bots.upsertCredential(subscription);
-    expectRefusal(
-      () => bots.upsertManagedBot({ ...personalBot, harness: "hermes" }),
-      InvalidInput,
-      "Remove the native credential before switching to Hermes.",
     );
     expect(bots.listManagedBots()).toEqual([]);
   });

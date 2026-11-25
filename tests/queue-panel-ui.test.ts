@@ -80,12 +80,6 @@ describe("when it shows", () => {
   it.each([
     ["the runtime has no queue management", boot(false), codex],
     ["a server from before harnesses sends no queue capability", boot(), codex],
-    ["the bot runs on Hermes", boot(true), { ...codex, harness: "hermes" }],
-    [
-      "the bot names no harness, so it runs on Hermes",
-      boot(true),
-      { ...codex, harness: undefined },
-    ],
     [
       "the bot's own harness turns queue management off",
       boot(true),

@@ -621,11 +621,6 @@ import XCTest
     try capture("07-integrations")
     back(app, from: "Integrations")
 
-    openPreferencesLink(app, "Hermes updates")
-    XCTAssertTrue(app.buttons["checkHermesUpdate"].waitForExistence(timeout: 10))
-    try capture("08-hermes-updates")
-    back(app, from: "Hermes updates")
-
     openPreferencesLink(app, "Avatar specimen")
     XCTAssertTrue(app.switches["Reduced motion"].waitForExistence(timeout: 5))
     try capture("09-specimen-geometric")

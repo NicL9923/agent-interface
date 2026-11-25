@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { fileSigner, type RegisteredFile } from "../src/server/hermes-files.js";
+import { fileSigner, type RegisteredFile } from "../src/server/file-signer.js";
 import { Store } from "../src/server/store.js";
 import type { FileRef, Submission } from "../src/shared/types.js";
 

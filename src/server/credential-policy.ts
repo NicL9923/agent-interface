@@ -17,7 +17,6 @@ export function assertBotHandoffAllowed(
   credential: CredentialRecord | undefined,
   sourceOwnerId?: string,
 ): void {
-  if (target.harness === "hermes") return;
   if (!credential || credential.id !== target.credentialId)
     throw new Conflict("This assistant's credential is unavailable.", "not_configured");
   assertCredentialPolicy(target, credential, { kind: "handoff", sourceOwnerId });
@@ -84,7 +83,6 @@ export function assertGroupChatAllowed(
     | undefined,
   multiUser: boolean,
 ): void {
-  if (bot.harness === "hermes") return;
   if (!credential)
     throw new InvalidInput(`Choose a credential for ${bot.name} before adding it to a group chat.`);
   assertCredentialPolicy(bot, credential, { kind: "group-chat", multiUser });

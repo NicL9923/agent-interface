@@ -23,38 +23,26 @@ final class SettingsParityTests: XCTestCase {
     XCTAssertNil(SettingsRoute.path(for: "More"))
   }
   /// The same rules as `harnessChoices` in src/app/harness.ts.
-  func testHarnessChoicesOfferNativeHarnessesAndKeepHermesOnlyWhereItRuns() {
+  func testHarnessChoicesOfferNativeHarnesses() {
     let ids = { (choices: [Harness.Choice]) in choices.map { "\($0.id)\($0.available ? "" : "-off")" } }
-    // A server from before harnesses advertises none, so Hermes is the only choice.
-    XCTAssertEqual(ids(Harness.choices(nil, saved: nil)), ["antigravity-off", "codex-off", "claude-code-off", "grok-off", "pi-off", "hermes"])
-    XCTAssertEqual(Harness.defaultChoice(nil), "hermes")
+    XCTAssertEqual(ids(Harness.choices(nil, saved: nil)), ["antigravity-off", "codex-off", "claude-code-off", "grok-off", "pi-off"])
+    XCTAssertEqual(Harness.defaultChoice(nil), "antigravity")
     let advertised = [HarnessOption(id: "codex", available: true), HarnessOption(id: "grok", available: false, reason: "Sign in first."),
       HarnessOption(id: "opencode", available: true)]
-    // A new bot never lands on Hermes once a native harness runs; an unknown advertised one is offered as named.
     XCTAssertEqual(ids(Harness.choices(advertised, saved: nil)), ["antigravity-off", "codex", "claude-code-off", "grok-off", "pi-off", "opencode"])
     XCTAssertEqual(Harness.defaultChoice(advertised), "codex")
     XCTAssertEqual(Harness.choices(advertised, saved: nil).first { $0.id == "grok" }?.reason, "Sign in first.")
-    XCTAssertEqual(Harness.choices(advertised, saved: "hermes").last?.id, "hermes", "A Hermes bot keeps its current harness")
     XCTAssertEqual(Harness.label("opencode"), "opencode")
   }
-  func testBotsWithoutAHarnessRunOnHermesAndOnlyHarnessBotsGetTheQueue() {
+  func testBotQueueFollowsCapabilities() {
     var bot = Bot(id: "ranch", name: "Ranch", model: "m", shared: true, activity: .idle)
-    XCTAssertTrue(bot.runsOnHermes)
-    var boot = Bootstrap(user: Member(id: "one", name: "One", email: "one@example.test"), household: [], preferences: Preferences(),
+    let boot = Bootstrap(user: Member(id: "one", name: "One", email: "one@example.test"), household: [], preferences: Preferences(),
       bots: [], capabilities: ["queueManagement": Capability(supported: true)], connection: RuntimeStatus(connected: true))
-    XCTAssertFalse(boot.supportsQueue(bot), "Hermes never shows the queue")
+    XCTAssertTrue(boot.supportsQueue(bot))
     bot.harness = "codex"
     XCTAssertTrue(boot.supportsQueue(bot))
     bot.capabilities = ["queueManagement": Capability(supported: false)]
     XCTAssertFalse(boot.supportsQueue(bot), "The bot's own harness wins over the bootstrap")
-    // Hermes updates stay while the server predates harnesses, while the roster is unknown, and while any bot runs on Hermes.
-    XCTAssertTrue(boot.showsHermesUpdates)
-    boot.harnesses = [HarnessOption(id: "codex", available: true)]
-    XCTAssertFalse(boot.showsHermesUpdates)
-    boot.rosterUnknown = true
-    XCTAssertTrue(boot.showsHermesUpdates)
-    boot.rosterUnknown = false; boot.bots = [Bot(id: "old", name: "Old", model: "m", shared: true, activity: .idle)]
-    XCTAssertTrue(boot.showsHermesUpdates)
   }
   func testSavingWithoutChoosingAHarnessNeverSendsOne() throws {
     var input = BotInput(bot: Bot(id: "ranch", name: "Ranch", model: "m", shared: true, activity: .idle, harness: "codex"))
@@ -111,101 +99,6 @@ final class SettingsParityTests: XCTestCase {
     XCTAssertEqual(chicago.label("2027-01-04T13:00:00Z", locale: en), "1/4/2027, 7:00:00\u{202F}AM")
     let unknown = SchedulePreview(botId: "b", schedule: "0 7 * * *", timezone: "Not/AZone", nextRuns: [], kind: "cron")
     XCTAssertEqual(unknown.label("2027-01-04T13:00:00Z", locale: en), "1/4/2027, 1:00:00\u{202F}PM UTC")
-  }
-
-  // MARK: Hermes updates
-
-  private func upgrade(_ phase: String, operation: String? = nil, candidate: Bool = true, checkedAt: String? = nil,
-    canInstall: Bool = false, canCheck: Bool = true, canRetry: Bool = false, canCancel: Bool = false, canRestart: Bool = false,
-    message: String = "Server message."
-  ) throws -> UpgradeStatus {
-    var json: [String: Any] = [
-      "available": true, "phase": phase, "message": message, "checks": [], "canCheck": canCheck, "canInstall": canInstall,
-      "canRetry": canRetry, "canCancel": canCancel, "canRestartService": canRestart, "busyBots": [],
-    ]
-    if candidate { json["candidate"] = ["revision": "new-revision", "version": "2.0"] }
-    if let operation { json["operation"] = operation }
-    if let checkedAt { json["checkedAt"] = checkedAt }
-    return try JSONDecoder().decode(UpgradeStatus.self, from: JSONSerialization.data(withJSONObject: json))
-  }
-  func testUpgradeTitlesDependOnWhetherTheOperationWasACheckOrAnInstall() throws {
-    let expected: [(String, String, String)] = [
-      ("succeeded", "Hermes is ready", "Hermes is up to date"),
-      ("blocked", "This update needs a look", "The update was stopped safely"),
-      ("failed", "The check didn't finish", "The update couldn't finish"),
-      ("cancelled", "Check stopped", "The update was cancelled"),
-    ]
-    for (phase, check, install) in expected {
-      XCTAssertEqual(try upgrade(phase, operation: "check").title, check, phase)
-      XCTAssertEqual(try upgrade(phase, operation: "install").title, install, phase)
-    }
-    XCTAssertEqual(try upgrade("ready").title, "Update tested and ready")
-    XCTAssertEqual(try upgrade("rolled_back").title, "The previous version is restored")
-  }
-  func testAStatusWithoutAnOperationIsAnInstallOnlyInInstallPhases() throws {
-    XCTAssertFalse(try upgrade("failed").isInstall)
-    XCTAssertTrue(try upgrade("rolled_back").isInstall)
-    XCTAssertTrue(try upgrade("verifying").isInstall)
-    XCTAssertTrue(try upgrade("failed", operation: "install").isInstall)
-    XCTAssertFalse(try upgrade("verifying", operation: "check").isInstall)
-  }
-  func testNothingFoundAfterACheckReadsAsUpToDate() throws {
-    let current = try upgrade("idle", candidate: false, checkedAt: "2026-10-01T11:45:00.000Z", message: "Checked.")
-    XCTAssertEqual(current.title, "Hermes is up to date")
-    XCTAssertEqual(current.description(loading: false), "You're running the newest Hermes.")
-    let unchecked = try upgrade("idle", candidate: false, message: "")
-    XCTAssertEqual(unchecked.title, "Hermes updates")
-    XCTAssertEqual(unchecked.description(loading: true), "Getting the current version and update status…")
-    XCTAssertEqual(unchecked.description(loading: false), "Find the newest Hermes and test it before installing it.")
-    XCTAssertEqual(try upgrade("ready", message: "It passed.").description(loading: false), "It passed.")
-  }
-  func testUpgradeStepsFollowTheWebPanel() throws {
-    func states(_ status: UpgradeStatus) -> [String] { status.steps.map(\.state.rawValue) }
-    XCTAssertEqual(try upgrade("checking", candidate: false).steps.map(\.name), ["Find", "Test in a copy", "Install"])
-    XCTAssertEqual(states(try upgrade("checking", candidate: false)), ["active", "waiting", "waiting"])
-    XCTAssertEqual(states(try upgrade("qualifying", operation: "check")), ["done", "active", "waiting"])
-    XCTAssertEqual(states(try upgrade("ready", operation: "check")), ["done", "done", "waiting"])
-    XCTAssertEqual(states(try upgrade("blocked", operation: "check")), ["done", "failed", "waiting"])
-    XCTAssertEqual(states(try upgrade("failed", operation: "check", candidate: false)), ["failed", "waiting", "waiting"])
-    XCTAssertEqual(states(try upgrade("installing", operation: "install")), ["done", "done", "active"])
-    XCTAssertEqual(states(try upgrade("succeeded", operation: "install")), ["done", "done", "done"])
-    XCTAssertEqual(states(try upgrade("rolled_back", operation: "install")), ["done", "done", "failed"])
-    XCTAssertEqual(states(try upgrade("cancelled", operation: "install")), ["done", "done", "failed"])
-  }
-  func testRetryAndCancelBelongToInstallsAndStopCheckingToChecks() throws {
-    let check = try upgrade("qualifying", operation: "check", canRetry: true, canCancel: true)
-    XCTAssertTrue(check.canStopCheck)
-    XCTAssertFalse(check.showsRecovery, "A running check has no recovery section")
-    let install = try upgrade("installing", operation: "install", canCancel: true)
-    XCTAssertFalse(install.canStopCheck)
-    XCTAssertTrue(install.showsRecovery)
-    XCTAssertTrue(try upgrade("failed", operation: "check", canRestart: true).showsRecovery, "Restart applies to either")
-    XCTAssertFalse(try upgrade("failed", operation: "check", canRetry: true, canCancel: true).showsRecovery)
-    XCTAssertFalse(try upgrade("ready", operation: "check", canCancel: true).canStopCheck, "Stopping needs a running check")
-  }
-  func testUpgradeButtonAndHintFollowTheWebPanel() throws {
-    let ready = try upgrade("ready", operation: "check", canInstall: true)
-    XCTAssertEqual(ready.actionLabel(submitting: false, uncertain: false), "Install update")
-    XCTAssertEqual(ready.actionLabel(submitting: true, uncertain: false), "Starting the install…")
-    XCTAssertEqual(ready.actionHint(uncertain: false), "Installing briefly reconnects Hermes. Conversations and drafts stay saved.")
-    let stopped = try upgrade("blocked", operation: "check", candidate: false)
-    XCTAssertEqual(stopped.actionLabel(submitting: false, uncertain: false), "Check again")
-    XCTAssertEqual(stopped.actionLabel(submitting: true, uncertain: false), "Starting the check…")
-    XCTAssertEqual(try upgrade("idle", candidate: false).actionLabel(submitting: false, uncertain: false), "Check for an update")
-    XCTAssertEqual(try upgrade("qualifying", operation: "check").actionLabel(submitting: false, uncertain: false), "Testing…")
-    XCTAssertEqual(try upgrade("installing", operation: "install").actionLabel(submitting: false, uncertain: false), "Installing…")
-    XCTAssertEqual(try upgrade("idle").actionLabel(submitting: false, uncertain: true), "Checking update status…")
-    let hint = "You can close this. Progress continues on the server."
-    XCTAssertEqual(try upgrade("qualifying", operation: "check").actionHint(uncertain: false), hint)
-    XCTAssertEqual(try upgrade("idle").actionHint(uncertain: true), hint)
-    XCTAssertTrue(try upgrade("idle").actionHint(uncertain: false).hasPrefix("A check finds"))
-  }
-  func testTestDetailsReadLikeTheWeb() {
-    func check(_ status: String, _ detail: String?) -> UpgradeCheck { UpgradeCheck(id: "x", label: "L", status: status, detail: detail) }
-    XCTAssertEqual(check("passed", nil).summary, "Passed")
-    XCTAssertEqual(check("failed", "Missing add-on").summary, "Failed · Missing add-on")
-    XCTAssertEqual(check("running", nil).summary, "Running")
-    XCTAssertEqual(check("pending", "Queued").summary, "Waiting · Queued")
   }
 
   // MARK: Computer
@@ -341,14 +234,14 @@ final class SettingsParityTests: XCTestCase {
       VaultSource(name: name, displayName: name, enabled: enabled, needsUnlock: true, unlocked: unlocked, installed: installed, canToggle: true, canUnlock: false, canLock: false)
     }
     XCTAssertEqual(source("bitwarden", installed: false).statusText, "CLI is not installed")
-    XCTAssertEqual(source("local", enabled: false).statusText, "Available to Hermes in this profile")
+    XCTAssertEqual(source("local", enabled: false).statusText, "Available to this assistant")
     XCTAssertEqual(source("bitwarden", enabled: false).statusText, "Disabled")
     XCTAssertEqual(source("bitwarden", unlocked: true).statusText, "Unlocked for this profile")
     XCTAssertEqual(source("bitwarden").statusText, "Locked")
     func login(_ backend: String) -> VaultLogin {
       VaultLogin(id: "i", kind: "login", label: "L", origin: "https://a.test", createdAt: "", identifier: "me", identifierType: "email", hasOtp: false, backend: backend, canRemove: true)
     }
-    XCTAssertEqual(login("local").backendLabel, "Hermes vault")
+    XCTAssertEqual(login("local").backendLabel, "WildBots vault")
     XCTAssertEqual(login("onepassword").backendLabel, "1Password")
     XCTAssertEqual(login("bitwarden").backendLabel, "Bitwarden")
   }

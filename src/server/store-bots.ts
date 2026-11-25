@@ -73,10 +73,9 @@ export class ManagedBotRepository {
     return this.db.isTransaction ? operation() : this.database.transaction(operation);
   }
 
-  /** Archived records keep their runtime so their IDs never fall through to the wrong runtime. */
-  runtimeIdForBot(botId: string): "hermes" | "harness" {
-    const bot = this.db.prepare("SELECT harness FROM managed_bots WHERE id=?").get(botId);
-    return !bot || bot.harness === "hermes" ? "hermes" : "harness";
+  /** Every managed assistant runs on the native harness runtime. */
+  runtimeIdForBot(_botId: string): "harness" {
+    return "harness";
   }
 
   listManagedBots(): ManagedBotRecord[] {
@@ -98,10 +97,7 @@ export class ManagedBotRepository {
     return this.write(() => {
       if (!HARNESS_KINDS.includes(bot.harness))
         throw new InvalidInput("Choose a supported harness.");
-      if (bot.harness === "hermes") {
-        if (bot.credentialId !== null)
-          throw new InvalidInput("Remove the native credential before switching to Hermes.");
-      } else if (bot.credentialId === null) {
+      if (bot.credentialId === null) {
         if (bot.archivedAt == null)
           throw new InvalidInput("Choose a credential for this native harness.");
       } else {
@@ -169,7 +165,6 @@ export class ManagedBotRepository {
         ...bot,
         harness,
         model,
-        credentialId: harness === "hermes" ? null : bot.credentialId,
         updatedAt: now,
       });
     });

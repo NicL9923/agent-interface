@@ -55,11 +55,10 @@ import { MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, UPLOAD_MIME_TYPES } from "../../shar
 import type { RoutineOutput, RoutineResult } from "../../shared/collaboration.js";
 import type { RoutineRunStatus } from "../../shared/routine-runs.js";
 import { assertCredentialPolicy } from "../credential-policy.js";
-import type { FileSigner, RegisteredFile } from "../hermes-files.js";
+import type { FileSigner, RegisteredFile } from "../file-signer.js";
 import { httpError } from "../http-error.js";
 import { firstRoutineTime, type NativeRoutineKind } from "../native-routine-schedule.js";
 import { NativeScheduler } from "../scheduler.js";
-import { namespacedEventId } from "../runtime-router.js";
 import type { Store } from "../store.js";
 import type { NativeRoutine, NativeRoutineRun } from "../store-native-routines.js";
 import type { TranscriptMessage } from "../store-transcripts.js";
@@ -73,12 +72,15 @@ import {
   type HarnessTurnInput,
   normalizeHarnessId,
 } from "./driver.js";
+import { createNativeGroupAdapter } from "./native-groups.js";
+import { createNativeVaultHandler } from "./native-vault.js";
 import { otherHarnessUser, reservedHarnessEnvironment } from "./process-spawn.js";
 import { HarnessSessionCoordinator } from "./session-coordinator.js";
 
 const runtimeId = "harness";
 const eventPrefix = `${runtimeId}:`;
-const eventId = (runId: string) => namespacedEventId(runtimeId, runId);
+const eventId = (runId: string) =>
+  runId.startsWith(eventPrefix) ? runId : `${eventPrefix}${runId}`;
 const missingBot = () => new NotFound(assistantNotFoundMessage, "assistant_not_found");
 const missingFile = () => new NotFound(fileNotFoundMessage, "file_not_found");
 const unsupported = () => new Conflict("This harness does not support that action.");
@@ -269,17 +271,11 @@ export function createHarnessRuntime({
   const registered = HARNESS_DRIVER_IDS.flatMap((id) => (drivers[id] ? [drivers[id]] : []));
   const driverFor = (bot: ManagedBotRecord) => {
     const id = normalizeHarnessId(bot.harness);
-    return id && id !== "hermes" ? drivers[id] : undefined;
+    return id ? drivers[id] : undefined;
   };
   const getBot = (id: string) => {
     const bot = store.managedBots.getManagedBot(id);
-    return validBotId(id) &&
-      bot &&
-      bot.harness !== "hermes" &&
-      bot.archivedAt == null &&
-      !deleting.has(id)
-      ? bot
-      : undefined;
+    return validBotId(id) && bot && bot.archivedAt == null && !deleting.has(id) ? bot : undefined;
   };
   const requireBot = (id: string) => {
     const bot = getBot(id);
@@ -805,9 +801,9 @@ export function createHarnessRuntime({
       .join("\n\n");
   }
 
-  async function executeRoutinePromptOn(
+  async function executeOneShotOn(
     bot: ManagedBotRecord,
-    routine: NativeRoutine,
+    sessionKeyPrefix: string,
     promptText: string,
     signal: AbortSignal,
     target: {
@@ -819,10 +815,10 @@ export function createHarnessRuntime({
     },
   ): Promise<string> {
     const cwd = await cwdFor(bot);
-    const turnId = `routine-${randomUUID()}`;
+    const turnId = `${sessionKeyPrefix}-${randomUUID()}`;
     const session = await target.driver.openSession({
       botId: bot.id,
-      sessionKey: `routine-${routine.id}-${randomUUID()}`,
+      sessionKey: `${sessionKeyPrefix}-${randomUUID()}`,
       cwd,
       osUser: target.osUser,
       model: target.model,
@@ -861,7 +857,7 @@ export function createHarnessRuntime({
           finished = true;
           resolveDone();
         } else if (event.type === "session.closed" && !finished) {
-          failure = event.reason || "Routine session closed unexpectedly.";
+          failure = event.reason || "Session closed unexpectedly.";
           finished = true;
           resolveDone();
         }
@@ -881,19 +877,20 @@ export function createHarnessRuntime({
     }
   }
 
-  async function runRoutinePrompt(
-    routine: NativeRoutine,
+  async function runOneShotPrompt(
+    bot: ManagedBotRecord,
+    sessionKeyPrefix: string,
     promptText: string,
     signal: AbortSignal,
+    modelOverride?: string | null,
   ): Promise<string> {
-    const bot = requireBot(routine.botId);
     try {
       const driver = requireDriver(bot);
       const credential = credentialFor(bot);
       const env = credentialsEnv(credential);
-      return await executeRoutinePromptOn(bot, routine, promptText, signal, {
+      return await executeOneShotOn(bot, sessionKeyPrefix, promptText, signal, {
         driver,
-        model: routine.modelOverride ?? bot.model,
+        model: modelOverride ?? bot.model,
         provider: bot.provider || undefined,
         env,
         osUser: bot.ownerOsUser || undefined,
@@ -902,9 +899,30 @@ export function createHarnessRuntime({
       if (signal.aborted) throw error;
       const target = resolveFallback(bot);
       if (!target) throw error;
-      return executeRoutinePromptOn(bot, routine, promptText, signal, target);
+      return executeOneShotOn(bot, sessionKeyPrefix, promptText, signal, target);
     }
   }
+
+  async function runRoutinePrompt(
+    routine: NativeRoutine,
+    promptText: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const bot = requireBot(routine.botId);
+    return runOneShotPrompt(
+      bot,
+      `routine-${routine.id}`,
+      promptText,
+      signal,
+      routine.modelOverride,
+    );
+  }
+
+  const nativeGroups = createNativeGroupAdapter({
+    store,
+    executeTurn: (bot, prompt, signal) => runOneShotPrompt(bot, `group-${bot.id}`, prompt, signal),
+  });
+  const nativeVault = createNativeVaultHandler(store, requireBot);
 
   let scheduler: NativeScheduler | undefined;
 
@@ -1248,7 +1266,7 @@ export function createHarnessRuntime({
       if (id === undefined && store.managedBots.getManagedBot(botId))
         throw new Conflict("An assistant with this name already exists. Choose another name.");
       const driverId = normalizeHarnessId(input.harness ?? previous?.harness ?? registered[0]?.id);
-      if (!driverId || driverId === "hermes" || !drivers[driverId])
+      if (!driverId || !drivers[driverId])
         throw new InvalidInput("Choose a registered native harness.");
       const harness: NativeHarnessKind = driverId;
       const ownerId = input.ownerId ?? store.presentation(botId).ownerId ?? previous?.ownerId ?? "";
@@ -1857,6 +1875,14 @@ export function createHarnessRuntime({
         previewOnly: false,
       };
     },
+    groupRequest: (input) => {
+      assertOpen();
+      return nativeGroups.handle(input);
+    },
+    vaultRequest: (input) => {
+      assertOpen();
+      return nativeVault(input);
+    },
     ...(voice?.realtimeSession
       ? { realtimeSession: (input: RealtimeSessionInput) => voice.realtimeSession!(input) }
       : {}),
@@ -1879,6 +1905,7 @@ export function createHarnessRuntime({
     close() {
       return (closing ??= (async () => {
         closed = true;
+        nativeGroups.close();
         for (const bot of store.managedBots.listManagedBots()) {
           const turn = active(bot.id);
           if (turn) finish(turn, "interrupted", "The harness runtime closed.");

@@ -13,7 +13,7 @@ import type {
 } from "../src/server/harness/driver.js";
 import { spawnHarnessProcess } from "../src/server/harness/process-spawn.js";
 import { createHarnessRuntime } from "../src/server/harness/runtime.js";
-import { fileSigner } from "../src/server/hermes-files.js";
+import { fileSigner } from "../src/server/file-signer.js";
 import { Store } from "../src/server/store.js";
 import type { Submission } from "../src/shared/types.js";
 import { MAX_UPLOAD_BYTES } from "../src/shared/uploads.js";

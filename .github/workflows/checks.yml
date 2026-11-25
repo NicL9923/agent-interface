@@ -129,7 +129,7 @@ jobs:
         shell: bash
         run: |
           # Syntax compilation has its own cache so imports in tests cannot share writes.
-          PYTHONPYCACHEPREFIX="$RUNNER_TEMP/python-syntax-cache" python -m compileall -q src/hermes scripts .agents/tools &
+          PYTHONPYCACHEPREFIX="$RUNNER_TEMP/python-syntax-cache" python -m compileall -q scripts .agents/tools &
           syntax_pid=$!
           ruff check --output-format=github . &
           lint_pid=$!

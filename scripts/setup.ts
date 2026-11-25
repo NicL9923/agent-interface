@@ -2,12 +2,10 @@ import { constants, promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseEnv } from "node:util";
-import { createInterface, emitKeypressEvents } from "node:readline";
+import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { loadConfig, loopback, parseAppOrigin } from "../src/server/config.js";
-import { createHermesRuntime } from "../src/server/hermes.js";
-import { fileKeys, fileSigner, generateFileKey } from "../src/server/hermes-files.js";
-import type { Runtime, RuntimeStatus } from "../src/shared/types.js";
+import type { RuntimeStatus } from "../src/shared/types.js";
 
 const settingKeys = [
   "NODE_ENV",
@@ -18,9 +16,6 @@ const settingKeys = [
   "LOCAL_DEV_AUTH",
   "GOOGLE_CLIENT_ID",
   "HOUSEHOLD_EMAILS",
-  "HERMES_URL",
-  "HERMES_TOKEN",
-  "HERMES_AUTH_MODE",
   "VAPID_PUBLIC_KEY",
   "VAPID_PRIVATE_KEY",
   "VAPID_SUBJECT",
@@ -87,7 +82,7 @@ export function updateEnv(text: string, changes: EnvValues): string {
     if (!quote) throw new Error("A setting contains unsupported quote characters.");
     result += `${key}=${quote}${value}${quote}${newline}`;
   }
-  // Node's parser is the authority. Never save a token whose roundtrip changed.
+  // Node's parser is the authority. Never save a value whose roundtrip changed.
   const parsed = parseEnv(result);
   if (Object.entries(changes).some(([key, value]) => parsed[key] !== value))
     throw new Error("A setting cannot be represented safely in the environment file.");
@@ -110,6 +105,7 @@ export async function readPrivateEnv(filename: string): Promise<string | undefin
     throw error;
   }
 }
+
 export async function savePrivateEnv(
   filename: string,
   original: string | undefined,
@@ -138,36 +134,13 @@ export async function savePrivateEnv(
   }
 }
 
-export async function checkSetup(
-  values: NodeJS.ProcessEnv,
-  // Only the connection is checked, so nothing is signed and a throwaway file key will do.
-  createRuntime: (options: {
-    url?: string;
-    token?: string;
-    authMode?: "static" | "service";
-    qualificationFile?: string;
-  }) => Pick<Runtime, "status" | "close"> = (options) =>
-    createHermesRuntime({
-      ...options,
-      files: fileSigner(fileKeys(generateFileKey()), options.token),
-    }),
-): Promise<RuntimeStatus> {
+export async function checkSetup(values: NodeJS.ProcessEnv): Promise<RuntimeStatus> {
   const config = loadConfig(values);
   if (!config.localDevAuth && (!config.googleClientId || !config.householdEmails.length))
     throw new Error(
       "Configure Google sign-in and HOUSEHOLD_EMAILS, or explicitly select local test sign-in on a loopback development installation.",
     );
-  const runtime = createRuntime({
-    url: config.hermesUrl,
-    token: config.hermesToken,
-    authMode: config.hermesAuthMode,
-    qualificationFile: config.hermesQualificationFile,
-  });
-  try {
-    return await runtime.status();
-  } finally {
-    await runtime.close();
-  }
+  return { connected: true, code: "ready", detail: "Configuration is valid." };
 }
 
 export async function verifyAndSave(
@@ -175,13 +148,8 @@ export async function verifyAndSave(
   original: string | undefined,
   next: string,
   exported: NodeJS.ProcessEnv = process.env,
-  createRuntime?: Parameters<typeof checkSetup>[1],
 ) {
-  const status = await checkSetup(effectiveEnv(next, exported).values, createRuntime);
-  if (!ready(status))
-    throw new Error(
-      `Hermes ${status.code ?? "unreachable"}. ${status.detail ?? ""} Connection verification failed. Your environment file was kept. See docs/HermesCapabilityMatrix.md and run setup again.`,
-    );
+  const status = await checkSetup(effectiveEnv(next, exported).values);
   await savePrivateEnv(filename, original, next);
   return status;
 }
@@ -201,61 +169,11 @@ function ask(label: string, fallback = ""): Promise<string> {
     });
   });
 }
-function askToken(existing: boolean): Promise<string> {
-  const input = process.stdin;
-  process.stdout.write(`Hermes token${existing ? " [Enter keeps the saved token]" : ""}: `);
-  emitKeypressEvents(input);
-  input.setRawMode(true);
-  input.resume();
-  return new Promise((resolve, reject) => {
-    let value = "";
-    const done = () => {
-      input.removeListener("keypress", keypress);
-      input.setRawMode(false);
-      input.pause();
-      process.stdout.write("\n");
-    };
-    const keypress = (text: string, key: { name?: string; ctrl?: boolean }) => {
-      if (key?.ctrl && ["c", "d"].includes(key.name ?? "")) {
-        done();
-        reject(new Error("Setup cancelled. No settings were saved."));
-      } else if (key?.name === "return" || key?.name === "enter") {
-        done();
-        resolve(value);
-      } else if (key?.name === "backspace") {
-        if (value) {
-          value = value.slice(0, -1);
-          process.stdout.write("\b \b");
-        }
-      }
-      // oxlint-disable-next-line no-control-regex -- masked input ignores control keys
-      else if (text && !/[\x00-\x1f\x7f]/.test(text)) {
-        value += text;
-        process.stdout.write("*".repeat(text.length));
-      }
-    };
-    input.on("keypress", keypress);
-  });
-}
-function report(status: RuntimeStatus) {
-  console.log(
-    `Hermes: ${status.code ?? (status.connected ? "ready" : "unreachable")}. ${status.detail ?? ""}`,
-  );
-  if (status.code === "addon_missing" || status.code === "incompatible")
-    console.log(
-      "Follow the existing supervisor and revision instructions in docs/HermesCapabilityMatrix.md. Setup does not install or restart Hermes.",
-    );
-}
-function ready(status: RuntimeStatus) {
-  return status.code ? status.code === "ready" : status.connected;
-}
 
 async function main() {
   const doctor = process.argv.slice(2).includes("--check");
   if (process.argv.slice(2).some((argument) => argument !== "--check"))
-    throw new Error(
-      "Use npm run setup or npm run doctor. Credentials are entered interactively, never as command arguments.",
-    );
+    throw new Error("Use npm run setup or npm run doctor.");
   const filename = path.resolve(".env");
   const original = await readPrivateEnv(filename);
   const source = original ?? (await fs.readFile(".env.example", "utf8"));
@@ -266,42 +184,16 @@ async function main() {
     );
   if (doctor) {
     const status = await checkSetup(current.values);
-    report(status);
-    console.log(
-      "Google credentials and allowlist are present when required. Browser sign-in still needs the configured authorized JavaScript origin.",
-    );
-    process.exitCode = ready(status) ? 0 : 1;
+    console.log(`WildBots: ${status.code ?? "ready"}. ${status.detail ?? ""}`);
+    process.exitCode = status.connected ? 0 : 1;
     return;
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY)
     throw new Error(
-      "Setup needs an interactive terminal to protect the Hermes token. Run npm run setup in a terminal, or use npm run doctor to check existing settings.",
+      "Setup needs an interactive terminal. Run npm run setup in a terminal, or use npm run doctor to check existing settings.",
     );
-  console.log(
-    "Connect this app to your existing supervised Hermes gateway. Provider and service sign-ins remain in the official Hermes interface.",
-  );
   const values = current.values;
   const changes: EnvValues = {};
-  let previousOrigin = "";
-  try {
-    const url = new URL(values.HERMES_URL);
-    if (!url.username && !url.password && !url.search && !url.hash) previousOrigin = url.origin;
-  } catch {
-    /* Ask for a usable origin. */
-  }
-  changes.HERMES_URL = await ask("Existing Hermes gateway origin", previousOrigin);
-  if (!changes.HERMES_URL)
-    throw new Error(
-      "Enter the URL of your existing supervised Hermes gateway. No settings were saved.",
-    );
-  changes.HERMES_AUTH_MODE = await ask(
-    "Hermes authentication: service for a Google-protected dashboard, or static for an isolated loopback gateway",
-    values.HERMES_AUTH_MODE || "service",
-  );
-  if (!["static", "service"].includes(changes.HERMES_AUTH_MODE))
-    throw new Error("Choose service or static. No settings were saved.");
-  changes.HERMES_TOKEN =
-    (await askToken(Boolean(values.HERMES_TOKEN))) || values.HERMES_TOKEN || "";
   const { origin: publicOrigin, correction } = await resolveSetupOrigin(values);
   if (correction !== undefined) changes.APP_ORIGIN = correction;
   const production =
@@ -331,9 +223,6 @@ async function main() {
       "Allowed household emails, comma-separated",
       values.HOUSEHOLD_EMAILS,
     );
-    console.log(
-      "In your Google OAuth web client, authorize that exact application origin as a JavaScript origin.",
-    );
   }
   const conflict = Object.keys(changes).filter(
     (key) => process.env[key] !== undefined && process.env[key] !== changes[key],
@@ -343,10 +232,9 @@ async function main() {
       `Unset conflicting exported settings before saving: ${conflict.join(", ")}. No settings were saved.`,
     );
   const next = updateEnv(source, changes);
-  const status = await verifyAndSave(filename, original, next);
-  report(status);
+  await verifyAndSave(filename, original, next);
   console.log(
-    "Verified settings saved to .env with owner-only permissions. Run npm run build, then npm start. Restart an already running app to load these settings.",
+    "Verified settings saved to .env with owner-only permissions. Run npm run build, then npm start.",
   );
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

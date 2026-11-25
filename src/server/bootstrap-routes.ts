@@ -1,12 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type {
-  HarnessOption,
-  Preferences,
-  PreferencesPatch,
-  Runtime,
-  RuntimeStatus,
-} from "../shared/types.js";
+import type { HarnessOption, Preferences, PreferencesPatch, Runtime } from "../shared/types.js";
 import { applyMergePatch, MERGE_PATCH } from "../shared/merge-patch.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
@@ -19,7 +13,6 @@ import { safeError } from "./logging.js";
 import type { RuntimeSnapshots } from "./runtime-snapshot.js";
 import { id, modelFavoriteList, notifications, preferences, preferencesPatch } from "./schemas.js";
 import type { Store } from "./store.js";
-import type { HermesUpgrades } from "./upgrades.js";
 
 /**
  * This person's preferences as their clients see them: assistants they cannot see are left out,
@@ -86,35 +79,29 @@ function patched(previous: Preferences, patch: PreferencesPatch): Preferences {
   return next;
 }
 
-/** The client's first read, retrying the Hermes connection, this person's preferences and model options. */
+/** The client's first read, retrying the runtime connection, this person's preferences and model options. */
 export function installBootstrapRoutes(
   app: FastifyInstance,
   collaborators: {
     config: Config;
     runtime: Runtime;
     store: Store;
-    upgrades: Pick<HermesUpgrades, "revisionDate">;
     directory: BotDirectory;
     snapshot: RuntimeSnapshots;
-    /** The native harnesses new assistants can use. Absent on a server running only Hermes. */
+    /** The native harnesses new assistants can use. */
     probeHarnesses?: () => Promise<HarnessOption[]>;
   },
 ) {
-  const { config, runtime, store, upgrades, directory, snapshot, probeHarnesses } = collaborators;
+  const { config, runtime, store, directory, snapshot, probeHarnesses } = collaborators;
   // Someone else's private assistant leaves this person's lists, so their saved
   // preferences stop naming it too.
   const preferencesFor = (userId: string): Preferences => visiblePreferences(store, userId);
-  const dated = (status: RuntimeStatus): RuntimeStatus => {
-    const revisionDate = upgrades.revisionDate(status.version);
-    return revisionDate ? { ...status, revisionDate } : status;
-  };
   apiRoute(app, "GET /bootstrap", {}, async (req) => ({
     user: signedIn(req),
     household: store.users().filter((user) => allowedIdentity(config, user)),
     preferences: preferencesFor(signedIn(req).id),
     ...(await snapshot.read().then(async (value) => ({
       ...value,
-      connection: dated(value.connection),
       bots: await directory.rosterFor(
         signedIn(req).id,
         value.bots,
@@ -126,7 +113,6 @@ export function installBootstrapRoutes(
     formKey: store.formKey(signedIn(req).id),
     vapidPublicKey: config.vapidPublicKey || undefined,
     nativeApp: config.nativeApp,
-    // A probe round that fails leaves the list out, as from a server running only Hermes, rather than the bootstrap.
     ...(probeHarnesses && {
       harnesses: await probeHarnesses().catch((error: unknown) => {
         req.log.warn({ error: safeError(error) }, "Native harness probes failed");
@@ -136,7 +122,7 @@ export function installBootstrapRoutes(
   }));
   apiRoute(app, "POST /connection/retry", {}, async () => {
     snapshot.invalidate();
-    const status = dated(await (runtime.reconnect ? runtime.reconnect() : runtime.status()));
+    const status = await (runtime.reconnect ? runtime.reconnect() : runtime.status());
     snapshot.invalidate();
     return status;
   });

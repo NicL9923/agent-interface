@@ -340,12 +340,8 @@ describe("a page from the previous release after a deploy", () => {
     );
   });
 
-  it("reads the file the deploy tooling writes, in the place the tooling writes it", () => {
-    // deploy_common.py writes <release>/dist/previous-release.json; the server reads dist/previous-release.json
-    // beside dist/client. If the two drift apart the grace silently stops, so the names are compared.
-    const tooling = readFileSync(".agents/tools/deploy_common.py", "utf8");
-    expect(tooling).toContain('PREVIOUS_RELEASE_FILE = "dist/previous-release.json"');
-    // The server derives it from the client root it serves, so the two cannot name different dist directories.
+  it("derives the previous-release file path from the client root it serves", () => {
+    // The server derives dist/previous-release.json from the client root it serves, so the two cannot drift.
     expect(readFileSync("src/server/app.ts", "utf8")).toContain(
       'join(dirname(clientRoot), "previous-release.json")',
     );

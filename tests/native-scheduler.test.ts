@@ -646,7 +646,10 @@ describe("durable native scheduler", () => {
       const { bots, record } = bot();
       bots.upsertManagedBot({ ...record, archivedAt: start });
       expect(() => create("archived", group)).toThrow("Routine assistant not found.");
-      bots.upsertManagedBot({ ...record, harness: "hermes", credentialId: null });
+      bots.upsertManagedBot({ ...record, archivedAt: undefined });
+      database.db
+        .prepare("UPDATE managed_bots SET harness = 'hermes', credential_id = NULL WHERE id = ?")
+        .run(record.id);
       expect(() => create("no-credential", group)).toThrow(
         "Choose a credential for this routine assistant.",
       );

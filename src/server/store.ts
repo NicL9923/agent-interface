@@ -20,7 +20,7 @@ import { SecretRepository } from "./store-secrets.js";
 import { MemorySkillsRepository } from "./store-memory.js";
 import { NativeRoutineRepository } from "./store-native-routines.js";
 import { NativeGroupRepository } from "./group-coordinator.js";
-import type { FileSigner } from "./hermes-files.js";
+import type { FileSigner } from "./file-signer.js";
 
 export { schemaVersion } from "./store-database.js";
 export type {

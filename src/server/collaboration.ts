@@ -534,6 +534,7 @@ export async function installCollaborationRoutes(
         roomId: body.requestId,
         name: body.name,
         members,
+        actorId: signedIn(req).id,
       }) as Promise<{ room: GroupRoom }>;
     },
   );
@@ -575,13 +576,21 @@ export async function installCollaborationRoutes(
     },
     async (req, body) => {
       const { roomId } = z.object({ roomId: id }).parse(req.params);
-      const userId = signedIn(req).id;
+      const user = signedIn(req);
+      const userId = user.id;
       await room(userId, roomId);
       // Separate household send keys without inventing a native actor or changing model text.
       const requestId = createHash("sha256")
         .update(JSON.stringify([userId, body.requestId]))
         .digest("hex");
-      const sent = (await request({ operation: "send", roomId, ...body, requestId })) as {
+      const sent = (await request({
+        operation: "send",
+        roomId,
+        ...body,
+        requestId,
+        actorId: userId,
+        actorName: user.name,
+      })) as {
         accepted?: boolean;
         event?: GroupEvent;
       };

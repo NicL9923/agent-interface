@@ -3,7 +3,7 @@ import { ApiError, queueApi } from "../client-api";
 import { MAX_MESSAGE_TEXT, routeUrl } from "../shared/api";
 import type { BotQueue, QueuedMessage } from "../shared/queue";
 import type { Bootstrap, Bot } from "../shared/types";
-import { botCapability, runsOnHermes } from "../app/harness";
+import { botCapability } from "../app/harness";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import { Icon } from "./Icon";
@@ -23,7 +23,7 @@ type Focus = { id: string; control: "edit" | "up" | "down" };
 export function QueuePanel({ boot, bot, active }: { boot: Bootstrap; bot: Bot; active: boolean }) {
   // Most bots have no queue, so they mount none of its state: typing in their chat stays one commit
   // per keystroke (tests/keystroke-delta-work.test.ts).
-  const supported = !!botCapability(boot, bot, "queueManagement")?.supported && !runsOnHermes(bot);
+  const supported = !!botCapability(boot, bot, "queueManagement")?.supported;
   return supported ? <LiveQueue bot={bot} active={active} /> : null;
 }
 

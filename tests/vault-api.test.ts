@@ -107,6 +107,7 @@ it("uses strict native management contracts and keeps unavailable/errors model b
     operation: "add_login",
     profile: "shared",
     login,
+    actor: "one",
   });
   for (const bad of [
     "https://user:password@site.invalid",

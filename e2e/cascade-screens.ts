@@ -309,33 +309,13 @@ export const STATEFUL: StatefulScreen[] = [
         name: "",
         reach: async (page) => {
           await openSettings(page, "Automation");
-          await page.getByText("Get the herd ready for winter").waitFor();
-          await page.getByText("Fence issue").waitFor();
           await page.locator(".routine-card").first().waitFor();
-          // Done tasks start folded.
-          await expect(page.getByRole("button", { name: /^Done · / })).toHaveAttribute(
-            "aria-expanded",
-            "false",
-          );
         },
       },
       {
-        name: "a goal to confirm clearing, a task open, and every form open",
+        name: "delete confirmation and edit form open",
         reach: async (page) => {
           const settings = page.locator(".settings-dialog[open]");
-          await settings.getByRole("button", { name: "Clear goal…" }).click();
-          await settings.getByText("Clear this standing goal?").waitFor();
-          await settings
-            .locator(".automation-task > summary", { hasText: "Fix the north gate" })
-            .click();
-          await settings.locator(".automation-task[open] .automation-task-callout").waitFor();
-          await settings.getByRole("button", { name: "New task" }).click();
-          await settings.locator("#new-task-heading").waitFor();
-          await settings.getByRole("button", { name: "Edit trigger" }).click();
-          await settings
-            .locator(".automation-triggers .automation-trigger-field")
-            .first()
-            .waitFor();
           const feed = settings.locator(".routine-card", { hasText: "Feed inventory" });
           await feed.getByRole("button", { name: "Delete" }).click();
           await feed.getByRole("button", { name: "Confirm delete" }).waitFor();

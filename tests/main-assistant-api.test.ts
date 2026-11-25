@@ -18,17 +18,8 @@ import type {
 import { fakeRuntime, signIn } from "./helpers/server.js";
 import { botFixture, capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import type { RoutineRunStatus } from "../src/shared/routine-runs.js";
-import { nativeOverrides } from "../src/server/hermes.js";
-import { readFileSync } from "node:fs";
 
-// A job as Hermes ed1afb0's real scheduler left it, mid-run and after completing.
-const scheduled = JSON.parse(
-  readFileSync(new URL("./fixtures/hermes-ed1afb0-scheduled-job.json", import.meta.url), "utf8"),
-) as Record<"running" | "completed", Record<string, unknown>> & {
-  failures: Record<string, Record<string, unknown>>;
-};
-
-// A member's main assistant and its check-ins, through the real app with an in-memory Hermes cron
+// A member's main assistant and its check-ins, through the real app with an in-memory routine
 // store. Every path that changes what a member wants, or what they may have, must leave Hermes with
 // zero or one check-in job for them: never an orphan, never a duplicate.
 const origin = "http://127.0.0.1:3000";
@@ -1159,27 +1150,6 @@ describe("review round three", () => {
       payload: { enabled: true },
     });
     expect(resume.json().code).toBe("routine_chats");
-  });
-  it("keeps a healthy check-in through its runs, failures, retries and quota holds, reading its native fields as Hermes left them", async () => {
-    await main("mom-main");
-    await checkIns();
-    const [job] = momJobs();
-    const states = [
-      ["running", scheduled.running, true],
-      ["completed", scheduled.completed, false],
-      ...Object.entries(scheduled.failures).map(
-        ([state, native]) => [state, native, false] as const,
-      ),
-    ] as const;
-    for (const [, native, running] of states) {
-      jobs = jobs.map((row) =>
-        row.id === job.id ? { ...row, running, nativeOverrides: nativeOverrides(native) } : row,
-      );
-      calls.length = 0;
-      await created.mains.reconcile();
-      expect(momJobs().map((row) => row.id)).toEqual([job.id]);
-      expect(calls.filter((call) => /^(stop|delete|create|update)/.test(call))).toEqual([]);
-    }
   });
 });
 

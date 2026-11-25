@@ -102,6 +102,7 @@ export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime)
       operation: "add_login",
       profile: botId(req),
       login: body,
+      actor: signedIn(req).id,
     }),
   );
   apiRoute(app, "DELETE /bots/:id/vault/logins/:itemId", {}, (req) => {

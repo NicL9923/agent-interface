@@ -286,7 +286,7 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     await api.runRouteCheck()
     lan.answer(status: 403, body: #"{"error":"Only administrators can do that."}"#)
     do {
-      _ = try await api.data(path: "/api/hermes/upgrade/install", method: "POST", body: Data("{}".utf8), contentType: "application/json")
+      _ = try await api.data(path: "/api/computer/terminal", method: "POST", body: Data("{}".utf8), contentType: "application/json")
       XCTFail("expected the 403")
     } catch let error as APIError { XCTAssertEqual(error.status, 403) }
     XCTAssertFalse(primary.requests.contains { $0.httpMethod == "POST" })

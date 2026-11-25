@@ -757,87 +757,9 @@ it("declines a handoff only for an assistant the member can see, with a validate
   expect((await decline(s.one, body)).statusCode).toBe(502);
 });
 
-it("names the same handoff method as the Hermes add-on", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const { computerHandoffMethod } = await import("../src/shared/computer.js");
-  const source = await readFile(new URL("../src/hermes/computer.py", import.meta.url), "utf8");
-  expect(source).toContain(`HANDOFF = "${computerHandoffMethod}"`);
-  expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(
-    `HANDOFF = "${computerHandoffMethod}"`,
-  );
-});
-
-it("names the same terminal request method as the Hermes add-on", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const { terminalRequestMethod, terminalCommandPattern } =
-    await import("../src/shared/computer.js");
-  expect(await readFile(new URL("../src/hermes/computer.py", import.meta.url), "utf8")).toContain(
-    `TERMINAL_REQUEST = "${terminalRequestMethod}"`,
-  );
-  expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(
-    `TERMINAL_REQUEST = "${terminalRequestMethod}"`,
-  );
-  // The add-on refuses a command with a line break; so must the app, because a pasted newline runs the command.
+it("refuses terminal commands with line breaks, control characters, or excessive length", async () => {
+  const { terminalCommandPattern } = await import("../src/shared/computer.js");
   expect(terminalCommandPattern.test("ls -la")).toBe(true);
   for (const bad of ["", "ls\nrm -rf ~", "ls\r", "ls\u202e", "x".repeat(501)])
     expect(terminalCommandPattern.test(bad), JSON.stringify(bad)).toBe(false);
-});
-
-it("keeps a terminal request open instead of refusing it as an unknown bridge", async () => {
-  const { applyFrame, emptyLiveState } = await import("../src/server/hermes-mapping.js");
-  const { terminalRequestMethod } = await import("../src/shared/computer.js");
-  const state = emptyLiveState();
-  expect(
-    applyFrame(
-      state,
-      {
-        jsonrpc: "2.0",
-        id: "srq-term",
-        method: terminalRequestMethod,
-        params: { session_id: "s", reason: "r", what_to_do: "w" },
-      },
-      1,
-    ),
-  ).toBe(true);
-  expect(state.state).toBe("blocked");
-});
-
-it("keeps a handoff request open instead of refusing it as an unknown bridge", async () => {
-  const { applyFrame, emptyLiveState } = await import("../src/server/hermes-mapping.js");
-  const { computerHandoffMethod } = await import("../src/shared/computer.js");
-  const state = emptyLiveState();
-  expect(
-    applyFrame(
-      state,
-      {
-        jsonrpc: "2.0",
-        id: "srq-hand",
-        method: computerHandoffMethod,
-        params: { session_id: "s", reason: "r", what_to_do: "w" },
-      },
-      1,
-    ),
-  ).toBe(true);
-  expect(state.state).toBe("blocked");
-  expect(
-    applyFrame(
-      state,
-      {
-        jsonrpc: "2.0",
-        id: "event",
-        method: "event",
-        params: { type: "request.cancel", payload: { id: "srq-hand" } },
-      },
-      2,
-    ),
-  ).toBe(true);
-  expect(state.requests).toEqual([]);
-  // Window bridges this client cannot answer are still refused.
-  expect(
-    applyFrame(
-      emptyLiveState(),
-      { jsonrpc: "2.0", id: "srq-x", method: "preview.read", params: {} },
-      3,
-    ),
-  ).toBe(false);
 });

@@ -279,9 +279,9 @@ struct BotSettingsView: View {
     if let current, current.model == form.model, let name = current.modelName, !name.isEmpty { return name }
     return form.model
   }
-  /// Simple view names the harness only once there is more than Hermes to tell apart.
+  /// Shows the harness beside the model name when set.
   private var behaviorSummary: String {
-    guard let saved = savedForm.harness, advanced || saved != Harness.hermes else { return modelName }
+    guard let saved = savedForm.harness else { return modelName }
     return "\(Harness.label(saved)) · \(modelName)"
   }
   private var sectionList: some View {
@@ -489,7 +489,7 @@ struct BotSettingsView: View {
     if advanced || available.count > 1 {
       Section {
         Picker("Harness", selection: Binding(
-          get: { form.harness ?? Harness.hermes },
+          get: { form.harness ?? "antigravity" },
           set: { form.harness = $0; error = nil })) {
           ForEach(available) { Text($0.label).tag($0.id) }
         }.accessibilityIdentifier("harnessPicker")

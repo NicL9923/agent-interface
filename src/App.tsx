@@ -83,7 +83,6 @@ import {
   UsagePanel,
   GroupCreate,
   GroupRoomView,
-  HermesUpgradePanel,
   Loading,
   PreferencesDialog,
   RoutineResults,
@@ -507,7 +506,6 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const { update, installEvent, notice, setNotice } = useAppInstall();
   // These keep their state while closed (a running update, a terminal), so once opened they stay mounted.
   const computerLoaded = useOnceActive(panel?.kind === "computer");
-  const upgradeLoaded = useOnceActive(panel?.kind === "upgrade");
   // Phone navigation hides one screen behind inert, so move focus to the one shown.
   const shownRail = useRef(railOpen);
   useEffect(() => {
@@ -1353,18 +1351,6 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           />
         </Loading>
       )}
-      {upgradeLoaded && (
-        <Loading>
-          <HermesUpgradePanel
-            key={`upgrades:${boot.user.id}`}
-            open={panel?.kind === "upgrade"}
-            onClose={() => closePanels("upgrade")}
-            bots={boot.bots}
-            currentVersion={boot.connection.version}
-            currentRevisionDate={boot.connection.revisionDate}
-          />
-        </Loading>
-      )}
       {panel?.kind === "preferences" && (
         <Loading>
           <PreferencesDialog
@@ -1382,7 +1368,6 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             onSignOut={signOut}
             signOutOnDeviceOnly={!canChangeAccounts()}
             onComputer={() => open({ kind: "computer" })}
-            onUpgrade={() => open({ kind: "upgrade" })}
             onShortcuts={showShortcuts}
           />
         </Loading>

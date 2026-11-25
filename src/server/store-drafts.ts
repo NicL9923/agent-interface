@@ -1,5 +1,5 @@
 import type { SavedDraft } from "../shared/types.js";
-import { fileIdentity } from "./hermes-files.js";
+import { fileIdentity } from "./file-signer.js";
 import type { StoreDatabase } from "./store-database.js";
 
 // What a draft says, with each attachment as the file it names: a re-signed identifier is the same attachment.

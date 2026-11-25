@@ -19,7 +19,7 @@ import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
 import { badgeFor, rosterOnce } from "./badge.js";
 import { digestCopy } from "../shared/event-copy.js";
-import { hermesRuntimeId } from "./runtime-router.js";
+import { defaultEventSource } from "./store-events.js";
 import { isIncomplete } from "./unknown-roster.js";
 export type PushSender = (
   subscription: webpush.PushSubscription,
@@ -284,7 +284,7 @@ export class BackgroundWorker {
       // and holds up no other.
       let failure: { error: unknown } | undefined;
       const sources = this.runtime.eventSources?.();
-      for (const source of sources ?? [hermesRuntimeId]) {
+      for (const source of sources ?? [defaultEventSource]) {
         try {
           // A runtime with event sources refuses one without durable events itself; a lone runtime is asked here.
           if (!sources) {
