@@ -23,7 +23,7 @@ import { assistantsUnavailable, notFound, visible, type Roster } from "./bot-acc
 import { httpError } from "./http-error.js";
 import { assertRoutinesStayPrivate, serialDelivery } from "./routine-delivery.js";
 import { avatar, botSaveRequest, id } from "./schemas.js";
-import { TALK_VOICES } from "../shared/voice.js";
+import { ALL_TALK_VOICES, isGrokTalkVoice } from "../shared/voice.js";
 import type { Store } from "./store.js";
 import { withBotCapabilities } from "./runtime-snapshot.js";
 import { mayOmit } from "./unknown-roster.js";
@@ -347,10 +347,11 @@ export function installBotRoutes(
   apiRoute(
     app,
     "PUT /bots/:id/voice",
-    { body: z.object({ voice: z.enum(TALK_VOICES) }).strict() },
+    { body: z.object({ voice: z.enum(ALL_TALK_VOICES) }).strict() },
     async (req, { voice }) => {
       const bot = await listed(req.params.id);
-      if ((await nativeAvatar(bot.id)) && runtime.setVoice) await runtime.setVoice(bot.id, voice);
+      if (!isGrokTalkVoice(voice) && (await nativeAvatar(bot.id)) && runtime.setVoice)
+        await runtime.setVoice(bot.id, voice);
       else store.saveVoice(bot.id, voice);
       return { voice };
     },

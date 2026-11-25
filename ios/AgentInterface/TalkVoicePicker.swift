@@ -1,10 +1,28 @@
 import AVFoundation
 import SwiftUI
 
-/// The Realtime voices live Talk can use, mirroring `TALK_VOICES` in src/shared/voice.ts.
+/// The Realtime voices live Talk can use, mirroring `TALK_VOICES` and `GROK_TALK_VOICES` in src/shared/voice.ts.
 enum TalkVoice {
+  enum Provider: String, CaseIterable, Identifiable {
+    case openai, xai
+    var id: String { rawValue }
+    var label: String { self == .xai ? "Grok Voice" : "OpenAI Realtime" }
+  }
   static let all = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
+  static let grokAll = ["eve", "ara", "rex", "sal", "leo"]
   static let `default` = "marin"
+  static let grokDefault = "eve"
+  static let grokHints = ["eve": "Energetic", "ara": "Warm", "rex": "Confident", "sal": "Balanced", "leo": "Authoritative"]
+  static func isGrok(_ voice: String) -> Bool { grokAll.contains(voice) }
+  static func provider(for voice: String?) -> Provider {
+    voice.map(isGrok) == true ? .xai : .openai
+  }
+  static func voices(for provider: Provider) -> [String] {
+    provider == .xai ? grokAll : all
+  }
+  static func defaultVoice(for provider: Provider) -> String {
+    provider == .xai ? grokDefault : Self.default
+  }
   static func title(_ voice: String) -> String { voice.prefix(1).uppercased() + voice.dropFirst() }
   /// The note under the picker when this server cannot run live Talk. A server that does not
   /// report the capability at all says nothing, as the web picker does.
@@ -116,22 +134,42 @@ struct TalkVoiceSection: View {
   let bot: Bot
   @Environment(AppStore.self) private var store
   @State private var model: TalkVoiceModel
+  @State private var provider: TalkVoice.Provider
 
   init(bot: Bot) {
     self.bot = bot
     _model = State(initialValue: TalkVoiceModel(botId: bot.id, voice: bot.voice))
+    _provider = State(initialValue: TalkVoice.provider(for: bot.voice))
   }
   private var savedVoice: String? { store.bootstrap?.bots.first { $0.id == bot.id }?.voice ?? bot.voice }
 
   var body: some View {
     Section {
+      Picker("Voice provider", selection: Binding(
+        get: { provider },
+        set: { next in
+          guard next != provider, model.saving == nil else { return }
+          model.stop()
+          provider = next
+          if TalkVoice.provider(for: model.chosen) != next {
+            let voice = TalkVoice.defaultVoice(for: next)
+            Task { if await model.choose(voice) { await store.refreshBootstrap() } }
+          }
+        })) {
+        ForEach(TalkVoice.Provider.allCases) { item in
+          Text(item.label).tag(item)
+        }
+      }
+      .pickerStyle(.segmented)
+      .disabled(model.saving != nil)
+      .accessibilityIdentifier("talkVoiceProvider")
       if let note = TalkVoice.unavailableNote(store.bootstrap?[capability: .liveVoice]) {
         Text(note).font(.footnote).foregroundStyle(Palette.muted).accessibilityIdentifier("talkVoiceUnavailable")
       }
       if !model.error.isEmpty {
         Text(model.error).font(.footnote).foregroundStyle(Palette.danger).accessibilityIdentifier("talkVoiceError")
       }
-      ForEach(TalkVoice.all, id: \.self) { voice in row(voice) }
+      ForEach(TalkVoice.voices(for: provider), id: \.self) { voice in row(voice) }
     } header: {
       Text("Voice for live Talk").font(.subheadline.weight(.semibold)).foregroundStyle(Palette.muted)
     } footer: {
@@ -139,12 +177,17 @@ struct TalkVoiceSection: View {
         .foregroundStyle(Palette.muted)
     }
     .task(id: store.api.map(ObjectIdentifier.init)) { model.api = store.api }
-    .onChange(of: savedVoice) { _, voice in model.sync(voice) }
+    .onChange(of: savedVoice) { _, voice in
+      model.sync(voice)
+      if model.saving == nil { provider = TalkVoice.provider(for: voice) }
+    }
     .onDisappear { model.stop() }
   }
 
   private func row(_ voice: String) -> some View {
     let selected = model.chosen == voice
+    let isGrok = TalkVoice.isGrok(voice)
+    let isDefault = voice == (isGrok ? TalkVoice.grokDefault : TalkVoice.default)
     return VStack(alignment: .leading, spacing: 4) {
       HStack {
         Button {
@@ -152,7 +195,8 @@ struct TalkVoiceSection: View {
         } label: {
           HStack {
             Text(TalkVoice.title(voice)).foregroundStyle(.primary)
-            if voice == TalkVoice.default { Text("Default").font(.caption).foregroundStyle(Palette.muted) }
+            if let hint = TalkVoice.grokHints[voice] { Text(hint).font(.caption).foregroundStyle(Palette.muted) }
+            if isDefault { Text("Default").font(.caption).foregroundStyle(Palette.muted) }
             if model.saving == voice { Text("Saving…").font(.caption).foregroundStyle(Palette.muted) }
             Spacer()
             if selected { Image(systemName: "checkmark").foregroundStyle(Palette.accent) }
@@ -162,13 +206,15 @@ struct TalkVoiceSection: View {
         .disabled(model.saving != nil)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("voiceOption.\(voice)")
-        let playing = model.playing == voice
-        Button { model.toggleSample(voice) } label: {
-          Image(systemName: playing ? "stop.fill" : "play.fill").foregroundStyle(Palette.accent).frame(minWidth: 44, minHeight: 44)
+        if !isGrok {
+          let playing = model.playing == voice
+          Button { model.toggleSample(voice) } label: {
+            Image(systemName: playing ? "stop.fill" : "play.fill").foregroundStyle(Palette.accent).frame(minWidth: 44, minHeight: 44)
+          }
+          .buttonStyle(.borderless)
+          .accessibilityLabel(playing ? "Stop \(TalkVoice.title(voice)) sample" : "Play \(TalkVoice.title(voice)) sample")
+          .accessibilityIdentifier("voiceSample.\(voice)")
         }
-        .buttonStyle(.borderless)
-        .accessibilityLabel(playing ? "Stop \(TalkVoice.title(voice)) sample" : "Play \(TalkVoice.title(voice)) sample")
-        .accessibilityIdentifier("voiceSample.\(voice)")
       }
       if model.failed == voice {
         Text("This sample could not play.").font(.caption).foregroundStyle(Palette.danger)

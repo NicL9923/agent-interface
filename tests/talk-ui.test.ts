@@ -348,4 +348,25 @@ describe("voice picker", () => {
       "Hermes is offline.",
     );
   });
+
+  it("switches between OpenAI Realtime and Grok Voice providers and saves the chosen Grok voice", async () => {
+    write.mockResolvedValueOnce({ voice: "eve" }).mockResolvedValueOnce({ voice: "rex" });
+    const saved = vi.fn();
+    const mount = mountRoot();
+    await mount.render(
+      createElement(VoicePicker, { botId: "ranch", name: "Ranch Hand", onSaved: saved }),
+    );
+    const grokTab = [...mount.container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+      (button) => button.textContent === "Grok Voice",
+    )!;
+    await act(async () => grokTab.click());
+    expect(write).toHaveBeenCalledWith("/bots/ranch/voice", { voice: "eve" }, "PUT");
+    expect(saved).toHaveBeenCalledWith("eve");
+    expect(mount.container.querySelectorAll('input[type="radio"]')).toHaveLength(5);
+    await act(async () =>
+      mount.container.querySelector<HTMLInputElement>('input[value="rex"]')!.click(),
+    );
+    expect(write).toHaveBeenCalledWith("/bots/ranch/voice", { voice: "rex" }, "PUT");
+    expect(saved).toHaveBeenCalledWith("rex");
+  });
 });

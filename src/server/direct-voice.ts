@@ -1,11 +1,14 @@
 import type { RealtimeSessionInput } from "../shared/types.js";
 import {
   DEFAULT_TALK_VOICE,
+  GROK_TALK_MODEL,
+  GROK_TALK_WS_URL,
   MAX_SPOKEN_TEXT,
   MAX_VOICE_BYTES,
   TALK_MODEL,
   VOICE_MIMES,
-  isTalkVoice,
+  isGrokTalkVoice,
+  isOpenAiTalkVoice,
   type TalkSession,
   type TalkVoice,
   type VoiceAudio,
@@ -87,8 +90,11 @@ function upstreamError(status: number) {
   });
 }
 
-function validateSession(input: RealtimeSessionInput) {
-  if (!isTalkVoice(input.voice)) throw httpError(400, "Choose one of the supported voices.");
+function validateSession(
+  input: RealtimeSessionInput,
+  allowedVoice: (voice: unknown) => boolean = isOpenAiTalkVoice,
+) {
+  if (!allowedVoice(input.voice)) throw httpError(400, "Choose one of the supported voices.");
   if (
     typeof input.instructions !== "string" ||
     !input.instructions.trim() ||
@@ -270,7 +276,7 @@ export function createDirectVoiceService(options: DirectVoiceOptions = {}): Dire
       if (!input) throw httpError(400, "Choose a reply with text to read aloud.");
       if (input.length > MAX_SPOKEN_TEXT)
         throw httpError(400, "This reply is too long to read aloud. Ask for a shorter summary.");
-      if (!isTalkVoice(voice)) throw httpError(400, "Choose one of the supported voices.");
+      if (!isOpenAiTalkVoice(voice)) throw httpError(400, "Choose one of the supported voices.");
       const data = await call(
         "/v1/audio/speech",
         {
@@ -291,6 +297,135 @@ export function createDirectVoiceService(options: DirectVoiceOptions = {}): Dire
           expose: true,
         });
       return { data, mime: "audio/mpeg", provider: "openai" };
+    },
+  };
+}
+
+export interface GrokVoiceOptions {
+  /** Defaults to XAI_API_KEY in `env`. Blank means unconfigured. */
+  apiKey?: string;
+  /** Defaults to https://api.x.ai. Tests point it at a loopback server. */
+  baseUrl?: string;
+  /** Defaults to wss://api.x.ai/v1/realtime. */
+  wsBaseUrl?: string;
+  realtimeModel?: string;
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+  /** How long a minted xAI Realtime secret lives, in seconds. */
+  secretTtlSeconds?: number;
+  env?: Record<string, string | undefined>;
+}
+
+export interface GrokVoiceService {
+  status(): DirectVoiceStatus;
+  realtimeSession(input: RealtimeSessionInput): Promise<TalkSession>;
+}
+
+export const GROK_VOICE_UNCONFIGURED = "Configure XAI_API_KEY to enable Grok Voice.";
+const DEFAULT_XAI_BASE_URL = "https://api.x.ai";
+const DEFAULT_XAI_SECRET_TTL = 300;
+
+function xaiUpstreamError(status: number) {
+  if (status === 401 || status === 403)
+    return httpError(502, "xAI refused the configured API key. Check XAI_API_KEY.", {
+      expose: true,
+    });
+  if (status === 429)
+    return httpError(503, "xAI is limiting Grok Voice requests right now. Try again shortly.", {
+      expose: true,
+    });
+  return httpError(502, `xAI could not handle the Grok Voice request (HTTP ${status}).`, {
+    expose: true,
+  });
+}
+
+/**
+ * Live Talk through xAI's Grok Voice Agent API (`wss://api.x.ai/v1/realtime`).
+ * The master `XAI_API_KEY` never leaves this server: clients receive a short-lived client secret
+ * and the validated `session.update` payload to send once the WebSocket opens.
+ */
+export function createGrokVoiceService(options: GrokVoiceOptions = {}): GrokVoiceService {
+  const apiKey = (options.apiKey ?? (options.env ?? process.env).XAI_API_KEY ?? "").trim();
+  const baseUrl = (options.baseUrl ?? DEFAULT_XAI_BASE_URL).replace(/\/+$/, "");
+  const wsBaseUrl = (options.wsBaseUrl ?? GROK_TALK_WS_URL).replace(/\/+$/, "");
+  const realtimeModel = options.realtimeModel ?? GROK_TALK_MODEL;
+  const fetcher = options.fetch ?? globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const secretTtl = options.secretTtlSeconds ?? DEFAULT_XAI_SECRET_TTL;
+
+  const configured = () => {
+    if (!apiKey) throw httpError(409, GROK_VOICE_UNCONFIGURED);
+  };
+
+  return {
+    status() {
+      return apiKey ? { available: true } : { available: false, reason: GROK_VOICE_UNCONFIGURED };
+    },
+
+    async realtimeSession(input) {
+      configured();
+      const tools = validateSession(input, isGrokTalkVoice);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let secret: { value: string; expiresAt: number } | undefined;
+      try {
+        let response: Response;
+        try {
+          response = await fetcher(`${baseUrl}/v1/realtime/client_secrets`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ expires_after: { seconds: secretTtl } }),
+            signal: controller.signal,
+          });
+        } catch {
+          throw controller.signal.aborted
+            ? httpError(504, "xAI did not answer the Grok Voice request in time. Try again.", {
+                expose: true,
+              })
+            : httpError(502, "WildBots could not reach xAI for Grok Voice. Try again.", {
+                expose: true,
+              });
+        }
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
+          throw xaiUpstreamError(response.status);
+        }
+        try {
+          secret = readSecret(await response.json());
+        } catch {
+          throw httpError(502, "xAI returned an unreadable Grok Voice session.", { expose: true });
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!secret)
+        throw httpError(502, "xAI returned an unreadable Grok Voice session.", { expose: true });
+      const sessionUpdate: Record<string, unknown> = {
+        type: "session.update",
+        session: {
+          voice: input.voice,
+          instructions: input.instructions,
+          turn_detection: { type: "server_vad" },
+          audio: {
+            input: { format: { type: "audio/pcm", rate: 24000 } },
+            output: { format: { type: "audio/pcm", rate: 24000 } },
+          },
+          tools,
+        },
+      };
+      return {
+        clientSecret: secret.value,
+        expiresAt: secret.expiresAt,
+        model: realtimeModel,
+        voice: input.voice,
+        provider: "xai",
+        wsUrl: `${wsBaseUrl}?model=${encodeURIComponent(realtimeModel)}`,
+        sessionUpdate,
+        sessionUpdateJson: JSON.stringify(sessionUpdate),
+      };
     },
   };
 }

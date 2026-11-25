@@ -1,7 +1,8 @@
-import type { HarnessOption, Runtime } from "../shared/types.js";
+import type { HarnessOption, RealtimeSessionInput, Runtime } from "../shared/types.js";
 import type { ManagedBotRecord } from "../shared/harness.js";
+import { isGrokTalkVoice } from "../shared/voice.js";
 import type { Config } from "./config.js";
-import { createDirectVoiceService } from "./direct-voice.js";
+import { createDirectVoiceService, createGrokVoiceService } from "./direct-voice.js";
 import type { HarnessDriver, HarnessDriverId, HarnessMcpServerSpec } from "./harness/driver.js";
 import { createDefaultHarnessDrivers, type HarnessVoiceDelegate } from "./harness/index.js";
 import { createCompositeRuntime, hermesOnlyForNew } from "./harness/wiring.js";
@@ -115,32 +116,42 @@ export async function composeServerRuntime({
   });
   try {
     const directVoice = createDirectVoiceService();
-    const voice: HarnessVoiceDelegate = directVoice.status().available
-      ? {
-          liveVoice: async () => ({ supported: true }),
-          realtimeSession: (input) => directVoice.realtimeSession(input),
-          transcribeVoice: (botId, input) => directVoice.transcribeVoice(botId, input),
-          synthesizeVoice: (botId, text, chosen) =>
-            directVoice.synthesizeVoice(botId, text, chosen),
+    const grokVoice = createGrokVoiceService();
+    const openAiDirect = directVoice.status().available;
+    const grokAvailable = grokVoice.status().available;
+    const mintRealtime = (input: RealtimeSessionInput) => {
+      if (isGrokTalkVoice(input.voice)) return grokVoice.realtimeSession(input);
+      if (openAiDirect) return directVoice.realtimeSession(input);
+      if (hermes.realtimeSession) return hermes.realtimeSession(input);
+      return directVoice.realtimeSession(input);
+    };
+    const voice: HarnessVoiceDelegate = {
+      liveVoice: async () => {
+        if (openAiDirect || grokAvailable) return { supported: true };
+        try {
+          return (await hermes.capabilities()).liveVoice;
+        } catch {
+          return { supported: false, reason: "Live voice is unavailable right now." };
         }
-      : {
-          liveVoice: async () => {
-            try {
-              return (await hermes.capabilities()).liveVoice;
-            } catch {
-              return { supported: false, reason: "Live voice is unavailable right now." };
-            }
-          },
-          ...(hermes.realtimeSession
-            ? { realtimeSession: (input) => hermes.realtimeSession!(input) }
-            : {}),
-          ...(hermes.transcribeVoice
-            ? { transcribeVoice: (_botId, input) => hermes.transcribeVoice!("default", input) }
-            : {}),
-          ...(hermes.synthesizeVoice
-            ? { synthesizeVoice: (_botId, text) => hermes.synthesizeVoice!("default", text) }
-            : {}),
-        };
+      },
+      ...(openAiDirect || grokAvailable || hermes.realtimeSession
+        ? { realtimeSession: mintRealtime }
+        : {}),
+      ...(openAiDirect
+        ? {
+            transcribeVoice: (botId, input) => directVoice.transcribeVoice(botId, input),
+            synthesizeVoice: (botId, text, chosen) =>
+              directVoice.synthesizeVoice(botId, text, chosen),
+          }
+        : {
+            ...(hermes.transcribeVoice
+              ? { transcribeVoice: (_botId, input) => hermes.transcribeVoice!("default", input) }
+              : {}),
+            ...(hermes.synthesizeVoice
+              ? { synthesizeVoice: (_botId, text) => hermes.synthesizeVoice!("default", text) }
+              : {}),
+          }),
+    };
     const composite = createCompositeRuntime({
       store,
       hermes,
@@ -152,12 +163,11 @@ export async function composeServerRuntime({
       fallback: config.nativeHarness.fallback,
       voice,
     });
-    if (directVoice.status().available) {
+    if (openAiDirect || grokAvailable || hermes.realtimeSession) {
       Object.defineProperty(composite.runtime, "realtimeSession", {
         enumerable: true,
         configurable: true,
-        value: (input: Parameters<typeof directVoice.realtimeSession>[0]) =>
-          directVoice.realtimeSession(input),
+        value: mintRealtime,
       });
     }
     return {
