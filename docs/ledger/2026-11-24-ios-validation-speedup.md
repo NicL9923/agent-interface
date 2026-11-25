@@ -7,7 +7,11 @@
 
 1. `.agents/tools/validate-ios.sh` defaults unfiltered `--allow-full-suite` runs to parallel simulator clones (`-parallel-testing-enabled YES -parallel-testing-worker-count 4`, overridable via `IOS_FULL_SUITE_WORKERS` or explicit `-parallel-testing-enabled NO`) under the whole-Mac lock, while keeping focused `-only-testing:` runs serial under `--sim`.
 2. `.agents/tools/validate-ios.sh` resolves linked git worktrees' default `DerivedData` to `<main-checkout>/.private/ios-build-<SIMULATOR_UUID>` (still isolated per simulator and protected by the simulator/whole-Mac lock), so fresh worktrees reuse incremental Swift builds.
-3. `ios/AgentInterfaceUITests/ScreenshotTourTests.swift` splits the monolithic 31-test `ScreenshotTourTests` class into base class `ScreenshotTourTestCase` plus 15 balanced `XCTestCase` subclasses (giving each multi-minute Memory and Work Tasks part its own class) so XCTest distributes heavy design-review tours evenly across parallel simulator clones. `.agents/tools/ios-screenshot-tour.sh` lists all 15 subclasses.
+3. `ios/AgentInterfaceUITests/ScreenshotTourTests.swift` splits the monolithic `ScreenshotTourTests` class into base class `ScreenshotTourTestCase` plus 8 balanced `XCTestCase` subclasses (giving each multi-minute Memory part its own class) so XCTest distributes heavy design-review tours evenly across parallel simulator clones. `.agents/tools/ios-screenshot-tour.sh` lists all 8 subclasses.
+4. Fixed the UI test regressions left behind when PR #476 removed the Connections page and Goals/Tasks/Triggers Work board and added the Harness section to Behavior settings:
+   - Updated `NativeFlowTests.testSettingsListOpensEachSectionAndProfileKeepsAvatarVisible` section summaries to match `BotSettingsView.swift` (`"Logins and approvals"`, `"Scheduled routines"`).
+   - Removed the 10 dead Work Goal/Task/Trigger design-review tests from `ScreenshotTourTests.swift` (and the obsolete `tests/pinned-fixtures.test.ts` that only pinned `work-triggers.json` for those removed tests).
+   - Added `"settings.behavior"` to the 24-drag travel budget in `revealFormControl` so `testModelsCaptionDesignReview` and `testModelsDesignReview` reach the Skills switches below the new Harness section at `AccessibilityXL`.
 
 ## Red-run proof
 
