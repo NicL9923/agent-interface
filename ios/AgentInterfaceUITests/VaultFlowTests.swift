@@ -20,7 +20,7 @@ import XCTest
     XCTAssertTrue(field.waitForExistence(timeout: 5)); field.typeWhenFocused(value)
   }
   private func reveal(_ button: XCUIElement, app: XCUIApplication, container: XCUIElement? = nil) {
-    for _ in 0..<5 { if button.canTap { return }; (container ?? app.scrollViews.firstMatch).swipeUp() }
+    for _ in 0..<5 { if button.waitUntilHittable(timeout: 1) { return }; (container ?? app.scrollViews.firstMatch).swipeUp() }
   }
   func testProfileLoginAddRemoveAndAvailableExternalSourceUnlock() {
     let app = launch()
@@ -35,13 +35,13 @@ import XCTest
     field("vault.loginOrigin", app: app, value: "https://library.example.test")
     field("vault.loginIdentifier", app: app, value: "fixture-reader")
     field("vault.loginPassword", app: app, value: "fixture-password", secure: true)
-    let save = app.buttons["vault.saveLogin"]; reveal(save, app: app, container: app.collectionViews["vaultAddForm"]); save.tap()
+    let save = app.buttons["vault.saveLogin"]; reveal(save, app: app, container: app.collectionViews["vaultAddForm"]); save.tapWhenReady()
     XCTAssertTrue(app.staticTexts["Fixture library"].waitForExistence(timeout: 5))
-    let remove = app.buttons["vault.remove.added-login"]; reveal(remove, app: app, container: app.collectionViews["vaultForm"]); remove.tap()
-    let confirm = app.sheets.buttons["Remove login"]; XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
+    let remove = app.buttons["vault.remove.added-login"]; reveal(remove, app: app, container: app.collectionViews["vaultForm"]); remove.tapWhenReady()
+    let confirm = app.sheets.buttons["Remove login"]; XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tapWhenReady()
     let absent = NSPredicate(format: "exists == false"); expectation(for: absent, evaluatedWith: app.staticTexts["Fixture library"]); waitForExpectations(timeout: 5)
-    let unlock = app.buttons["Unlock Bitwarden fixture"]; reveal(unlock, app: app, container: app.collectionViews["vaultForm"]); unlock.tap()
-    field("vault.unlockPassword", app: app, value: "fixture-master", secure: true); app.buttons["vault.unlock"].tap()
+    let unlock = app.buttons["Unlock Bitwarden fixture"]; reveal(unlock, app: app, container: app.collectionViews["vaultForm"]); unlock.tapWhenReady()
+    field("vault.unlockPassword", app: app, value: "fixture-master", secure: true); app.buttons["vault.unlock"].tapWhenReady()
     XCTAssertTrue(app.buttons["Lock Bitwarden fixture"].waitForExistence(timeout: 5))
     capture(app, name: "Native available password source controls")
   }
@@ -50,15 +50,15 @@ import XCTest
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10)); app.openAssistantSettings("Ranch hand")
     app.selectSettingsTab("Logins")
     XCTAssertTrue(app.staticTexts["Hermes profile: default"].waitForExistence(timeout: 5))
-    let unlock = app.buttons["Unlock Bitwarden fixture"]; reveal(unlock, app: app, container: app.collectionViews["vaultForm"]); unlock.tap()
-    field("vault.unlockPassword", app: app, value: "fixture-master", secure: true); app.buttons["vault.unlock"].tap()
+    let unlock = app.buttons["Unlock Bitwarden fixture"]; reveal(unlock, app: app, container: app.collectionViews["vaultForm"]); unlock.tapWhenReady()
+    field("vault.unlockPassword", app: app, value: "fixture-master", secure: true); app.buttons["vault.unlock"].tapWhenReady()
     let message = "Hermes could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared."
     XCTAssertTrue(app.staticTexts["vault.unlockError"].waitForExistence(timeout: 5), "The error shows in the sheet that asked for the password")
     XCTAssertEqual(app.staticTexts["vault.unlockError"].label, message)
     XCTAssertTrue(app.secureTextFields["vault.unlockPassword"].exists, "The sheet stays open until Hermes answers")
     XCTAssertFalse(app.buttons["vault.unlock"].isEnabled)
     capture(app, name: "Native failed unlock stays in the sheet")
-    app.buttons["Cancel"].tap()
+    app.buttons["Cancel"].tapWhenReady()
     let banner = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "could not confirm this change")).firstMatch
     for _ in 0..<5 { if banner.exists { break }; app.collectionViews["vaultForm"].swipeDown() }
     XCTAssertTrue(banner.exists, "The unconfirmed change is explained on the vault screen")
@@ -66,7 +66,7 @@ import XCTest
     XCTAssertFalse(app.buttons["vault.add"].isEnabled, "An unconfirmed change locks vault actions")
     reveal(unlock, app: app, container: app.collectionViews["vaultForm"])
     XCTAssertFalse(unlock.isEnabled)
-    let reload = app.buttons["vault.reload"]; reveal(reload, app: app, container: app.collectionViews["vaultForm"]); reload.tap()
+    let reload = app.buttons["vault.reload"]; reveal(reload, app: app, container: app.collectionViews["vaultForm"]); reload.tapWhenReady()
     reveal(app.buttons["vault.add"], app: app, container: app.collectionViews["vaultForm"])
     expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: app.buttons["vault.add"]); waitForExpectations(timeout: 5)
     XCTAssertFalse(banner.exists)

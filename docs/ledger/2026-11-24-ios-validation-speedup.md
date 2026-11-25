@@ -12,6 +12,8 @@
    - Updated `NativeFlowTests.testSettingsListOpensEachSectionAndProfileKeepsAvatarVisible` section summaries to match `BotSettingsView.swift` (`"Logins and approvals"`, `"Scheduled routines"`).
    - Removed the 10 dead Work Goal/Task/Trigger design-review tests from `ScreenshotTourTests.swift` (and the obsolete `tests/pinned-fixtures.test.ts` that only pinned `work-triggers.json` for those removed tests).
    - Added `"settings.behavior"` to the 24-drag travel budget in `revealFormControl` so `testModelsCaptionDesignReview` and `testModelsDesignReview` reach the Skills switches below the new Harness section at `AccessibilityXL`.
+5. Gated the 12 multi-variant visual design-review capture tours in `ScreenshotTourTests.swift` behind `requireDesignTour()` (`AGENT_INTERFACE_SCREENSHOT_DIR` or `AGENT_INTERFACE_DESIGN_VARIANT`), matching `ios/README.md` ("UI tests skip ... `ScreenshotTourTests`, which only produces evidence") while keeping `testShortQuestionFollowsItsLongReply`, `testAvatarCreationLayoutRegression`, all 987 unit tests, and all 19 behavioral UI suites always active.
+6. Hardened `VaultFlowTests.swift` (`reveal` + `tapWhenReady()`) after `task-54` hit a scroll-settling hittability race on `Unlock Bitwarden fixture` under parallel load (isolated rerun `task-100` passed cleanly).
 
 ## Red-run proof
 

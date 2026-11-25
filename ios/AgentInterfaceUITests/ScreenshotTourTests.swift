@@ -30,6 +30,17 @@ import XCTest
     try await super.tearDown()
   }
 
+  /// Visual design-review tours launch the app many times across light/dark/large-text variants
+  /// to produce design-gate screenshots. Routine full-suite runs skip them unless a capture
+  /// directory or explicit variant is requested (matching ios/README.md).
+  fileprivate func requireDesignTour() throws {
+    let variant = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    try XCTSkipUnless(
+      directory != nil || !variant.isEmpty,
+      "Set AGENT_INTERFACE_SCREENSHOT_DIR or AGENT_INTERFACE_DESIGN_VARIANT to run design-review capture tours."
+    )
+  }
+
   /// The gutter drag scrolls the form without sending the gesture into its nested TextEditor.
   fileprivate func settingsReveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
     // Profile's fixed preview and Save bar cover parts of its reported form frame.
@@ -101,6 +112,7 @@ import XCTest
     XCTFail("Models control did not fit within the visible form: \(element)")
   }
   fileprivate func memoryDesignReview(part: Int) throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MEMORY_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_MEMORY_PATH to capture Memory."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
@@ -376,6 +388,7 @@ import XCTest
 @MainActor final class ScreenshotTourTests: ScreenshotTourTestCase {
   /// Focused captures for the screen-by-screen design gate, using the same data as the web.
   func testTodayDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_TODAY_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_TODAY_PATH to the shared design fixture."); return }
     let fixture = try Data(contentsOf: URL(fileURLWithPath: source))
@@ -436,6 +449,7 @@ import XCTest
   }
 
   func testHomeDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_HOME_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_HOME_PATH to capture home."); return }
     let fixture = try String(contentsOfFile: source, encoding: .utf8)
@@ -707,6 +721,7 @@ import XCTest
 
 @MainActor final class ConversationDesignTourTests: ScreenshotTourTestCase {
   func testConversationDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_CONVERSATION_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_CONVERSATION_PATH to capture conversation."); return }
     let fixture = try String(contentsOfFile: source, encoding: .utf8)
@@ -744,6 +759,7 @@ import XCTest
   }
 
   func testQuestionsDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_QUESTIONS_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_QUESTIONS_PATH to capture questions."); return }
     let data = try Data(contentsOf: URL(fileURLWithPath: source))
@@ -863,6 +879,7 @@ import XCTest
   }
 
   func testApprovalsDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_APPROVALS_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_APPROVALS_PATH to capture approvals."); return }
     let data = try Data(contentsOf: URL(fileURLWithPath: source))
@@ -945,6 +962,7 @@ import XCTest
   }
 
   func testRecoveryDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_RECOVERY_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_RECOVERY_PATH to capture recovery."); return }
     let data = try Data(contentsOf: URL(fileURLWithPath: source))
@@ -1019,6 +1037,7 @@ import XCTest
 
 @MainActor final class DetailsAndModelsDesignTourTests: ScreenshotTourTestCase {
   func testDetailsDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_DETAILS_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_DETAILS_PATH to capture assistant details."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
@@ -1123,6 +1142,7 @@ import XCTest
 
   /// Only states affected by moving guidance outside disabled controls. Other captures stay valid.
   func testModelsCaptionDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MODELS_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set the shared Models fixture to capture caption corrections."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
@@ -1184,6 +1204,7 @@ import XCTest
 
   /// Shared production-shaped model and capability data, with explicit recoverable failures.
   func testModelsDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MODELS_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_MODELS_PATH to capture Models."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
@@ -1420,6 +1441,7 @@ import XCTest
 @MainActor final class AvatarAndSettingsDesignTourTests: ScreenshotTourTestCase {
   /// Captures the real editor with fixture-backed writes and refresh readback.
   func testAvatarDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_AVATAR_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_AVATAR_PATH to capture Avatar."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
@@ -1646,6 +1668,7 @@ import XCTest
   }
 
   func testSettingsDesignReview() throws {
+    try requireDesignTour()
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_SETTINGS_PATH"] ?? ""
     guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_SETTINGS_PATH to capture assistant creation and settings."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
