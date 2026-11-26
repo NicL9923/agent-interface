@@ -2444,6 +2444,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try await until { server.conversationQueries.count == beforeMalformed + 1 && value.conversationReadsInFlight == 0 }
         XCTAssertNil(value.latestInflight, "Malformed turn drops latestInflight")
         XCTAssertEqual(value.conversation?.version, "boot-a:1:4")
+        // Absence: confirm no second reload follows the first.
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(server.conversationQueries.count, beforeMalformed + 1, "Malformed turn triggers one reload")
     }
