@@ -34,6 +34,7 @@ struct PreferencesView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.dynamicTypeSize) private var typeSize
   @State private var form = SettingsForm()
   private var preferences: Preferences { form.shown }
   @State private var reachability = NetworkReachability()
@@ -89,14 +90,14 @@ struct PreferencesView: View {
           Section { NoticeBanner(message: notice) { store.preferencesNotice = nil }.accessibilityIdentifier("preferencesNotice") }
         }
         Section("Display") {
-          Picker("Appearance", selection: edited().theme) {
+          adaptivePicker("Appearance", selection: edited().theme) {
             Text("Follow device").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
           }
-          Picker("Chat style", selection: edited([.chatStyle]).chatStyleChoice) {
+          adaptivePicker("Chat style", selection: edited([.chatStyle]).chatStyleChoice) {
             Text("Bubbles").tag(ChatStyle.bubbles); Text("Classic").tag(ChatStyle.classic)
           }.accessibilityIdentifier("chatStyle")
           VStack(alignment: .leading, spacing: 4) {
-            Picker("Your messages", selection: edited([.ownBubble]).ownBubbleChoice) {
+            adaptivePicker("Your messages", selection: edited([.ownBubble]).ownBubbleChoice) {
               Text("Tinted").tag(OwnBubble.tint); Text("Solid color").tag(OwnBubble.solid)
             }.accessibilityIdentifier("ownBubble")
             Text("Solid color uses each assistant's color. Assistants with a photo keep the tint.").font(.caption).foregroundStyle(Palette.muted)
@@ -111,7 +112,7 @@ struct PreferencesView: View {
             Toggle("Advanced details", isOn: Binding(get: { preferences.presentation == "advanced" }, set: { on in update { $0.presentation = on ? "advanced" : "simple" } }))
               .labelsHidden().fixedSize().accessibilityIdentifier("advancedDetails")
           }
-          Picker("Start page", selection: Binding(get: { preferences.startPage ?? (preferences.defaultBotId == nil ? "today" : "assistant") }, set: { page in update { $0.startPage = page } })) {
+          adaptivePicker("Start page", selection: Binding(get: { preferences.startPage ?? (preferences.defaultBotId == nil ? "today" : "assistant") }, set: { page in update { $0.startPage = page } })) {
             Text("Today").tag("today"); Text("Assistant").tag("assistant")
           }
           defaultPicker
@@ -280,11 +281,28 @@ struct PreferencesView: View {
       }
     }.accessibilityIdentifier("followedAssistants")
   }
+  @ViewBuilder
+  private func adaptivePicker<SelectionValue: Hashable, Content: View>(
+    _ title: String,
+    selection: Binding<SelectionValue>,
+    @ViewBuilder content: () -> Content,
+  ) -> some View {
+    if typeSize.isAccessibilitySize {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title).fixedSize(horizontal: false, vertical: true)
+        Picker(title, selection: selection, content: content)
+          .labelsHidden()
+          .accessibilityLabel(title)
+      }
+    } else {
+      Picker(title, selection: selection, content: content)
+    }
+  }
   private var defaultPicker: some View {
     let selection = Binding<String>(
       get: { preferences.defaultBotId ?? "" },
       set: { value in update { $0.defaultBotId = value.isEmpty ? nil : value } })
-    return Picker("Open by default", selection: selection) {
+    return adaptivePicker("Open by default", selection: selection) {
       Text("First assistant").tag("")
       ForEach(store.bootstrap?.bots ?? []) { bot in Text(bot.name).tag(bot.id) }
     }
