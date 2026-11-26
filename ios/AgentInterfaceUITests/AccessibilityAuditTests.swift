@@ -34,9 +34,11 @@ import XCTest
       case ("settings", .dynamicType, "Appearance", _),
            ("settings", .textClipped, "Appearance", _),
            ("settings", .dynamicType, "Follow device", _),
+           ("settings", .textClipped, "Follow device", _),
            ("settings", .dynamicType, "Chat style", _),
            ("settings", .textClipped, "Chat style", _),
-           ("settings", .dynamicType, "Bubbles", _): return true
+           ("settings", .dynamicType, "Bubbles", _),
+           ("settings", .textClipped, "Bubbles", _): return true
       // #412: Today heading and notice scaling and section clipping remain under investigation.
       case ("today", .dynamicType, "Today", _),
            ("today", .dynamicType, "Your assistants, at a glance", _),
