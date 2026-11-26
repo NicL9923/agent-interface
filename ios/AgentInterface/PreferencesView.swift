@@ -288,8 +288,12 @@ struct PreferencesView: View {
     @ViewBuilder content: () -> Content,
   ) -> some View {
     if typeSize.isAccessibilitySize {
-      Picker(title, selection: selection, content: content)
-        .pickerStyle(.navigationLink)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title).fixedSize(horizontal: false, vertical: true)
+        Picker(title, selection: selection, content: content)
+          .labelsHidden()
+          .accessibilityLabel(title)
+      }
     } else {
       Picker(title, selection: selection, content: content)
     }
