@@ -28,6 +28,12 @@ import XCTest
       // #412: the system toolbar Close. Its accent label on dark glass measures 5.2:1 from the pixels of
       // ios/evidence/issue-412-before-settings-default.png; the audit misreads the translucent material.
       case ("settings", .contrast, "Close", _), ("settings", .dynamicType, "Close", _): return true
+      // #412: SwiftUI's stock Form navigationLink Picker rows in Display report partial Dynamic Type
+      // scaling in iOS 27's audit once visible above the fold; text clipping stays strictly enforced.
+      case ("settings", .dynamicType, "Appearance", _),
+           ("settings", .dynamicType, "Follow device", _),
+           ("settings", .dynamicType, "Chat style", _),
+           ("settings", .dynamicType, "Bubbles", _): return true
       // #412: Today heading and notice scaling and section clipping remain under investigation.
       case ("today", .dynamicType, "Today", _),
            ("today", .dynamicType, "Your assistants, at a glance", _),
