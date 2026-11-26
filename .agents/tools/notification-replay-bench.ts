@@ -1,4 +1,4 @@
-// Times the notification replay the background worker runs every 5 seconds: `npx tsx .agents/tools/notification-replay-bench.ts`.
+// Times the notification replay the background worker runs every 5 seconds: `pnpm exec tsx .agents/tools/notification-replay-bench.ts`.
 import { Store } from "../../src/server/store.js";
 const store = new Store(":memory:");
 const users = ["one", "two", "three", "four"];

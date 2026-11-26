@@ -1,6 +1,6 @@
 # Standalone avatar review
 
-Reviewed before main application integration on September 29, 2026. Specimen entry: `avatar-specimen/index.html`; run `npm run dev:client` and open `/avatar-specimen/`.
+Reviewed before main application integration on September 29, 2026. Specimen entry: `avatar-specimen/index.html`; run `pnpm run dev:client` and open `/avatar-specimen/`.
 
 The orchestrator reviewed the rendered standalone specimen at 1280 px/light and 390 px/dark alongside the actual x.ai lifecycle demo. The geometric gallery, colors, working motion and state controls were readable and usable. Both reviewers found no horizontal overflow. Reduced motion froze the SVG DOM over a 400 ms observation while preserving the correct state label and expression.
 

@@ -37,7 +37,7 @@ import { controlPort, port } from "./ports.js";
  * browser told /api/csp-report, because the app only logs those, and resets the conversations between tests.
  */
 if (!existsSync("dist/client/index.html"))
-  throw new Error("Run `npm run build` first: the suite serves dist/client.");
+  throw new Error("Run `pnpm run build` first: the suite serves dist/client.");
 
 /** What the browser uploaded through POST /bots/:id/uploads, bytes included, until the next test starts. */
 const uploads: { name: string; mime: string; base64: string }[] = [];

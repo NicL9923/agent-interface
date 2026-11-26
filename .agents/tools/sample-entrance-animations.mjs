@@ -4,7 +4,7 @@
 // animation, so a spring's overshoot shows as numbers. Each selector is read from a bare element with that class added
 // after sign-in, so the result is the cascade's answer for that class alone. The window is 900 px wide, the desktop
 // layout; WIDTH=390 reads the phone layout, where the palette and settings sheet rise from the bottom instead.
-// `npm run build` first. MODE=dev reads the Vite dev server instead, whose stylesheet order can differ from the
+// `pnpm run build` first. MODE=dev reads the Vite dev server instead, whose stylesheet order can differ from the
 // build's; it proxies /api to the same e2e server. Uses port 4199 and the next one (E2E_PORT moves them), plus 5199
 // for dev (DEV_PORT). With SHOT=prefix it also saves the real bot menu and undo toast at 40, 140 and 260 ms into
 // their entrance, per motion setting.
@@ -27,7 +27,7 @@ const TIMES = [0, 40, 80, 140, 200, 260, 320, 380, 420];
 const port = Number(process.env.E2E_PORT) || 4199,
   api = `http://127.0.0.1:${port}`;
 const dev = process.env.MODE === "dev";
-const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+const server = spawn("pnpm", ["exec", "tsx", "e2e/server.ts"], {
   stdio: ["ignore", "ignore", "inherit"],
   detached: true,
   env: { ...process.env, E2E_PORT: String(port) },

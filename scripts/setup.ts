@@ -173,7 +173,7 @@ function ask(label: string, fallback = ""): Promise<string> {
 async function main() {
   const doctor = process.argv.slice(2).includes("--check");
   if (process.argv.slice(2).some((argument) => argument !== "--check"))
-    throw new Error("Use npm run setup or npm run doctor.");
+    throw new Error("Use pnpm run setup or pnpm run doctor.");
   const filename = path.resolve(".env");
   const original = await readPrivateEnv(filename);
   const source = original ?? (await fs.readFile(".env.example", "utf8"));
@@ -190,7 +190,7 @@ async function main() {
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY)
     throw new Error(
-      "Setup needs an interactive terminal. Run npm run setup in a terminal, or use npm run doctor to check existing settings.",
+      "Setup needs an interactive terminal. Run pnpm run setup in a terminal, or use pnpm run doctor to check existing settings.",
     );
   const values = current.values;
   const changes: EnvValues = {};
@@ -234,7 +234,7 @@ async function main() {
   const next = updateEnv(source, changes);
   await verifyAndSave(filename, original, next);
   console.log(
-    "Verified settings saved to .env with owner-only permissions. Run npm run build, then npm start.",
+    "Verified settings saved to .env with owner-only permissions. Run pnpm run build, then pnpm start.",
   );
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

@@ -24,8 +24,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: 3.14.7
-      - name: Audit production npm dependencies
-        run: npm audit --omit=dev
+      - name: Install pnpm
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/pnpm" "$(node -p "require('./package.json').packageManager")"
+          echo "$RUNNER_TEMP/pnpm/bin" >> "$GITHUB_PATH"
+      - name: Audit production pnpm dependencies
+        run: pnpm audit --prod
       - name: Audit pinned Python dependencies
         run: |
           pip install -r .github/requirements-ci.txt

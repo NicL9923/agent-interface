@@ -201,16 +201,16 @@ struct HermesConnectionPanel: View {
         if let detail = connection?.detail, !detail.isEmpty { Text(detail) }
         if let last = connection?.lastConnectedAt, !When.format(last).isEmpty { Text("Last connected \(When.format(last, inline: true)).") }
         if copy.setup { setupCommand }
-        Text("For a read-only connection check on that computer, run `npm run doctor`.")
+        Text("For a read-only connection check on that computer, run `pnpm run doctor`.")
       }.font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
     }.font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
   }
   @ViewBuilder private var setupCommand: some View {
     Text("On the computer running WildBots, open its project folder and run:")
     HStack {
-      Text("npm run setup").font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+      Text("pnpm run setup").font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
       Spacer(minLength: 8)
-      Button(copied ? "Copied" : "Copy command") { UIPasteboard.general.string = "npm run setup"; copied = true }
+      Button(copied ? "Copied" : "Copy command") { UIPasteboard.general.string = "pnpm run setup"; copied = true }
         .buttonStyle(.bordered).controlSize(.small)
     }.padding(10).background(Palette.line.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
     Text("Setup keeps the connection token on that computer. Restart this app after saving; everyone else can simply sign in.")

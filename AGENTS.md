@@ -1,15 +1,15 @@
 # Stack
 
-- Node and npm versions follow `.node-version` and `package.json`.
-- React uses Vite for the web build. The Fastify server runs TypeScript through tsx.
-- `npm run typecheck` uses the exactly pinned Oxc tsrs with `tsconfig.json`.
-  `npm run build` runs the same no-emit check before Vite and the service-worker build.
+- Node and pnpm versions follow `.node-version` and `package.json` (`packageManager`).
+- React uses Vite for the web build. The Fastify server runs TypeScript through tsx in development and Bun 1.4.5 in production.
+- `pnpm run typecheck` uses the exactly pinned Oxc tsrs with `tsconfig.json`.
+  `pnpm run build` runs the same no-emit check before Vite and the service-worker build.
 - Keep TypeScript 7.0.2 available for compiler comparisons and rollback. This
   migration does not change runtime transpilation or emitted JavaScript tooling.
 - Keep all optional tsrs macOS arm64 and Linux x64/arm64 GNU/musl packages in
-  `package-lock.json`; macOS-only lockfile regeneration must not drop Linux binaries.
+  `pnpm-lock.yaml`; macOS-only lockfile regeneration must not drop Linux binaries.
 - See `docs/Dependencies.md` for the tool choice and `README.md` for validation.
-- Before calling work done, run `.agents/tools/check-all`. Use `npm ci` per worktree, never a symlinked `node_modules`.
+- Before calling work done, run `.agents/tools/check-all`. Use `pnpm install --frozen-lockfile` per worktree, never a symlinked `node_modules`.
   Where WebKit cannot start on the host, as on Fedora, check-all runs the WebKit half of e2e in Playwright's
   container under podman. A WebKit failure there is a real failure.
 
@@ -30,9 +30,9 @@
 
 # Staged checks
 
-- `npm ci` installs the pre-commit hook in Git checkouts. It runs Oxlint and Oxfmt on staged JavaScript/TypeScript, Prettier on staged data and prose, and the pinned Ruff on staged Python. Release archives skip hook installation.
-- `npm run verify:ci` runs lint, typecheck, build and Vitest concurrently and waits for every result. Browser tests run on main pushes and manual runs, never PR CI.
-- Vitest runs all application tests with `isolate: false` in shared workers (zero file-isolation exceptions in `vitest.config.ts`). The migration records in `docs/ledger/2026-11-17-isolation.md` and `docs/ledger/2026-11-19-platform-improvements.md` document the shared-worker cleanup and verification. The first setup file clears app module caches for reused workers. Replay file order with `npm test -- --sequence.shuffle.files --sequence.seed=731 --maxWorkers=1`.
+- `pnpm install --frozen-lockfile` installs the pre-commit hook in Git checkouts. It runs Oxlint and Oxfmt on staged JavaScript/TypeScript, Prettier on staged data and prose, and the pinned Ruff on staged Python. Release archives skip hook installation.
+- `pnpm run verify:ci` runs lint, typecheck, build and Vitest concurrently and waits for every result. Browser tests run on main pushes and manual runs, never PR CI.
+- Vitest runs all application tests with `isolate: false` in shared workers (zero file-isolation exceptions in `vitest.config.ts`). The migration records in `docs/ledger/2026-11-17-isolation.md` and `docs/ledger/2026-11-19-platform-improvements.md` document the shared-worker cleanup and verification. The first setup file clears app module caches for reused workers. Replay file order with `pnpm test --sequence.shuffle.files --sequence.seed=731 --maxWorkers=1`.
 
 # Tests
 

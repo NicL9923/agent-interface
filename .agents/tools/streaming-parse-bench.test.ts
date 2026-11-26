@@ -1,6 +1,6 @@
 // Counts and times how often a live reply re-parses while about 20,000 characters stream, as the
 // transcript showed it before pacing (StreamingMarkdown at each update) and after (ReplyMarkdown, live, on
-// animation frames). Run: npx vitest run --config .agents/tools/streaming-parse-bench.config.ts
+// animation frames). Run: pnpm exec vitest run --config .agents/tools/streaming-parse-bench.config.ts
 // UPDATE_MS sets the time between the server's updates (default 250); the reply grows 500 characters a second either way.
 // jsdom is slower than a browser, so the times are an upper bound; the counts are exact.
 import { act, createElement } from "react";

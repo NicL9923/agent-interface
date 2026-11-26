@@ -172,11 +172,9 @@ command = (
     [installed]
     if installed
     else [
-        "npm",
-        "exec",
-        "--yes",
+        "pnpm",
+        "dlx",
         "--package=@playwright/cli@0.1.22",
-        "--",
         "playwright-cli",
     ]
 )

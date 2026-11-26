@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { port } from "./e2e/ports.js";
 
-// Run `npm run build` first: the server in e2e/server.ts serves dist/client.
+// Run `pnpm run build` first: the server in e2e/server.ts serves dist/client.
 export default defineConfig({
   testDir: "e2e",
   // Only TypeScript specs, which lint holds to the suite's own fixtures and their route guard. A spec in any other
@@ -14,13 +14,13 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure" },
   // Full Chromium, not Playwright's headless shell: the shell crashes the page when a service worker calls the
   // badge API, which the worker does for every page it controls (see src/app/badge.ts), and it has no
-  // back-forward cache. `npx playwright install chromium` installs both builds.
+  // back-forward cache. `pnpm exec playwright install chromium` installs both builds.
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chromium" } },
     { name: "webkit", use: { ...devices["Desktop Safari"] } },
   ],
   webServer: {
-    command: "npx tsx e2e/server.ts",
+    command: "./node_modules/.bin/tsx e2e/server.ts",
     url: `http://127.0.0.1:${port}/api/auth/config`,
     reuseExistingServer: false,
     timeout: 30_000,

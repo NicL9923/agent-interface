@@ -292,41 +292,58 @@ class PortTest(TempCase):
 
 
 class NodeModulesTest(TempCase):
+    def lock_yaml(self, packages):
+        lines = ["lockfileVersion: '9.0'", "", "packages:"]
+        optional = []
+        for key, meta in packages.items():
+            quoted = f"'{key}'" if key.startswith("@") else key
+            lines.append(f"  {quoted}:")
+            lines.append("    resolution: {integrity: sha512-test}")
+            if meta.get("optional"):
+                optional.append(quoted)
+        if optional:
+            lines.append("")
+            lines.append("snapshots:")
+            for quoted in optional:
+                lines.append(f"  {quoted}:")
+                lines.append("    optional: true")
+        return "\n".join(lines) + "\n"
+
     def lock(self, packages):
-        return {"packages": {"": {"name": "app"}, **packages}}
+        return check_all.parse_pnpm_lock(self.lock_yaml(packages))
 
     def test_drift_cases(self):
         wanted = self.lock(
             {
-                "node_modules/a": {"version": "1.0.0"},
-                "node_modules/native": {"version": "2.0.0", "optional": True},
+                "a@1.0.0": {},
+                "@tsrs/darwin-arm64@2.0.0": {"optional": True},
             }
         )
         cases = {
             "identical, with the other platform's optional binary left out": (
                 wanted,
-                self.lock({"node_modules/a": {"version": "1.0.0"}}),
+                self.lock({"a@1.0.0": {}}),
                 [],
             ),
             "a version moved": (
                 wanted,
-                self.lock({"node_modules/a": {"version": "0.9.0"}}),
-                ["node_modules/a is 0.9.0 but package-lock.json has 1.0.0"],
+                self.lock({"a@0.9.0": {}}),
+                ["a is 0.9.0 but pnpm-lock.yaml has 1.0.0"],
             ),
             "a package was added to the lock": (
                 self.lock(
                     {
-                        "node_modules/a": {"version": "1.0.0"},
-                        "node_modules/b": {"version": "1.0.0"},
+                        "a@1.0.0": {},
+                        "b@1.0.0": {},
                     }
                 ),
-                self.lock({"node_modules/a": {"version": "1.0.0"}}),
-                ["node_modules/b is in package-lock.json but not installed"],
+                self.lock({"a@1.0.0": {}}),
+                ["b@1.0.0 is in pnpm-lock.yaml but not installed"],
             ),
             "a package was removed from the lock": (
                 self.lock({}),
-                self.lock({"node_modules/a": {"version": "1.0.0"}}),
-                ["node_modules/a is installed but not in package-lock.json"],
+                self.lock({"a@1.0.0": {}}),
+                ["a@1.0.0 is installed but not in pnpm-lock.yaml"],
             ),
         }
         for name, (lock, installed, expected) in cases.items():
@@ -336,14 +353,25 @@ class NodeModulesTest(TempCase):
     def checkout(self, lock=None, installed=None, link=False):
         root = self.tmp / "checkout"
         root.mkdir(exist_ok=True)
-        lock = lock or self.lock({"node_modules/a": {"version": "1.0.0"}})
-        (root / "package-lock.json").write_text(json.dumps(lock))
+        lock_text = (
+            lock
+            if isinstance(lock, str)
+            else self.lock_yaml({"a@1.0.0": {}} if lock is None else lock)
+        )
+        (root / "pnpm-lock.yaml").write_text(lock_text)
         if installed is not False:
             home = (self.tmp / "shared") if link else root
-            (home / "node_modules").mkdir(parents=True, exist_ok=True)
-            (home / "node_modules/.package-lock.json").write_text(
-                json.dumps(installed or lock)
+            (home / "node_modules/.pnpm").mkdir(parents=True, exist_ok=True)
+            installed_text = (
+                lock_text
+                if installed is None
+                else (
+                    installed
+                    if isinstance(installed, str)
+                    else self.lock_yaml(installed)
+                )
             )
+            (home / "node_modules/.pnpm/lock.yaml").write_text(installed_text)
             if link:
                 (root / "node_modules").symlink_to(home / "node_modules")
         return root
@@ -356,7 +384,7 @@ class NodeModulesTest(TempCase):
     def test_a_missing_node_modules_is_refused_with_the_fix(self):
         message = self.refusal(self.checkout(installed=False))
         self.assertIn("node_modules is missing", message)
-        self.assertIn("npm ci", message)
+        self.assertIn("pnpm install --frozen-lockfile", message)
 
     def test_a_symlink_to_nothing_is_called_missing_and_says_where_it_pointed(self):
         root = self.checkout(installed=False)
@@ -365,36 +393,32 @@ class NodeModulesTest(TempCase):
         self.assertIn("node_modules is missing", message)
         self.assertIn(str(self.tmp / "gone"), message)
 
-    def test_an_install_npm_did_not_make_is_refused(self):
+    def test_an_install_pnpm_did_not_make_is_refused(self):
         root = self.checkout()
-        (root / "node_modules/.package-lock.json").unlink()
+        (root / "node_modules/.pnpm/lock.yaml").unlink()
         self.assertIn("did not install it", self.refusal(root))
 
     def test_a_lockfile_changed_since_install_is_refused_with_the_package_and_the_fix(
         self,
     ):
-        root = self.checkout(
-            installed=self.lock({"node_modules/a": {"version": "0.9.0"}})
-        )
+        root = self.checkout(installed={"a@0.9.0": {}})
         message = self.refusal(root)
         self.assertIn(
-            "package-lock.json changed since node_modules was installed", message
+            "pnpm-lock.yaml changed since node_modules was installed", message
         )
-        self.assertIn("node_modules/a is 0.9.0", message)
-        self.assertIn("npm ci", message)
+        self.assertIn("a is 0.9.0", message)
+        self.assertIn("pnpm install --frozen-lockfile", message)
 
     def test_a_long_drift_list_is_cut_short_with_a_count(self):
-        installed = self.lock(
-            {f"node_modules/p{index}": {"version": "1.0.0"} for index in range(6)}
-        )
+        installed = {f"p{index}@1.0.0": {} for index in range(6)}
         self.assertIn(
             "and 3 more",
-            self.refusal(self.checkout(lock=self.lock({}), installed=installed)),
+            self.refusal(self.checkout(lock={}, installed=installed)),
         )
 
     def test_an_unreadable_lockfile_is_refused_not_crashed_on(self):
         root = self.checkout()
-        (root / "package-lock.json").write_text("{not json")
+        (root / "pnpm-lock.yaml").write_text("not a pnpm lockfile")
         self.assertIn("Could not read the lockfiles", self.refusal(root))
 
     def test_a_matching_plain_install_passes_without_a_warning(self):
@@ -411,10 +435,8 @@ class NodeModulesTest(TempCase):
     def test_a_symlinked_node_modules_from_a_checkout_with_another_lock_is_refused(
         self,
     ):
-        root = self.checkout(
-            installed=self.lock({"node_modules/a": {"version": "9.9.9"}}), link=True
-        )
-        self.assertIn("package-lock.json changed", self.refusal(root))
+        root = self.checkout(installed={"a@9.9.9": {}}, link=True)
+        self.assertIn("pnpm-lock.yaml changed", self.refusal(root))
 
 
 class FakeBootstrap(TempCase):
@@ -1182,14 +1204,14 @@ open(sys.argv[2], "w").write(str(os.getpid()))
 time.sleep(600)
 """
 
-FAKE_NPM = """
+FAKE_PNPM = """
     import json, os, signal, subprocess, sys, time
     key = " ".join(sys.argv[1:])
     with open(os.environ["FAKE_LOG"], "a") as log:
         log.write(json.dumps({"call": key, "port": os.environ.get("E2E_PORT"), "no_color": os.environ.get("NO_COLOR"), "cwd": os.getcwd(), "at": time.time(), "pid": os.getpid()}) + "\\n")
     plan = json.load(open(os.environ["FAKE_PLAN"]))
     if key not in plan:
-        print("UNPLANNED npm call: " + key); sys.exit(97)
+        print("UNPLANNED pnpm call: " + key); sys.exit(97)
     step = plan[key]
     if step.get("ignore_sigint"):
         signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -1241,16 +1263,16 @@ for number in range(3, 256):
 print(json.dumps(found))
 """
 
-# The real Node as npm, since the claim is about what Node does with descriptors it inherits: it records which lock
+# The real Node as pnpm, since the claim is about what Node does with descriptors it inherits: it records which lock
 # descriptors it holds, then which a child it spawns holds.
-NODE_NPM = """
+NODE_PNPM = """
 const fs = require("fs"), path = require("path"), { spawnSync } = require("child_process");
 const locks = path.join(process.env.CHECK_ALL_HOME, "locks");
 const identities = new Set(fs.readdirSync(locks).map((name) => { const s = fs.statSync(path.join(locks, name)); return s.dev + ":" + s.ino; }));
 let own = [];
 for (let fd = 3; fd < 256; fd++) { try { const s = fs.fstatSync(fd); if (identities.has(s.dev + ":" + s.ino)) own.push(fd); } catch (_) {} }
 const child = spawnSync(process.env.FAKE_PROBE, [locks], { encoding: "utf8" });
-fs.writeFileSync(process.env.FAKE_REPORT, JSON.stringify({ npm: own, grandchild: JSON.parse(child.stdout) }));
+fs.writeFileSync(process.env.FAKE_REPORT, JSON.stringify({ pnpm: own, grandchild: JSON.parse(child.stdout) }));
 console.log("  4 passed (3s)");
 """
 # Podman. `run` records its arguments, the lock descriptors it was given and whether the heavy slot was
@@ -1327,13 +1349,13 @@ PASSING = {
     "run build": {"out": "✓ 10 modules transformed.\n"},
     "run test:e2e": {"out": "  4 passed (3s)\n"},
     "run test:py": {"out": "2 passed, 0 skipped, 0 failed in 1.0s (Python 3.14.0)\n"},
-    "run test:e2e -- --project=chromium": {"out": "  3 passed (2s)\n"},
+    "run test:e2e --project=chromium": {"out": "  3 passed (2s)\n"},
     "container": {"out": "  2 passed (2s)\n"},
 }
 
 
 class CommandTest(TempCase):
-    """The whole command against a fake checkout and fake npm, node and ruff on PATH."""
+    """The whole command against a fake checkout and fake pnpm, node and ruff on PATH."""
 
     def setUp(self):
         super().setUp()
@@ -1344,24 +1366,22 @@ class CommandTest(TempCase):
         )
         for path in (
             self.root / ".github",
-            self.root / "node_modules",
+            self.root / "node_modules/.pnpm",
             self.root / "dist/client",
             self.bin,
         ):
             path.mkdir(parents=True)
         (self.root / ".github/requirements-ci.txt").write_text("ruff==0.17.3\n")
-        lock = json.dumps(
-            {"packages": {"": {}, "node_modules/a": {"version": "1.0.0"}}}
-        )
-        (self.root / "package-lock.json").write_text(lock)
-        (self.root / "node_modules/.package-lock.json").write_text(lock)
+        lock = "lockfileVersion: '9.0'\n\npackages:\n  a@1.0.0:\n    resolution: {integrity: sha512-test}\n"
+        (self.root / "pnpm-lock.yaml").write_text(lock)
+        (self.root / "node_modules/.pnpm/lock.yaml").write_text(lock)
         (self.root / "dist/client/index.html").write_text("<html>")
         self.log = self.tmp / "calls.log"
         self.plan = self.tmp / "plan.json"
         self.containers = self.tmp / "containers"
         self.containers.mkdir()
         self.set_plan(PASSING)
-        script(self.bin / "npm", FAKE_NPM)
+        script(self.bin / "pnpm", FAKE_PNPM)
         self.fake_node(True, "v24.0.0")
         script(
             self.bin / "ruff",
@@ -1656,14 +1676,14 @@ class CommandTest(TempCase):
         (self.root / "dist/client/index.html").unlink()
         code, _, err = self.run_main("--only", "e2e")
         self.assertEqual(code, 2)
-        self.assertIn("npm run build", err)
+        self.assertIn("pnpm run build", err)
         self.assertEqual(self.run_main("--only", "build,e2e")[0], 0)
 
     def test_a_missing_node_modules_refuses_before_running_any_check(self):
-        (self.root / "node_modules/.package-lock.json").unlink()
+        (self.root / "node_modules/.pnpm/lock.yaml").unlink()
         code, _, err = self.run_main()
         self.assertEqual(code, 2)
-        self.assertIn("npm ci", err)
+        self.assertIn("pnpm install --frozen-lockfile", err)
         self.assertEqual(self.names(), [])
 
     def test_a_symlinked_node_modules_runs_and_the_warning_is_in_the_summary_too(self):
@@ -2020,14 +2040,14 @@ class CommandTest(TempCase):
         lease.release()
 
     def run_with_leaky_launcher(self, *argv):
-        """Run check-all's main in a process whose launcher left descriptors 3 to 20 open, under the real Node as npm.
+        """Run check-all's main in a process whose launcher left descriptors 3 to 20 open, under the real Node as pnpm.
         Returns what Node and a child of Node's held of the locks."""
         node = shutil.which("node")
         if node is None:
             self.skipTest("needs a real node on PATH")
-        npm = self.bin / "npm"
-        npm.write_text(f"#!{node}\n" + textwrap.dedent(NODE_NPM))
-        npm.chmod(0o700)
+        pnpm = self.bin / "pnpm"
+        pnpm.write_text(f"#!{node}\n" + textwrap.dedent(NODE_PNPM))
+        pnpm.chmod(0o700)
         probe, report = script(self.tmp / "probe", LOCK_PROBE), self.tmp / "report.json"
         driver = (
             "import sys; sys.path.insert(0, sys.argv[1]); import check_all; "
@@ -2054,17 +2074,17 @@ class CommandTest(TempCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(report.read_text())
 
-    def test_the_locks_stay_below_descriptor_16_whatever_the_launcher_left_open_so_only_npm_holds_them(
+    def test_the_locks_stay_below_descriptor_16_whatever_the_launcher_left_open_so_only_pnpm_holds_them(
         self,
     ):
-        # libuv marks descriptors 0 to 15 close-on-exec, so locks at 3, 4 and 5 stay with npm. With 3 to 20 inherited
+        # libuv marks descriptors 0 to 15 close-on-exec, so locks at 3, 4 and 5 stay with pnpm. With 3 to 20 inherited
         # open, locks opened after them land at 21 and up, which Node hands to every child: the runner, its workers and
         # Playwright's web server, any of which could hold the slot for good.
         report = self.run_with_leaky_launcher("--only", "e2e")
         self.assertEqual(
-            report["npm"], [3, 4, 5]
+            report["pnpm"], [3, 4, 5]
         )  # the heavy slot and both ports, the lowest numbers there are
-        self.assertEqual(report["grandchild"], [], "a child of npm still holds a lock")
+        self.assertEqual(report["grandchild"], [], "a child of pnpm still holds a lock")
 
     def test_a_lock_descriptor_node_would_pass_on_is_refused_before_anything_starts(
         self,
@@ -2246,17 +2266,15 @@ class CommandTest(TempCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(
             self.names(),
-            ["run test:e2e -- --project=chromium", "podman run", "podman rm"],
+            ["run test:e2e --project=chromium", "podman run", "podman rm"],
         )
         chromium, container, removed = self.calls()
         self.assertEqual(
-            container["args"][-6:],
+            container["args"][-4:],
             [
                 "mcr.microsoft.com/playwright:v1.65.0-noble",
-                "npm",
-                "run",
-                "test:e2e",
-                "--",
+                "./node_modules/.bin/playwright",
+                "test",
                 "--project=webkit",
             ],
         )
@@ -2297,7 +2315,7 @@ class CommandTest(TempCase):
         self.set_plan(
             {
                 **PASSING,
-                "run test:e2e -- --project=chromium": {
+                "run test:e2e --project=chromium": {
                     "rc": 1,
                     "out": "  1 failed\n  2 passed (2s)\n",
                 },
@@ -2540,7 +2558,9 @@ class WebKitProbeTest(TempCase):
             check=False,
         )
         if not loads or loads.returncode:
-            self.skipTest("needs node and an installed @playwright/test (npm ci)")
+            self.skipTest(
+                "needs node and an installed @playwright/test (pnpm install --frozen-lockfile)"
+            )
         pidfile, browser = self.tmp / "browser.pid", self.tmp / "webkit"
         browser.write_text(f"#!/bin/sh\necho $$ > {pidfile}\nkill -STOP $$\n")
         browser.chmod(0o700)
@@ -2627,7 +2647,9 @@ class WebKitProbeTest(TempCase):
         self,
     ):
         package = self.tmp / "node_modules/@playwright/test"
-        with self.assertRaisesRegex(check_all.Refusal, "Fix: npm ci"):
+        with self.assertRaisesRegex(
+            check_all.Refusal, "Fix: pnpm install --frozen-lockfile"
+        ):
             check_all.playwright_image(self.tmp)
         package.mkdir(parents=True)
         (package / "package.json").write_text('{"version": "1.66.1"}')

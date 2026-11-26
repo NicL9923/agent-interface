@@ -4,7 +4,7 @@
 // records when each growth happened; the page records when each word arrived on the event stream and when the
 // DOM first showed it, on the same wall clock. Prints one JSON object.
 //
-//   npm run build && node .agents/tools/measure-live-latency.mjs [--cps 150 | --bursty] [--words 400] [--seed-turns 0] [--cpu-throttle 1] [--port 4192] [--label name]
+//   pnpm run build && node .agents/tools/measure-live-latency.mjs [--cps 150 | --bursty] [--words 400] [--seed-turns 0] [--cpu-throttle 1] [--port 4192] [--label name]
 //
 // - produced → arrived: the server's batching, the tick this measures. produced → shown: what a person sees.
 // - Paints: each change to the live row's text length, and the gaps between them while the answer streams. Gaps
@@ -39,7 +39,7 @@ const steady =
   CPS >= 75
     ? { STREAM_CHARS: String(Math.round(CPS * 0.04)), STREAM_MS: "40" }
     : { STREAM_CHARS: "2", STREAM_MS: String(Math.round(2000 / CPS)) };
-const server = spawn("npx", ["tsx", ".agents/tools/streaming-preview.ts", String(PORT)], {
+const server = spawn("pnpm", ["exec", "tsx", ".agents/tools/streaming-preview.ts", String(PORT)], {
   stdio: ["ignore", "inherit", "inherit"],
   detached: true,
   env: {

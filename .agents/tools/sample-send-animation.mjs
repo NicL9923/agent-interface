@@ -4,14 +4,14 @@
 // paused animation through the Web Animations API, so two builds can be compared value for value. The send is held
 // unanswered so the message stays outgoing. With SHOT=prefix it also saves a screenshot per motion setting, which
 // live motion elsewhere on the page keeps from matching pixel for pixel.
-// Run `npm run build` first. It uses port 4197 and the next one; E2E_PORT picks others.
+// Run `pnpm run build` first. It uses port 4197 and the next one; E2E_PORT picks others.
 //   node .agents/tools/sample-send-animation.mjs > before.json
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
 const port = Number(process.env.E2E_PORT) || 4197,
   base = `http://127.0.0.1:${port}`;
-const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+const server = spawn("pnpm", ["exec", "tsx", "e2e/server.ts"], {
   stdio: ["ignore", "ignore", "inherit"],
   detached: true,
   env: { ...process.env, E2E_PORT: String(port) },

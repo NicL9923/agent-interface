@@ -1,5 +1,5 @@
 // Written by tests/avatar-art-parity.test.ts from the web's avatar catalog. Do not edit: run
-// `UPDATE_AVATAR_ART=1 npx vitest run tests/avatar-art-parity.test.ts`. docs/AvatarShapes.md
+// `UPDATE_AVATAR_ART=1 pnpm exec vitest run tests/avatar-art-parity.test.ts`. docs/AvatarShapes.md
 // says where each shape comes from.
 import Foundation
 

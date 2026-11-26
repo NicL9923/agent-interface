@@ -1,7 +1,7 @@
 # Dependencies and local runtime
 
 Verified October 30, 2026. Direct dependencies use exact versions in
-`package.json`; `package-lock.json` pins the transitive tree.
+`package.json`; `pnpm-lock.yaml` pins the transitive tree.
 
 | Component                                                                                                                                                                                                          | Pin                                            | Primary evidence                                                                                                                                                |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -54,13 +54,13 @@ not claim that every accepted future patch release has been tested.
 
 Verified October 20, 2026 against npm's current release and the
 [tsrs CLI documentation](https://github.com/oxc-project/tsrs/blob/main/docs/USAGE.md).
-`npm run typecheck` and the first step of `npm run build` use the exactly pinned
+`pnpm run typecheck` and the first step of `pnpm run build` use the exactly pinned
 Oxc tsrs with `--noEmit` and the existing `tsconfig.json`. Its strictness, included
 files and other compiler options are unchanged. Vite, the service-worker build
 and the server's tsx runtime keep producing and running JavaScript as before.
 
 This is a prerelease targeting TypeScript 7.1 development semantics. Retain
-TypeScript 7.0.2 for comparisons and rollback with `npx --no-install tsc --noEmit`.
+TypeScript 7.0.2 for comparisons and rollback with `pnpm exec tsc --noEmit`.
 The repository uses the compiler CLI and does not depend on a compiler API.
 The [compatibility record](https://github.com/oxc-project/tsrs/blob/main/docs/COMPATIBILITY.md)
 lists known gaps and supported platforms. The lockfile retains every published
@@ -71,12 +71,12 @@ Do not omit optional dependencies when installing the checker.
 
 Verified November 17, 2026 against the
 [Oxlint type-aware guide](https://oxc.rs/docs/guide/usage/linter/type-aware.html).
-`.oxlintrc.json` sets `options.typeAware`, so `npm run lint` also runs the
+`.oxlintrc.json` sets `options.typeAware`, so `pnpm run lint` also runs the
 `typescript/*` rules that need type information. Oxlint 1.92 and later find the
 `tsrs-lint` launcher that the pinned tsrs package installs in `node_modules/.bin`
 and prefer it over `tsgolint`. Do not install `oxlint-tsgolint`: without
 `tsrs-lint` the run fails with "Failed to find type-aware linter executable"
-instead of quietly switching engines. `npm run typecheck` stays on `tsrs --noEmit`
+instead of quietly switching engines. `pnpm run typecheck` stays on `tsrs --noEmit`
 because `oxlint --type-check` also checks `.agents/tools` files that `tsconfig.json`
 does not include.
 
@@ -121,7 +121,7 @@ only in development, with both the listener and configured origin on loopback.
 The route also checks the client's direct IP. It cannot be enabled in production.
 
 For Vite development, run the server with
-`APP_ORIGIN=http://127.0.0.1:5173 LOCAL_DEV_AUTH=true npm run dev`, then run
-`npm run dev:client` in another terminal. Vite proxies `/api` to the local server,
+`APP_ORIGIN=http://127.0.0.1:5173 LOCAL_DEV_AUTH=true pnpm run dev`, then run
+`pnpm run dev:client` in another terminal. Vite proxies `/api` to the local server,
 so browser requests stay on one origin. For the built application, use the default
-origin `http://127.0.0.1:3000` with `LOCAL_DEV_AUTH=true npm start`.
+origin `http://127.0.0.1:3000` with `LOCAL_DEV_AUTH=true pnpm start`.

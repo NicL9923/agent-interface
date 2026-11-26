@@ -494,7 +494,7 @@ describe("setup and recovery interface", () => {
 
   it("gives an unconfigured household a concrete setup action and rechecks saved settings", async () => {
     await act(async () => root.render(createElement(SignIn, { onSuccess: vi.fn() })));
-    expect(container.textContent).toContain("npm run setup");
+    expect(container.textContent).toContain("pnpm run setup");
     expect(container.textContent).toContain("Start on the computer running this app");
     const button = Array.from(container.querySelectorAll("button")).find(
       (node) => node.textContent === "Check now",

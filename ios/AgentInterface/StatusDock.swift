@@ -169,9 +169,9 @@ struct StatusDock: View {
               if let detail = connection?.detail, !detail.isEmpty { Text(detail) }
               if let last = connection?.lastConnectedAt, !When.format(last).isEmpty { Text("Last connected \(When.format(last, inline: true)).") }
               if copy.setup {
-                Text("On the computer running WildBots, open its project folder and run `npm run setup`. Setup keeps the connection token on that computer. Restart this app after saving; everyone else can simply sign in.")
+                Text("On the computer running WildBots, open its project folder and run `pnpm run setup`. Setup keeps the connection token on that computer. Restart this app after saving; everyone else can simply sign in.")
               }
-              Text("For a read-only connection check on that computer, run `npm run doctor`.")
+              Text("For a read-only connection check on that computer, run `pnpm run doctor`.")
             }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
           }.font(.caption).foregroundStyle(.secondary)
         }
