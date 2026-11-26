@@ -381,9 +381,6 @@ export function installConversationRoutes(
   // Change notices for one conversation, so open chats refetch instead of polling. Sign-in
   // and assistant access are the conversation read's own hooks; each notice rechecks the session.
   const watchers = new Map<string, Set<() => void>>();
-  // Opt-in queue notices (`?queue=1`) per assistant, notified on queue route writes, conversation
-  // writes, and runtime structural transitions that advance the queue's conversation version.
-  const queueStreams = new Map<string, Set<() => void>>();
   // The app's own conversation writes notify at once, before Hermes reports their effect.
   const conversationWrites = new Set(
     [
@@ -399,22 +396,25 @@ export function installConversationRoutes(
       "connection-requests/:requestId",
     ].map((path) => `POST /api/bots/:id/${path}`),
   );
-  const queueWrites = new Set([
-    "PATCH /api/bots/:id/queue/:itemId",
-    "POST /api/bots/:id/queue/:itemId/reorder",
-    "POST /api/bots/:id/queue/:itemId/send-now",
-    "DELETE /api/bots/:id/queue/:itemId",
-  ]);
   app.addHook("onResponse", async (req, reply) => {
-    if (reply.statusCode >= 400) return;
-    const route = `${req.method} ${routePattern(req)}`;
-    const isConversationWrite = conversationWrites.has(route);
-    const isQueueWrite = queueWrites.has(route);
-    if (!isConversationWrite && !isQueueWrite) return;
+    if (reply.statusCode >= 400 || !conversationWrites.has(`${req.method} ${routePattern(req)}`))
+      return;
     const botId = (req.params as { id?: string }).id;
     if (!botId) return;
-    if (isConversationWrite) for (const changed of watchers.get(botId) ?? []) changed();
-    for (const queueChanged of queueStreams.get(botId) ?? []) queueChanged();
+    for (const changed of watchers.get(botId) ?? []) changed();
+  });
+  // Opt-in queue notices (`?queue=1`) per assistant, notified only on committed `bot_queue`
+  // mutations so unrelated conversation writes and tool-call version bumps stay silent.
+  const queueStreams = new Map<string, Set<() => void>>();
+  const pendingQueueNotices = new Set<string>();
+  const unwatchQueue = store.watchQueue((botId) => {
+    if (!queueStreams.get(botId)?.size || pendingQueueNotices.has(botId)) return;
+    pendingQueueNotices.add(botId);
+    // After the writing transaction commits, so a client that reloads at once reads the new queue.
+    queueMicrotask(() => {
+      pendingQueueNotices.delete(botId);
+      for (const listener of queueStreams.get(botId) ?? []) listener();
+    });
   });
   // Each person's open streams per assistant hear their own draft's new revisions, so a chat open
   // on another device reloads the draft at once instead of polling for it. Only the revision is
@@ -429,7 +429,10 @@ export function installConversationRoutes(
         for (const listener of listeners) listener(revision);
       });
   });
-  app.addHook("onClose", async () => unwatchDrafts());
+  app.addHook("onClose", async () => {
+    unwatchDrafts();
+    unwatchQueue();
+  });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
     // Followed before the first await, so a client that leaves during setup leaves no watcher.
     const connection = eventStreamConnection(reply);
@@ -461,9 +464,7 @@ export function installConversationRoutes(
     let livePending: ReturnType<typeof setTimeout> | undefined,
       liveLast = 0;
     let stream: EventStream | undefined;
-    let lastQueueVersion = queueNotices ? store.queue.version(botId) : 0;
     const queueChanged = () => {
-      if (queueNotices) lastQueueVersion = store.queue.version(botId);
       stream?.send("event: queue\ndata: queue\n\n");
     };
     // What this stream last sent of the live reply, after redaction, so growth is measured on what
@@ -621,10 +622,11 @@ export function installConversationRoutes(
               // Fall through to the structural notice below so the client refetches.
             }
           }
-          redact = undefined;
-          seen = -1;
+          if (store.privacyVersion !== seen) {
+            redact = undefined;
+            seen = -1;
+          }
         }
-        if (queueNotices && store.queue.version(botId) !== lastQueueVersion) queueChanged();
         if (holds && turnVersion) {
           if (!flushedVersion || (compareVersions(flushedVersion, turnVersion) ?? -1) < 0)
             hold(turnVersion);

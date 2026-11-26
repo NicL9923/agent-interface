@@ -43,6 +43,29 @@ export class QueueRepository {
   private get db() {
     return this.database.db;
   }
+  readonly #listeners = new Set<(botId: string) => void>();
+
+  /**
+   * Hears every queue table mutation for an assistant, so open `?queue=1` streams reload the
+   * queue without firing on unrelated conversation version bumps. Runs inside the writing
+   * transaction; a listener only queues a notice.
+   */
+  watch(listener: (botId: string) => void) {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  }
+
+  private notify(botId: string) {
+    for (const listener of this.#listeners) {
+      try {
+        listener(botId);
+      } catch {
+        /* A watcher never fails a queue write. */
+      }
+    }
+  }
 
   version(botId: string): number {
     const row = this.db
@@ -99,6 +122,7 @@ export class QueueRepository {
           now,
           now,
         ) as QueueRow;
+      this.notify(input.botId);
       return queueItem(row);
     });
   }
@@ -153,6 +177,7 @@ export class QueueRepository {
         .prepare(`UPDATE bot_queue SET text=?,updated_at=? WHERE id=? RETURNING ${columns}`)
         .get(text, Date.now(), itemId) as QueueRow;
       this.bumpVersion(botId);
+      this.notify(botId);
       return queueItem(row);
     });
   }
@@ -209,6 +234,7 @@ export class QueueRepository {
     }
     if (!changed) return item;
     this.bumpVersion(item.botId);
+    this.notify(item.botId);
     return this.item(item.botId, item.id);
   }
 
@@ -230,6 +256,7 @@ export class QueueRepository {
         .get(runId, now, now, botId, botId) as QueueRow | undefined;
       if (!row) return undefined;
       this.bumpVersion(botId);
+      this.notify(botId);
       return queueItem(row);
     });
   }
@@ -269,6 +296,7 @@ export class QueueRepository {
       WHERE id=? RETURNING ${columns}`)
       .get(status, error ?? null, now, now, itemId) as QueueRow;
     this.bumpVersion(botId);
+    this.notify(botId);
     return queueItem(row);
   }
 
@@ -280,8 +308,19 @@ export class QueueRepository {
         .prepare(`UPDATE bot_queue SET status='interrupted',settled_at=?,updated_at=?
         WHERE status='running' ${scope} RETURNING bot_id AS botId`)
         .all(now, now, ...(botId === undefined ? [] : [botId])) as { botId: string }[];
-      for (const row of interrupted) this.bumpVersion(row.botId);
+      const notified = new Set<string>();
+      for (const row of interrupted) {
+        this.bumpVersion(row.botId);
+        notified.add(row.botId);
+      }
+      for (const id of notified) this.notify(id);
       return interrupted.length;
     });
+  }
+
+  forgetBot(botId: string) {
+    const deleted = this.db.prepare("DELETE FROM bot_queue WHERE bot_id=?").run(botId).changes;
+    this.bumpVersion(botId);
+    if (deleted > 0) this.notify(botId);
   }
 }

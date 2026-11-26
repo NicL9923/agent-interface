@@ -339,6 +339,9 @@ export class Store {
   watchDrafts(...args: Parameters<DraftRepository["watch"]>) {
     return this.drafts.watch(...args);
   }
+  watchQueue(...args: Parameters<QueueRepository["watch"]>) {
+    return this.queue.watch(...args);
+  }
   // presentation
   presentation(...args: Parameters<PresentationRepository["presentation"]>) {
     return this.presentations.presentation(...args);

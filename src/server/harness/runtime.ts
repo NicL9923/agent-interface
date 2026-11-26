@@ -202,7 +202,9 @@ function directory(path: string, mode = 0o700) {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
-  if (!lstatSync(path).isDirectory()) throw new Error("Invalid harness workspace directory.");
+  const stat = lstatSync(path);
+  if (!stat.isDirectory()) throw new Error("Invalid harness workspace directory.");
+  return stat;
 }
 
 const runFile = promisify(execFile);
@@ -296,7 +298,7 @@ export function createHarnessRuntime({
   const rosterWatchers = new Set<() => void>();
   const deleting = new Set<string>();
   const preparations = new Map<string, Set<Promise<void>>>();
-  const grantedCwdAcls = new Set<string>();
+  const grantedCwdAcls = new Map<string, string>();
   const botCwdAclKeys = new Map<string, Set<string>>();
   const bootId = randomUUID();
   let closed = false;
@@ -501,19 +503,20 @@ export function createHarnessRuntime({
   async function cwdFor(bot: ManagedBotRecord) {
     // A changed Unix account gets its own workspace. It cannot inherit the previous owner's files.
     const parent = join(workspaces, bot.id);
-    directory(parent);
+    const parentStat = directory(parent);
     const cwd = join(parent, bot.ownerOsUser ? `owner-${bot.ownerOsUser}` : "server");
-    directory(cwd);
+    const cwdStat = directory(cwd);
     const user = otherHarnessUser(bot.ownerOsUser || undefined);
     if (user) {
-      const key = `${cwd}\0${user}`;
-      if (!grantedCwdAcls.has(key)) {
+      const slot = `${cwd}\0${user}`;
+      const fingerprint = `${parentStat.dev}:${parentStat.ino}\0${cwdStat.dev}:${cwdStat.ino}`;
+      if (grantedCwdAcls.get(slot) !== fingerprint) {
         await grantTraversal(parent, user, workspaces);
         await grantAcl(cwd, user, "rwx");
         if (!deleting.has(bot.id) && !closed) {
-          grantedCwdAcls.add(key);
+          grantedCwdAcls.set(slot, fingerprint);
           const keys = botCwdAclKeys.get(bot.id) ?? new Set<string>();
-          keys.add(key);
+          keys.add(slot);
           botCwdAclKeys.set(bot.id, keys);
         }
       }
@@ -1110,6 +1113,7 @@ export function createHarnessRuntime({
   async function executePooledGroupOn(
     bot: ManagedBotRecord,
     slotKey: string,
+    cwd: string,
     promptText: string,
     signal: AbortSignal,
     target: {
@@ -1120,8 +1124,6 @@ export function createHarnessRuntime({
       osUser: string | undefined;
     },
   ): Promise<string> {
-    signal.throwIfAborted();
-    const cwd = await cwdFor(bot);
     signal.throwIfAborted();
     const turnId = `group-${bot.id}-${randomUUID()}`;
     const turn: GroupTurn = { runId: turnId, promptSeq: 0 };
@@ -1212,11 +1214,18 @@ export function createHarnessRuntime({
   }
 
   async function runGroupPrompt(
+    roomId: string,
     bot: ManagedBotRecord,
     promptText: string,
     signal: AbortSignal,
   ): Promise<string> {
-    const slotKey = `group:${bot.id}`;
+    const slotKey = `group:${roomId}:${bot.id}`;
+    if (groupCoordinator.active(slotKey)) {
+      return runOneShotPrompt(bot, `group-${bot.id}`, promptText, signal);
+    }
+    signal.throwIfAborted();
+    const cwd = await cwdFor(bot);
+    signal.throwIfAborted();
     if (groupCoordinator.active(slotKey)) {
       return runOneShotPrompt(bot, `group-${bot.id}`, promptText, signal);
     }
@@ -1224,7 +1233,7 @@ export function createHarnessRuntime({
       const driver = requireDriver(bot);
       const credential = credentialFor(bot);
       const env = credentialsEnv(credential);
-      return await executePooledGroupOn(bot, slotKey, promptText, signal, {
+      return await executePooledGroupOn(bot, slotKey, cwd, promptText, signal, {
         driver,
         model: bot.model,
         provider: bot.provider || undefined,
@@ -1256,7 +1265,7 @@ export function createHarnessRuntime({
 
   const nativeGroups = createNativeGroupAdapter({
     store,
-    executeTurn: (bot, prompt, signal) => runGroupPrompt(bot, prompt, signal),
+    executeTurn: (bot, prompt, signal, roomId) => runGroupPrompt(roomId, bot, prompt, signal),
   });
   const nativeVault = createNativeVaultHandler(store, requireBot);
   const nativeIntegrations = createNativeIntegrationsHandler({ store, requireBot });
@@ -1764,7 +1773,10 @@ export function createHarnessRuntime({
           current.stopping = true;
           finish(current, "interrupted");
         }
-        await Promise.all([coordinator.closeBot(id), groupCoordinator.closeBot(`group:${id}`)]);
+        await Promise.all([
+          coordinator.closeBot(id),
+          groupCoordinator.closeMatching((key) => key.endsWith(`:${id}`)),
+        ]);
         const pending = preparations.get(id);
         if (pending) await Promise.all([...pending]);
         const aclKeys = botCwdAclKeys.get(id);

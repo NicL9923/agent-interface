@@ -22,6 +22,7 @@ function setup(
     bot: ManagedBotRecord,
     prompt: string,
     signal: AbortSignal,
+    roomId: string,
   ) => Promise<string> = async (bot) => `Reply from ${bot.name}`,
 ) {
   let clock = 1_790_000_000_000;
@@ -137,9 +138,9 @@ describe("native group adapter", () => {
   });
 
   it("sends new topics and thread replies, deduplicates by requestId, and emits GroupEvent wire format", async () => {
-    const turns: { botId: string; prompt: string }[] = [];
-    const { adapter, advance } = setup(async (bot, prompt) => {
-      turns.push({ botId: bot.id, prompt });
+    const turns: { botId: string; prompt: string; roomId: string }[] = [];
+    const { adapter, advance } = setup(async (bot, prompt, _signal, roomId) => {
+      turns.push({ botId: bot.id, prompt, roomId });
       return `Ack from ${bot.name}`;
     });
     await adapter.handle({
@@ -192,6 +193,7 @@ describe("native group adapter", () => {
     });
     expect(retry).toEqual(sent);
     expect(turns).toHaveLength(1);
+    expect(turns[0]?.roomId).toBe("r1");
 
     // Reply inside the existing thread using root event_id as threadId.
     advance(5_000);

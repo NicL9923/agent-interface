@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1238,8 +1238,242 @@ describe("native harness runtime", () => {
       credentialId: "other-sub",
     });
     const third = await runtime.submit(submission(recreated.id, "acl-3", "Third"));
-    await nextSession(codex, third.runId);
+    const recreatedSession = await nextSession(codex, third.runId);
     expect(aclCalls).toHaveLength(8);
+    recreatedSession.emit({ type: "turn.completed", turnId: third.runId! });
+
+    // Deleting and recreating the workspace directory outside deleteBot changes its inode, so setfacl re-runs.
+    const botCwd = join(directory, "sandbox", "workspaces", recreated.id, `owner-${otherUser}`);
+    await rename(botCwd, `${botCwd}.old`);
+    const fourth = await runtime.submit(submission(recreated.id, "acl-4", "Fourth"));
+    await vi.waitFor(() => expect(recreatedSession.turns).toHaveLength(2));
+    expect(aclCalls).toHaveLength(12);
+    recreatedSession.emit({ type: "turn.completed", turnId: fourth.runId! });
+  });
+
+  it("isolates pooled group sessions per room, falls back cleanly on concurrent turns, and closes all room slots on deleteBot", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "synthetic-openrouter-key");
+    const directory = await mkdtemp(join(tmpdir(), "harness-group-rooms-"));
+    const store = new Store(":memory:");
+    const files = fileSigner(store.fileKeys(), undefined);
+    store.user({ id: "sam", name: "Sam", email: "sam@example.net" });
+    store.managedBots.upsertCredential({
+      id: "codex-sub",
+      label: "Codex sub",
+      kind: "subscription",
+      vendor: "openai",
+      ownerId: "sam",
+      osUser: owner,
+      allowedHarnesses: ["codex"],
+    });
+    store.managedBots.upsertCredential({
+      id: "openrouter-key",
+      label: "OpenRouter key",
+      kind: "api_key",
+      vendor: "openrouter",
+      envVar: "OPENROUTER_API_KEY",
+      allowedHarnesses: ["pi"],
+    });
+    const codex = new FakeDriver("codex", true);
+    const pi = new FakeDriver("pi", false);
+    const runtime = createHarnessRuntime({
+      store,
+      files,
+      workspaceRoot: join(directory, "sandbox"),
+      drivers: { codex, pi },
+      groupSessionIdleTtlMs: 60_000,
+      fallback: {
+        harness: "pi",
+        model: "deepseek/deepseek-v4.1-flash",
+        provider: "openrouter",
+        credentialId: "openrouter-key",
+      },
+    });
+    cleanups.push(async () => {
+      await runtime.close();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const alpha = await runtime.saveBot({
+      ...botInput,
+      name: "Alpha",
+      harness: "codex",
+      shared: true,
+      ownerId: "sam",
+      credentialId: "codex-sub",
+    });
+    const beta = await runtime.saveBot({
+      ...botInput,
+      name: "Beta",
+      harness: "codex",
+      shared: true,
+      ownerId: "sam",
+      credentialId: "codex-sub",
+    });
+    const members = [
+      { member_id: alpha.id, profile: alpha.id, handle: alpha.id, display_name: alpha.name },
+      { member_id: beta.id, profile: beta.id, handle: beta.id, display_name: beta.name },
+    ];
+    for (const [roomId, name] of [
+      ["room-a", "Room A"],
+      ["room-b", "Room B"],
+    ] as const) {
+      await runtime.groupRequest({
+        operation: "create",
+        roomId,
+        name,
+        actorId: "sam",
+        members,
+      });
+    }
+
+    const completeTurn = async (
+      session: FakeSession,
+      index: number,
+      text: string,
+      roomId: string,
+    ) => {
+      await vi.waitFor(() => expect(session.turns.length).toBeGreaterThan(index));
+      session.emit({
+        type: "turn.completed",
+        turnId: session.turns[index]!.turnId,
+        text,
+        stopReason: "end_turn",
+      });
+      await vi.waitFor(async () => {
+        const state = await runtime.groupRequest({ operation: "state", roomId });
+        expect("driver_status" in state && state.driver_status?.running).toBe(false);
+      });
+    };
+
+    // 1. Alpha taking turns in Room A and Room B opens separate sessions (no cross-room bleed).
+    await runtime.groupRequest({
+      operation: "send",
+      roomId: "room-a",
+      requestId: "room-a-1",
+      threadId: "thread-a-1",
+      text: "Hello room A",
+      actorId: "sam",
+      actorName: "Sam",
+    });
+    await vi.waitFor(() => expect(codex.opened).toHaveLength(1));
+    const roomAAlpha = codex.opened[0]!.session;
+    await completeTurn(roomAAlpha, 0, "Reply A1", "room-a");
+
+    await runtime.groupRequest({
+      operation: "send",
+      roomId: "room-b",
+      requestId: "room-b-1",
+      threadId: "thread-b-1",
+      text: "Hello room B",
+      actorId: "sam",
+      actorName: "Sam",
+    });
+    await vi.waitFor(() => expect(codex.opened).toHaveLength(2));
+    const roomBAlpha = codex.opened[1]!.session;
+    expect(roomBAlpha).not.toBe(roomAAlpha);
+    await completeTurn(roomBAlpha, 0, "Reply B1", "room-b");
+
+    // Consecutive turns in Room A reuse Room A's warm session.
+    await runtime.groupRequest({
+      operation: "send",
+      roomId: "room-a",
+      requestId: "room-a-2",
+      threadId: "thread-a-2",
+      text: "Follow up in A",
+      actorId: "sam",
+      actorName: "Sam",
+    });
+    await completeTurn(roomAAlpha, 1, "Reply A2", "room-a");
+    expect(codex.opened).toHaveLength(2);
+
+    // Beta also opens its own pooled slot in Room A so we can prove deleteBot(alpha) leaves beta open.
+    await runtime.groupRequest({
+      operation: "send",
+      roomId: "room-a",
+      requestId: "room-a-beta",
+      threadId: "thread-a-beta",
+      text: "@beta check status",
+      actorId: "sam",
+      actorName: "Sam",
+    });
+    await vi.waitFor(() => expect(codex.opened).toHaveLength(3));
+    const roomABeta = codex.opened[2]!.session;
+    await completeTurn(roomABeta, 0, "Beta ready", "room-a");
+
+    // 2. Concurrent turn on the same roomId + botId falls back cleanly to one-shot on primary driver
+    //    without throwing or triggering the fallback harness.
+    let releaseFirstOpen!: () => void;
+    let firstOpenStarted!: () => void;
+    const firstOpenGate = new Promise<void>((resolve) => {
+      releaseFirstOpen = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      firstOpenStarted = resolve;
+    });
+    let blockedOnce = false;
+    // Force a fresh open in room-c so the pooled slot is actively opening while a second turn arrives.
+    await runtime.groupRequest({
+      operation: "create",
+      roomId: "room-c",
+      name: "Room C",
+      actorId: "sam",
+      members,
+    });
+    codex.beforeOpen = async () => {
+      if (!blockedOnce) {
+        blockedOnce = true;
+        firstOpenStarted();
+        await firstOpenGate;
+      }
+    };
+    await runtime.groupRequest({
+      operation: "send",
+      roomId: "room-c",
+      requestId: "room-c-1",
+      threadId: "thread-c-1",
+      text: "First in C",
+      actorId: "sam",
+      actorName: "Sam",
+    });
+    await started;
+    // Stop Room C so GroupCoordinator accepts a new turn while Turn 1 still holds group:room-c:alpha.
+    await runtime.groupRequest({
+      operation: "stop",
+      roomId: "room-c",
+      requestId: "room-c-stop",
+    });
+    await runtime.groupRequest({
+      operation: "send",
+      roomId: "room-c",
+      requestId: "room-c-2",
+      threadId: "thread-c-2",
+      text: "Concurrent in C",
+      actorId: "sam",
+      actorName: "Sam",
+    });
+    // Turn 2 runs one-shot on primary codex (not fallback pi!) and closes its one-shot session on completion.
+    await vi.waitFor(() => expect(codex.opened).toHaveLength(4));
+    const oneShotSession = codex.opened[3]!.session;
+    expect(pi.opened).toHaveLength(0);
+    await completeTurn(oneShotSession, 0, "One-shot reply", "room-c");
+    expect(oneShotSession.closed).toBe(true);
+    expect(pi.opened).toHaveLength(0);
+    // Unblock Turn 1 so it retires cleanly.
+    releaseFirstOpen();
+    codex.beforeOpen = undefined;
+    await vi.waitFor(() => expect(codex.opened).toHaveLength(5));
+    await vi.waitFor(() => expect(codex.opened[4]!.session.closed).toBe(true));
+
+    // 3. deleteBot(alpha.id) closes ALL pooled group slots for alpha across rooms, leaving beta open.
+    expect(roomAAlpha.closed).toBe(false);
+    expect(roomBAlpha.closed).toBe(false);
+    expect(roomABeta.closed).toBe(false);
+    await runtime.deleteBot(alpha.id);
+    expect(roomAAlpha.closed).toBe(true);
+    expect(roomBAlpha.closed).toBe(true);
+    expect(roomABeta.closed).toBe(false);
   });
 
   it("reuses pooled group sessions across rounds and retires them on stop or deleteBot", async () => {

@@ -50,7 +50,12 @@ export function createNativeGroupAdapter({
   now = Date.now,
 }: {
   store: Store;
-  executeTurn: (bot: ManagedBotRecord, prompt: string, signal: AbortSignal) => Promise<string>;
+  executeTurn: (
+    bot: ManagedBotRecord,
+    prompt: string,
+    signal: AbortSignal,
+    roomId: string,
+  ) => Promise<string>;
   now?: () => number;
 }): NativeGroupAdapter {
   const repository = store.nativeGroups;
@@ -177,7 +182,7 @@ export function createNativeGroupAdapter({
       const fullPrompt = extras.notes.trim()
         ? `${prompt}\n\n# Shared room notes\n${extras.notes.trim()}`
         : prompt;
-      const text = await executeTurn(bot, fullPrompt, signal);
+      const text = await executeTurn(bot, fullPrompt, signal, room.id);
       return { text };
     },
   });

@@ -823,6 +823,34 @@ describe("conversation change stream", () => {
       await events.close();
     });
 
+    // Unchanged privacyVersion across consecutive structural barriers keeps redaction warm without
+    // rebuilding redactAgents or skipping the synchronous barrier flush.
+    it("reuses redaction across structural barriers when privacyVersion is unchanged", async () => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=2`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      const before = vi.mocked(s.runtime.listBots).mock.calls.length;
+      s.runtime.inflight = () => live("First");
+      s.change("shared", "inflight");
+      await pass(0);
+      // Two back-to-back structural barriers with buffered growth in between.
+      s.runtime.inflight = () => live("First second");
+      s.change("shared", "inflight");
+      s.change("shared");
+      s.runtime.inflight = () => live("First second third");
+      s.change("shared", "inflight");
+      s.change("shared");
+      await pass(LIVE_TICK_MS);
+      // Every buffered update was synchronously flushed because redact stayed populated.
+      expect(frames(events.text).map(([, data]) => data.message?.text ?? data.appendText)).toEqual([
+        "First",
+        " second",
+        " third",
+      ]);
+      expect(vi.mocked(s.runtime.listBots).mock.calls.length).toBe(before);
+      await events.close();
+    });
+
     it("?inflight=3 flushes buffered growth on a versioned control barrier and skips redundant hold when covered", async () => {
       const s = await setup();
       let built: NonNullable<ReturnType<NonNullable<Runtime["turn"]>>> | undefined;
@@ -1066,7 +1094,7 @@ describe("conversation change stream", () => {
     await legacy.close();
   });
 
-  it("announces queue changes only on ?queue=1 streams for queue writes, conversation writes, and version advances", async () => {
+  it("announces queue changes only on ?queue=1 streams for actual bot_queue mutations, not tool calls or non-queue writes", async () => {
     const s = await setup();
     const optedIn = await stream(`${s.base}/api/bots/shared/events?queue=1`, s.cookie);
     const legacy = await stream(`${s.base}/api/bots/shared/events?inflight=2`, s.cookie);
@@ -1079,35 +1107,11 @@ describe("conversation change stream", () => {
       "x-csrf-token": s.csrfToken,
       "content-type": "application/json",
     };
-    const item = s.store.queue.enqueue({
-      botId: "shared",
-      requestId: randomUUID(),
-      senderId: "local-one",
-      senderName: "First member",
-      text: "Queued item",
-    });
-    // PATCH /queue/:itemId emits event: queue on ?queue=1.
-    expect(
-      (
-        await fetch(`${s.base}/api/bots/shared/queue/${item.id}`, {
-          method: "PATCH",
-          headers,
-          body: JSON.stringify({ text: "Updated queued item" }),
-        })
-      ).status,
-    ).toBe(200);
-    await optedIn.until(() => queueCount(optedIn) === 1);
-    // A failed queue write (400) does not emit event: queue.
-    expect(
-      (
-        await fetch(`${s.base}/api/bots/shared/queue/${item.id}`, {
-          method: "PATCH",
-          headers,
-          body: JSON.stringify({ text: "   " }),
-        })
-      ).status,
-    ).toBe(400);
-    // POST /messages emits event: queue too.
+
+    // Structural turn changes / tool calls that only bump conversation version must NOT emit event: queue.
+    s.store.queue.bumpVersion("shared");
+    s.change("shared");
+    // Non-queue conversation writes (runtimeDouble.submit does not write bot_queue) must NOT emit event: queue.
     expect(
       (
         await fetch(`${s.base}/api/bots/shared/messages`, {
@@ -1117,23 +1121,91 @@ describe("conversation change stream", () => {
         })
       ).status,
     ).toBe(200);
+    await pass(200);
+    expect(queueCount(optedIn)).toBe(0);
+
+    // Enqueueing a queued item emits event: queue on ?queue=1.
+    const first = s.store.queue.enqueue({
+      botId: "shared",
+      requestId: randomUUID(),
+      senderId: "local-one",
+      senderName: "First member",
+      text: "Queued item",
+    });
+    await optedIn.until(() => queueCount(optedIn) === 1);
+    const second = s.store.queue.enqueue({
+      botId: "shared",
+      requestId: randomUUID(),
+      senderId: "local-one",
+      senderName: "First member",
+      text: "Second queued item",
+    });
     await optedIn.until(() => queueCount(optedIn) === 2);
+
+    // PATCH /queue/:itemId emits event: queue on ?queue=1.
+    expect(
+      (
+        await fetch(`${s.base}/api/bots/shared/queue/${first.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ text: "Updated queued item" }),
+        })
+      ).status,
+    ).toBe(200);
+    await optedIn.until(() => queueCount(optedIn) === 3);
+
+    // A failed queue write (400) does not emit event: queue.
+    expect(
+      (
+        await fetch(`${s.base}/api/bots/shared/queue/${first.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ text: "   " }),
+        })
+      ).status,
+    ).toBe(400);
+
+    // POST /queue/:itemId/reorder emits event: queue.
+    expect(
+      (
+        await fetch(`${s.base}/api/bots/shared/queue/${second.id}/reorder`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ beforeItemId: first.id }),
+        })
+      ).status,
+    ).toBe(200);
+    await optedIn.until(() => queueCount(optedIn) === 4);
+
     // DELETE /queue/:itemId emits event: queue.
     expect(
       (
-        await fetch(`${s.base}/api/bots/shared/queue/${item.id}`, {
+        await fetch(`${s.base}/api/bots/shared/queue/${first.id}`, {
           method: "DELETE",
           headers: { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken },
         })
       ).status,
     ).toBe(200);
-    await optedIn.until(() => queueCount(optedIn) === 3);
-    // Background runtime queue transition advancing conversation version + structural notice emits event: queue.
+    await optedIn.until(() => queueCount(optedIn) === 5);
+
+    // Claiming and completing a queued item emits event: queue; another bot's mutation does not.
+    s.store.queue.enqueue({
+      botId: "other",
+      requestId: randomUUID(),
+      senderId: "local-one",
+      senderName: "First member",
+      text: "Other bot item",
+    });
+    s.store.queue.claimNext("shared", "run-1");
+    await optedIn.until(() => queueCount(optedIn) === 6);
+    s.store.queue.complete("shared", second.id);
+    await optedIn.until(() => queueCount(optedIn) === 7);
+
+    // Another tool call / structural bump still stays silent.
     s.store.queue.bumpVersion("shared");
     s.change("shared");
-    await optedIn.until(() => queueCount(optedIn) === 4);
     await pass(200);
-    expect(queueCount(optedIn)).toBe(4);
+    expect(queueCount(optedIn)).toBe(7);
     expect(legacy.text).not.toContain("event: queue");
     await optedIn.close();
     await legacy.close();

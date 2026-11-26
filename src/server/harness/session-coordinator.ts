@@ -125,7 +125,7 @@ export class HarnessSessionCoordinator<T extends { runId: string; promptSeq: num
   ): Promise<HarnessSession | undefined> {
     const slot = this.slots.get(botId);
     if (!slot || slot.active !== turn || this.closed) return;
-    await Promise.all([slot.opening, slot.closing]);
+    await Promise.allSettled([slot.opening, slot.closing]);
     if (slot.active !== turn || this.closed) return;
 
     const fingerprint = sessionFingerprint(driver, spec);
@@ -281,6 +281,16 @@ export class HarnessSessionCoordinator<T extends { runId: string; promptSeq: num
     if (!slot) return;
     slot.active = undefined;
     await this.retireSession(botId);
+  }
+
+  async closeMatching(predicate: (slotKey: string) => boolean) {
+    const matching = [...this.slots.keys()].filter(predicate);
+    if (!matching.length) return;
+    const results = await Promise.allSettled(matching.map((key) => this.closeBot(key)));
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) throw new AggregateError(failures, "Harness session teardown failed.");
   }
 
   async close() {
