@@ -25,8 +25,13 @@ import type { EditPreferences } from "./use-preference-edits";
 import "./home.css";
 import { FormMessage } from "../components/ui/form-message";
 import { SaveRefusal, type Refusal } from "./SaveRefusal";
-import { CHECK_IN_HOURS, checkInFrequencyLabel, mainEligible } from "../shared/main-assistant";
-import type { CheckInSettings, Preferences } from "../shared/types";
+import {
+  CHECK_IN_HOURS,
+  MORNING_BRIEF_DEFAULT_TIME,
+  checkInFrequencyLabel,
+  mainEligible,
+} from "../shared/main-assistant";
+import type { CheckInSettings, MorningBriefSettings, Preferences } from "../shared/types";
 
 const newSectionValue = "\u0000new";
 
@@ -52,6 +57,7 @@ export function BotDetails({
   saveRefusal,
   onMain,
   onCheckIns,
+  onMorningBrief,
   onSettings,
   onFind,
   onClose,
@@ -70,6 +76,7 @@ export function BotDetails({
   /** Makes this assistant the main one, or clears it with null; rejects with the reason it couldn't. */
   onMain?: (botId: string | null) => Promise<Preferences>;
   onCheckIns?: (change: Partial<CheckInSettings>) => Promise<Preferences>;
+  onMorningBrief?: (change: Partial<MorningBriefSettings>) => Promise<Preferences>;
   onSettings: (bot: Bot) => void;
   /** Opens this assistant's chat with Find in chat ready. */
   onFind: (botId: string) => void;
@@ -98,6 +105,8 @@ export function BotDetails({
   const canBeMain = !!onMain && mainEligible(bot, boot.user.id);
   const checkIns = boot.preferences.checkIns;
   const checkingIn = isMain && !!checkIns?.enabled;
+  const morningBrief = boot.preferences.morningBrief;
+  const briefing = isMain && !!morningBrief?.enabled;
   const [mainBusy, setMainBusy] = useState(false);
   const [mainError, setMainError] = useState("");
   const [moveNotice, setMoveNotice] = useState("");
@@ -272,6 +281,44 @@ export function BotDetails({
                   ))}
                 </NativeSelect>
               </label>
+            )}
+            {onMorningBrief && (
+              <>
+                <label className="settings-row">
+                  <span className="row-text">
+                    <span className="row-label">Morning brief</span>
+                    <small>
+                      {bot.name} prepares a daily summary with ready-to-review drafts and pins it at
+                      the top of Today.
+                    </small>
+                  </span>
+                  <Input
+                    type="checkbox"
+                    role="switch"
+                    className="switch"
+                    checked={briefing}
+                    disabled={mainBusy || connectionLost}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      act(() => onMorningBrief({ enabled }));
+                    }}
+                  />
+                </label>
+                {briefing && (
+                  <label className="settings-row">
+                    <span className="row-label">Delivery time</span>
+                    <Input
+                      type="time"
+                      value={morningBrief?.timeOfDay ?? MORNING_BRIEF_DEFAULT_TIME}
+                      disabled={mainBusy || connectionLost}
+                      onChange={(event) => {
+                        const timeOfDay = event.target.value;
+                        if (timeOfDay) act(() => onMorningBrief({ enabled: true, timeOfDay }));
+                      }}
+                    />
+                  </label>
+                )}
+              </>
             )}
           </div>
         )}

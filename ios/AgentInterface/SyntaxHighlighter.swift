@@ -117,7 +117,7 @@ enum SyntaxHighlighter {
     python.annotations = true
     let bash = Spec(
       keywords: words("if then else elif fi for while until do done case esac function in return export local readonly declare unset select time shift break continue exit source alias"),
-      types: words("echo printf cd ls grep sed awk cat curl wget git npm npx node python python3 pip brew sudo chmod chown mkdir rm cp mv touch find xargs tar ssh scp make docker kubectl test true false set trap read eval exec"),
+      types: words("echo printf cd ls grep sed awk cat curl wget git npm npx pnpm node python python3 pip brew sudo chmod chown mkdir rm cp mv touch find xargs tar ssh scp make docker kubectl test true false set trap read eval exec"),
       lineComments: ["#"], capitalizedTypes: false, variables: true, hashNeedsSpace: true)
     let json = Spec(types: words("true false null"), quotes: ["\""], capitalizedTypes: false, keys: true)
     var yaml = Spec(types: words("true false null yes no on off True False Null ~"), lineComments: ["#"], capitalizedTypes: false, hashNeedsSpace: true, keys: true)

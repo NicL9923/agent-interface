@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-// Runs only the streaming parse benchmark; `npm test` never picks it up.
+// Runs only the streaming parse benchmark; `pnpm test` never picks it up.
 export default defineConfig({
   test: {
     include: [".agents/tools/streaming-parse-bench.test.ts"],

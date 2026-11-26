@@ -41,6 +41,9 @@ export function visiblePreferences(store: Store, userId: string): Preferences {
     ...(value.checkIns
       ? { checkIns: main ? value.checkIns : { ...value.checkIns, enabled: false } }
       : {}),
+    ...(value.morningBrief
+      ? { morningBrief: main ? value.morningBrief : { ...value.morningBrief, enabled: false } }
+      : {}),
   };
 }
 
@@ -65,6 +68,7 @@ function whole(previous: Preferences, value: Preferences): Preferences {
   // matching, so neither an older client nor a stale copy here can change or clear them.
   value.mainBotId = previous.mainBotId;
   value.checkIns = previous.checkIns;
+  value.morningBrief = previous.morningBrief;
   return value;
 }
 

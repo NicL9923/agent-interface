@@ -61,7 +61,7 @@ import { Sidebar, type HomeGroups } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
 import { Composer, useOwnPrompts, useStopResponse } from "./app/Composer";
-import { chooseMain, saveCheckIns } from "./app/main-assistant";
+import { chooseMain, saveCheckIns, saveMorningBrief } from "./app/main-assistant";
 import { OPEN_CHAT_EVENT } from "./components/AgentExchange";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
@@ -82,6 +82,8 @@ import { prefetchLinkedChat } from "./app/linked-chat";
 import {
   BotDetails,
   BotSettings,
+  BrainDumpDialog,
+  ChannelCreateDialog,
   CommandPalette,
   ComputerPanel,
   DiscoveryPanel,
@@ -90,6 +92,7 @@ import {
   GroupRoomView,
   Loading,
   MainAssistantPicker,
+  OutputsPanel,
   PreferencesDialog,
   RoutineResults,
   ShortcutsDialog,
@@ -626,6 +629,11 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const setCheckIns = useStableCallback((change: Parameters<typeof saveCheckIns>[1]) =>
     saveCheckIns(boot?.preferences.checkIns, change, session.applyPreferences),
   );
+  const setMorningBrief = useStableCallback((change: Parameters<typeof saveMorningBrief>[1]) =>
+    saveMorningBrief(boot?.preferences.morningBrief, change, session.applyPreferences),
+  );
+  const openBrainDump = useStableCallback(() => openPanel({ kind: "braindump" }));
+  const openChannelCreate = useStableCallback(() => openPanel({ kind: "channel-create" }));
   const chooseMainFromHome = useStableCallback(() => setChoosingMain(true));
   const dismissMainSuggestion = useStableCallback(
     () =>
@@ -1135,6 +1143,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         onNewSection={newSection}
         onChooseMain={chooseMainFromHome}
         onDismissMainSuggestion={dismissMainSuggestion}
+        onBrainDump={openBrainDump}
+        onNewChannel={openChannelCreate}
       />
       <main
         className="conversation-panel"
@@ -1185,6 +1195,17 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
               onChanged={reloadGroups}
             />
           </Loading>
+        ) : view === "outputs" ? (
+          <Loading key="outputs">
+            <OutputsPanel
+              key={boot.user.id}
+              bootstrap={boot}
+              onOpenMessage={(id, messageId) => {
+                if (messageId) openMessage(id, messageId);
+                else selectBot(id);
+              }}
+            />
+          </Loading>
         ) : view === "today" ? (
           <Loading key="today">
             <TodayPanel
@@ -1194,6 +1215,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
                 selectBot(id);
                 if (routineId) setPanel({ kind: "routine", botId: id, routineId });
               }}
+              onOutputs={() => showView("outputs")}
+              onBrainDump={openBrainDump}
             />
           </Loading>
         ) : (
@@ -1329,6 +1352,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             onFind={findInChat}
             onMain={setMain}
             onCheckIns={setCheckIns}
+            onMorningBrief={setMorningBrief}
             onSettings={(bot) => open({ kind: "settings", bot })}
             onClose={() => {
               setSaveRefusal(null);
@@ -1390,6 +1414,41 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           />
         </Loading>
       )}
+      {panel?.kind === "braindump" &&
+        (() => {
+          const main = boot.bots.find((bot) => bot.id === boot.preferences.mainBotId);
+          return main ? (
+            <Loading>
+              <BrainDumpDialog
+                main={main}
+                voiceSupported={typeof MediaRecorder !== "undefined"}
+                onClose={() => closePanels("braindump")}
+                onSubmitted={(id) => {
+                  closePanels("braindump");
+                  selectBot(id);
+                }}
+              />
+            </Loading>
+          ) : null;
+        })()}
+      {panel?.kind === "channel-create" &&
+        (() => {
+          const main = boot.bots.find((bot) => bot.id === boot.preferences.mainBotId);
+          return main ? (
+            <Loading>
+              <ChannelCreateDialog
+                main={main}
+                onClose={() => closePanels("channel-create")}
+                onCreated={(id) => {
+                  closePanels("channel-create");
+                  void session.refresh().then((next) => {
+                    if (next?.bots.some((bot) => bot.id === id)) selectBot(id);
+                  });
+                }}
+              />
+            </Loading>
+          ) : null;
+        })()}
       {overlay === "palette" && (
         <Loading>
           <CommandPalette
@@ -1431,6 +1490,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             onShortcuts={showShortcuts}
             onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined}
             onAsk={askMain}
+            onBrainDump={openBrainDump}
+            onNewChannel={openChannelCreate}
           />
         </Loading>
       )}

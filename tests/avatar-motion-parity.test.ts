@@ -24,7 +24,7 @@ const file = fileURLToPath(
   new URL("../ios/AgentInterfaceTests/Motion/avatar-motion.json", import.meta.url),
 );
 const instruction =
-  "If the motion change is intended, run `UPDATE_MOTION=1 npx vitest run tests/avatar-motion-parity.test.ts`, commit the samples, and match AvatarView.swift until AvatarMotionParityTests passes.";
+  "If the motion change is intended, run `UPDATE_MOTION=1 pnpm exec vitest run tests/avatar-motion-parity.test.ts`, commit the samples, and match AvatarView.swift until AvatarMotionParityTests passes.";
 const round = (value: number) => Math.round(value * 1e6) / 1e6;
 const rounded = <T extends object>(value: T): T =>
   Object.fromEntries(

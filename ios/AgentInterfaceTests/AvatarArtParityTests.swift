@@ -5,7 +5,7 @@ import XCTest
 /// Checks the avatar catalog the app draws, AvatarCatalog.swift, and the fixed paths in
 /// AvatarPathData.swift against the web's. tests/avatar-art-parity.test.ts writes both the catalog
 /// and the answer key in Avatar/avatar-art.json from src/components/avatar-shapes.ts and Avatar.tsx.
-/// After an intended web change, run `UPDATE_AVATAR_ART=1 npx vitest run tests/avatar-art-parity.test.ts`,
+/// After an intended web change, run `UPDATE_AVATAR_ART=1 pnpm exec vitest run tests/avatar-art-parity.test.ts`,
 /// commit both files, and match AvatarPathData.swift until this passes.
 final class AvatarArtParityTests: XCTestCase {
   private struct Entry: Decodable, Equatable {

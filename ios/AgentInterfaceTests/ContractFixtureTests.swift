@@ -13,7 +13,7 @@ private typealias Check = @MainActor (Data) throws -> Void
 
 /// Decodes every server-generated fixture in `Contract/` into the app's real types.
 /// `tests/native-contract.test.ts` writes the fixtures from the real server; regenerate them with
-/// `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`.
+/// `UPDATE_CONTRACT=1 pnpm exec vitest run tests/native-contract.test.ts`.
 @MainActor final class ContractFixtureTests: XCTestCase {
   private static let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     .appendingPathComponent("Contract", isDirectory: true)
@@ -261,7 +261,7 @@ private typealias Check = @MainActor (Data) throws -> Void
   func testEveryServerFixtureDecodesIntoTheAppTypes() throws {
     let names = Set(try FileManager.default.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil)
       .filter { $0.pathExtension == "json" }.map { $0.deletingPathExtension().lastPathComponent })
-    XCTAssertFalse(names.isEmpty, "Generate fixtures with UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts")
+    XCTAssertFalse(names.isEmpty, "Generate fixtures with UPDATE_CONTRACT=1 pnpm exec vitest run tests/native-contract.test.ts")
     XCTAssertEqual(names.subtracting(checks.keys).sorted(), [], "Add a decoding check for each new fixture")
     XCTAssertEqual(Set(checks.keys).subtracting(names).sorted(), [], "Remove checks for fixtures the server no longer writes")
     for name in names.sorted() {

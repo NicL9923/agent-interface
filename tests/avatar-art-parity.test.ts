@@ -24,7 +24,7 @@ const swiftFile = fileURLToPath(
   new URL("../ios/AgentInterface/AvatarCatalog.swift", import.meta.url),
 );
 const instruction =
-  "If the avatar change is intended, run `UPDATE_AVATAR_ART=1 npx vitest run tests/avatar-art-parity.test.ts`, commit both files it writes, and match AvatarPathData.swift until AvatarArtParityTests passes on the Mac mini.";
+  "If the avatar change is intended, run `UPDATE_AVATAR_ART=1 pnpm exec vitest run tests/avatar-art-parity.test.ts`, commit both files it writes, and match AvatarPathData.swift until AvatarArtParityTests passes on the Mac mini.";
 
 // Listing every key of a Record makes the compiler reject a list that misses a new member.
 const modes = Object.keys({ geometric: 0, portrait: 0 } satisfies Record<Avatar["mode"], 0>);
@@ -88,7 +88,7 @@ function swiftCatalog() {
   };
   return [
     "// Written by tests/avatar-art-parity.test.ts from the web's avatar catalog. Do not edit: run",
-    "// `UPDATE_AVATAR_ART=1 npx vitest run tests/avatar-art-parity.test.ts`. docs/AvatarShapes.md",
+    "// `UPDATE_AVATAR_ART=1 pnpm exec vitest run tests/avatar-art-parity.test.ts`. docs/AvatarShapes.md",
     "// says where each shape comes from.",
     "import Foundation",
     "",

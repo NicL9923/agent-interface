@@ -31,6 +31,10 @@ import { installTerminalRequestRoutes } from "./terminal-requests.js";
 import { installCollaborationRoutes } from "./collaboration.js";
 import { installRoutineRoutes } from "./routine-routes.js";
 import { installMemoryRoutes } from "./memory-routes.js";
+import { installTaskRoutes } from "./task-routes.js";
+import { installConfirmationRoutes } from "./confirmation-routes.js";
+import { installDeliverableRoutes } from "./deliverables.js";
+import { installChannelRoutes } from "./channel-routes.js";
 import { installBootstrapRoutes, visiblePreferences } from "./bootstrap-routes.js";
 import { installMainAssistantRoutes, MainAssistants } from "./main-assistant.js";
 import { installClientErrorRoutes } from "./client-errors.js";
@@ -224,6 +228,10 @@ export async function createApp(
   });
   installRoutineRoutes(app, { config, runtime, store, roster, requireCapability });
   installMemoryRoutes(app, { store, memory: store.memory, roster });
+  installTaskRoutes(app, { runtime, store });
+  installConfirmationRoutes(app, { runtime, store });
+  installDeliverableRoutes(app, { runtime, store, roster });
+  installChannelRoutes(app, { runtime, store, roster });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.
   installPushRoutes(app, { config, runtime, store, live: () => worker.live });
   // Universal links and Handoff for the iOS app, whose bundle ID is the APNs topic. Only chat and Today

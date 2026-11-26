@@ -7,17 +7,17 @@ the traps agents kept hitting by hand:
 - A browser-suite port that another worktree holds: it picks a free app port and control port and holds a lock
   on the pair while the suite runs, so two runs never choose the same one between the check and the bind.
 - Heavy suites timing out under each other: at most `--heavy-slots` of test, e2e and py share the machine.
-- A node_modules that is missing, or older than package-lock.json: it refuses to run and prints the fix.
+- A node_modules that is missing, or older than pnpm-lock.yaml: it refuses to run and prints the fix.
 - ruff: it needs the exact version in .github/requirements-ci.txt, from PATH or a cached venv, never another.
 
-Locks are flock(2) locks on small files in a per-user cache directory. The check's own process (the npm
+Locks are flock(2) locks on small files in a per-user cache directory. The check's own process (the pnpm
 wrapper) inherits the lock descriptors and waits for the suite it started, so a lock lasts as long as the suite
 does: check-all killed by SIGKILL leaves its suite running with its slot and ports still held, and they free
 when the suite ends. The lock files name the check's pid once it starts, so a waiter is told about a live process.
 
-Only npm should hold the locks, and that depends on the descriptor numbers. When Node starts, libuv marks
+Only pnpm should hold the locks, and that depends on the descriptor numbers. When Node starts, libuv marks
 descriptors 0 to 15 close-on-exec (and goes on past 15 only until it meets a closed number), so a descriptor
-below 16 is not passed to the runner, its children or Playwright's web server. That does not matter, because npm
+below 16 is not passed to the runner, its children or Playwright's web server. That does not matter, because pnpm
 waits for the runner and the runner stops the server when it exits. A descriptor of 17 or more is passed on to
 every process in the suite tree, and a leaked child, or a web server in a session of its own, would then hold the
 slot for good. A launcher that leaves descriptors 3 to 20 open puts the locks at 21 and up, which is how 207
@@ -327,33 +327,111 @@ def pick_e2e_port(
 # node_modules.
 
 
-def lock_drift(lock, installed):
-    """Differences between package-lock.json's packages and the hidden lockfile npm wrote at install time.
+def _unquote_yaml_key(raw):
+    key = raw.strip()
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in ("'", '"'):
+        return key[1:-1]
+    return key
 
-    A package the lock lists but the install lacks is fine when it is optional: npm leaves out the binaries for
+
+def _split_pkg_key(key):
+    base = key.split("(", 1)[0]
+    at = base.rfind("@")
+    if at <= 0:
+        return base, ""
+    return base[:at], base[at + 1 :]
+
+
+def parse_pnpm_lock(text):
+    """Parse pnpm-lock.yaml (v9) package keys and optionality using the standard library."""
+    has_version = False
+    section = None
+    current_pkg = None
+    current_snap = None
+    packages = {}
+    optional_snaps = set()
+    for line in text.splitlines():
+        if not line or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        stripped = line.strip()
+        if indent == 0:
+            if stripped.startswith("lockfileVersion:"):
+                value = stripped.split(":", 1)[1].strip()
+                if not value:
+                    raise ValueError("empty lockfileVersion")
+                has_version = True
+                section = None
+            elif stripped.endswith(":"):
+                section = stripped[:-1]
+            else:
+                section = None
+            current_pkg = None
+            current_snap = None
+            continue
+        if section == "packages":
+            if indent == 2 and stripped.endswith(":"):
+                current_pkg = _unquote_yaml_key(stripped[:-1])
+                packages[current_pkg] = {"optional": False}
+            elif indent == 4 and current_pkg is not None:
+                if stripped.startswith(("os:", "cpu:", "libc:")):
+                    packages[current_pkg]["optional"] = True
+        elif section == "snapshots":
+            if indent == 2 and stripped.endswith(":"):
+                current_snap = _unquote_yaml_key(stripped[:-1]).split("(", 1)[0]
+            elif (
+                indent == 4
+                and current_snap is not None
+                and stripped == "optional: true"
+            ):
+                optional_snaps.add(current_snap)
+    if not has_version:
+        raise ValueError("not a pnpm lockfile (missing lockfileVersion)")
+    for key in optional_snaps:
+        if key in packages:
+            packages[key]["optional"] = True
+    return {"packages": packages}
+
+
+def lock_drift(lock, installed):
+    """Differences between pnpm-lock.yaml's packages and the hidden lockfile pnpm wrote at install time.
+
+    A package the lock lists but the install lacks is fine when it is optional: pnpm leaves out the binaries for
     other platforms.
     """
     wanted, present = lock.get("packages", {}), installed.get("packages", {})
+    wanted_by_name = {}
+    for key in wanted:
+        name, version = _split_pkg_key(key)
+        wanted_by_name.setdefault(name, set()).add(version)
     problems = []
-    for path, entry in present.items():
-        if not path:
-            continue
-        if path not in wanted:
-            problems.append(f"{path} is installed but not in package-lock.json")
-        elif entry.get("version") != wanted[path].get("version"):
-            problems.append(
-                f"{path} is {entry.get('version')} but package-lock.json has {wanted[path].get('version')}"
-            )
-    for path, entry in wanted.items():
-        if path and path not in present and not entry.get("optional"):
-            problems.append(f"{path} is in package-lock.json but not installed")
+    reported_names = set()
+    for key in present:
+        if key not in wanted:
+            name, version = _split_pkg_key(key)
+            wanted_versions = wanted_by_name.get(name, set())
+            if len(wanted_versions) == 1:
+                problems.append(
+                    f"{name} is {version} but pnpm-lock.yaml has {next(iter(wanted_versions))}"
+                )
+                reported_names.add(name)
+            else:
+                problems.append(f"{key} is installed but not in pnpm-lock.yaml")
+    for key, entry in wanted.items():
+        name, _ = _split_pkg_key(key)
+        if (
+            key not in present
+            and not entry.get("optional")
+            and name not in reported_names
+        ):
+            problems.append(f"{key} is in pnpm-lock.yaml but not installed")
     return problems
 
 
 def check_install(root):
-    """Refuse when node_modules is missing or older than package-lock.json. Returns warnings to print."""
+    """Refuse when node_modules is missing or older than pnpm-lock.yaml. Returns warnings to print."""
     modules = root / "node_modules"
-    fix = "Fix: npm ci"
+    fix = "Fix: pnpm install --frozen-lockfile"
     if not modules.exists():
         where = (
             f" (a symlink to {os.readlink(modules)}, which does not exist)"
@@ -361,14 +439,14 @@ def check_install(root):
             else ""
         )
         raise Refusal(f"node_modules is missing{where}. {fix}")
-    installed_path = modules / ".package-lock.json"
+    installed_path = modules / ".pnpm/lock.yaml"
     if not installed_path.is_file():
         raise Refusal(
-            f"node_modules has no .package-lock.json, so npm did not install it. {fix}"
+            f"node_modules has no .pnpm/lock.yaml, so pnpm did not install it. {fix}"
         )
     try:
-        lock = json.loads((root / "package-lock.json").read_text())
-        installed = json.loads(installed_path.read_text())
+        lock = parse_pnpm_lock((root / "pnpm-lock.yaml").read_text())
+        installed = parse_pnpm_lock(installed_path.read_text())
     except (OSError, ValueError) as error:
         raise Refusal(
             f"Could not read the lockfiles to compare them ({error}). {fix}"
@@ -379,12 +457,12 @@ def check_install(root):
             f"; and {len(drift) - 3} more" if len(drift) > 3 else ""
         )
         raise Refusal(
-            f"package-lock.json changed since node_modules was installed: {shown}. {fix}"
+            f"pnpm-lock.yaml changed since node_modules was installed: {shown}. {fix}"
         )
     if modules.is_symlink():
         return [
-            f"node_modules is a symlink to {os.readlink(modules)}. It matches package-lock.json, but a shared install lets"
-            " the other checkout change what this one tests; run npm ci here to own one."
+            f"node_modules is a symlink to {os.readlink(modules)}. It matches pnpm-lock.yaml, but a shared install lets"
+            " the other checkout change what this one tests; run pnpm install --frozen-lockfile here to own one."
         ]
     return []
 
@@ -610,7 +688,7 @@ def playwright_image(root):
         version = json.loads(path.read_text())["version"]
     except (OSError, ValueError, KeyError) as error:
         raise Refusal(
-            f"Could not read the @playwright/test version from {path} ({error}). Fix: npm ci"
+            f"Could not read the @playwright/test version from {path} ({error}). Fix: pnpm install --frozen-lockfile"
         ) from error
     return f"mcr.microsoft.com/playwright:v{version}-noble"
 
@@ -925,7 +1003,7 @@ def run_process(
     whether the output was cut short because another process still held the pipe).
 
     The descriptors in `inherit` (the lock files) go to the child, so the locks last as long as it does, even if
-    this process is killed. They must be below 16: Node keeps those from its own children, so only the npm wrapper
+    this process is killed. They must be below 16: Node keeps those from its own children, so only the pnpm wrapper
     holds the locks, where a higher descriptor reaches every process in the suite tree (see the module docstring).
     `on_start(pid)` runs once the child exists, for a caller that records who now holds the locks. `on_stop()` runs
     after a timeout or an interrupt has stopped the group, for what the group does not contain, such as a container
@@ -1164,14 +1242,14 @@ def plan_e2e(root, env, check_timeout, log):
     container. Refuses when WebKit cannot start and podman is absent, rather than skip it."""
     failure = webkit_failure(root, env)
     if failure is None:
-        return [Step("e2e", ["npm", "run", "test:e2e"])]
+        return [Step("e2e", ["pnpm", "run", "test:e2e"])]
     podman = find_podman(env)
     if not podman:
         raise Refusal(
             f"WebKit cannot start on this host: {failure.rstrip('.')}. podman is not on PATH to run it in"
             " Playwright's container, and check-all does not skip WebKit. Fix: install podman (on Fedora, sudo dnf"
-            " install podman), or give the host what WebKit needs (npx playwright install webkit, and on Debian or"
-            " Ubuntu sudo npx playwright install-deps webkit)."
+            " install podman), or give the host what WebKit needs (pnpm exec playwright install webkit, and on Debian or"
+            " Ubuntu sudo pnpm exec playwright install-deps webkit)."
         )
     image = playwright_image(root)
     container = f"check-all-webkit-{os.getpid()}"
@@ -1179,7 +1257,7 @@ def plan_e2e(root, env, check_timeout, log):
         f"e2e: WebKit cannot start on this host: {failure.rstrip('.')}. Chromium runs here and WebKit in {image} under podman."
     )
     return [
-        Step("e2e:chromium", ["npm", "run", "test:e2e", "--", "--project=chromium"]),
+        Step("e2e:chromium", ["pnpm", "run", "test:e2e", "--project=chromium"]),
         Step(
             "e2e:webkit (podman)",
             container_command(
@@ -1188,7 +1266,7 @@ def plan_e2e(root, env, check_timeout, log):
                 image,
                 container,
                 check_timeout,
-                ["npm", "run", "test:e2e", "--", "--project=webkit"],
+                ["./node_modules/.bin/playwright", "test", "--project=webkit"],
             ),
             container=(podman, container),
         ),
@@ -1230,7 +1308,7 @@ def run_battery(root, args, cache, log=None, env=None):
         and not (root / "dist/client/index.html").is_file()
     ):
         raise Refusal(
-            "e2e serves dist/client, which is not built. Fix: npm run build, or do not --skip build."
+            "e2e serves dist/client, which is not built. Fix: pnpm run build, or do not --skip build."
         )
     requested = None
     if "e2e" in names and env.get("E2E_PORT"):
@@ -1252,11 +1330,11 @@ def run_battery(root, args, cache, log=None, env=None):
 
     child_env = {**env, "NO_COLOR": "1"}
     commands = {
-        "typecheck": ["npm", "run", "typecheck"],
-        "lint": ["npm", "run", "lint"],
-        "test": ["npm", "test"],
-        "build": ["npm", "run", "build"],
-        "py": ["npm", "run", "test:py"],
+        "typecheck": ["pnpm", "run", "typecheck"],
+        "lint": ["pnpm", "run", "lint"],
+        "test": ["pnpm", "test"],
+        "build": ["pnpm", "run", "build"],
+        "py": ["pnpm", "run", "test:py"],
     }
     if ruff:
         commands["ruff"] = [ruff, "check", "."]

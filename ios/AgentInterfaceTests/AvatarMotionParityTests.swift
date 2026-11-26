@@ -6,7 +6,7 @@ import XCTest
 /// samples in Motion/avatar-motion.json come from `avatarPose`, `expressionFor`, `pitchEyes`,
 /// `tickMarks`, `motionSeed`, `ringOffset` and a scripted household run through the conductor
 /// in src/components, written by tests/avatar-motion-parity.test.ts. After an intended web
-/// motion change, run `UPDATE_MOTION=1 npx vitest run tests/avatar-motion-parity.test.ts`,
+/// motion change, run `UPDATE_MOTION=1 pnpm exec vitest run tests/avatar-motion-parity.test.ts`,
 /// commit the samples, and match the Swift side until this passes.
 @MainActor
 final class AvatarMotionParityTests: XCTestCase {

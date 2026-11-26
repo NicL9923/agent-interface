@@ -63,6 +63,8 @@ export function CommandPalette({
   onShortcuts,
   onFind,
   onAsk,
+  onBrainDump,
+  onNewChannel,
 }: {
   boot: Bootstrap;
   botId: string;
@@ -89,6 +91,8 @@ export function CommandPalette({
   onFind?: () => void;
   /** Puts the typed text in an assistant's draft: "Ask <main>…" targets the main assistant. */
   onAsk?: (botId: string, text: string) => void;
+  onBrainDump?: () => void;
+  onNewChannel?: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -162,9 +166,17 @@ export function CommandPalette({
         id: "view:today",
         group: "Go to",
         label: "Today",
-        keywords: ["home", "schedule"],
+        keywords: ["home", "schedule", "tasks", "triage"],
         icon: icon("today"),
         run: () => onView("today"),
+      },
+      {
+        id: "view:outputs",
+        group: "Go to",
+        label: "Outputs",
+        keywords: ["deliverables", "artifacts", "views", "drafts", "files", "make"],
+        icon: icon("file-text"),
+        run: () => onView("outputs"),
       },
       {
         id: "view:find",
@@ -174,6 +186,30 @@ export function CommandPalette({
         icon: icon("search"),
         run: () => onView("find"),
       },
+      ...(main && onBrainDump
+        ? [
+            {
+              id: "action:brain-dump",
+              group: "Actions",
+              label: `Brain dump to ${main.name}`,
+              keywords: ["capture", "triage", "voice", "notes", "dump"],
+              icon: icon("sparkle"),
+              run: onBrainDump,
+            },
+          ]
+        : []),
+      ...(main && onNewChannel
+        ? [
+            {
+              id: "action:new-channel",
+              group: "Actions",
+              label: "New topic channel",
+              keywords: ["channel", "topic", "thread", "project"],
+              icon: icon("plus"),
+              run: onNewChannel,
+            },
+          ]
+        : []),
       ...(onFind
         ? [
             {
@@ -306,6 +342,8 @@ export function CommandPalette({
     onFind,
     main,
     onAsk,
+    onBrainDump,
+    onNewChannel,
   ]);
   const searching = !!query.trim();
   const results = useMemo(() => rankItems(query, commands), [query, commands]);

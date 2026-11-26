@@ -49,14 +49,14 @@ export function SetupCommand() {
   const [failed, setFailed] = useState(false);
   return (
     <div className="setup-command">
-      <code>npm run setup</code>
+      <code>pnpm run setup</code>
       <button
         type="button"
         onClick={fire(async () => {
           setCopied(false);
           setFailed(false);
           try {
-            await navigator.clipboard.writeText("npm run setup");
+            await navigator.clipboard.writeText("pnpm run setup");
             setCopied(true);
             setFailed(false);
           } catch {
@@ -181,7 +181,7 @@ export function ConnectionPanel({
         </>
       )}
       <p>
-        For a read-only connection check on that computer, run <code>npm run doctor</code>.
+        For a read-only connection check on that computer, run <code>pnpm run doctor</code>.
       </p>
     </details>
   );

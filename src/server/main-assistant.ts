@@ -4,11 +4,14 @@ import { z } from "zod";
 import { timingSafeEqualText } from "./timing-safe.js";
 import {
   CHECK_IN_ROUTINE_NAME,
+  MORNING_BRIEF_ROUTINE_NAME,
   checkInSchedule,
+  morningBriefCron,
   scheduleMinutes,
   mainEligible,
   mainIneligibleReason,
   validCheckInHours,
+  validMorningBriefTime,
 } from "../shared/main-assistant.js";
 import type {
   Bot,
@@ -112,8 +115,26 @@ export function checkInPrompt(input: {
     `${member}'s timezone is ${input.timezone}. If it is between 10 PM and 7 AM there right now, reply with exactly [SILENT] and nothing else.`,
     `Otherwise review what you can reach: connected calendars, email and task lists, and your recent conversation with ${member}.`,
     "Speak up only for something that clearly needs them soon: a calendar conflict, a time that changed, a deadline within the next day, or a reply someone is waiting on from them. Skip anything you already raised in an earlier check-in.",
-    "When something needs them, write one short message: what it is, why it matters now, and what you suggest.",
+    "When something needs them, write one short message: what it is, why it matters now, and what you suggest. Whenever an email reply, calendar update, or action checklist is needed, attach a ready-to-review `agent-ui` card (`email`, `event`, or `checklist`) directly in your message so they can act in one tap.",
     `When nothing needs attention, reply with exactly [SILENT] and nothing else, so ${member} hears nothing.`,
+  ].join("\n\n");
+}
+
+export const morningBriefMarker = (store: Store, botId: string, userId: string) =>
+  `[WildBots morning brief for member ${userId} on ${botId}, ${store.accounts.checkInSignature(botId, userId)}]`;
+
+export function morningBriefPrompt(input: {
+  marker: string;
+  member: string;
+  timezone: string;
+  timeOfDay: string;
+}) {
+  return [
+    input.marker,
+    `You are ${input.member}'s main assistant in WildBots, preparing their daily Morning Brief at ${input.timeOfDay} (${input.timezone}).`,
+    "Review connected calendars, email, open tracked tasks (`task_list`), and recent conversations.",
+    "Write a concise, scannable brief covering: (1) Today's schedule & conflicts, (2) Unreplied threads or decisions waiting on them, (3) Open background tasks ready for review.",
+    "Attach ready-to-review `agent-ui` cards (`email` drafts for urgent replies, `event` cards for scheduling fixes, or a `checklist` for today's top actions) directly below the summary so they can triage from Today without hunting across chats.",
   ].join("\n\n");
 }
 
@@ -322,6 +343,7 @@ export class MainAssistants {
       ...value,
       mainBotId: undefined,
       checkIns: value.checkIns && { ...value.checkIns, enabled: false },
+      morningBrief: value.morningBrief && { ...value.morningBrief, enabled: false },
     });
   }
 
@@ -824,6 +846,9 @@ export function installMainAssistantRoutes(
           ...value,
           mainBotId: botId ?? undefined,
           ...(changed && value.checkIns ? { checkIns: { ...value.checkIns, enabled: false } } : {}),
+          ...(changed && value.morningBrief
+            ? { morningBrief: { ...value.morningBrief, enabled: false } }
+            : {}),
         });
       };
       // Every request, a reaffirmation or a no-op included, decides from the designation as it is in its turn,
@@ -926,6 +951,75 @@ export function installMainAssistantRoutes(
           expose: true,
           preferences: preferences(userId),
         });
+      return preferences(userId);
+    },
+  );
+  apiRoute(
+    app,
+    "PUT /preferences/morning-brief",
+    {
+      before: (req) => requireCapability("routines", store.preferences(signedIn(req).id).mainBotId),
+      body: z.object({ enabled: z.boolean(), timeOfDay: z.string(), timezone }).strict(),
+    },
+    async (req, settings) => {
+      const userId = signedIn(req).id;
+      if (!validMorningBriefTime(settings.timeOfDay))
+        throw httpError(400, "Choose a morning brief time as HH:MM (24-hour clock).", {
+          code: "morning_brief_time",
+        });
+      const user = store.getUser(userId);
+      await serialDelivery(store, async () => {
+        const mainBotId = store.preferences(userId).mainBotId;
+        if (!mainBotId)
+          throw httpError(409, "Choose a main assistant before turning on Morning brief.", {
+            code: "main_required",
+          });
+        if (settings.enabled) await eligibleBot(userId, mainBotId);
+        const existing = store.checkIns.currentBriefs().filter((row) => row.userId === userId);
+        if (!settings.enabled) {
+          for (const row of existing) {
+            await runtime.deleteRoutine(row.jobId, row.botId).catch(() => {});
+            store.checkIns.removedBrief(row.botId, row.jobId);
+          }
+          store.savePreferences(userId, { ...store.preferences(userId), morningBrief: settings });
+          return;
+        }
+        const prompt = morningBriefPrompt({
+          marker: morningBriefMarker(store, mainBotId, userId),
+          member: user?.name ?? "this member",
+          timezone: settings.timezone,
+          timeOfDay: settings.timeOfDay,
+        });
+        const schedule = morningBriefCron(settings.timeOfDay);
+        const onMain = existing.find((row) => row.botId === mainBotId);
+        for (const row of existing) {
+          if (row !== onMain) {
+            await runtime.deleteRoutine(row.jobId, row.botId).catch(() => {});
+            store.checkIns.removedBrief(row.botId, row.jobId);
+          }
+        }
+        let savedRoutine: Routine;
+        const routineInput: Omit<Routine, "id"> = {
+          botId: mainBotId,
+          name: MORNING_BRIEF_ROUTINE_NAME,
+          prompt,
+          schedule,
+          enabled: true,
+          delivery: { deliver: `bot-chat:${mainBotId}` },
+        };
+        if (onMain) {
+          try {
+            savedRoutine = await runtime.saveRoutine(routineInput, onMain.jobId);
+          } catch {
+            store.checkIns.removedBrief(onMain.botId, onMain.jobId);
+            savedRoutine = await runtime.saveRoutine(routineInput);
+          }
+        } else {
+          savedRoutine = await runtime.saveRoutine(routineInput);
+        }
+        store.checkIns.trackBrief({ botId: mainBotId, jobId: savedRoutine.id, userId });
+        store.savePreferences(userId, { ...store.preferences(userId), morningBrief: settings });
+      });
       return preferences(userId);
     },
   );

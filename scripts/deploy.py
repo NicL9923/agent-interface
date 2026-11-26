@@ -70,7 +70,7 @@ for candidate in $(ls -1d "$ROOT"/runtime/node-v24*/bin "$ROOT"/runtime/node-v26
     PATH="$candidate:$PATH"
   fi
 done
-export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="$PATH:$HOME/.local/share/pnpm:$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 REL_NAME={q_rel}
 REL_DIR="$ROOT/releases/$REL_NAME"
 TARBALL={q_tar}
@@ -89,9 +89,9 @@ tar -xzf "$TARBALL" -C "$REL_DIR"
 rm -f "$TARBALL"
 
 cd "$REL_DIR"
-npm ci --no-audit --no-fund
-npm run build
-npm run build:server:bun
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm run build:server:bun
 
 if [ -n "$PREV" ] && [ -d "$PREV/dist/client/assets" ]; then
   python3 -c 'import json, sys; print(json.dumps({{"assets": sys.argv[1]}}))' "$PREV/dist/client/assets" > "$REL_DIR/dist/previous-release.json"

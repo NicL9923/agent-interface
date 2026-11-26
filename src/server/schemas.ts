@@ -107,10 +107,14 @@ export const preferences = z.object({
     .array(z.object({ botId: id, routineId: id }).strict())
     .max(500)
     .optional(),
-  // --- Main assistant: server-owned, so PATCH /preferences ignores what a client sends for these two. ---
+  // --- Main assistant: server-owned, so PATCH /preferences ignores what a client sends for these. ---
   mainBotId: id.optional(),
   checkIns: z
     .object({ enabled: z.boolean(), everyHours: z.number(), timezone: z.string() })
+    .strict()
+    .optional(),
+  morningBrief: z
+    .object({ enabled: z.boolean(), timeOfDay: z.string(), timezone: z.string() })
     .strict()
     .optional(),
   mainSuggestionDismissed: z.boolean().optional(),

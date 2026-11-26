@@ -8,7 +8,7 @@
 // sampled every animation frame, in requestAnimationFrame, and again in a task posted from it, which runs after
 // that frame paints, until a second after the reply's first words; each run reports the largest move between two
 // consecutive frames in both, and when it happened relative to the send and to the activity row's last insertion.
-// Run `npm run build` first. It uses port 4183 and the next one; E2E_PORT picks others.
+// Run `pnpm run build` first. It uses port 4183 and the next one; E2E_PORT picks others.
 //   node .agents/tools/measure-thinking-gap.mjs [--runs 10] [--delays 0,1500]
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -32,7 +32,7 @@ if (
   )
 )
   throw new Error(`Port ${port} is taken; set E2E_PORT.`);
-const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+const server = spawn("pnpm", ["exec", "tsx", "e2e/server.ts"], {
   stdio: ["ignore", "inherit", "inherit"],
   detached: true,
   env: { ...process.env, E2E_PORT: String(port) },

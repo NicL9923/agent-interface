@@ -83,8 +83,8 @@ of the body's area at the midpoint.
 4. Add the id to its group in `avatarShapeGroups` in `src/shared/types.ts`. The compiler then names
    anything else that misses it.
 5. Look at it in every state, with a hat and with glasses, on `/avatar-specimen/` under
-   `npm run dev:client`. Override `radius` or `hat` in the manifest if the measurement is off.
-6. Run `UPDATE_AVATAR_ART=1 npx vitest run tests/avatar-art-parity.test.ts`, which rewrites the
+   `pnpm run dev:client`. Override `radius` or `hat` in the manifest if the measurement is off.
+6. Run `UPDATE_AVATAR_ART=1 pnpm exec vitest run tests/avatar-art-parity.test.ts`, which rewrites the
    iOS catalog, and commit both files it writes. `tests/avatar-component.test.ts` then checks the
    new shape's eyes sit on its body and `tests/avatar-outline.test.ts` that it morphs to and from
    every other shape without collapsing.

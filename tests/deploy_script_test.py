@@ -80,11 +80,11 @@ proc = subprocess.run(["bash", "-s"], input=script, text=True, env=env)
 sys.exit(proc.returncode)
 """,
         )
-        # Fake npm records calls and creates dist/.
+        # Fake pnpm records calls and creates dist/.
         make_executable(
-            self.bin_dir / "npm",
+            self.bin_dir / "pnpm",
             f"""#!/usr/bin/env bash
-echo "npm $*" >> {str(self.log_file)!r}
+echo "pnpm $*" >> {str(self.log_file)!r}
 mkdir -p dist/client/assets
 """,
         )
@@ -157,8 +157,8 @@ printf '%s' {health_body!r}
             prev_json, {"assets": str(self.prev_release / "dist" / "client" / "assets")}
         )
         calls = self.log_file.read_text("utf-8")
-        self.assertIn("npm ci", calls)
-        self.assertIn("npm run build:server:bun", calls)
+        self.assertIn("pnpm install --frozen-lockfile", calls)
+        self.assertIn("pnpm run build:server:bun", calls)
         self.assertIn("systemctl --user restart agent-interface.service", calls)
 
     def test_rolls_back_automatically_when_health_check_fails(self) -> None:

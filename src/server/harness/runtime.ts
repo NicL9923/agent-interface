@@ -863,11 +863,32 @@ export function createHarnessRuntime({
     if (bot.instructions.trim()) sections.push(bot.instructions.trim());
     const entries = store.memory.listEntries(bot.id, "active");
     if (entries.length) sections.push(`# Memory\n${store.memory.renderMemoryMarkdown(bot.id)}`);
+    if (!bot.shared && bot.ownerId && store.memory.sharedPersonalMemoryEnabled(bot.id)) {
+      const siblingIds = store.managedBots
+        .listManagedBots()
+        .filter(
+          (row) => row.archivedAt == null && row.shared === false && row.ownerId === bot.ownerId,
+        )
+        .map((row) => row.id);
+      const sharedFacts = store.memory.renderSharedOwnerMemoryMarkdown(
+        bot.ownerId,
+        bot.id,
+        siblingIds,
+      );
+      if (sharedFacts) sections.push(`# Shared personal memory\n${sharedFacts}`);
+    }
     const skills = store.memory.listSkills(bot.id, "active");
     if (skills.length)
       sections.push(
         `# Skills\nUse the \`wildbots\` MCP \`skill_read\` tool to load a skill's full instructions.\n${store.memory.renderSkillIndex(bot.id)}`,
       );
+    sections.push(
+      [
+        "# Tasks & external actions",
+        "- For multi-step background work, create and update a tracked task via `task_create` / `task_update`. When work is ready for sign-off, set status to `ready_for_review` with a clear summary; only a household member can mark a task done.",
+        "- Before executing any irreversible external side effect (sending an email or message, deleting external data, publishing publicly, making a payment, or modifying external records), call `action_confirm` with the exact target and fields and wait for approval.",
+      ].join("\n"),
+    );
     const policy = delegationPolicies[bot.id];
     if (policy && (policy.main || policy.personal.length || policy.shared.length)) {
       const lines: string[] = ["# Household assistants"];

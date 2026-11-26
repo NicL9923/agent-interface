@@ -2515,7 +2515,7 @@ const handle = async (request, response) => {
       response.end(fallback);
     } catch {
       response.writeHead(404);
-      response.end("Run npm run build first.");
+      response.end("Run pnpm run build first.");
     }
   }
 };

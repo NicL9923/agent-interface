@@ -6,7 +6,7 @@ const results = await Promise.allSettled(
   checks.map(
     (name) =>
       new Promise((resolve, reject) => {
-        const child = spawn("npm", ["run", name], { stdio: "inherit", shell: false });
+        const child = spawn("pnpm", ["run", name], { stdio: "inherit", shell: false });
         child.on("error", reject);
         child.on("exit", (code, signal) => {
           console.log(`check ${name}: ${signal || code}`);

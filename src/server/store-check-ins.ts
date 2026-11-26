@@ -52,4 +52,34 @@ export class CheckInRepository {
     if (!this.isCheckIn(event.botId, event.routineId) && event.checkIn !== true) return false;
     return event.kind !== "completed" || !event.body?.trim() || isSilentAnswer(event.body);
   }
+  /** Managed morning brief routines currently active per member. */
+  currentBriefs(): CheckInJob[] {
+    return this.db
+      .prepare(
+        "SELECT bot_id AS botId,job_id AS jobId,user_id AS userId FROM morning_brief_jobs WHERE removed_at IS NULL ORDER BY created_at",
+      )
+      .all() as CheckInJob[];
+  }
+  trackBrief(job: CheckInJob, now = Date.now()) {
+    this.db
+      .prepare(
+        "INSERT INTO morning_brief_jobs(bot_id,job_id,user_id,created_at) VALUES(?,?,?,?) ON CONFLICT(bot_id,job_id) DO UPDATE SET user_id=excluded.user_id,removed_at=NULL",
+      )
+      .run(job.botId, job.jobId, job.userId, now);
+  }
+  removedBrief(botId: string, jobId: string, now = Date.now()) {
+    this.db
+      .prepare(
+        "UPDATE morning_brief_jobs SET removed_at=? WHERE bot_id=? AND job_id=? AND removed_at IS NULL",
+      )
+      .run(now, botId, jobId);
+  }
+  isMorningBrief(botId: string, jobId: string | undefined) {
+    return (
+      !!jobId &&
+      !!this.db
+        .prepare("SELECT 1 FROM morning_brief_jobs WHERE bot_id=? AND job_id=?")
+        .get(botId, jobId)
+    );
+  }
 }

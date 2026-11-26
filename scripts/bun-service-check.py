@@ -27,7 +27,7 @@ def main():
     bundle = Path(__file__).resolve().parents[1] / "dist" / "server"
     for name in ("index.js", "index.js.map", "terminal-host.py"):
         if not (bundle / name).is_file():
-            raise SystemExit(f"Missing {bundle / name}. Run npm run build:server:bun.")
+            raise SystemExit(f"Missing {bundle / name}. Run pnpm run build:server:bun.")
     print(f"Bun {VERSION} and the WildBots server bundle are ready.")
 
 

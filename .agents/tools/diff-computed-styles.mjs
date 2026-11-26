@@ -4,7 +4,7 @@
 // home.css, shell.css and the component sheets around index.css; dev injects them in import order and motion.css
 // last), so a rule that wins in one and loses in the other shows as a property whose value differs. Prints each
 // difference as `screen  element  property  build -> dev`, and exits 1 when there is any.
-//   npm run build && node .agents/tools/diff-computed-styles.mjs
+//   pnpm run build && node .agents/tools/diff-computed-styles.mjs
 // WIDTH=390 reads the phone layout. SCHEMES=light,dark picks the color schemes (both by default). MOTION=no-preference
 // reads with motion allowed; the default is reduce, so a running animation does not differ by the frame it was read at.
 // Uses ports 4199 and the next one (E2E_PORT moves them), and 5199 for dev (DEV_PORT).
@@ -18,7 +18,7 @@ const devPort = Number(process.env.DEV_PORT) || 5199;
 const width = Number(process.env.WIDTH) || 900;
 const schemes = (process.env.SCHEMES || "light,dark").split(",");
 const motion = process.env.MOTION || "reduce";
-const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+const server = spawn("pnpm", ["exec", "tsx", "e2e/server.ts"], {
   stdio: ["ignore", "ignore", "inherit"],
   detached: true,
   env: { ...process.env, E2E_PORT: String(port) },
