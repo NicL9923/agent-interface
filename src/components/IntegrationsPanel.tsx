@@ -348,7 +348,8 @@ export function IntegrationList({
         >
           <h3>Connect {editing.name}</h3>
           <p className="muted">
-            Connection credentials stay with Hermes. Secret fields are cleared after saving.
+            Connection credentials stay encrypted in WildBots. Secret fields are cleared after
+            saving.
           </p>
           {editing.setup.map((field) => (
             <label key={field.key}>
@@ -562,7 +563,7 @@ export function IntegrationList({
         </section>
       ))}
       {catalog && catalog.connections.length === 0 && !only && (
-        <p className="muted">Hermes has not reported any connections for this assistant.</p>
+        <p className="muted">No connections are configured for this assistant yet.</p>
       )}
       {catalog?.canManage && !only && (
         <section className="integration-custom">

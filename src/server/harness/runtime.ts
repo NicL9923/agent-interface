@@ -32,6 +32,7 @@ import {
   type BotInput,
   type Capability,
   type ConversationOptions,
+  type DelegationPolicies,
   type FileRef,
   type Inflight,
   type HarnessOption,
@@ -72,7 +73,9 @@ import {
   type HarnessTurnInput,
   normalizeHarnessId,
 } from "./driver.js";
+import type { NativeComputerService } from "./native-computer.js";
 import { createNativeGroupAdapter } from "./native-groups.js";
+import { createNativeIntegrationsHandler } from "./native-integrations.js";
 import { createNativeVaultHandler } from "./native-vault.js";
 import { otherHarnessUser, reservedHarnessEnvironment } from "./process-spawn.js";
 import { HarnessSessionCoordinator } from "./session-coordinator.js";
@@ -172,6 +175,8 @@ export interface HarnessRuntimeOptions {
   fallback?: HarnessFallbackConfig;
   /** Live Talk, transcription, and speech synthesis provider for native bots. */
   voice?: HarnessVoiceDelegate;
+  /** Native shared desktop and browser service. */
+  computer?: NativeComputerService;
 }
 
 function directory(path: string, mode = 0o700) {
@@ -233,6 +238,7 @@ export function createHarnessRuntime({
   startScheduler = false,
   fallback,
   voice,
+  computer,
 }: HarnessRuntimeOptions) {
   const root = resolve(workspaceRoot);
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -494,6 +500,53 @@ export function createHarnessRuntime({
     return { state: "idle" };
   }
 
+  const DELEGATION_POLICIES_KEY = "delegation_policies";
+  const ROUTINE_ROOMS_PREFIX = "routine_rooms:";
+  let delegationPolicies: DelegationPolicies = (() => {
+    const row = store.db
+      .prepare("SELECT value FROM metadata WHERE key=?")
+      .get(DELEGATION_POLICIES_KEY) as { value: string } | undefined;
+    if (!row) return {};
+    try {
+      const parsed = JSON.parse(row.value) as DelegationPolicies;
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  })();
+
+  function routineRoomsFor(routine: Pick<NativeRoutine, "id" | "deliverToGroupId">): string[] {
+    const row = store.db
+      .prepare("SELECT value FROM metadata WHERE key=?")
+      .get(`${ROUTINE_ROOMS_PREFIX}${routine.id}`) as { value: string } | undefined;
+    if (row) {
+      try {
+        const parsed = JSON.parse(row.value) as unknown;
+        if (Array.isArray(parsed)) {
+          return [
+            ...new Set(parsed.filter((item): item is string => typeof item === "string" && !!item)),
+          ];
+        }
+      } catch {
+        /* Fall back to deliverToGroupId. */
+      }
+    }
+    return routine.deliverToGroupId ? [routine.deliverToGroupId] : [];
+  }
+
+  function writeRoutineRooms(routineId: string, roomIds: string[]) {
+    const key = `${ROUTINE_ROOMS_PREFIX}${routineId}`;
+    if (!roomIds.length) {
+      store.db.prepare("DELETE FROM metadata WHERE key=?").run(key);
+      return;
+    }
+    store.db
+      .prepare(
+        "INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      )
+      .run(key, JSON.stringify([...new Set(roomIds)]));
+  }
+
   function toBot(bot: ManagedBotRecord, detail = false): Bot {
     const preview = store.transcripts.latestPreview(bot.id);
     return {
@@ -512,7 +565,7 @@ export function createHarnessRuntime({
       enabledMcpServers: bot.enabledMcpServers,
       enabledSkills: bot.enabledSkills,
       enabledTools: bot.enabledTools,
-      ...(detail && { availableMcpServers: defaultMcpServers(bot).map(({ name }) => name) }),
+      ...(detail && { availableMcpServers: mcpServersFor(bot).map(({ name }) => name) }),
     };
   }
 
@@ -730,6 +783,33 @@ export function createHarnessRuntime({
       sections.push(
         `# Skills\nUse the \`wildbots\` MCP \`skill_read\` tool to load a skill's full instructions.\n${store.memory.renderSkillIndex(bot.id)}`,
       );
+    const policy = delegationPolicies[bot.id];
+    if (policy && (policy.main || policy.personal.length || policy.shared.length)) {
+      const lines: string[] = ["# Household assistants"];
+      const formatList = (items: { id: string; name: string; description?: string }[]) =>
+        items.map(
+          (item) =>
+            `- \`${item.id}\` (${item.name})${item.description ? `: ${item.description}` : ""}`,
+        );
+      if (policy.main) {
+        lines.push(
+          `You are ${policy.member || "this member"}'s main assistant in WildBots. Ask before sharing personal details with shared household assistants or messaging them on their behalf.`,
+        );
+      }
+      if (policy.personal.length) {
+        lines.push("Personal assistants you can reach with `message_bot`:");
+        lines.push(...formatList(policy.personal));
+      }
+      if (policy.shared.length) {
+        lines.push(
+          policy.main
+            ? "Shared household assistants (ask your member before messaging these):"
+            : "Shared household assistants you can reach with `message_bot`:",
+        );
+        lines.push(...formatList(policy.shared));
+      }
+      sections.push(lines.join("\n"));
+    }
     return sections.join("\n\n");
   }
 
@@ -767,6 +847,11 @@ export function createHarnessRuntime({
   }
 
   function toRoutine(routine: NativeRoutine): Routine {
+    const roomIds = routineRoomsFor(routine);
+    const deliver = [
+      `bot-chat:${routine.botId}`,
+      ...roomIds.map((roomId) => `room:${roomId}`),
+    ].join(",");
     return {
       id: routine.id,
       botId: routine.botId,
@@ -776,6 +861,9 @@ export function createHarnessRuntime({
       enabled: routine.enabled,
       script: routine.scriptCommand,
       noAgent: routine.scriptCommand !== null && !routine.prompt.trim(),
+      roomIds,
+      delivery: { deliver },
+      nativeOverrides: [],
       running: routine.lastStatus === "running",
       nextRunAt: routine.nextRunAt ? new Date(routine.nextRunAt).toISOString() : undefined,
       lastRunAt: routine.lastRunAt ? new Date(routine.lastRunAt).toISOString() : undefined,
@@ -826,9 +914,9 @@ export function createHarnessRuntime({
       reasoning: target.driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
       speed: target.driver.capabilities.supportsSpeed ? bot.speed : undefined,
       systemPrompt: systemPromptFor(bot),
-      env: target.env,
+      env: mergedEnvFor(bot, target.env),
       mcpServers: target.driver.capabilities.supportsMcp
-        ? defaultMcpServers(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
+        ? mcpServersFor(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
         : undefined,
       fullPermissions: true,
     });
@@ -923,6 +1011,59 @@ export function createHarnessRuntime({
     executeTurn: (bot, prompt, signal) => runOneShotPrompt(bot, `group-${bot.id}`, prompt, signal),
   });
   const nativeVault = createNativeVaultHandler(store, requireBot);
+  const nativeIntegrations = createNativeIntegrationsHandler({ store, requireBot });
+
+  function mcpServersFor(bot: ManagedBotRecord): HarnessMcpServerSpec[] {
+    const combined = [...defaultMcpServers(bot), ...nativeIntegrations.mcpServersForBot(bot.id)];
+    const seen = new Set<string>();
+    return combined.filter((spec) => {
+      if (seen.has(spec.name)) return false;
+      seen.add(spec.name);
+      return true;
+    });
+  }
+
+  function mergedEnvFor(
+    bot: ManagedBotRecord,
+    baseEnv: Record<string, string> | undefined,
+  ): Record<string, string> | undefined {
+    const extra = nativeIntegrations.envForBot(bot.id);
+    if (!Object.keys(extra).length) return baseEnv;
+    return { ...extra, ...baseEnv };
+  }
+
+  function assertDelegationAllowed(sourceBotId: string, targetBotId: string) {
+    const policy = delegationPolicies[sourceBotId];
+    if (!policy) return;
+    const reachable = [...policy.personal, ...policy.shared].some(
+      (item) => item.id === targetBotId,
+    );
+    if (!reachable) throw new Conflict("This assistant is not allowed to message that assistant.");
+  }
+
+  async function deliverBotMessage(input: {
+    sourceBotId: string;
+    targetBotId: string;
+    message: string;
+  }) {
+    assertOpen();
+    assertDelegationAllowed(input.sourceBotId, input.targetBotId);
+    const target = requireBot(input.targetBotId);
+    const source = getBot(input.sourceBotId);
+    const sourceName = source?.name ?? input.sourceBotId;
+    const text = `Message from ${sourceName} (@${input.sourceBotId}): ${input.message}`;
+    store.queue.enqueue({
+      botId: target.id,
+      requestId: `handoff:${randomUUID()}`,
+      senderId: `bot:${input.sourceBotId}`,
+      senderName: sourceName,
+      text,
+      files: [],
+    });
+    drain(target.id);
+    changed(target.id);
+    rosterChanged();
+  }
 
   let scheduler: NativeScheduler | undefined;
 
@@ -959,9 +1100,9 @@ export function createHarnessRuntime({
           reasoning: target.driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
           speed: target.driver.capabilities.supportsSpeed ? bot.speed : undefined,
           systemPrompt: systemPromptFor(bot),
-          env: target.env,
+          env: mergedEnvFor(bot, target.env),
           mcpServers: target.driver.capabilities.supportsMcp
-            ? defaultMcpServers(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
+            ? mcpServersFor(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
             : undefined,
           fullPermissions: true,
         },
@@ -1004,19 +1145,20 @@ export function createHarnessRuntime({
     const runId = randomUUID();
     const item = store.queue.claimNext(botId, runId);
     if (!item) return;
+    const isBotHandoff = item.senderId.startsWith("bot:");
     const prompt: Message = {
       id: userMessageId(item),
       runId,
       role: "user",
       text: item.text,
-      sender: { id: item.senderId, name: item.senderName },
+      ...(!isBotHandoff && { sender: { id: item.senderId, name: item.senderName } }),
       files: item.files,
       createdAt: new Date(item.createdAt).toISOString(),
     };
     const after = store.transcripts.listPage(botId, { limit: 1 }).messages[0]?.id ?? null;
     append(botId, [prompt]);
     store.transcripts.markCanonicalLocal(botId);
-    store.participate(runId, item.senderId);
+    if (!isBotHandoff) store.participate(runId, item.senderId);
     const startedAt = now();
     const turn: ActiveTurn = {
       bot,
@@ -1336,7 +1478,7 @@ export function createHarnessRuntime({
         updatedAt: Date.now(),
       };
       if (!previous && input.enabledMcpServers === undefined)
-        next.enabledMcpServers = defaultMcpServers(next).map(({ name }) => name);
+        next.enabledMcpServers = mcpServersFor(next).map(({ name }) => name);
       credentialFor(next);
       if (
         active(botId) &&
@@ -1769,6 +1911,7 @@ export function createHarnessRuntime({
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
       const timestamp = Date.now();
       if (id === undefined) {
+        const roomIds = [...new Set(input.roomIds ?? [])];
         const created = store.nativeRoutines.create(
           {
             botId: bot.id,
@@ -1780,13 +1923,19 @@ export function createHarnessRuntime({
             scriptCommand,
             modelOverride: input.model ?? null,
             enabled: input.enabled,
+            deliverToGroupId: roomIds[0] ?? null,
           },
           timestamp,
         );
+        writeRoutineRooms(created.id, roomIds);
         return toRoutine(created);
       }
       const existing = store.nativeRoutines.get(id);
       if (!existing || existing.botId !== bot.id) throw new NotFound("Routine not found.");
+      const roomIds =
+        input.roomIds !== undefined ? [...new Set(input.roomIds)] : routineRoomsFor(existing);
+      const deliverToGroupId = roomIds[0] ?? null;
+      store.nativeRoutines.assertRoutineGroupDeliveryAllowed({ botId: bot.id, deliverToGroupId });
       const next = input.enabled
         ? firstRoutineTime(schedule.kind, schedule.expression, existing.timezone, timestamp)
         : null;
@@ -1794,7 +1943,7 @@ export function createHarnessRuntime({
         .prepare(
           `UPDATE native_routines
            SET name=?, kind=?, schedule_expr=?, prompt=?, script_command=?, model_override=?,
-               enabled=?, next_run_at=?, updated_at=?
+               enabled=?, deliver_to_group_id=?, next_run_at=?, updated_at=?
            WHERE id=? AND bot_id=?`,
         )
         .run(
@@ -1805,11 +1954,13 @@ export function createHarnessRuntime({
           scriptCommand,
           input.model ?? null,
           Number(input.enabled),
+          deliverToGroupId,
           next,
           timestamp,
           id,
           bot.id,
         );
+      writeRoutineRooms(id, roomIds);
       return toRoutine(store.nativeRoutines.get(id)!);
     },
     async deleteRoutine(id, botId) {
@@ -1819,6 +1970,7 @@ export function createHarnessRuntime({
       if (!existing || existing.botId !== bot.id) throw new NotFound("Routine not found.");
       scheduler?.stopRun(id);
       store.db.prepare("DELETE FROM native_routines WHERE id=? AND bot_id=?").run(id, bot.id);
+      writeRoutineRooms(id, []);
     },
     async setRoutineEnabled(botId, routineId, enabled) {
       assertOpen();
@@ -1875,6 +2027,20 @@ export function createHarnessRuntime({
         previewOnly: false,
       };
     },
+    async routineDeliveries() {
+      return [];
+    },
+    async delegationPolicy(policies: DelegationPolicies) {
+      assertOpen();
+      delegationPolicies = policies;
+      store.db
+        .prepare(
+          "INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        )
+        .run(DELEGATION_POLICIES_KEY, JSON.stringify(policies));
+      return 2;
+    },
+    deliverBotMessage,
     groupRequest: (input) => {
       assertOpen();
       return nativeGroups.handle(input);
@@ -1883,6 +2049,29 @@ export function createHarnessRuntime({
       assertOpen();
       return nativeVault(input);
     },
+    integrationRequest: (input) => {
+      assertOpen();
+      return nativeIntegrations.handle(input);
+    },
+    connectionRequest: (input) => {
+      assertOpen();
+      return nativeIntegrations.settleConnectionRequest(input);
+    },
+    ...(computer
+      ? {
+          computerRequest: (input: Parameters<NativeComputerService["computerRequest"]>[0]) => {
+            assertOpen();
+            return computer.computerRequest(input);
+          },
+          ...(computer.enabled
+            ? {
+                connectComputerDisplay: (
+                  attachment: Parameters<NativeComputerService["connectComputerDisplay"]>[0],
+                ) => computer.connectComputerDisplay(attachment),
+              }
+            : {}),
+        }
+      : {}),
     ...(voice?.realtimeSession
       ? { realtimeSession: (input: RealtimeSessionInput) => voice.realtimeSession!(input) }
       : {}),
@@ -1928,7 +2117,14 @@ export function createHarnessRuntime({
         if (failures.length) throw new AggregateError(failures, "Harness runtime teardown failed.");
       })());
     },
-  } satisfies Runtime & { harnessOptions(): Promise<HarnessOption[]> };
+  } satisfies Runtime & {
+    harnessOptions(): Promise<HarnessOption[]>;
+    deliverBotMessage(input: {
+      sourceBotId: string;
+      targetBotId: string;
+      message: string;
+    }): Promise<void>;
+  };
 
   // A server exit may have left a claimed item behind. Recover its existing outcome or
   // report an interruption. Only unclaimed work can ever be dispatched from the queue.
@@ -1965,15 +2161,26 @@ export function createHarnessRuntime({
       return runRoutinePrompt(routine, promptText, signal);
     },
     onDeliver: async (routine, run, outputText) => {
-      if (!outputText.trim()) return false;
+      const trimmed = outputText.trim();
+      if (!trimmed || /^[\p{P}\s`]*\[SILENT\][\p{P}\s`]*$/iu.test(trimmed)) return false;
       const at = new Date().toISOString();
-      const text = `[Cron delivery: ${routine.name}]\n\n${outputText.trim()}`;
+      const text = `[Cron delivery: ${routine.name}]\n\n${trimmed}`;
       store.transcripts.appendMessages(
         routine.botId,
         [{ id: `routine-run-${run.id}`, role: "assistant", text, createdAt: at }],
         runtimeId,
       );
       structural(routine.botId);
+      const roomIds = routineRoomsFor(routine);
+      for (const roomId of roomIds) {
+        const room = store.nativeGroups.getRoom(roomId);
+        if (!room || room.archivedAt !== undefined) continue;
+        nativeGroups.deliverRoutine(roomId, {
+          routineId: routine.id,
+          routineName: routine.name,
+          text: trimmed,
+        });
+      }
       return true;
     },
   });

@@ -6,8 +6,11 @@ import { createDirectVoiceService, createGrokVoiceService } from "./direct-voice
 import type { FileSigner } from "./file-signer.js";
 import type { HarnessDriver, HarnessDriverId, HarnessMcpServerSpec } from "./harness/driver.js";
 import { createDefaultHarnessDrivers, type HarnessVoiceDelegate } from "./harness/index.js";
+import { createNativeComputerService } from "./harness/native-computer.js";
 import { createServerHarnessRuntime } from "./harness/wiring.js";
+import { createComputerMcpTools } from "./mcp/computer-tools.js";
 import { createMacMcpTools, type MacLinkRelay } from "./mcp/mac-tools.js";
+import { createVaultMcpTools } from "./mcp/vault-tools.js";
 import { createWildbotsMcpServer, type McpToolProvider } from "./mcp/wildbots-mcp.js";
 import { createMemoryMcpTools } from "./memory-learning.js";
 import type { MemorySkillsRepository } from "./store-memory.js";
@@ -81,7 +84,7 @@ export async function composeServerRuntime({
   files,
   drivers = createDefaultHarnessDrivers(),
 }: {
-  config: Pick<Config, "nativeHarness">;
+  config: Pick<Config, "nativeHarness" | "computerDesktop">;
   store: Store;
   files: FileSigner;
   drivers?: Partial<Record<HarnessDriverId, HarnessDriver>>;
@@ -95,10 +98,27 @@ export async function composeServerRuntime({
       return macs.invoke(request);
     },
   };
+  const computer = createNativeComputerService(config.computerDesktop);
+  let deliverMessage:
+    | ((input: { sourceBotId: string; targetBotId: string; message: string }) => Promise<void>)
+    | undefined;
+  const extraToolProviders: McpToolProvider[] = [
+    memoryToolProvider(store.memory),
+    createMacMcpTools({ store, relay }),
+    createVaultMcpTools({
+      secrets: store.secrets,
+      browserBridge: computer.enabled ? computer.browserBridge : undefined,
+    }),
+    ...(computer.enabled ? [createComputerMcpTools({ backend: computer.backend })] : []),
+  ];
   const mcp = await createWildbotsMcpServer({
     store,
     secrets: store.secrets,
-    extraToolProviders: [memoryToolProvider(store.memory), createMacMcpTools({ store, relay })],
+    onMessageBot: async ({ source, targetBotId, message }) => {
+      if (!deliverMessage) throw new Error("Assistant messaging is not ready yet.");
+      await deliverMessage({ sourceBotId: source.botId, targetBotId, message });
+    },
+    extraToolProviders,
   });
   try {
     const directVoice = createDirectVoiceService();
@@ -132,7 +152,9 @@ export async function composeServerRuntime({
       startScheduler: true,
       fallback: config.nativeHarness.fallback,
       voice,
+      computer,
     });
+    deliverMessage = server.harnessRuntime.deliverBotMessage;
     return {
       runtime: server.runtime,
       probeHarnesses: server.probeHarnesses,
@@ -140,10 +162,12 @@ export async function composeServerRuntime({
         macs = broker;
       },
       sweptQueueItems: server.sweptQueueItems,
-      close: () => mcp.close(),
+      close: async () => {
+        await Promise.allSettled([computer.close(), mcp.close()]);
+      },
     };
   } catch (error) {
-    await mcp.close();
+    await Promise.allSettled([computer.close(), mcp.close()]);
     throw error;
   }
 }

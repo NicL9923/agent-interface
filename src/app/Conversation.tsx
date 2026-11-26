@@ -445,7 +445,7 @@ export const Conversation = memo(function Conversation({
                     </button>
                     {!boot.capabilities.botConfiguration.supported && (
                       <p className="muted">
-                        Assistant setup is unavailable while Hermes is disconnected.
+                        Assistant setup is unavailable while the server is disconnected.
                       </p>
                     )}
                     {prefs.presentation === "advanced" && (

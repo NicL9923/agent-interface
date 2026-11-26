@@ -587,6 +587,44 @@ export class GroupCoordinator {
     return { message, round };
   }
 
+  /**
+   * Posts a scheduled routine's output into a room. Assistants answer only when the routine post
+   * explicitly `@mentions` them, and never interrupt an already running discussion.
+   */
+  deliverRoutineMessage(
+    roomId: string,
+    input: { routineId: string; routineName: string; text: string; failed?: boolean },
+  ): { message: NativeGroupMessage; round?: Promise<GroupRoundResult> } {
+    const { repository } = this.options;
+    const room = repository.openRoom(roomId);
+    const text = typeof input.text === "string" ? input.text.trim().slice(0, MAX_MESSAGE) : "";
+    if (!text) throw new InvalidInput("Routine delivery text cannot be empty.");
+    const members = repository.memberBots(room);
+    const mentions = input.failed ? [] : parseMentions(text, members);
+    const message = this.post({
+      roomId,
+      threadId: null,
+      senderKind: "system",
+      senderId: `${input.failed ? "cron-notice" : "cron"}:${input.routineId}`,
+      senderName: input.routineName,
+      text,
+      mentions,
+      round: 0,
+    });
+    if (!mentions.length || this.running.has(roomId)) return { message };
+    const controller = new AbortController();
+    this.running.set(roomId, controller);
+    const round = this.discuss(room, members, message, controller.signal)
+      .catch((): GroupRoundResult => {
+        this.emit({ type: "round_finished", roomId, reason: "failed", turns: 0 });
+        return { reason: "failed", turns: 0, replies: [] };
+      })
+      .finally(() => {
+        if (this.running.get(roomId) === controller) this.running.delete(roomId);
+      });
+    return { message, round };
+  }
+
   /** Stops the room's discussion. The room stays busy until the abandoned turn settles. */
   stopRoom(roomId: string): boolean {
     const controller = this.running.get(roomId);
