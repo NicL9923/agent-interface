@@ -1,0 +1,461 @@
+{
+  "comment": "Shared by tests/inflight-delta.test.ts (src/shared/inflight.ts) and InflightDeltaTests.swift (Models.swift), so the web and iOS clients order structural versions and place ?inflight=3 turn events identically.",
+  "compareVersions": [
+    {
+      "name": "orders lower epoch before higher epoch regardless of generation",
+      "a": "b:1:9",
+      "b": "b:2:0",
+      "sign": -1
+    },
+    {
+      "name": "orders higher generation after lower generation in the same epoch",
+      "a": "b:2:10",
+      "b": "b:2:9",
+      "sign": 1
+    },
+    {
+      "name": "orders equal boot, epoch, and generation as zero",
+      "a": "b:2:9",
+      "b": "b:2:9",
+      "sign": 0
+    },
+    {
+      "name": "returns null across different server processes",
+      "a": "a:5:5",
+      "b": "b:1:1",
+      "sign": null
+    },
+    {
+      "name": "returns null when left version is missing",
+      "a": null,
+      "b": "b:1:1",
+      "sign": null
+    },
+    {
+      "name": "returns null when right version is missing",
+      "a": "b:1:1",
+      "b": null,
+      "sign": null
+    },
+    {
+      "name": "returns null when a version has too few parts",
+      "a": "b:1",
+      "b": "b:1:1",
+      "sign": null
+    },
+    {
+      "name": "returns null when a version has too many parts",
+      "a": "b:1:2:3",
+      "b": "b:1:2",
+      "sign": null
+    },
+    {
+      "name": "returns null when boot is empty",
+      "a": ":1:1",
+      "b": ":1:1",
+      "sign": null
+    },
+    {
+      "name": "returns null when generation is non-numeric",
+      "a": "b:1:x",
+      "b": "b:1:1",
+      "sign": null
+    },
+    {
+      "name": "returns null when epoch is fractional",
+      "a": "b:1.5:2",
+      "b": "b:1:2",
+      "sign": null
+    }
+  ],
+  "versionBoot": [
+    {
+      "name": "extracts boot from a valid structural version",
+      "version": "boot-42:1:7",
+      "boot": "boot-42"
+    },
+    {
+      "name": "returns null for missing version",
+      "version": null,
+      "boot": null
+    },
+    {
+      "name": "returns null for malformed version with two parts",
+      "version": "boot-42:1",
+      "boot": null
+    },
+    {
+      "name": "returns null for empty boot",
+      "version": ":1:2",
+      "boot": null
+    },
+    {
+      "name": "returns null for trailing colon",
+      "version": "boot-42:1:2:",
+      "boot": null
+    }
+  ],
+  "placeTurn": [
+    {
+      "name": "replaces from turn first message on and strips -inflight",
+      "messages": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" },
+        { "id": "u2", "role": "user", "text": "u2" },
+        { "id": "old-inflight", "role": "assistant", "text": "old" }
+      ],
+      "turn": {
+        "messages": [
+          { "id": "u2", "role": "user", "text": "u2" },
+          { "id": "a2", "role": "assistant", "text": "a2" }
+        ]
+      },
+      "result": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" },
+        { "id": "u2", "role": "user", "text": "u2" },
+        { "id": "a2", "role": "assistant", "text": "a2" }
+      ]
+    },
+    {
+      "name": "places after named anchor when first message is not held",
+      "messages": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" },
+        { "id": "u2", "role": "user", "text": "u2" },
+        { "id": "old-inflight", "role": "assistant", "text": "old" }
+      ],
+      "turn": {
+        "after": "u2",
+        "messages": [{ "id": "u3", "role": "user", "text": "u3" }]
+      },
+      "result": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" },
+        { "id": "u2", "role": "user", "text": "u2" },
+        { "id": "u3", "role": "user", "text": "u3" }
+      ]
+    },
+    {
+      "name": "replaces everything when after is explicitly null",
+      "messages": [
+        { "id": "u0", "role": "user", "text": "u0" },
+        { "id": "a0", "role": "assistant", "text": "a0" },
+        { "id": "old-inflight", "role": "assistant", "text": "old" }
+      ],
+      "turn": {
+        "after": null,
+        "messages": [{ "id": "u1", "role": "user", "text": "u1" }]
+      },
+      "result": [{ "id": "u1", "role": "user", "text": "u1" }]
+    },
+    {
+      "name": "rejects when after is absent and first message is not held",
+      "messages": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" }
+      ],
+      "turn": {
+        "messages": [{ "id": "u9", "role": "user", "text": "u9" }]
+      },
+      "result": null
+    },
+    {
+      "name": "rejects when after names an unknown message and first message is not held",
+      "messages": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" }
+      ],
+      "turn": {
+        "after": "gone",
+        "messages": [{ "id": "u9", "role": "user", "text": "u9" }]
+      },
+      "result": null
+    },
+    {
+      "name": "rejects when a kept message ID also appears in turn messages",
+      "messages": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" },
+        { "id": "u2", "role": "user", "text": "u2" }
+      ],
+      "turn": {
+        "after": "u1",
+        "messages": [
+          { "id": "u3", "role": "user", "text": "u3" },
+          { "id": "u1", "role": "user", "text": "u1" }
+        ]
+      },
+      "result": null
+    },
+    {
+      "name": "prefers first message index over after anchor when first message is already held",
+      "messages": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" },
+        { "id": "u2", "role": "user", "text": "u2" }
+      ],
+      "turn": {
+        "after": "u1",
+        "messages": [
+          { "id": "u2", "role": "user", "text": "u2" },
+          { "id": "a2", "role": "assistant", "text": "a2" }
+        ]
+      },
+      "result": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" },
+        { "id": "u2", "role": "user", "text": "u2" },
+        { "id": "a2", "role": "assistant", "text": "a2" }
+      ]
+    },
+    {
+      "name": "strips -inflight before looking up after anchor",
+      "messages": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "old-inflight", "role": "assistant", "text": "old" }
+      ],
+      "turn": {
+        "after": "old-inflight",
+        "messages": [{ "id": "u2", "role": "user", "text": "u2" }]
+      },
+      "result": null
+    },
+    {
+      "name": "handles empty turn messages with a known after anchor",
+      "messages": [
+        { "id": "u1", "role": "user", "text": "u1" },
+        { "id": "a1", "role": "assistant", "text": "a1" }
+      ],
+      "turn": {
+        "after": "u1",
+        "messages": []
+      },
+      "result": [{ "id": "u1", "role": "user", "text": "u1" }]
+    }
+  ],
+  "withTurn": [
+    {
+      "name": "returns conversation unchanged when turn version is older",
+      "conversation": {
+        "botId": "bot",
+        "messages": [{ "id": "u2", "role": "user", "text": "u2" }],
+        "activity": { "state": "thinking", "runId": "run" },
+        "approvals": [],
+        "files": [],
+        "toolCalls": [],
+        "version": "b:1:5"
+      },
+      "turn": {
+        "botId": "bot",
+        "version": "b:1:4",
+        "messages": [
+          { "id": "u2", "role": "user", "text": "u2" },
+          { "id": "a2", "role": "assistant", "text": "a2" }
+        ],
+        "message": {
+          "id": "sid-inflight",
+          "role": "assistant",
+          "text": "Live"
+        },
+        "activity": { "state": "working", "runId": "run" },
+        "toolCalls": []
+      },
+      "result": {
+        "botId": "bot",
+        "messages": [{ "id": "u2", "role": "user", "text": "u2" }],
+        "activity": { "state": "thinking", "runId": "run" },
+        "approvals": [],
+        "files": [],
+        "toolCalls": [],
+        "version": "b:1:5"
+      }
+    },
+    {
+      "name": "applies newer turn messages, version, activity, tools, and deduplicated files",
+      "conversation": {
+        "botId": "bot",
+        "messages": [
+          { "id": "u1", "role": "user", "text": "u1" },
+          { "id": "u2", "role": "user", "text": "u2" },
+          { "id": "sid-inflight", "role": "assistant", "text": "Stale live" }
+        ],
+        "activity": { "state": "thinking", "runId": "run" },
+        "approvals": [],
+        "files": [{ "id": "old", "name": "old.png", "mime": "image/png" }],
+        "toolCalls": [],
+        "version": "b:1:5"
+      },
+      "turn": {
+        "botId": "bot",
+        "version": "b:1:6",
+        "messages": [
+          { "id": "u2", "role": "user", "text": "u2" },
+          {
+            "id": "a2",
+            "role": "assistant",
+            "text": "a2",
+            "files": [
+              { "id": "new", "name": "new.png", "mime": "image/png" },
+              { "id": "old", "name": "old.png", "mime": "image/png" }
+            ]
+          },
+          {
+            "id": "a3",
+            "role": "assistant",
+            "text": "a3",
+            "files": [
+              { "id": "new", "name": "new.png", "mime": "image/png" },
+              { "id": "second", "name": "second.txt", "mime": "text/plain" }
+            ]
+          }
+        ],
+        "message": {
+          "id": "sid-inflight",
+          "role": "assistant",
+          "text": "Live"
+        },
+        "activity": { "state": "working", "runId": "run" },
+        "toolCalls": [{ "id": "t1", "name": "terminal", "status": "running" }]
+      },
+      "result": {
+        "botId": "bot",
+        "messages": [
+          { "id": "u1", "role": "user", "text": "u1" },
+          { "id": "u2", "role": "user", "text": "u2" },
+          {
+            "id": "a2",
+            "role": "assistant",
+            "text": "a2",
+            "files": [
+              { "id": "new", "name": "new.png", "mime": "image/png" },
+              { "id": "old", "name": "old.png", "mime": "image/png" }
+            ]
+          },
+          {
+            "id": "a3",
+            "role": "assistant",
+            "text": "a3",
+            "files": [
+              { "id": "new", "name": "new.png", "mime": "image/png" },
+              { "id": "second", "name": "second.txt", "mime": "text/plain" }
+            ]
+          }
+        ],
+        "activity": { "state": "working", "runId": "run" },
+        "approvals": [],
+        "files": [
+          { "id": "old", "name": "old.png", "mime": "image/png" },
+          { "id": "new", "name": "new.png", "mime": "image/png" },
+          { "id": "second", "name": "second.txt", "mime": "text/plain" }
+        ],
+        "toolCalls": [{ "id": "t1", "name": "terminal", "status": "running" }],
+        "version": "b:1:6"
+      }
+    },
+    {
+      "name": "applies an equal-version turn",
+      "conversation": {
+        "botId": "bot",
+        "messages": [{ "id": "u2", "role": "user", "text": "u2" }],
+        "activity": { "state": "thinking", "runId": "run" },
+        "approvals": [],
+        "files": [],
+        "toolCalls": [],
+        "version": "b:1:5"
+      },
+      "turn": {
+        "botId": "bot",
+        "version": "b:1:5",
+        "messages": [
+          { "id": "u2", "role": "user", "text": "u2" },
+          { "id": "a2", "role": "assistant", "text": "a2" }
+        ],
+        "message": {
+          "id": "sid-inflight",
+          "role": "assistant",
+          "text": "Live"
+        },
+        "activity": { "state": "working", "runId": "run" },
+        "toolCalls": []
+      },
+      "result": {
+        "botId": "bot",
+        "messages": [
+          { "id": "u2", "role": "user", "text": "u2" },
+          { "id": "a2", "role": "assistant", "text": "a2" }
+        ],
+        "activity": { "state": "working", "runId": "run" },
+        "approvals": [],
+        "files": [],
+        "toolCalls": [],
+        "version": "b:1:5"
+      }
+    },
+    {
+      "name": "applies a cross-boot turn directly when placeable",
+      "conversation": {
+        "botId": "bot",
+        "messages": [{ "id": "u1", "role": "user", "text": "u1" }],
+        "activity": { "state": "thinking", "runId": "run" },
+        "approvals": [],
+        "files": [],
+        "toolCalls": [],
+        "version": "boot-a:1:9"
+      },
+      "turn": {
+        "botId": "bot",
+        "version": "boot-b:1:1",
+        "after": null,
+        "messages": [
+          { "id": "u1", "role": "user", "text": "u1" },
+          { "id": "a1", "role": "assistant", "text": "a1" }
+        ],
+        "message": {
+          "id": "sid-inflight",
+          "role": "assistant",
+          "text": "Live"
+        },
+        "activity": { "state": "working", "runId": "run" },
+        "toolCalls": []
+      },
+      "result": {
+        "botId": "bot",
+        "messages": [
+          { "id": "u1", "role": "user", "text": "u1" },
+          { "id": "a1", "role": "assistant", "text": "a1" }
+        ],
+        "activity": { "state": "working", "runId": "run" },
+        "approvals": [],
+        "files": [],
+        "toolCalls": [],
+        "version": "boot-b:1:1"
+      }
+    },
+    {
+      "name": "returns null when a newer turn cannot be placed",
+      "conversation": {
+        "botId": "bot",
+        "messages": [{ "id": "u2", "role": "user", "text": "u2" }],
+        "activity": { "state": "thinking", "runId": "run" },
+        "approvals": [],
+        "files": [],
+        "toolCalls": [],
+        "version": "b:1:5"
+      },
+      "turn": {
+        "botId": "bot",
+        "version": "b:1:6",
+        "messages": [{ "id": "u9", "role": "user", "text": "u9" }],
+        "message": {
+          "id": "sid-inflight",
+          "role": "assistant",
+          "text": "Live"
+        },
+        "activity": { "state": "working", "runId": "run" },
+        "toolCalls": []
+      },
+      "result": null
+    }
+  ]
+}

@@ -329,6 +329,7 @@ extension AppStore {
     generation = UUID()
     selectionGeneration = UUID()
     bootstrap = nil
+    resetTurnState()
     conversation = nil
     conversationCache.removeAll()
     conversationCapturedAt.removeAll()

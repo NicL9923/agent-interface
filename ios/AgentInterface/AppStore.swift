@@ -245,6 +245,17 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// Latest live reply patch, retained across overlapping conversation reads. A read applied with
   /// a patch since dropped must apply again, even if the server's body is unchanged.
   @ObservationIgnored var latestInflight: Inflight? { didSet { appliedConversationTag = nil } }
+  /// Latest `?inflight=3` turn event for the open chat, until a conversation read as new as it
+  /// arrives. Overlaid onto older overlapping reads so they cannot undo it.
+  @ObservationIgnored var heldTurn: TurnEvent? { didSet { appliedConversationTag = nil } }
+  /// A turn event from another server process than `conversationBoot`, waiting for a read asked
+  /// after it to decide which process the view shows.
+  @ObservationIgnored var pendingTurn: PendingTurn? { didSet { appliedConversationTag = nil } }
+  /// The server process (`boot` of `Conversation.version`) the open chat currently shows.
+  @ObservationIgnored var conversationBoot: String?
+  /// Monotonic counter of conversation reads asked (including coalesced refreshes), used to decide
+  /// which read settles `pendingTurn` and when to drop an older read from another server process.
+  @ObservationIgnored var conversationReadAsks = 0
   /// Household roster stream, independent of the selected conversation.
   @ObservationIgnored var rosterTask: Task<Void, Never>?
   /// The open conversation's change stream and when it last spoke.

@@ -63,11 +63,18 @@ extension AppStore {
   func stopStream() {
     rosterTask?.cancel()
     rosterTask = nil
-    latestInflight = nil
+    resetTurnState()
     eventTask?.cancel()
     eventTask = nil
     eventBotId = nil
     streamHeardAt = nil
+  }
+  /// Clears per-open-chat turn and live-reply stream state.
+  func resetTurnState() {
+    latestInflight = nil
+    heldTurn = nil
+    pendingTurn = nil
+    conversationBoot = nil
   }
   /// Without a live stream the conversation is polled every pass, as before streams existed.
   private var conversationDue: Bool {
@@ -106,8 +113,9 @@ extension AppStore {
     }
   }
   /// Follows the change stream of the conversation on screen, reconnecting with a growing delay.
-  /// The stream sends a live reply whole once, then only what it grew by (`?inflight=2`), so a long
-  /// reply is not sent again in full on every tick.
+  /// The stream sends each running turn whole with its saved messages and version (`?inflight=3`),
+  /// then only what the live reply grew by (`inflight-delta`), so replies keep streaming across
+  /// tool calls without waiting for a refetch.
   func watchConversation() {
     let followed = followedBotId
     guard eventBotId != followed || eventTask == nil else { return }
@@ -115,6 +123,11 @@ extension AppStore {
     streamHeardAt = nil
     eventBotId = followed
     latestInflight = nil
+    if followed == nil || conversation?.botId != followed {
+      heldTurn = nil
+      pendingTurn = nil
+      conversationBoot = nil
+    }
     guard let id = followed, let api else { eventTask = nil; return }
     eventTask = Task { [weak self] in
       var failures = 0
@@ -124,12 +137,12 @@ extension AppStore {
       while !Task.isCancelled {
         var resync = false
         do {
-          let stream = try await api.events("/api/bots/\(APIClient.component(id))/events?inflight=2")
+          let stream = try await api.events("/api/bots/\(APIClient.component(id))/events?inflight=3")
           guard let self, !Task.isCancelled else { return }
           failures = 0
           self.streamHeardAt = self.now()
           // Notices sent before the subscription are lost, so connecting counts as one. A new
-          // stream starts from a whole reply, so nothing held from the last one is extended.
+          // stream starts from a whole turn or reply, so nothing held from the last one is extended.
           self.latestInflight = nil
           self.requestConversationRefresh()
           var event = ""
@@ -138,8 +151,27 @@ extension AppStore {
             self.streamHeardAt = self.now()
             if line.hasPrefix("event:") { event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
             if line.hasPrefix("data:") {
-              if event == "inflight" {
-                // The whole reply so far, so it decodes away from the main actor.
+              if event == "turn" {
+                // The running turn whole (saved messages + live reply), decoded away from the main actor.
+                var decodedTurn: TurnEvent?
+                if let data = String(line.dropFirst(5)).data(using: .utf8),
+                  let decoded: TurnEvent = try? await APIClient.decoded(data, from: "/api/bots/events")
+                {
+                  decodedTurn = decoded
+                }
+                guard !Task.isCancelled else { return }
+                if let decodedTurn {
+                  if self.selectedBotId == decodedTurn.botId {
+                    self.showTurn(decodedTurn)
+                  } else {
+                    self.latestInflight = nil
+                  }
+                } else {
+                  self.latestInflight = nil
+                  self.requestConversationRefresh()
+                }
+              } else if event == "inflight" {
+                // The whole reply so far (older `?inflight=2` / `?inflight=1` servers), decoded away from the main actor.
                 var patch: Inflight?
                 if let data = String(line.dropFirst(5)).data(using: .utf8),
                   let decoded: Inflight = try? await APIClient.decoded(data, from: "/api/bots/events") {
@@ -152,10 +184,11 @@ extension AppStore {
               } else if event == "inflight-delta" {
                 // Applies only when it continues exactly the reply held. Anything else is not
                 // guessed at: drop the reply, close this stream and open a new one, whose connect
-                // reads the conversation and whose server starts again from a whole reply.
+                // reads the conversation and whose server starts again from a whole event.
                 guard let data = String(line.dropFirst(5)).data(using: .utf8),
                   let delta: InflightDelta = try? APIClient.decode(data, from: "/api/bots/events"),
-                  let next = self.latestInflight?.extended(by: delta)
+                  let before = self.latestInflight,
+                  let next = before.extended(by: delta)
                 else {
                   self.latestInflight = nil
                   resync = true
@@ -163,10 +196,20 @@ extension AppStore {
                   break reading
                 }
                 refused = 0
+                if let held = self.heldTurn {
+                  let grown = held.growing(from: before, to: next)
+                  if grown != held { self.heldTurn = grown }
+                }
+                if let pending = self.pendingTurn {
+                  let grown = pending.turn.growing(from: before, to: next)
+                  if grown != pending.turn { self.pendingTurn = PendingTurn(turn: grown, ask: pending.ask) }
+                }
                 self.showLive(next)
               } else if line != "data: ping" {
-                // The server sends the next live reply whole after this notice.
-                self.latestInflight = nil
+                // On `?inflight=3`, versions say which read a live reply belongs with, and the
+                // server keeps sending deltas against it across change notices. Drop only an
+                // unversioned legacy reply.
+                if self.latestInflight?.version == nil { self.latestInflight = nil }
                 // The conversation changed, so an unconfirmed send there is worth asking about now.
                 if let pending = self.pendings[id] { self.submissionChecks[pending.requestId] = nil }
                 self.requestConversationRefresh()
@@ -191,11 +234,40 @@ extension AppStore {
   /// Shows a live reply from the stream and keeps it for conversation reads to lay over theirs.
   private func showLive(_ patch: Inflight) {
     latestInflight = patch
-    if let current = conversation {
-      let value = patch.applying(to: current)
-      conversation = value
-      conversationCache[patch.botId] = value
+    guard let current = conversation, current.botId == patch.botId else { return }
+    let value = patch.applying(to: current)
+    if conversation != value { conversation = value }
+    conversationCache[patch.botId] = value
+  }
+  /// Applies a whole running turn from a `?inflight=3` stream, matching `showTurn` in
+  /// src/app/use-conversation.ts.
+  func showTurn(_ turn: TurnEvent) {
+    let from = ConversationVersion.boot(turn.version)
+    // Growth on the stream continues this reply. It shows only beside a read of its own version.
+    latestInflight = turn.inflight
+    // From another server process than the view's, or before any read: wait for a read asked after it.
+    if let from, from != conversationBoot {
+      if pendingTurn != nil {
+        pendingTurn?.turn = turn
+        return
+      }
+      requestConversationRefresh()
+      pendingTurn = PendingTurn(turn: turn, ask: conversationReadAsks)
+      return
     }
+    guard let held = conversation, held.botId == turn.botId else {
+      heldTurn = turn
+      return
+    }
+    guard let placed = held.applying(turn: turn) else {
+      heldTurn = nil
+      requestConversationRefresh()
+      return
+    }
+    heldTurn = turn
+    let value = latestInflight?.applying(to: placed) ?? placed
+    if conversation != value { conversation = value }
+    conversationCache[turn.botId] = value
   }
   /// One refresh at a time; a notice during one asks for one more after it. Each read is checked as
   /// it sets out, not when it was asked for, so one queued just before a loss or a suspension stays home.
@@ -203,14 +275,16 @@ extension AppStore {
   /// before a switch reads for the new one when the new one asked, and never for the old one.
   func requestConversationRefresh() {
     let session = generation
+    conversationReadAsks += 1
     if conversationRefreshing { conversationRefreshAgain = session; return }
     conversationRefreshing = true
+    let initialAsk = conversationReadAsks
     Task {
-      var asked: UUID? = session
+      var asked: (session: UUID, ask: Int)? = (session, initialAsk)
       while let next = asked {
         conversationRefreshAgain = nil
-        await refreshConversation(automatic: next)
-        asked = conversationRefreshAgain
+        await refreshConversation(automatic: next.session, ask: next.ask)
+        asked = conversationRefreshAgain.map { ($0, conversationReadAsks) }
       }
       conversationRefreshing = false
     }

@@ -651,16 +651,170 @@ struct ConversationTurn: Identifiable, Equatable {
     return groups
   }
 }
+/// Structural conversation version (`boot:epoch:generation`), mirroring `versionBoot` and
+/// `compareVersions` in src/shared/inflight.ts.
+enum ConversationVersion {
+  struct Parsed: Equatable {
+    var boot: String
+    var epoch: Int
+    var generation: Int
+  }
+  static func parse(_ value: String?) -> Parsed? {
+    guard let value else { return nil }
+    let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+    guard parts.count == 3, !parts[0].isEmpty,
+      let epoch = Int(parts[1]),
+      let generation = Int(parts[2])
+    else { return nil }
+    return Parsed(boot: String(parts[0]), epoch: epoch, generation: generation)
+  }
+  /// The server process a structural version came from, or nil for a missing or malformed version.
+  static func boot(_ version: String?) -> String? { parse(version)?.boot }
+  /// Orders two structural versions: negative when `lhs` is older, zero when equal, positive when
+  /// newer. Nil when either is missing, malformed, or from another server process.
+  static func compare(_ lhs: String?, _ rhs: String?) -> Int? {
+    guard let left = parse(lhs), let right = parse(rhs), left.boot == right.boot else { return nil }
+    let epochs = left.epoch - right.epoch
+    return epochs != 0 ? epochs : left.generation - right.generation
+  }
+}
+/// Where a turn sits when its first message is not held yet, matching `TurnRows.after` in
+/// src/shared/types.ts: `.after(id)` for a string ID, `.start` for an explicit JSON `null`
+/// (the turn starts the conversation), and `nil` when the key is absent from JSON.
+enum TurnAnchor: Equatable {
+  case after(String)
+  case start
+}
+/// The running turn's saved messages and anchor, matching `TurnRows` in src/shared/types.ts.
+struct TurnRows: Codable, Equatable {
+  var messages: [Message]
+  var after: TurnAnchor? = nil
+  init(messages: [Message], after: TurnAnchor? = nil) {
+    self.messages = messages
+    self.after = after
+  }
+  private enum CodingKeys: String, CodingKey { case messages, after }
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    messages = try values.decode([Message].self, forKey: .messages)
+    if values.contains(.after) {
+      if try values.decodeNil(forKey: .after) {
+        after = .start
+      } else {
+        after = .after(try values.decode(String.self, forKey: .after))
+      }
+    } else {
+      after = nil
+    }
+  }
+  func encode(to encoder: Encoder) throws {
+    var values = encoder.container(keyedBy: CodingKeys.self)
+    try values.encode(messages, forKey: .messages)
+    switch after {
+    case .after(let id): try values.encode(id, forKey: .after)
+    case .start: try values.encodeNil(forKey: .after)
+    case nil: break
+    }
+  }
+}
+/// What `event: turn` carries on a stream opened with `?inflight=3` (src/shared/types.ts
+/// `TurnEvent`): the running turn whole, its saved messages and its live reply, both from one read
+/// at `version`. Growth after it arrives as `inflight-delta` events based on `message`.
+struct TurnEvent: Codable, Equatable {
+  var botId: String
+  var version: String
+  var messages: [Message]
+  var after: TurnAnchor? = nil
+  var message: Message
+  var activity: Activity
+  var toolCalls: [ToolCall]
+  init(
+    botId: String,
+    version: String,
+    messages: [Message],
+    after: TurnAnchor? = nil,
+    message: Message,
+    activity: Activity,
+    toolCalls: [ToolCall]
+  ) {
+    self.botId = botId
+    self.version = version
+    self.messages = messages
+    self.after = after
+    self.message = message
+    self.activity = activity
+    self.toolCalls = toolCalls
+  }
+  private enum CodingKeys: String, CodingKey {
+    case botId, version, messages, after, message, activity, toolCalls
+  }
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    botId = try values.decode(String.self, forKey: .botId)
+    version = try values.decode(String.self, forKey: .version)
+    messages = try values.decode([Message].self, forKey: .messages)
+    if values.contains(.after) {
+      if try values.decodeNil(forKey: .after) {
+        after = .start
+      } else {
+        after = .after(try values.decode(String.self, forKey: .after))
+      }
+    } else {
+      after = nil
+    }
+    message = try values.decode(Message.self, forKey: .message)
+    activity = try values.decode(Activity.self, forKey: .activity)
+    toolCalls = try values.decode([ToolCall].self, forKey: .toolCalls)
+  }
+  func encode(to encoder: Encoder) throws {
+    var values = encoder.container(keyedBy: CodingKeys.self)
+    try values.encode(botId, forKey: .botId)
+    try values.encode(version, forKey: .version)
+    try values.encode(messages, forKey: .messages)
+    switch after {
+    case .after(let id): try values.encode(id, forKey: .after)
+    case .start: try values.encodeNil(forKey: .after)
+    case nil: break
+    }
+    try values.encode(message, forKey: .message)
+    try values.encode(activity, forKey: .activity)
+    try values.encode(toolCalls, forKey: .toolCalls)
+  }
+  var rows: TurnRows { TurnRows(messages: messages, after: after) }
+  /// The live reply carried by this turn event, stamped with its structural version.
+  var inflight: Inflight {
+    Inflight(botId: botId, message: message, activity: activity, toolCalls: toolCalls, version: version)
+  }
+  /// Continues this turn's live reply when `before` was its live reply, matching `grown` in
+  /// src/app/use-conversation.ts.
+  func growing(from before: Inflight, to after: Inflight) -> TurnEvent {
+    guard botId == before.botId, version == before.version, message == before.message else { return self }
+    var next = self
+    next.message = after.message
+    next.activity = after.activity
+    next.toolCalls = after.toolCalls
+    return next
+  }
+}
+/// A turn event from another server process, waiting for a read asked after it to settle which
+/// process the view shows.
+struct PendingTurn: Equatable {
+  var turn: TurnEvent
+  var ask: Int
+}
 struct Inflight: Codable, Equatable {
   var botId: String
   var message: Message
   var activity: Activity
   var toolCalls: [ToolCall]
-  /// This reply grown by a notice from a stream opened with `?inflight=2`, as the web's
-  /// `applyInflightDelta` (src/shared/inflight.ts) grows it. Nil when the notice does not continue
-  /// exactly this reply, so the caller reloads instead of guessing. The server counts lengths in
-  /// UTF-16 code units, as JavaScript's `String.length` does; `count` counts characters, which
-  /// differs for emoji and combining marks.
+  /// The structural version of the read this live reply leaves saved text to, from a `turn` event.
+  /// Nil on `?inflight=1` and `?inflight=2` events from older servers.
+  var version: String? = nil
+  /// This reply grown by a notice from a stream opened with `?inflight=2` or `?inflight=3`, as the
+  /// web's `applyInflightDelta` (src/shared/inflight.ts) grows it. Nil when the notice does not
+  /// continue exactly this reply, so the caller reloads instead of guessing. The server counts
+  /// lengths in UTF-16 code units, as JavaScript's `String.length` does; `count` counts characters,
+  /// which differs for emoji and combining marks.
   func extended(by delta: InflightDelta) -> Inflight? {
     guard botId == delta.botId, message.id == delta.messageId,
       message.text.utf16.count == delta.baseTextLength,
@@ -678,7 +832,10 @@ struct Inflight: Codable, Equatable {
   func applying(to conversation: Conversation) -> Conversation {
     guard conversation.botId == botId,
       [.thinking, .working, .waiting, .blocked].contains(conversation.activity.state),
-      conversation.activity.runId == activity.runId
+      conversation.activity.runId == activity.runId,
+      // A versioned live reply leaves out exactly what its own read saved, so it shows only beside
+      // that read's messages.
+      version == nil || ConversationVersion.compare(version, conversation.version) == 0
     else { return conversation }
     var value = conversation
     value.messages.removeAll { $0.id.hasSuffix("-inflight") }
@@ -722,6 +879,55 @@ struct Conversation: Codable, Equatable {
   /// After a failed turn: anyone's retry of it, as the server claimed it, with its current receipt.
   /// Older servers omit it.
   var retry: RetryClaim?
+  /// The structural version this read reflects, at the least: the runtime's version when the read
+  /// began. Compare with `ConversationVersion.compare`. Absent from an older server or a runtime
+  /// that does not track one.
+  var version: String? = nil
+  /// The messages with a turn's saved messages in place of everything from the turn on, and no live
+  /// reply. Matches `placeTurn` in src/shared/inflight.ts.
+  static func placeTurn(_ messages: [Message], turn: TurnRows) -> [Message]? {
+    let saved = messages.filter { !$0.id.hasSuffix("-inflight") }
+    var end: Int? = turn.messages.first.flatMap { first in
+      saved.firstIndex { $0.id == first.id }
+    }
+    if end == nil, let after = turn.after {
+      switch after {
+      case .after(let anchor):
+        if let index = saved.firstIndex(where: { $0.id == anchor }) {
+          end = index + 1
+        }
+      case .start:
+        end = 0
+      }
+    }
+    guard let end else { return nil }
+    let kept = saved.prefix(end)
+    let ids = Set(turn.messages.map(\.id))
+    if kept.contains(where: { ids.contains($0.id) }) { return nil }
+    return Array(kept) + turn.messages
+  }
+  /// This conversation with a turn event's saved messages, version, activity and tools, without its
+  /// live reply (which `Inflight.applying(to:)` adds). Returns `self` unchanged when this
+  /// conversation is newer than the event, or nil when the turn cannot be placed. Matches `withTurn`
+  /// in src/shared/inflight.ts.
+  func applying(turn: TurnEvent) -> Conversation? {
+    if let order = ConversationVersion.compare(turn.version, version), order < 0 {
+      return self
+    }
+    guard let placed = Self.placeTurn(messages, turn: turn.rows) else { return nil }
+    var value = self
+    value.messages = placed
+    value.version = turn.version
+    value.activity = turn.activity
+    value.toolCalls = turn.toolCalls
+    var known = Set(files.map(\.id))
+    for message in turn.messages {
+      for file in message.files ?? [] where known.insert(file.id).inserted {
+        value.files.append(file)
+      }
+    }
+    return value
+  }
   /// The view with an earlier page in front of the message it was read `before`, or nil when the view no longer
   /// holds that message. Only the page's messages, files and earlier counts are taken: live state, the draft and
   /// the rest stay as the view's own reads left them. Files keep conversation order, each once.

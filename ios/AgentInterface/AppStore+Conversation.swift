@@ -28,7 +28,7 @@ extension AppStore {
     persistDraft()
     flushDraft()
     selectionGeneration = UUID()
-    latestInflight = nil
+    resetTurnState()
     // Opening reads the conversation itself, so its view arriving on screen needs no read of its own.
     openingBotId = id
     conversationRefreshedAt = nil
@@ -88,13 +88,24 @@ extension AppStore {
   /// from the poll, a stream notice or a retry, names the session it was asked in, and each request it
   /// sends checks `automaticReadAllowed` as it sets out. Opening a chat, pull to refresh and Reconnect
   /// now read at once.
-  func refreshConversation(after draftLoad: Task<Void, Never>? = nil, automatic session: UUID? = nil) async {
+  func refreshConversation(
+    after draftLoad: Task<Void, Never>? = nil,
+    automatic session: UUID? = nil,
+    ask: Int? = nil
+  ) async {
     guard let id = selectedBotId, let api, bootstrap != nil else { return }
     if let session, !automaticReadAllowed(in: session) { return }
     let selectedGeneration = selectionGeneration
     let requestedWindow = windowGeneration
     let query = historyStarts[id].map { "start=\(APIClient.component($0))" }
       ?? "turns=\(Self.historyPageTurns)"
+    let asked: Int
+    if let ask {
+      asked = ask
+    } else {
+      conversationReadAsks += 1
+      asked = conversationReadAsks
+    }
     conversationReads += 1
     let read = conversationReads
     conversationRefreshes += 1
@@ -107,7 +118,9 @@ extension AppStore {
     // A draft still to load or to save again needs the conversation's copy applied every time.
     // One still loading is assumed to load; if it does not, the copy is read again below.
     let needsCopy = { !self.draftReady || self.draft.dirty == true && self.settled(id) }
-    let skippable = draftLoad != nil ? !(draft.dirty == true && settled(id)) : !needsCopy()
+    let skippable =
+      pendingTurn == nil && heldTurn == nil
+      && (draftLoad != nil ? !(draft.dirty == true && settled(id)) : !needsCopy())
     do {
       var response: (value: Conversation?, etag: String?) = try await api.changed(
         conversationPath(id, query: query), since: skippable ? appliedConversationTag : nil)
@@ -120,6 +133,15 @@ extension AppStore {
       guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
         read > appliedConversationRead
       else { return }
+      // Another process than the one shown answered, and a newer read is already asked: that one decides.
+      if let value = response.value,
+        let from = ConversationVersion.boot(value.version),
+        let boot = conversationBoot,
+        from != boot,
+        asked < conversationReadAsks
+      {
+        return
+      }
       appliedConversationRead = read
       conversationRefreshedAt = now()
       pollSucceeded(.chat)
@@ -130,8 +152,9 @@ extension AppStore {
       guard let value = response.value else { conversationCapturedAt[id] = Date(); chatReadAt[id] = now(); return }
       hearReplies(in: value, botId: id)
       historyStarts[id] = value.messages.first?.id
-      apply(value, botId: id)
-      appliedConversationTag = response.etag
+      let needsFollowUp = apply(value, botId: id, asked: asked)
+      appliedConversationTag = heldTurn == nil && pendingTurn == nil ? response.etag : nil
+      if needsFollowUp { requestConversationRefresh() }
     } catch is CancellationError {
       // Cancelled on its way, as pull to refresh is when the list lets go: it answered nothing. When it had
       // dropped the failed chat's retry and no newer refresh took over, the same wait starts again; the poll
@@ -177,6 +200,8 @@ extension AppStore {
     guard let api else { return false }
     let selectedGeneration = selectionGeneration
     let windowAtStart = windowGeneration
+    conversationReadAsks += 1
+    let asked = conversationReadAsks
     conversationReads += 1
     let read = conversationReads
     conversationReadsInFlight += 1
@@ -189,6 +214,13 @@ extension AppStore {
       // The window was moved while this loaded, as by opening at a message: the answer is for the window
       // before it, and the person's request wins.
       guard windowAtStart == windowGeneration else { return false }
+      if let from = ConversationVersion.boot(value.version),
+        let boot = conversationBoot,
+        from != boot,
+        asked < conversationReadAsks
+      {
+        return false
+      }
       if !whole, value.before == first {
         // Only the page's messages and files go in front of the message. The view keeps its own live
         // state, draft and version, which a newer read may have moved on since this one began.
@@ -219,9 +251,9 @@ extension AppStore {
       }
       appliedConversationRead = read
       hearReplies(in: value, botId: id)
-      apply(value, botId: id)
+      let needsFollowUp = apply(value, botId: id, asked: asked)
       // Moving the window dropped any read asked before it, with whatever newer turns it carried.
-      if conversationReadsInFlight > 1 { await refreshConversation() }
+      if conversationReadsInFlight > 1 || needsFollowUp { await refreshConversation() }
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration { report(error) }
     }
@@ -292,10 +324,40 @@ extension AppStore {
       if selectedGeneration == selectionGeneration { earlierFilesFailure = key }
     }
   }
-  private func apply(_ value: Conversation, botId id: String) {
+  @discardableResult
+  private func apply(_ value: Conversation, botId id: String, asked: Int? = nil) -> Bool {
     cachedChats.remove(id)
     if offlineSavedAt != nil { offlineSavedAt = nil }
-    let value = latestInflight?.applying(to: value) ?? value
+    var needsFollowUp = false
+    let from = ConversationVersion.boot(value.version)
+    if let from { conversationBoot = from }
+    if let asked, let pending = pendingTurn, asked >= pending.ask {
+      let waiting = pending.turn
+      pendingTurn = nil
+      // From another process than this read's, the waiting turn is dropped. From this read's, it is
+      // held unless a turn already held from this process is as new; `compose` then puts the held
+      // turn on top only when it is newer.
+      let order = ConversationVersion.compare(heldTurn?.version, waiting.version)
+      if let from, ConversationVersion.boot(waiting.version) == from, order == nil || order! < 0 {
+        heldTurn = waiting
+        // Newer than this read, which holds neither its first message nor `after`: one more read,
+        // asked after it, is as new.
+        if (ConversationVersion.compare(waiting.version, value.version) ?? 0) > 0,
+          value.applying(turn: waiting) == nil
+        {
+          needsFollowUp = true
+        }
+      }
+      // The live reply is the last turn heard, which can be from the other process. Growth continues
+      // the held turn's.
+      if let held = heldTurn, let from,
+        ConversationVersion.boot(held.version) == from,
+        ConversationVersion.boot(latestInflight?.version) != from
+      {
+        latestInflight = held.inflight
+      }
+    }
+    let value = compose(value)
     let changed = conversationCache[id] != value
     conversationCapturedAt[id] = Date()
     chatReadAt[id] = now()
@@ -321,6 +383,20 @@ extension AppStore {
     if !draftReady || (value.draft?.revision ?? 0) != (draft.baseRevision ?? 0) || draft.dirty == true && settled(id) {
       loadDraft(value.draft, botId: id)
     }
+    return needsFollowUp
+  }
+  /// Layers a newer held turn event and the latest live reply onto a fetched conversation,
+  /// matching `compose` in src/app/use-conversation.ts.
+  func compose(_ value: Conversation) -> Conversation {
+    var shown = value
+    if let held = heldTurn, held.botId == value.botId,
+      (ConversationVersion.compare(held.version, value.version) ?? 0) > 0
+    {
+      shown = value.applying(turn: held) ?? value
+    } else {
+      heldTurn = nil
+    }
+    return latestInflight?.applying(to: shown) ?? shown
   }
 
   /// A message the open conversation should scroll to and highlight once it shows it.
