@@ -14,9 +14,19 @@ import type {
   ExperienceRequest,
   ExperienceResult,
   TodayItem,
+  TodayLearningProposal,
+  TodayMorningBrief,
   TodayOverview,
+  TodayReadyDraft,
 } from "../shared/experience.js";
-import { replyCardsFromText, validReplyCardState } from "../shared/reply-cards.js";
+import {
+  replyCardsFromText,
+  validReplyCardState,
+  type EmailCard,
+  type EventCard,
+} from "../shared/reply-cards.js";
+import { MORNING_BRIEF_ROUTINE_NAME } from "../shared/main-assistant.js";
+import { wireRevision } from "./memory-routes.js";
 import { routinePresets } from "../shared/routine-presets.js";
 import type { Store } from "./store.js";
 import { isConversationReply } from "../shared/message-origin.js";
@@ -345,6 +355,8 @@ export async function installExperienceRoutes(
       if (key.startsWith(`${userId}\0`) && !bots.some((bot) => key === `${userId}\0${bot.id}`))
         recaps.delete(key);
     const ids = new Set(bots.map((bot) => bot.id));
+    const namesById = new Map(bots.map((bot) => [bot.id, bot.name]));
+    const botIds = bots.map((bot) => bot.id);
     // Check-ins run every few hours and usually say nothing, so they are not scheduled work to show.
     const upcoming = ((await routines) ?? [])
       .filter(
@@ -358,6 +370,55 @@ export async function installExperienceRoutes(
       .slice(0, 10)
       // Today never shows where a routine posts, so it never reads the room catalog to hide rooms someone cannot open.
       .map(({ roomIds: _, delivery: __, nativeOverrides: ___, inFlight: ____, ...row }) => row);
+    const confirmations = store.confirmations
+      .listPendingForBots(botIds, 50)
+      .map((item) => ({ ...item, botName: namesById.get(item.botId) ?? item.botId }));
+    const tasks = store.tasks
+      .listForBots(botIds, { status: "open", limit: 50 })
+      .map((task) => ({ ...task, botName: namesById.get(task.botId) ?? task.botId }));
+    const learningProposals: TodayLearningProposal[] = bots.flatMap((bot) =>
+      store.memory.listPending(bot.id).map((rev) => ({
+        botId: bot.id,
+        botName: bot.name,
+        revision: wireRevision(rev),
+      })),
+    );
+    const readyDrafts: TodayReadyDraft[] = items.flatMap((item) => {
+      if (!item.latestMessage?.text) return [];
+      const cards = replyCardsFromText(item.latestMessage.text).filter(
+        (card): card is EmailCard | EventCard => card.type === "email" || card.type === "event",
+      );
+      return cards.map((card) => ({
+        botId: item.botId,
+        botName: item.botName,
+        messageId: item.latestMessage!.id,
+        ...(item.latestMessage!.createdAt ? { createdAt: item.latestMessage!.createdAt } : {}),
+        card,
+      }));
+    });
+    let morningBrief: TodayMorningBrief | undefined;
+    const mainBotId = store.preferences(userId).mainBotId;
+    if (mainBotId && ids.has(mainBotId)) {
+      const recentMain = store.transcripts.listPage(mainBotId, { limit: 30 }).messages;
+      const briefMessage = [...recentMain].reverse().find((msg) => {
+        if (msg.role !== "assistant" || !msg.text.trim()) return false;
+        const origin = msg.origin;
+        if (origin?.kind !== "scheduled") return false;
+        const label = (origin.title ?? origin.name ?? "").toLowerCase();
+        return label.includes(MORNING_BRIEF_ROUTINE_NAME.toLowerCase());
+      });
+      if (briefMessage) {
+        const cleanText = redact.text(briefMessage.text);
+        morningBrief = {
+          botId: mainBotId,
+          botName: namesById.get(mainBotId) ?? mainBotId,
+          messageId: briefMessage.id,
+          text: cleanText,
+          createdAt: briefMessage.createdAt ?? now.toISOString(),
+          cards: replyCardsFromText(cleanText),
+        };
+      }
+    }
     const content = {
       since,
       frontier: page.frontier,
@@ -373,6 +434,11 @@ export async function installExperienceRoutes(
         }))
         .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
       unavailableBots: items.filter((item) => item.error || item.pending).map((item) => item.botId),
+      ...(confirmations.length ? { confirmations } : {}),
+      ...(tasks.length ? { tasks } : {}),
+      ...(learningProposals.length ? { learningProposals } : {}),
+      ...(morningBrief ? { morningBrief } : {}),
+      ...(readyDrafts.length ? { readyDrafts } : {}),
     };
     // The check time alone never makes Today new, so an unchanged recap revalidates as 304 and the
     // client keeps the body it holds, with the time that content was generated.

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { Bot, Preferences } from "../shared/types";
 import { useStableCallback } from "./use-stable-callback";
-export type View = "conversation" | "today" | "group" | "find";
+export type View = "conversation" | "today" | "group" | "find" | "outputs";
 /** An assistant's terminal card opened the shell; each opening is a new number. The command is pasted once, never run. */
 export type TerminalOpening = { at: number; command?: string };
 // Modal overlays. Only one can be interactive at a time.
@@ -15,8 +15,10 @@ export type Panel =
   | { kind: "computer"; tab?: "desktop" | "terminal"; take?: number; terminal?: TerminalOpening }
   | { kind: "settings"; bot: Bot | "new" }
   | { kind: "details"; botId: string; newSection?: boolean }
-  | { kind: "routine"; botId: string; routineId: string; resultId?: string };
-const views: View[] = ["today", "find"];
+  | { kind: "routine"; botId: string; routineId: string; resultId?: string }
+  | { kind: "braindump" }
+  | { kind: "channel-create" };
+const views: View[] = ["today", "find", "outputs"];
 /**
  * A group chat opens by `?view=group&room=<id>`. A link to the old Group chats page,
  * `?view=groups`, opens home, where the rooms now live.
@@ -32,6 +34,7 @@ export function initialView(): View {
 }
 export function initialPanel(): Panel | null {
   const query = new URLSearchParams(location.search);
+  if (query.get("braindump") === "1") return { kind: "braindump" };
   if (query.get("computer") === "1")
     return query.get("computerTab") === "terminal"
       ? { kind: "computer", tab: "terminal" }
@@ -44,7 +47,7 @@ export function initialPanel(): Panel | null {
 export function hasDestination() {
   const query = new URLSearchParams(location.search);
   // The old Group chats page is home now, which is where a phone starts anyway.
-  return ["bot", "view", "routine", "computer"].some(
+  return ["bot", "view", "routine", "computer", "braindump"].some(
     (key) => query.has(key) && !(key === "view" && query.get(key) === "groups"),
   );
 }

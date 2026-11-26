@@ -511,6 +511,56 @@ export class MemorySkillsRepository {
     return lines.join("\n");
   }
 
+  /** Whether a personal bot shares its active `user` memory facts with its owner's other personal bots. Defaults to true. */
+  sharedPersonalMemoryEnabled(botId: string): boolean {
+    const row = this.db
+      .prepare("SELECT enabled FROM bot_shared_memory_prefs WHERE bot_id=?")
+      .get(botId) as { enabled: number } | undefined;
+    return row ? row.enabled === 1 : true;
+  }
+
+  setSharedPersonalMemoryEnabled(botId: string, enabled: boolean): boolean {
+    this.db
+      .prepare(
+        "INSERT INTO bot_shared_memory_prefs(bot_id,enabled) VALUES(?,?) ON CONFLICT(bot_id) DO UPDATE SET enabled=excluded.enabled",
+      )
+      .run(botId, enabled ? 1 : 0);
+    return enabled;
+  }
+
+  /**
+   * Renders active personal facts (`kind = 'user'`) from an owner's other personal bots that have
+   * personal memory sharing enabled, excluding keys this bot already defines itself. Never reads
+   * shared household bots or another owner's bots.
+   */
+  renderSharedOwnerMemoryMarkdown(
+    ownerId: string,
+    targetBotId: string,
+    sourceBotIds: readonly string[],
+    charBudget = 4_000,
+  ): string {
+    if (!ownerId || !sourceBotIds.length) return "";
+    const eligible = sourceBotIds.filter(
+      (id) => id !== targetBotId && this.sharedPersonalMemoryEnabled(id),
+    );
+    if (!eligible.length) return "";
+    const ownKeys = new Set(this.listEntries(targetBotId, "active").map((entry) => entry.key));
+    const seenKeys = new Set<string>(ownKeys);
+    const lines: string[] = [];
+    let used = 0;
+    for (const botId of eligible) {
+      for (const entry of this.listEntries(botId, "active")) {
+        if (entry.kind !== "user" || seenKeys.has(entry.key)) continue;
+        seenKeys.add(entry.key);
+        const line = entryLine(entry);
+        if (used + line.length + 1 > charBudget) return lines.join("\n");
+        lines.push(line);
+        used += line.length + 1;
+      }
+    }
+    return lines.join("\n");
+  }
+
   // Proposals
 
   /** Checks a memory change and records it, applied at once or pending by the bot's setting. */

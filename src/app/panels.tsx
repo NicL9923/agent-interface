@@ -32,6 +32,17 @@ export const GroupRoomView = lazy(() =>
 export const GroupCreate = lazy(() =>
   import("../components/GroupCreate").then((module) => ({ default: module.GroupCreate })),
 );
+export const OutputsPanel = lazy(() =>
+  import("../components/OutputsPanel").then((module) => ({ default: module.OutputsPanel })),
+);
+export const BrainDumpDialog = lazy(() =>
+  import("../components/BrainDumpDialog").then((module) => ({ default: module.BrainDumpDialog })),
+);
+export const ChannelCreateDialog = lazy(() =>
+  import("../components/ChannelCreateDialog").then((module) => ({
+    default: module.ChannelCreateDialog,
+  })),
+);
 
 /** True once `active` has been, for panels that keep their state while closed but need not load until first use. */
 export function useOnceActive(active: boolean) {

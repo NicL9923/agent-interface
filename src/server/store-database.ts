@@ -430,6 +430,65 @@ const additions = `
     last_pruned_at INTEGER
   );
   -- END memory_skills
+  -- BEGIN native_tasks
+  CREATE TABLE IF NOT EXISTS native_tasks(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK(status IN ('working','needs_input','ready_for_review','done')),
+    summary TEXT,
+    source_message_id TEXT,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    completed_by TEXT
+  );
+  CREATE INDEX IF NOT EXISTS native_tasks_bot_status ON native_tasks(bot_id,status,updated_at);
+  -- END native_tasks
+  -- BEGIN action_confirmations
+  CREATE TABLE IF NOT EXISTS action_confirmations(
+    id TEXT PRIMARY KEY NOT NULL,
+    bot_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('send_email','delete_data','publish','payment','external_write')),
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    target TEXT,
+    payload_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL CHECK(status IN ('pending','approved','declined','expired')),
+    decided_by TEXT,
+    decision_note TEXT,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS action_confirmations_bot_status ON action_confirmations(bot_id,status,created_at);
+  -- END action_confirmations
+  -- BEGIN bot_channels
+  CREATE TABLE IF NOT EXISTS bot_channels(
+    bot_id TEXT PRIMARY KEY NOT NULL,
+    parent_bot_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS bot_channels_owner_parent ON bot_channels(owner_id,parent_bot_id,created_at);
+  -- END bot_channels
+  -- BEGIN morning_briefs_and_shared_memory
+  CREATE TABLE IF NOT EXISTS morning_brief_jobs(
+    bot_id TEXT NOT NULL,
+    job_id TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    created_at INTEGER NOT NULL,
+    removed_at INTEGER,
+    PRIMARY KEY(bot_id,job_id)
+  );
+  -- Opt-in toggle for sharing a personal bot's user facts across its owner's other personal bots.
+  CREATE TABLE IF NOT EXISTS bot_shared_memory_prefs(
+    bot_id TEXT PRIMARY KEY NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1))
+  );
+  -- END morning_briefs_and_shared_memory
 `;
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {

@@ -61,6 +61,9 @@ export type ErrorCode =
   | "main_routine_busy"
   | "main_activation_failed"
   | "main_clear_pending"
+  | "morning_brief_time"
+  | "already_decided"
+  | "human_signoff_required"
   // --- End main assistant ---
   // A Hermes transport failure carries its connection diagnosis.
   | NonNullable<RuntimeStatus["code"]>

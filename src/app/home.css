@@ -1132,6 +1132,20 @@
   .home-main {
     padding: 6px 0 10px;
   }
+  .home-main-actions {
+    display: flex;
+    gap: 6px;
+    padding: 6px 4px 0;
+  }
+  .home-main-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.75rem;
+    padding: 5px 10px;
+    border-radius: 999px;
+    min-height: 30px;
+  }
   .home .main-bot {
     display: flex;
     align-items: center;

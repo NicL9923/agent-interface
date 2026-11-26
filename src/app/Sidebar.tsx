@@ -79,6 +79,8 @@ export const Sidebar = memo(function Sidebar({
   onNewSection,
   onChooseMain,
   onDismissMainSuggestion,
+  onBrainDump,
+  onNewChannel,
 }: {
   boot: HomeSource;
   /**
@@ -113,6 +115,8 @@ export const Sidebar = memo(function Sidebar({
   /** Opens the main assistant picker. Without it, home never suggests choosing one. */
   onChooseMain?: () => void;
   onDismissMainSuggestion?: () => void;
+  onBrainDump?: () => void;
+  onNewChannel?: () => void;
 }) {
   const prefs = boot.preferences;
   // The main assistant leads home, above the pinned ones, and appears nowhere else on it.
@@ -402,6 +406,20 @@ export const Sidebar = memo(function Sidebar({
                     </span>
                   </Button>
                 </BotMenu>
+                {!saved && (onBrainDump || onNewChannel) && (
+                  <div className="home-main-actions">
+                    {onBrainDump && (
+                      <Button className="home-main-chip" onClick={onBrainDump}>
+                        <Icon name="sparkle" size={14} /> Brain dump
+                      </Button>
+                    )}
+                    {onNewChannel && (
+                      <Button className="home-main-chip" onClick={onNewChannel}>
+                        <Icon name="plus" size={14} /> Channel
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -486,6 +504,13 @@ export const Sidebar = memo(function Sidebar({
             onClick={() => onView("today")}
           >
             <Icon name="today" size={16} /> Today
+          </Button>
+          <Button
+            aria-current={view === "outputs" ? "page" : undefined}
+            disabled={saved}
+            onClick={() => onView("outputs")}
+          >
+            <Icon name="file-text" size={16} /> Outputs
           </Button>
         </nav>
         {sections.map((section) => (

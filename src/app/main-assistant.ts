@@ -1,6 +1,6 @@
 import { ApiError, request } from "../client-api";
-import type { CheckInSettings, Preferences } from "../shared/types";
-import { CHECK_IN_HOURS } from "../shared/main-assistant";
+import type { CheckInSettings, MorningBriefSettings, Preferences } from "../shared/types";
+import { CHECK_IN_HOURS, MORNING_BRIEF_DEFAULT_TIME } from "../shared/main-assistant";
 
 /** The device's timezone, which check-ins read as night. */
 export const deviceTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -48,4 +48,19 @@ export function saveCheckIns(
     ...change,
   };
   return applying(request("PUT /preferences/check-ins", { body }), apply);
+}
+
+/** Turns the main assistant's daily morning brief on or off, or updates its time. */
+export function saveMorningBrief(
+  current: Preferences["morningBrief"],
+  change: Partial<MorningBriefSettings>,
+  apply: (value: Preferences) => void,
+): Promise<Preferences> {
+  const body: MorningBriefSettings = {
+    enabled: current?.enabled ?? false,
+    timeOfDay: current?.timeOfDay ?? MORNING_BRIEF_DEFAULT_TIME,
+    timezone: deviceTimezone(),
+    ...change,
+  };
+  return applying(request("PUT /preferences/morning-brief", { body }), apply);
 }

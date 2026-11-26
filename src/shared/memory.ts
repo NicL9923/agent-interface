@@ -70,6 +70,8 @@ export interface RevisionState {
 export interface WireLearningSettings {
   /** Whether learning and cleaning apply at once (true) or wait for approval (false). */
   autoApply: boolean;
+  /** For personal bots: whether active `user` facts are shared across the owner's other personal bots. */
+  sharePersonalMemory?: boolean;
   memoryCharBudget: number;
   skillCountBudget: number;
   lastPrunedAt: string | null;
@@ -90,5 +92,7 @@ export interface MemoryDecision {
   revision: WireRevision;
 }
 
-export const learningSettingsBody = z.object({ autoApply: z.boolean() }).strict();
+export const learningSettingsBody = z
+  .object({ autoApply: z.boolean(), sharePersonalMemory: z.boolean().optional() })
+  .strict();
 export type LearningSettingsUpdate = z.input<typeof learningSettingsBody>;

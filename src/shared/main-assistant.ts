@@ -10,6 +10,23 @@ import type { Bot, Message, Preferences } from "./types.js";
 export const CHECK_IN_HOURS = { min: 1, max: 4, default: 2 } as const;
 /** The name the managed routine has in every routine list. */
 export const CHECK_IN_ROUTINE_NAME = "Check-ins";
+/** The name the managed morning brief routine has in every routine list. */
+export const MORNING_BRIEF_ROUTINE_NAME = "Morning brief";
+/** Default 24h local time for a member's daily morning brief. */
+export const MORNING_BRIEF_DEFAULT_TIME = "07:30";
+
+const clockPattern = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+/** Whether `timeOfDay` is a valid 24-hour HH:MM clock time. */
+export const validMorningBriefTime = (value: unknown): value is string =>
+  typeof value === "string" && clockPattern.test(value);
+
+/** Daily cron expression for a valid HH:MM clock time (e.g. "07:30" -> "30 7 * * *"). */
+export function morningBriefCron(timeOfDay: string): string {
+  const match = clockPattern.exec(timeOfDay);
+  if (!match) return "30 7 * * *";
+  return `${Number(match[2])} ${Number(match[1])} * * *`;
+}
 
 /**
  * Only a member's own personal assistant can be their main one. Its routines, deliveries and

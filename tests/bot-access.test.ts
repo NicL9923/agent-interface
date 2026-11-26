@@ -239,6 +239,7 @@ const values: Record<string, string> = {
   roomId: "ledger-room",
   flowId: "f".repeat(24),
   audioId: "audio",
+  confirmationId: "confirm-1",
 };
 const ids: Record<string, (botId: string) => string> = {
   "/api/routines/:id": () => "r-secret",
@@ -247,8 +248,10 @@ const ids: Record<string, (botId: string) => string> = {
   "/api/integrations/:id": () => "workspace",
 };
 const queries: Record<string, (botId: string) => string> = {
-  // Search names the private assistant to be refused, and otherwise searches every visible one.
+  // Search, tasks and deliverables name the private assistant to be refused, and otherwise list every visible one.
   "/api/search": (botId) => (botId === secret ? `q=ledger&botId=${botId}` : "q=ledger"),
+  "/api/tasks": (botId) => (botId === secret ? `botId=${botId}` : ""),
+  "/api/deliverables": (botId) => (botId === secret ? `botId=${botId}` : ""),
   "/api/models": (botId) => `botId=${botId}`,
   "/api/integrations": (botId) => `profile=${botId}`,
   "/api/integrations/flows/:flowId": (botId) => `profile=${botId}`,
