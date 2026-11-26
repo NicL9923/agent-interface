@@ -102,21 +102,38 @@ export function cancelIntentPrefetch(preload: () => void): void {
   timers.delete(preload);
 }
 
+export type IntentPrefetchHandlers = {
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
+  onPointerDown?: () => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+};
+
 /**
  * Pointer and focus handlers that warm a lazy chunk after `INTENT_DWELL_MS` of hover/focus, or
- * immediately on pointer down. Returns an empty object when `enabled` is false.
+ * immediately on pointer down. Returns an empty object when `enabled` is false. Pass
+ * `{ pointerOnly: true }` for controls that receive automatic focus when opened (e.g. menus).
  */
-export function intentPrefetchHandlers(preload: () => void, enabled = true) {
+export function intentPrefetchHandlers(
+  preload: () => void,
+  enabled = true,
+  options?: { pointerOnly?: boolean },
+): IntentPrefetchHandlers {
   if (!enabled) return {};
-  return {
+  const pointer = {
     onPointerEnter: () => scheduleIntentPrefetch(preload),
     onPointerLeave: () => cancelIntentPrefetch(preload),
-    onFocus: () => scheduleIntentPrefetch(preload),
-    onBlur: () => cancelIntentPrefetch(preload),
     onPointerDown: () => {
       cancelIntentPrefetch(preload);
       preload();
     },
+  };
+  if (options?.pointerOnly) return pointer;
+  return {
+    ...pointer,
+    onFocus: () => scheduleIntentPrefetch(preload),
+    onBlur: () => cancelIntentPrefetch(preload),
   };
 }
 

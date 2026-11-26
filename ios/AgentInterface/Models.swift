@@ -674,8 +674,9 @@ enum ConversationVersion {
   /// newer. Nil when either is missing, malformed, or from another server process.
   static func compare(_ lhs: String?, _ rhs: String?) -> Int? {
     guard let left = parse(lhs), let right = parse(rhs), left.boot == right.boot else { return nil }
-    let epochs = left.epoch - right.epoch
-    return epochs != 0 ? epochs : left.generation - right.generation
+    if left.epoch != right.epoch { return left.epoch < right.epoch ? -1 : 1 }
+    if left.generation != right.generation { return left.generation < right.generation ? -1 : 1 }
+    return 0
   }
 }
 /// Where a turn sits when its first message is not held yet, matching `TurnRows.after` in

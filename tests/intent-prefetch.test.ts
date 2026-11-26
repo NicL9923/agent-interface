@@ -130,5 +130,12 @@ describe("intent chunk prefetcher", () => {
     expect(preload).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(INTENT_DWELL_MS * 2);
     expect(preload).toHaveBeenCalledTimes(1);
+
+    const pointerOnly = intentPrefetchHandlers(preload, true, { pointerOnly: true });
+    expect("onFocus" in pointerOnly).toBe(false);
+    expect("onBlur" in pointerOnly).toBe(false);
+    expect("onPointerEnter" in pointerOnly).toBe(true);
+    expect("onPointerLeave" in pointerOnly).toBe(true);
+    expect("onPointerDown" in pointerOnly).toBe(true);
   });
 });

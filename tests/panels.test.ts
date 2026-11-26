@@ -76,4 +76,26 @@ describe("lazy screens", () => {
     expect(container.querySelector("[role=alert]")?.textContent).toContain("could not load");
     expect(container.querySelector("[role=alert] button")?.textContent).toBe("Reload");
   });
+
+  it("reserves a flex body slot when fill is set while still delaying Opening…", async () => {
+    vi.useFakeTimers();
+    type Module = { default: () => ReturnType<typeof createElement> };
+    let finish!: (module: Module) => void;
+    const Screen = lazy(
+      () =>
+        new Promise<Module>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await act(async () =>
+      root.render(createElement(Loading, { fill: true, children: createElement(Screen) })),
+    );
+    const slot = container.firstElementChild as HTMLElement | null;
+    expect(slot?.style.flex).toContain("1");
+    expect(container.querySelector("[role=status]")).toBeNull();
+    await advance(155);
+    expect(container.querySelector("[role=status]")?.textContent).toBe("Opening…");
+    await act(async () => finish({ default: () => createElement("p", { id: "screen" }, "Today") }));
+    expect(container.querySelector("#screen")?.textContent).toBe("Today");
+  });
 });

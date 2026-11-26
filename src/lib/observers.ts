@@ -7,7 +7,8 @@ type ObserverPool<Ctor, Observer, Entry, Callback extends (entry: Entry) => void
   ctor: Ctor | undefined;
   observer: Observer | undefined;
   byTarget: WeakMap<Element, Set<Callback>>;
-  all: Set<Callback>;
+  lastEntry: WeakMap<Element, Entry>;
+  all: Map<Callback, number>;
 };
 
 const resizePool: ObserverPool<
@@ -19,7 +20,8 @@ const resizePool: ObserverPool<
   ctor: undefined,
   observer: undefined,
   byTarget: new WeakMap(),
-  all: new Set(),
+  lastEntry: new WeakMap(),
+  all: new Map(),
 };
 
 const intersectionPool: ObserverPool<
@@ -31,7 +33,8 @@ const intersectionPool: ObserverPool<
   ctor: undefined,
   observer: undefined,
   byTarget: new WeakMap(),
-  all: new Set(),
+  lastEntry: new WeakMap(),
+  all: new Map(),
 };
 
 function dispatchEntries<
@@ -40,21 +43,94 @@ function dispatchEntries<
 >(
   entries: readonly Entry[] | undefined,
   byTarget: WeakMap<Element, Set<Callback>>,
-  all: Set<Callback>,
+  lastEntry: WeakMap<Element, Entry>,
+  all: Map<Callback, number>,
 ) {
   if (!entries) {
-    for (const callback of [...all]) callback(undefined as unknown as Entry);
+    for (const callback of [...all.keys()]) callback(undefined as unknown as Entry);
     return;
   }
   for (const entry of entries) {
     if (entry?.target) {
+      lastEntry.set(entry.target, entry);
       const set = byTarget.get(entry.target);
       if (!set) continue;
       for (const callback of [...set]) callback(entry);
     } else {
-      for (const callback of [...all]) callback(entry);
+      for (const callback of [...all.keys()]) callback(entry);
     }
   }
+}
+
+function subscribePool<
+  Entry extends { target?: Element },
+  Observer extends {
+    observe: (target: Element) => void;
+    unobserve?: (target: Element) => void;
+    disconnect?: () => void;
+  },
+  Ctor extends new (callback: (entries: Entry[], observer: Observer) => void) => Observer,
+  Callback extends (entry: Entry) => void,
+>(
+  pool: ObserverPool<Ctor, Observer, Entry, Callback>,
+  Ctor: Ctor | undefined,
+  element: Element,
+  callback: Callback,
+): () => void {
+  if (!Ctor) return () => {};
+  if (pool.ctor !== Ctor || !pool.observer) {
+    pool.observer?.disconnect?.();
+    const byTarget = new WeakMap<Element, Set<Callback>>();
+    const lastEntry = new WeakMap<Element, Entry>();
+    const all = new Map<Callback, number>();
+    pool.ctor = Ctor;
+    pool.byTarget = byTarget;
+    pool.lastEntry = lastEntry;
+    pool.all = all;
+    pool.observer = new Ctor((entries) => dispatchEntries(entries, byTarget, lastEntry, all));
+  }
+  const { observer, byTarget, lastEntry, all } = pool;
+  let set = byTarget.get(element);
+  const alreadyObserved = set !== undefined;
+  if (!set) {
+    set = new Set();
+    byTarget.set(element, set);
+    observer.observe(element);
+  }
+  if (!set.has(callback)) {
+    set.add(callback);
+    all.set(callback, (all.get(callback) ?? 0) + 1);
+  }
+  let stopped = false;
+  if (alreadyObserved) {
+    const cached = lastEntry.get(element);
+    if (cached !== undefined) {
+      queueMicrotask(() => {
+        if (
+          !stopped &&
+          pool.byTarget === byTarget &&
+          byTarget.get(element)?.has(callback) &&
+          lastEntry.get(element) === cached
+        ) {
+          callback(cached);
+        }
+      });
+    }
+  }
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    const current = byTarget.get(element);
+    if (!current || !current.delete(callback)) return;
+    const remaining = (all.get(callback) ?? 0) - 1;
+    if (remaining <= 0) all.delete(callback);
+    else all.set(callback, remaining);
+    if (current.size === 0) {
+      byTarget.delete(element);
+      lastEntry.delete(element);
+      observer.unobserve?.(element);
+    }
+  };
 }
 
 /**
@@ -64,35 +140,7 @@ function dispatchEntries<
  */
 export function observeResize(element: Element, callback: ResizeCallback): () => void {
   const Ctor = typeof ResizeObserver === "function" ? ResizeObserver : undefined;
-  if (!Ctor) return () => {};
-  if (resizePool.ctor !== Ctor || !resizePool.observer) {
-    resizePool.observer?.disconnect?.();
-    const byTarget = new WeakMap<Element, Set<ResizeCallback>>();
-    const all = new Set<ResizeCallback>();
-    resizePool.ctor = Ctor;
-    resizePool.byTarget = byTarget;
-    resizePool.all = all;
-    resizePool.observer = new Ctor((entries) => dispatchEntries(entries, byTarget, all));
-  }
-  const { observer, byTarget, all } = resizePool;
-  let set = byTarget.get(element);
-  if (!set) {
-    set = new Set();
-    byTarget.set(element, set);
-    observer.observe(element);
-  }
-  set.add(callback);
-  all.add(callback);
-  return () => {
-    all.delete(callback);
-    const current = byTarget.get(element);
-    if (!current) return;
-    current.delete(callback);
-    if (current.size === 0) {
-      byTarget.delete(element);
-      observer.unobserve?.(element);
-    }
-  };
+  return subscribePool(resizePool, Ctor, element, callback);
 }
 
 /**
@@ -103,35 +151,7 @@ export function observeResize(element: Element, callback: ResizeCallback): () =>
  */
 export function observeIntersection(element: Element, callback: IntersectionCallback): () => void {
   const Ctor = typeof IntersectionObserver === "function" ? IntersectionObserver : undefined;
-  if (!Ctor) return () => {};
-  if (intersectionPool.ctor !== Ctor || !intersectionPool.observer) {
-    intersectionPool.observer?.disconnect?.();
-    const byTarget = new WeakMap<Element, Set<IntersectionCallback>>();
-    const all = new Set<IntersectionCallback>();
-    intersectionPool.ctor = Ctor;
-    intersectionPool.byTarget = byTarget;
-    intersectionPool.all = all;
-    intersectionPool.observer = new Ctor((entries) => dispatchEntries(entries, byTarget, all));
-  }
-  const { observer, byTarget, all } = intersectionPool;
-  let set = byTarget.get(element);
-  if (!set) {
-    set = new Set();
-    byTarget.set(element, set);
-    observer.observe(element);
-  }
-  set.add(callback);
-  all.add(callback);
-  return () => {
-    all.delete(callback);
-    const current = byTarget.get(element);
-    if (!current) return;
-    current.delete(callback);
-    if (current.size === 0) {
-      byTarget.delete(element);
-      observer.unobserve?.(element);
-    }
-  };
+  return subscribePool(intersectionPool, Ctor, element, callback);
 }
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -216,11 +236,13 @@ export function resetObserversForTest() {
   resizePool.ctor = undefined;
   resizePool.observer = undefined;
   resizePool.byTarget = new WeakMap();
+  resizePool.lastEntry = new WeakMap();
   resizePool.all.clear();
   intersectionPool.observer?.disconnect?.();
   intersectionPool.ctor = undefined;
   intersectionPool.observer = undefined;
   intersectionPool.byTarget = new WeakMap();
+  intersectionPool.lastEntry = new WeakMap();
   intersectionPool.all.clear();
   reducedMotionListeners.clear();
   detachReducedMotion();

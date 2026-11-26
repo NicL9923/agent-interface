@@ -278,13 +278,16 @@ extension AppStore {
     conversationReadAsks += 1
     if conversationRefreshing { conversationRefreshAgain = session; return }
     conversationRefreshing = true
-    let initialAsk = conversationReadAsks
     Task {
-      var asked: (session: UUID, ask: Int)? = (session, initialAsk)
-      while let next = asked {
+      var nextSession: UUID? = session
+      while let currentSession = nextSession {
+        // A second request can arrive before this Task begins; capture the latest session and ask
+        // right as this read starts, matching `use-conversation.ts`.
+        let targetSession = conversationRefreshAgain ?? currentSession
         conversationRefreshAgain = nil
-        await refreshConversation(automatic: next.session, ask: next.ask)
-        asked = conversationRefreshAgain.map { ($0, conversationReadAsks) }
+        let ask = conversationReadAsks
+        await refreshConversation(automatic: targetSession, ask: ask)
+        nextSession = conversationRefreshAgain
       }
       conversationRefreshing = false
     }

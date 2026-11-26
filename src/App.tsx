@@ -1,12 +1,4 @@
-import {
-  startTransition,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActivityState, Bot, FileRef, Preferences, SubmissionReceipt } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
 import { request } from "./client-api";
@@ -572,13 +564,11 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // Home is memoized, so its handlers keep one identity across renders.
   const scrolled = useCallback(() => persistPosition(), [persistPosition]);
   const showView = useStableCallback((next: View) => {
-    startTransition(() => {
-      setView(next);
-      setRailOpen(false);
-    });
+    setView(next);
+    setRailOpen(false);
   });
   const openPanel = useStableCallback((next: Panel) => {
-    startTransition(() => setPanel(next));
+    setPanel(next);
   });
   const newBot = useStableCallback(() => setPanel({ kind: "settings", bot: "new" }));
   const newGroup = useStableCallback(() => setCreatingGroup(true));
@@ -1061,6 +1051,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           onNewSection={newSection}
           onChooseMain={chooseMainFromHome}
           onDismissMainSuggestion={dismissMainSuggestion}
+          onBrainDump={openBrainDump}
+          onNewChannel={openChannelCreate}
         />
         <main className="conversation-panel saved-home-wait" inert={mobile && railOpen}>
           <p>
@@ -1173,7 +1165,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
         {view === "find" ? (
-          <Loading key="find">
+          <Loading key="find" fill>
             <DiscoveryPanel
               key={boot.user.id}
               bootstrap={boot}
@@ -1185,7 +1177,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             />
           </Loading>
         ) : view === "group" ? (
-          <Loading key="group">
+          <Loading key="group" fill>
             <GroupRoomView
               key={`${boot.user.id}:${roomId}`}
               bootstrap={boot}
@@ -1196,7 +1188,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             />
           </Loading>
         ) : view === "outputs" ? (
-          <Loading key="outputs">
+          <Loading key="outputs" fill>
             <OutputsPanel
               key={boot.user.id}
               bootstrap={boot}
@@ -1207,7 +1199,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             />
           </Loading>
         ) : view === "today" ? (
-          <Loading key="today">
+          <Loading key="today" fill>
             <TodayPanel
               key={boot.user.id}
               bootstrap={boot}

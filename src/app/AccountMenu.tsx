@@ -80,7 +80,7 @@ export function AccountMenu({
           <button
             type="button"
             role="menuitem"
-            {...intentPrefetchHandlers(preloadUsage, !disabled)}
+            {...intentPrefetchHandlers(preloadUsage, !disabled, { pointerOnly: true })}
             onClick={() => choose(onUsage)}
           >
             <Icon name="gauge" size={16} />
@@ -91,7 +91,7 @@ export function AccountMenu({
           <button
             type="button"
             role="menuitem"
-            {...intentPrefetchHandlers(preloadPreferences, !disabled)}
+            {...intentPrefetchHandlers(preloadPreferences, !disabled, { pointerOnly: true })}
             onClick={() => choose(onSettings)}
           >
             <Icon name="gear" size={16} />
@@ -100,7 +100,7 @@ export function AccountMenu({
           <button
             type="button"
             role="menuitem"
-            {...intentPrefetchHandlers(preloadPreferences, !disabled)}
+            {...intentPrefetchHandlers(preloadPreferences, !disabled, { pointerOnly: true })}
             onClick={() => choose(onSignOut)}
           >
             <Icon name="signout" size={16} />

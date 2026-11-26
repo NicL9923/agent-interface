@@ -111,6 +111,83 @@ describe("observeResize", () => {
     const stop = observeResize(document.createElement("div"), () => {});
     expect(() => stop()).not.toThrow();
   });
+
+  it("ref-counts shared callbacks across elements for targetless fallback entries", () => {
+    let fire!: ResizeObserverCallback;
+    let instance!: ResizeObserver;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          fire = callback;
+          instance = this as unknown as ResizeObserver;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+
+    const a = document.createElement("div");
+    const b = document.createElement("div");
+    const shared = vi.fn();
+    const stopA = observeResize(a, shared);
+    const stopB = observeResize(b, shared);
+
+    stopA();
+    const targetless = {} as unknown as ResizeObserverEntry;
+    fire([targetless], instance);
+    expect(shared).toHaveBeenCalledExactlyOnceWith(targetless);
+
+    stopB();
+    fire([targetless], instance);
+    expect(shared).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers the last cached entry to a second subscriber on an already-observed element", async () => {
+    let fire!: ResizeObserverCallback;
+    let instance!: ResizeObserver;
+    const unobserved: Element[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          fire = callback;
+          instance = this as unknown as ResizeObserver;
+        }
+        observe() {}
+        unobserve(target: Element) {
+          unobserved.push(target);
+        }
+        disconnect() {}
+      },
+    );
+
+    const el = document.createElement("div");
+    const cb1 = vi.fn();
+    const cb2 = vi.fn();
+    const cbCancelled = vi.fn();
+    const stop1 = observeResize(el, cb1);
+
+    const initial = { target: el } as unknown as ResizeObserverEntry;
+    fire([initial], instance);
+    expect(cb1).toHaveBeenCalledExactlyOnceWith(initial);
+
+    // Late subscriber receives the cached entry via microtask without re-notifying cb1 or unobserving.
+    const stop2 = observeResize(el, cb2);
+    const stopCancelled = observeResize(el, cbCancelled);
+    stopCancelled();
+    expect(cb2).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(cb1).toHaveBeenCalledTimes(1);
+    expect(cb2).toHaveBeenCalledExactlyOnceWith(initial);
+    expect(cbCancelled).not.toHaveBeenCalled();
+    expect(unobserved).toEqual([]);
+
+    stop1();
+    stop2();
+    expect(unobserved).toEqual([el]);
+  });
 });
 
 describe("observeIntersection", () => {
@@ -163,6 +240,47 @@ describe("observeIntersection", () => {
     vi.stubGlobal("IntersectionObserver", undefined);
     const stop = observeIntersection(document.createElement("span"), () => {});
     expect(() => stop()).not.toThrow();
+  });
+
+  it("ref-counts shared callbacks and replays cached visibility to a second subscriber on the same element", async () => {
+    let fire!: IntersectionObserverCallback;
+    let instance!: IntersectionObserver;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          fire = callback;
+          instance = this as unknown as IntersectionObserver;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+
+    const a = document.createElement("span");
+    const b = document.createElement("span");
+    const shared = vi.fn();
+    const stopA = observeIntersection(a, shared);
+    const stopB = observeIntersection(b, shared);
+
+    const entryA = { target: a, isIntersecting: false } as unknown as IntersectionObserverEntry;
+    fire([entryA], instance);
+    expect(shared).toHaveBeenCalledExactlyOnceWith(entryA);
+
+    const late = vi.fn();
+    const stopLate = observeIntersection(a, late);
+    await Promise.resolve();
+    expect(late).toHaveBeenCalledExactlyOnceWith(entryA);
+
+    stopA();
+    const targetless = { isIntersecting: true } as unknown as IntersectionObserverEntry;
+    fire([targetless], instance);
+    expect(shared).toHaveBeenCalledTimes(2);
+    expect(shared).toHaveBeenLastCalledWith(targetless);
+
+    stopB();
+    stopLate();
   });
 });
 

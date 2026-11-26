@@ -488,15 +488,15 @@ export const Sidebar = memo(function Sidebar({
                     </span>
                   </Button>
                 </BotMenu>
-                {!saved && (onBrainDump || onNewChannel) && (
+                {(onBrainDump || onNewChannel) && (
                   <div className="home-main-actions">
                     {onBrainDump && (
-                      <Button className="home-main-chip" onClick={onBrainDump}>
+                      <Button className="home-main-chip" disabled={saved} onClick={onBrainDump}>
                         <Icon name="sparkle" size={14} /> Brain dump
                       </Button>
                     )}
                     {onNewChannel && (
-                      <Button className="home-main-chip" onClick={onNewChannel}>
+                      <Button className="home-main-chip" disabled={saved} onClick={onNewChannel}>
                         <Icon name="plus" size={14} /> Channel
                       </Button>
                     )}

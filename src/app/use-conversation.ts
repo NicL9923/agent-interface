@@ -569,7 +569,10 @@ export function useConversation(
         if (!live || delta.botId !== botId) return true;
         // Growth that does not continue the held reply is dropped for a reload, never guessed at.
         const value = applyInflightDelta(latestInflight, delta);
-        if (!value) return false;
+        if (!value) {
+          cancelDelta();
+          return false;
+        }
         const before = latestInflight!.message;
         latestInflight = value;
         heldTurn = grown(heldTurn, before, value);

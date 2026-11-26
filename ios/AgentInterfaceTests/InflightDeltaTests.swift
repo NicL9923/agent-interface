@@ -110,4 +110,12 @@ import XCTest
       XCTAssertEqual(matching.applying(to: conversation), conversation, "Versioned live reply skips version \(mismatch ?? "nil")")
     }
   }
+
+  func testConversationVersionCompareHandlesExtremeIntValuesWithoutOverflow() {
+    XCTAssertEqual(ConversationVersion.compare("b:\(Int.max):0", "b:\(Int.min):0"), 1)
+    XCTAssertEqual(ConversationVersion.compare("b:\(Int.min):0", "b:\(Int.max):0"), -1)
+    XCTAssertEqual(ConversationVersion.compare("b:1:\(Int.max)", "b:1:\(Int.min)"), 1)
+    XCTAssertEqual(ConversationVersion.compare("b:1:\(Int.min)", "b:1:\(Int.max)"), -1)
+    XCTAssertEqual(ConversationVersion.compare("b:\(Int.max):\(Int.min)", "b:\(Int.max):\(Int.min)"), 0)
+  }
 }

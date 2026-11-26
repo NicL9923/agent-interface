@@ -2505,6 +2505,39 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(live(value)?.text, "From B!", "Dropping the other process's turn restores boot-b's grown reply")
     }
 
+    func testCrossBootTurnQueuedBeforeFirstRefreshTaskStartsSettlesPendingTurn() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-a:1:5")
+        try await openLiveStream(server, value)
+        XCTAssertEqual(value.conversationBoot, "boot-a")
+
+        // Server restarts under boot-b. Queue one refresh and then immediately deliver a cross-boot
+        // turn before the first refresh Task begins executing on the MainActor.
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-b:1:1")
+        let turn = TurnEvent(
+            botId: "bot",
+            version: "boot-b:1:2",
+            messages: [
+                Message(id: "u1", role: "user", text: "u1"),
+                Message(id: "reply-b", role: "assistant", text: "From B saved"),
+            ],
+            after: .start,
+            message: Message(id: "sid-inflight", role: "assistant", text: "From B"),
+            activity: Activity(state: .thinking, runId: "run-b"),
+            toolCalls: []
+        )
+        value.requestConversationRefresh()
+        value.showTurn(turn)
+        XCTAssertEqual(value.pendingTurn?.turn.version, "boot-b:1:2")
+
+        try await until { value.conversationBoot == "boot-b" && value.pendingTurn == nil && !value.conversationRefreshing }
+        XCTAssertEqual(value.conversation?.version, "boot-b:1:2")
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ["u1", "reply-b", "sid-inflight"])
+        XCTAssertEqual(live(value)?.text, "From B")
+    }
+
     func testAGroupsNoticeRereadsTheGroupCatalogAndUnknownNoticesChangeNothing() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.serveGroups(["Supper planning"])

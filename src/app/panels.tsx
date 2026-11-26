@@ -106,28 +106,35 @@ class LoadFailure extends Component<
   }
 }
 
-function DelayedOpening() {
+function DelayedOpening({ fill = false }: { fill?: boolean }) {
   const shown = useDelayedStatus(true);
-  return shown ? (
+  const status = shown ? (
     <p className="panel-loading" role="status">
       Opening…
     </p>
   ) : null;
+  // Main-pane lazy views sit inside `.conversation-panel` (`justify-content: flex-end`), so a
+  // flex spacer holds the header at the top of the viewport while the chunk resolves.
+  if (!fill) return status;
+  return <div style={{ flex: 1, minHeight: 0 }}>{status}</div>;
 }
 
 /** Shows a quiet status while a lazy screen loads slowly, and a reload notice if it cannot. */
 export function Loading({
   children,
+  fill = false,
   loadingFallback,
   errorFallback,
 }: {
   children: ReactNode;
+  /** Reserves the main-pane flex body while suspended so `.chat-header` stays pinned at the top. */
+  fill?: boolean;
   loadingFallback?: ReactNode;
   errorFallback?: ReactNode;
 }) {
   return (
     <LoadFailure fallback={errorFallback}>
-      <Suspense fallback={loadingFallback ?? <DelayedOpening />}>{children}</Suspense>
+      <Suspense fallback={loadingFallback ?? <DelayedOpening fill={fill} />}>{children}</Suspense>
     </LoadFailure>
   );
 }
