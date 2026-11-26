@@ -201,7 +201,7 @@ export async function installComputerRoutes(
         })) as ComputerStatus;
       } catch {
         native.reason =
-          "Hermes is disconnected. The system terminal is independent of that connection.";
+          "The shared desktop is disconnected. The system terminal is independent of that connection.";
       }
     }
     // Hermes names the acting assistant by its profile, the assistant's ID. The desktop itself
@@ -241,12 +241,12 @@ export async function installComputerRoutes(
     if (maintenance())
       throw httpError(
         409,
-        "Hermes is being maintained. Try computer input after maintenance finishes.",
+        "WildBots is being maintained. Try computer input after maintenance finishes.",
       );
   }
   function requireDesktop() {
     if (!runtime.computerRequest || !runtime.connectComputerDisplay)
-      throw httpError(409, "The Hermes desktop integration is unavailable.");
+      throw httpError(409, "The shared desktop integration is unavailable.");
   }
   apiRoute(app, "GET /computer", {}, async (req) => status(req));
   apiRoute(
@@ -261,7 +261,7 @@ export async function installComputerRoutes(
         ...input,
       })) as ComputerAttachment;
       if (native.path !== "/api/display/ws" || !viewer.safeParse(native.viewerId).success)
-        throw httpError(502, "Hermes returned an invalid desktop attachment");
+        throw httpError(502, "The desktop service returned an invalid attachment");
       rememberViewer(signedIn(req).id, native.viewerId);
       return issue(req, "desktop", native);
     },
@@ -312,7 +312,7 @@ export async function installComputerRoutes(
         ...actor(req),
       })) as unknown as Partial<ComputerHandoffResult>;
       if (result?.status !== "ok" && result?.status !== "expired")
-        throw httpError(502, "Hermes returned an invalid answer for this computer request");
+        throw httpError(502, "The desktop service returned an invalid answer for this request");
       return { status: result.status };
     },
   );

@@ -3,6 +3,7 @@ import type { HarnessFallbackConfig } from "../config.js";
 import type { FileSigner } from "../file-signer.js";
 import type { Store } from "../store.js";
 import type { HarnessDriver, HarnessDriverId } from "./driver.js";
+import type { NativeComputerService } from "./native-computer.js";
 import {
   createHarnessRuntime,
   type HarnessRuntime,
@@ -32,6 +33,8 @@ export interface ServerHarnessRuntimeOptions {
   fallback?: HarnessFallbackConfig;
   /** Live Talk, transcription, and speech synthesis provider for native bots. */
   voice?: HarnessVoiceDelegate;
+  /** Native shared desktop and browser service. */
+  computer?: NativeComputerService;
 }
 
 export interface ServerHarnessRuntime {
@@ -61,6 +64,7 @@ export function createServerHarnessRuntime({
   startScheduler = false,
   fallback,
   voice,
+  computer,
 }: ServerHarnessRuntimeOptions): ServerHarnessRuntime {
   // Construction recovers each assistant's claimed row from its recorded outcome, synchronously.
   const harnessRuntime = createHarnessRuntime({
@@ -72,6 +76,7 @@ export function createServerHarnessRuntime({
     startScheduler,
     fallback,
     voice,
+    computer,
   });
   // Whatever is still running belongs to no live dispatcher: an archived assistant or a row from before
   // a crash. Each would hold its assistant's queue shut forever, because a claim waits for no running row.

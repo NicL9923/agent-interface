@@ -32,6 +32,10 @@ interface StoredRoomExtras {
 
 export interface NativeGroupAdapter {
   handle(input: GroupRequest): Promise<GroupResponse>;
+  deliverRoutine(
+    roomId: string,
+    input: { routineId: string; routineName: string; text: string; failed?: boolean },
+  ): GroupEvent;
   close(): void;
 }
 
@@ -113,14 +117,21 @@ export function createNativeGroupAdapter({
   }
 
   function toEvent(message: NativeGroupMessage): GroupEvent {
+    const isRoutine =
+      message.senderKind === "system" &&
+      (message.senderId.startsWith("cron:") || message.senderId.startsWith("cron-notice:"));
     const kind =
-      message.senderKind === "human"
+      message.senderKind === "human" || isRoutine
         ? "message.user"
         : message.senderKind === "bot"
           ? "message.member"
           : "room.notice";
     const actorKind =
-      message.senderKind === "human" ? "user" : message.senderKind === "bot" ? "member" : "system";
+      message.senderKind === "human" || isRoutine
+        ? "user"
+        : message.senderKind === "bot"
+          ? "member"
+          : "system";
     return {
       event_id: message.id,
       seq: message.seq,
@@ -194,7 +205,7 @@ export function createNativeGroupAdapter({
           supported: true,
           canSend: true,
           settings: true,
-          routineDelivery: false,
+          routineDelivery: true,
           rooms,
         } satisfies GroupCatalog;
       }
@@ -319,12 +330,21 @@ export function createNativeGroupAdapter({
     }
   }
 
+  function deliverRoutine(
+    roomId: string,
+    input: { routineId: string; routineName: string; text: string; failed?: boolean },
+  ): GroupEvent {
+    ensureSubscribed(roomId);
+    const { message } = coordinator.deliverRoutineMessage(roomId, input);
+    return toEvent(message);
+  }
+
   function close() {
     for (const roomId of activeRooms) coordinator.stopRoom(roomId);
     activeWork.clear();
   }
 
-  return { handle, close };
+  return { handle, deliverRoutine, close };
 }
 
 export { NotFound };

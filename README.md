@@ -1,74 +1,77 @@
 # WildBots
 
-WildBots is a web client and native iOS app for a shared Hermes installation. The repository and internal identifiers keep the original `agent-interface` name. Each bot has a
-persistent conversation, configurable instructions and capabilities, and an avatar
-that reflects its current state. Each household member has separate preferences,
-drafts and notification subscriptions.
+WildBots is a self-hosted web client and native iOS app for a household's AI assistants. The repository and internal identifiers keep the original `agent-interface` name. Each assistant has a persistent SQLite-backed conversation, configurable instructions, memory, skills, routines, custom MCP connections, encrypted website logins, live voice, and an expressive avatar that reflects what it is doing. Each household member has separate preferences, personal assistants, drafts, and notification subscriptions.
 
 Household installation: [agentui.wildflowersranch.com](https://agentui.wildflowersranch.com).
 
-The web home lists every assistant with its latest message. A dot marks a chat you
-have opened before that has a newer message than your last read, on any of your
-devices. Pin assistants to show them as large live avatars at the top. In a conversation, the assistant's avatar and
-name in the header open its details: Pin, Artifacts, Settings, "Notify me about all
-activity" and its home section. Long-press (right-click on a computer) an assistant
-on home to pin it or move it to a section. Phones open on home and push into a
-conversation; Back returns, and so do the browser's Back button and the system Back gesture
-(see "Back on a phone" below). The account button opens Settings, which also holds Hermes
-updates while any assistant runs on Hermes, Computer, the assistants you follow and your
-home sections.
-Each assistant can be in one section. New assistants start with their name and look,
-then role and model. On the web, a new assistant's chat opens once it is created.
+## The story so far
 
-The self-hoster connects this server to Hermes once. Web users sign in to that
-installation. iOS users enter its HTTPS address, then sign in to the same
-household. The app keeps the sign-in alive while it is used, up to 90 days after
-signing in with Google. The mobile app connects to this server, not directly to Hermes.
+This repository evolved through three distinct chapters:
 
-Web assistant settings load model options from the connected Hermes profile.
-The selected provider starts expanded. Search the catalog, refresh it after
-changing connected providers, and star models to keep personal favorites. Shared assistants keep one shared model. Existing selections remain
-saved when a provider is unavailable, and Hermes model warnings still require
-confirmation. In Advanced presentation, the model chip under the assistant's name in the web and iOS chat headers, with the provider's mark and the model's display name, switches
-the assistant's model from the same catalog without opening settings. Simple presentation never shows the model. Display names come from Hermes's cached models.dev catalog through the add-on, and the server formats the identifier itself (`claude-opus-5-5` becomes Claude Opus 5.5) when the add-on is older or does not know the model. Both pickers control reasoning effort and Normal/Auto/Fast/Ultrafast speed for the current
-conversation. Auto runs Fast at the start of each reply and drops back to Normal for long work, using Hermes's `agent.service_tier: auto` window (`agent.fast_auto_seconds`, 60 seconds unless the profile sets it). A Hermes without Auto refuses it with the reason instead of saving Normal. On a model without fast mode, Auto runs at Normal speed. The native picker includes search, provider groups, refresh and model favorites. Hermes validates support for the selected model.
+1. **Household client for Hermes.** WildBots started as `agent-interface`, a web and native SwiftUI iOS client sitting in front of a shared upstream Hermes installation. That first chapter built the household experience: Google sign-in with an allowlist, personal vs. shared assistant privacy boundaries, Main Assistant and quiet check-ins, durable send receipts, offline service-worker caching, drawn animated avatars, Web Push and APNs/Live Activities, group chats, encrypted logins, and a shared VPS desktop + system terminal.
+2. **Multi-harness & ACP wrapper.** Rather than staying tied to a single upstream agent daemon, we introduced a unified `HarnessDriver` architecture (`src/server/harness/`) that wraps modern CLI/protocol agents directly: **Antigravity** (ACP stdio JSON-RPC), **Codex** (app-server JSON-RPC), **Claude Code** (stream-json), **Grok**, and **Pi** (including automatic OpenRouter fallback). At the same time, we moved transcripts, message queues, persistent memory, skills, routines, group chat coordination, and AES-256-GCM encrypted secrets into WildBots' own SQLite database, exposed to every harness through a localhost **WildBots MCP** server (`src/server/mcp/wildbots-mcp.ts`).
+3. **Native platform & Hermes retirement.** Once every household assistant, transcript, memory, routine, group room, and vault login was migrated to SQLite, we retired Hermes completely — removing the Hermes gateway client, Python add-on, upgrade runner, and migration scaffolding (~101,000 lines deleted), switching production to Bun 1.4.5, and wiring the remaining platform capabilities directly into `HarnessRuntime`:
+   - **Native Shared Computer:** `Xtigervnc` + Chrome/Chromium DevTools Protocol (CDP) supervised directly by the server with a zero-dependency TCP-to-WebSocket RFB bridge (`/api/computer/desktop/ws`), human takeover / release control, and browser automation MCP tools.
+   - **Vault-Safe Browser Sign-In:** Encrypted website logins (`bot_secrets` with AES-256-GCM) usable via `vault_list_logins`, `vault_login_fill`, and `vault_totp_fill` MCP tools — verifying exact origin match inside the browser page before filling, never exposing plaintext passwords or TOTP seeds to models or logs.
+   - **Native Integrations & Custom MCP Manager:** Per-assistant API keys and custom HTTP MCP servers (`none` or encrypted `bearer` auth) managed through `/api/integrations*` and attached automatically to each assistant's harness sessions.
+   - **Native Bot-to-Bot Delegation & Group Routine Delivery:** `delegationPolicy` enforcement, `message_bot` handoffs formatted as agent-exchange cards, Main Assistant activation & quiet `[SILENT]` check-ins, and scheduled routines delivering straight into group chats (with `@mention` wakeups).
+   - **Single-command Rollback-Safe Deploys:** [`scripts/deploy.py`](scripts/deploy.py) archives a clean git commit, builds client + Bun server bundle, writes `dist/previous-release.json` for zero-downtime asset continuity, atomically swaps `current`, verifies `/api/health/ready`, and rolls back automatically on failure.
 
-An assistant is either shared with the household or personal. A personal assistant
-is private to its owner in WildBots: nobody else sees it in lists, Today, search,
-notifications, automations, routines or group chats, or can open it. Anyone may make
-a shared assistant personal after confirming it will disappear for everyone else;
-only its owner can share it again. Personal assistants created before owners were
-recorded stay visible to everyone. WildBots hides a personal assistant, but the
-Hermes dashboard is household-wide, so anyone with dashboard access can still reach
-its memory and logins.
+## Household experience
+
+The web home lists every assistant with its latest message and unread indicator across devices, with pinned assistants as large live avatars at the top. Phones open on home and push into a conversation with native Back gestures and View Transitions. Each assistant can be **shared** with the household or **personal** to its owner — nobody else sees a personal assistant in lists, Today, search, notifications, routines, or group chats.
 
 <!-- Main assistant: begin -->
 
 Each member can make one of their own personal assistants their **main assistant**, on
 web and iOS. It leads home with a **Main** mark, is first in the command palette, whose
 Ask entry sends typed words to its draft, and hands specialist work to the member's
-other assistants. A hand-off to a shared assistant asks the member first, because the
+other assistants via `message_bot`. A hand-off to a shared assistant asks the member first, because the
 whole household can read that chat. **Check in with me** in its details runs a quiet
 routine every 1 to 4 hours that speaks only when something needs the member and stays
-silent overnight in their timezone. A main assistant's routines post only in its own chat.
-Every assistant lists and reaches only its own roster
-inside Hermes, so another member's personal assistant never appears in its instructions or
+silent overnight in their timezone (`[SILENT]` suppresses delivery). A main assistant's routines post only in its own chat.
+Every assistant receives and is enforced against its own delegation roster, so another member's personal assistant never appears in its instructions or
 receives its messages. See [main assistant](docs/HouseholdExperience.md#main-assistant).
 <!-- Main assistant: end -->
 
-Web Settings > Notifications shows whether this account has notifications enabled
-on the current device. Turn the browser switch on or off there. The iOS app asks the
-same question in its own card after household sign-in when the server supports Apple
-push, shows the system permission prompt only after Enable, and has the same switch
-in Settings. Manage device permission in iOS Settings. A new browser asks once
-whether to enable notifications and explains where to change the setting later.
-On iPhone or iPad, add the app to the Home Screen and open it before enabling
-notifications.
+### Harnesses, models, and memory
 
-A chat you have open and are using sends no notifications to any of your devices.
-Reading a chat on one device stops its pending notifications to the others and
-removes its delivered ones from your iPhone and iPad. A browser tab counts while
-it is focused and has had input in the last five minutes.
+- **Harnesses:** Assistants run on Antigravity (ACP), Codex, Claude Code, Grok, or Pi. When a primary harness fails before streaming a reply, WildBots can automatically fall back to a configured OpenRouter/Pi fallback model.
+- **Models & inference:** Assistant settings and the chat header model chip (in Advanced presentation) pick models, reasoning effort, and speed tier where the harness supports them.
+- **Memory & skills:** Each assistant keeps editable SQLite memory and skills (`Memory & learning` in settings), injected into its system prompt and readable/updatable via the `wildbots` MCP server.
+- **Message queue & steering:** Harnesses with native steering accept mid-turn guidance; others queue messages cleanly above the composer so each waiting message can be edited, reordered, sent immediately, or cancelled.
+
+### Group chats and routines
+
+- **Group chats** let 2–6 assistants collaborate in one persistent room with `@handle` addressing, thread replies, shared purpose/notes, and optional lead routing. Rooms sit beside assistants on home with live previews and overlapping member avatars.
+- **Routines** run on cron, interval, or one-shot schedules via `NativeScheduler` (`src/server/scheduler.ts`), supporting prompts, scripts, or script-assisted prompts.
+- **Routine → Group delivery:** Routines can target one or more group chats (subject to household privacy rules so a personal assistant never leaks into a room others can open). Routine posts render under the routine's name with a `Routine` tag and wake assistants in the room only when explicitly `@mentioned`.
+
+### Shared computer, vault, and integrations
+
+- **Shared computer:** Enable with `COMPUTER_DESKTOP_ENABLED=true`. Supervises a loopback `Xtigervnc` display and persistent Chrome/Chromium profile controlled over CDP, streamed to web and iOS via `/api/computer/desktop/ws` with human **Take over** / **Hand back** and touch gestures on phones. Terminal administrators also get a fresh-auth-gated host shell (`/api/computer/terminal/ws`).
+- **Encrypted login vault:** Assistant settings > **Access** stores per-assistant website logins and optional TOTP secrets encrypted at rest with AES-256-GCM (`WILDBOTS_VAULT_KEY`). Assistants can list metadata (`vault_list_logins`) and sign in on the shared browser (`vault_login_fill`, `vault_totp_fill`) only when the active page origin matches the saved origin; raw secrets are never exposed to `secret_get` or chat transcripts and are automatically redacted from logs.
+- **Integrations & custom MCP:** Settings > **Integrations** manages per-assistant API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `BRAVE_API_KEY`, `GITHUB_TOKEN`) and custom HTTP MCP servers (`none` or encrypted `bearer` token). Added MCP servers are enabled and attached automatically to that assistant's harness sessions.
+
+### Live voice, Today, Search, and interactive replies
+
+- **Live voice & Talk:** Direct OpenAI Realtime and xAI Grok Voice power live spoken **Talk** sessions, plus OpenAI voice transcription and spoken replies on web and iOS.
+- **Today & Search:** **Today** gathers pending decisions, scheduled work, recent results, and generated files across visible assistants with cross-device **Mark caught up**. **Search & saved** runs SQLite FTS over transcripts, attachments, and routine previews.
+- **Interactive replies:** Assistants can emit inline HTML views (charts, calculators, diagrams), checklists, itineraries, forms, T3 Code thread cards, and email drafts.
+
+<!-- BEGIN draft revisions -->
+
+When an assistant revises an email draft from earlier in the chat, the new draft
+marks the words it added and removed, with **Hide changes** to read it clean.
+<!-- END draft revisions -->
+<!-- BEGIN reply files -->
+
+A reply whose turn produced files it does not already show as attachments lists
+them as chips under it, up to four and then **+N more**. A chip opens Artifacts on
+that file; **+N more** opens the whole list. Files you shared yourself are not chips.
+<!-- END reply files -->
+
+### Notifications & multi-account browsers
 
 <!-- BEGIN device activity -->
 
@@ -81,244 +84,11 @@ device gets it as before. Security alerts always reach every device. See
 [Device activity](docs/native-api.md#device-activity).
 <!-- END device activity -->
 
-Tapping a web notification while the app is open in a window switches that window to the
-chat, as choosing it there would, and brings the window forward without reloading it. Every
-tap ends one of two ways: a window known to be in front shows the chat, or the notification
-is back on screen, quietly, to tap again. A window counts as in front only when it was focused
-already, it came forward when asked, or the worker just opened it; a browser covered by
-another application still reports itself visible. The worker follows four rules:
-
-1. No window the worker controls: it opens a new one. If the browser refuses, the
-   notification comes back.
-2. The page answers its `OPEN_CHAT` message within 250 ms: the chat is open there. If the
-   window is in front, that is all; if not, the notification comes back. No second window
-   opens, so the chat never shows twice.
-3. The page does not answer in time, on a first tap: it may be busy with something a reload
-   would lose, such as an edited settings form, so the window is left as it is and asked to
-   come forward, and the notification comes back marked as having come back. If the page
-   opens the chat late after all, the notification simply stays until it is dismissed or
-   tapped; a tap then gets a prompt answer.
-4. The page does not answer in time, on a tap of a notification that came back: that is the
-   person asking again, so the worker loads the chat's address into the window, or opens a
-   new window when that fails. Unless a window is then known to be in front, the
-   notification comes back again.
-
-A window running a release from before pages answered gets the notification back on the
-first tap and the chat on the second, as taps always did. A notification comes back only
-because of a tap, so it never loops on its own. A second tap on the same chat while the
-first is still being handled joins it, so nothing opens, loads or comes back twice. A tap
-while the notification is coming back may be a tap on that notification, so it starts a new
-try at once, and later taps join that one. A notification that comes back is tagged with its
-chat, so it replaces one already back for that chat and never a new notification. The worker
-waits at most 10 seconds for the browser to say a notification is back. Two cases the rules
-cannot cover leave nothing on screen: the browser refuses to show the notification again and
-refuses the worker's one further try, or it has neither shown nor refused it after those 10
-seconds, when the worker stops waiting and the notification still appears if the browser
-finishes later. Each fallback ends well
-inside the one second Firefox allows a worker to open a window after a tap.
-
-An open assistant settings sheet or Settings closes the way its close button does before the
-chat opens. An edited assistant asks whether to discard the changes, and the chat opens only
-if the person discards them. A section name being typed in Settings is saved, or, if it
-cannot be, Settings stays open with the reason. The page answers the worker either way, so
-the worker never reloads the window over the form. A chat waiting on a sheet belongs to that
-sheet and account: if the sheet goes without closing, as when another tab signs in as someone
-else, the chat never opens.
-
-The web app's first read, its sign-in check (`/api/bootstrap`), starts before the app's code
-has downloaded. `index.html` loads `public/boot.js` first, a small script served as written,
-which starts that read and leaves it for the app, so a load reads bootstrap once and a
-returning visit no longer waits for the code before asking. The app takes the read only if it
-is the one the app would make and the account record below is the one the script saw, and
-judges its answer exactly as its own, discarding it if the record changes before it arrives.
-The script starts no read while another tab's sign-in or sign-out is under way. If the read fails or
-is cancelled, the app reads again itself; if it finds no session, the app shows sign-in, as
-before. The same script applies the theme this device last showed the signed-in person, so a
-dark theme never opens light. The browser keeps that theme with the account it belongs to, in
-`agent-interface:theme`, and uses it only while the sign-in record below names that account and
-no other tab's sign-in or sign-out is under way. The app's first draw of each account applies
-the same rule again before it paints, so a change another tab finishes after the script ran,
-before the app's code arrived, leaves none of the last member's theme on screen. See
-`src/startup-read.ts` and `src/app/saved-theme.ts`.
-
-A returning visit draws home at once from the last roster this device showed, instead of waiting
-for bootstrap. The browser keeps, in `agent-interface:roster`, only what home draws: the person's
-name and picture address for the account button, each assistant's ID, name, avatar and whether it
-is shared, the pinned assistants, sections, main assistant and whether the person put off choosing
-one, and each group chat's ID, name and members. It keeps no message, preview, time, unread mark,
-activity, draft, token or email, and lists only the assistants bootstrap gave that person. Until
-bootstrap answers, home says "Connecting" (or "Offline", or "Can't connect" once a check failed),
-each row says "Shared assistant" or "Personal assistant" in place of its latest message, a group
-chat names its members, and no row is marked unread or busy. Account, Search, New, row menus and
-the main assistant suggestion wait for bootstrap. A tap on an assistant opens its chat once
-bootstrap answers, and starts reading it at the tap as a linked chat does; Today and group chats
-open once bootstrap answers, and read nothing before. The saved home is the account's screen too:
-it shows the plain title and no app badge, and the back-forward cache covers it as it does the
-rest. Bootstrap's answer redraws the same rows in place, so scroll and
-focus stay, and the saved group chats stay until the group list answers, except a group chat with
-an assistant bootstrap no longer lists, which goes at once and stays gone if the group list then
-fails. The copy belongs to one account: it is drawn only while the sign-in hint names that
-account and the record does not name another (a sign-in whose two writes did not both land), read once per account generation (see Accounts in one browser below), so every change
-of account in any tab, cleared storage, a refused session and the sign-in record's lapse take it
-off the page, and it is removed with the sign-in record, so a second member never sees the
-first's home. Every field is checked as the server would accept it: assistant, section and group
-chat names take the server's own bounds, and the account's and group members' names, which the
-server does not bound, a generous one. A copy past any bound, a stored value over 200,000 characters, one this release cannot read,
-or storage that fails falls back to the welcome screen. When the first check fails, the saved
-home offers **Sign out of this device**: it signs out at once in every tab, removes this device's
-copy, sign-in record and theme, ends this browser's push subscription, which the server still
-holds for that account, and shows sign-in. Since the server could not be reached, the
-account record notes that the server's session may still be live; until it is ended there, which
-the sign-in screen does as soon as the server answers, nothing reads as that account. That note is
-written, and found in storage, before anything is removed. If storage refuses it or does not keep
-it, the record goes back, the copies stay, and the saved home says the sign-out could not be
-completed on this device. See
-`src/app/saved-roster.ts`.
-
-A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
-web app checks the sign-in, instead of after. It does so only when this browser signed in
-within the session's seven days and that sign-in's last check named the account and listed
-the chat, so a signed-out browser or a chat you may not see usually sends no request that
-would be refused. Two cases still cost one refused read: a session the server ended early,
-such as an account removed from the household, and an assistant made private since the
-last check. The app then shows what it shows today: the sign-in screen, or its notice that
-the assistant is no longer available. The read is tagged with the account the record names,
-and the chat shows it only if the sign-in check answers as that same account and no other
-tab has signed out or in meanwhile; otherwise the chat reads again. The early read answers
-only the first chat load after the page loads, once, whether it has finished or not; nothing a
-person does can come before that load. Every later open of any chat, however soon, reads
-fresh, and the chat's change stream reads fresh as it connects. A row's hover or press read
-is joined only while it is still on its way; once finished it only fills the response cache,
-which the chat shows while it reads again. The response cache keeps the body of the
-latest-started read of each path, so a slower, older read that finishes last never replaces
-it. The browser keeps only the lapse time, the account ID and the chat IDs, in
-`agent-interface:sign-in-hint`, and drops them, and the saved theme and home with them, at sign-out,
-a refused session, a new sign-in, a check that finds another account, or the lapse time. A link to a message, Today or a group chat
-waits for the check as before. See `src/app/linked-chat.ts`.
-
-### Accounts in one browser
-
-Household members sometimes share a browser profile, and every tab of a profile shares one
-session cookie. So a change of account in one tab is a change in all of them, and each takes
-effect in every tab before anything of the previous account is drawn or used again. The
-changes are a sign-in, a sign-out, a session the server refuses, a check that names another
-account, and the sign-in hint's lapse time passing. Each writes a new
-`agent-interface:auth-epoch` record: before a sign-in or sign-out request can change the
-cookie (marked as under way), and again when it settles. A tab compares the stored record with
-the one it acts under when another tab writes it, when a page comes back from the back-forward
-cache, when it is shown or focused, and before and after every request, live-update event and
-upload. Once they differ, the tab unmounts everything it held for the account, including its
-reads, live connections, drafts in memory and cached responses, discards any answer still on
-its way, and starts again from the account check. Meanwhile it shows the connecting screen, or
-sign-in after a sign-out, and never the previous account's rows, unread count or theme. An
-address belongs to the account the record named when its screen started, even one still
-connecting, or to the account the saved home or its check drew since. A check that names another
-account than the saved home drew, or than the record named when the screen started, starts the app
-again, as when the record lags the cookie. It is reset to `/`, fragment included,
-before a sign-out or another account draws; an address opened while signed out, or while another
-tab's sign-in that began signed out is under way, is kept for the next sign-in. A sign-in that
-the server refuses puts the record back, so other tabs read the
-same account again and keep their address, open chat and fragment. A record left marked as under way by a tab that closed
-mid-request stops counting after 65 seconds, and a tab that waited on it starts as soon as it
-is shown or focused. Cookie-changing sign-in, server sign-out and pending-logout requests require
-the [Web Locks API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API). They hold a
-separate lock through the request and record settlement, while record updates use their own lock.
-Without that API, no cookie-changing request is sent: the page asks for an updated browser and
-WildBots over HTTPS. Web Locks require a secure context. Device-only sign-out remains available
-from Settings and the offline home. It first keeps the signed-out record, then removes saved data;
-the server logout stays pending until this browser can acquire the lock. A record the browser
-cannot keep leaves the person signed in here and explains why. Storage that refuses writes leaves
-each tab on its own: it still takes its own changes, but cannot tell other tabs. See
-`src/app/account-epoch.ts` and `src/app/account-change.ts`.
-
-A page in the back-forward cache hears nothing while it is frozen, and a browser can show it
-again before its script runs. So as a page leaves, the account's screens are hidden in place,
-with the plain title and theme; nothing is unmounted. Coming back with the same account, they
-show again at once with their scroll, drafts and open panels, and in their theme. After a
-change they stay hidden, in the plain theme, until the next screen replaces them. A restored page
-does not run `boot.js` again, so its theme until then is the cover's; a fresh load runs it, and
-has no cover. Chromium restores this app from the cache, signed in, with
-its live connections and service worker; `e2e/back-forward-cache.spec.ts` checks both cases.
-
-When another account signs in over one that never signed out here, that account's
-notifications on screen close and the browser's push subscription ends, since the server would
-keep sending the old account's notifications to it. A sign-out closes them too. Until the
-server learns the subscription is gone, a push can still arrive for the old account, so each
-web push names the account it is for, as APNs payloads do (a hash of the account ID), and the
-service worker shows it only for the account its pages last said is signed in: none while a
-change is under way or after a sign-out. A notification for another account offers no working
-Decline, and a tap on it opens the app without its chat. A push that names no account, from a
-server before this change, shows as before while someone is signed in. The worker sets the app
-badge from a push only once its notification is on screen and its account is still the one
-signed in, and clears a badge another account's push set when the account changes; it records
-in Cache Storage which account set the badge. A page the worker controls asks it to set or clear
-the badge too (a `BADGE` message naming the account its screens show), in the order it said its
-account words, so the page and the worker never race: a count is set only for the latest account,
-and a clear never removes the latest account's count unless that account's own page asks. A page no
-worker controls, or whose worker does not answer within three seconds, as one from a release before
-this message, writes the badge itself, and so does a page whose worker answers that it has no badge
-API. Once a worker has answered on a page, that page waits on no later answer, and a write the page
-makes itself is dropped when its account generation has ended. Its account steps run one at a time, so a late step for an
-earlier account never overwrites a later one's.
-
-What the browser keeps, in localStorage unless noted:
-
-| Record                                                                                              | Holds                                                                                                                         | Removed                                           |
-| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `agent-interface:auth-epoch`                                                                        | Which account the tabs act for, and whether a change is under way                                                             | Never; each change replaces it                    |
-| `wildbots-account` (the service worker's Cache Storage)                                             | The hash of the account notifications may show for, or that none may, and of the account whose push or page set the app badge | Never; each change replaces it                    |
-| `agent-interface:sign-in-hint`                                                                      | Lapse time, account ID, chat IDs                                                                                              | Sign-out, refused session, another account, lapse |
-| `agent-interface:theme`                                                                             | The theme last shown, and its account, for `boot.js`                                                                          | With the hint, and at any sign-in                 |
-| `agent-interface:roster`                                                                            | The home last shown: assistants, order, group chats and their members, the member's name and picture                          | With the hint, and at any sign-in                 |
-| `agent-interface:draft:<account>:<assistant>`                                                       | An unsent draft                                                                                                               | Sign-out                                          |
-| `agent-interface:submission:<account>:<assistant>`                                                  | A message whose delivery is unconfirmed                                                                                       | Sign-out, or once confirmed                       |
-| `agent-interface:group-send:<account>:<room>` and its `:draft`                                      | A group message on its way, a group draft                                                                                     | Sign-out, or once sent                            |
-| `agent-interface:group-create:<account>`                                                            | A group being made: name, assistants                                                                                          | Sign-out, or once made                            |
-| `agent-interface:form-reply:<account>:…`                                                            | A form's answers                                                                                                              | Sign-out                                          |
-| `agent-interface:routine-trial:<account>:<routine>`, `automation-goal-resume:<account>:<assistant>` | A request ID, so a retry is checked rather than repeated                                                                      | Kept                                              |
-| `agent-interface:notifications-prompt:v2:<account>`                                                 | Whether the notification prompt was shown                                                                                     | Kept                                              |
-| `agent-interface:approval:<account>:…` (sessionStorage)                                             | An approval decision on its way                                                                                               | With the tab                                      |
-| `integration-flow:<account>:<profile>` (sessionStorage)                                             | An integration sign-in flow ID                                                                                                | With the tab                                      |
-| `wildbots.device-id`                                                                                | This profile's device ID                                                                                                      | Kept; it names the device, not a member           |
-| `computer.trackpad`                                                                                 | A trackpad preference                                                                                                         | Kept                                              |
-
-Every record that belongs to an account has the account's ID in its name, and the app reads
-only the signed-in account's, so no member's records are read under another account. A
-sign-out removes the ones that hold what a member wrote. Records that hold only a request ID
-or a choice stay, so an uncertain request is checked, not sent twice, after the member signs
-in again. Records that outlive a session are as private as the browser profile: anyone who can
-open the profile can read its storage.
-
-One change is out of a browser's sight: a session revoked from another device, or a member
-removed from the household, while this browser is offline or has not yet asked the server.
-This browser keeps showing what it already shows, the saved home included, until its first
-answer from the server, which refuses the session and so becomes the refused-session change
-above: the saved home, the sign-in record and the theme go, and sign-in shows.
-
-The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
-show how many assistants have unread messages or a decision waiting for you. A web
-approval notification offers **Review** and **Decline** where the browser supports
-notification buttons, as the iOS notification does. Decline works without opening
-the app and can only decline that one request.
-
-An approval card in a chat offers the choices Hermes allows for that request: Allow
-once, Allow for this conversation, Decline and, under More choices, Always allow.
-Always allow first says which kind of command Hermes will run for that assistant from
-now on, in every conversation. A command Hermes's guardian doubted offers only Allow
-once and Decline, and an older Hermes keeps Approve and Decline. Notifications never
-offer more than Review and Decline. After Decline, the card reads "Declined. The
-assistant stopped that step." and the message box asks what to do instead. Each
-assistant's Access settings list its always-allowed commands with Remove, and an
-integration administrator can turn on Hermes's auto-review of routine commands.
-A question's recommended answer is tagged and, for a single choice, already chosen.
-A message sent while the assistant works says "Added to the current task" once Hermes
-adds it to that task.
+Web Push notifications switch an open window directly to the chat without reloading. Shared browser profiles track account changes via `agent-interface:auth-epoch` and Web Locks so switching accounts unmounts previous state, clears cached rosters/themes/badges, and prevents cross-account leakage across tabs and back-forward cache restores.
 
 ## Run locally
 
-Use Node 24.22 or 26.13 and npm. `.node-version` selects the tested Node 24 LTS
-release. The lockfile pins application dependencies. See the
-[dependency record](docs/Dependencies.md) for versions and verification.
+Use Node 24.22+ (or 26.13+) and npm (`.node-version` selects the tested Node 24 LTS release), or Bun 1.4.5+ for the bundled production server.
 
 ```sh
 npm ci
@@ -327,812 +97,58 @@ npm run build
 npm start
 ```
 
-Setup asks for the existing Hermes gateway address and token, then checks access
-and compatibility before saving a private `.env`. Token entry is masked. Choose
-Google sign-in for the household, or explicitly enable local test accounts for
-development. A failed check leaves the previous configuration intact.
+- `npm run setup` configures a private `.env` with Google sign-in + `HOUSEHOLD_EMAILS` allowlist (or `LOCAL_DEV_AUTH=true` for loopback development) and checks harness availability.
+- `npm run doctor` checks the active configuration, database, and available harness binaries.
+- For hot reload, set `APP_ORIGIN=http://127.0.0.1:5173`, run `npm run dev` and `npm run dev:client` in separate terminals, and open port 5173.
+- To build and smoke-test the Bun server bundle:
 
-Open the app address printed by `npm start`, normally `http://127.0.0.1:3000`.
-Household members only need to sign in; they never enter the Hermes token.
-Local test accounts are refused in production or on a non-loopback host.
-An unconfigured installation explains how to start setup from its sign-in page.
+```sh
+npm run build
+npm run build:server:bun
+npm run smoke:bun
+```
 
-After changing configuration, restart the app. Use `npm run doctor` for a
-read-only check of the active configuration and Hermes connection. It exits with
-a failure status and an actionable explanation when something needs attention.
-Exported environment settings override `.env`; setup reports conflicting keys
-before writing so a saved change cannot silently be ignored.
+## Deploy
 
-For hot reload, set `APP_ORIGIN=http://127.0.0.1:5173`, run `npm run dev` and
-`npm run dev:client` in separate terminals, and open port 5173. Vite proxies API
-requests to the app server. The built application serves its API and static files
-from one Fastify process.
+Deploy any git ref to a Linux host with atomic symlink swap, `dist/previous-release.json` asset continuity, health check, and automatic rollback:
 
-The server writes JSON log lines to stdout. It logs each response of 400 or above and each request that
-takes over a second, with the method, route pattern, status, duration and request ID, never the URL or its
-query. It also warns, at most once a minute, when the event loop stalls (p99 delay over 50 ms).
-Successful quick requests are not logged because clients poll every 1.5 seconds. `docs/Hosting.md` lists the lines worth searching for.
+```sh
+python3 scripts/deploy.py --host hermes-prod --ref main
+```
 
-## Web UI components
+Use `--dry-run` to preview the exact commit and release name without touching the remote host. See [docs/Hosting.md](docs/Hosting.md) for systemd service setup, backups, environment variables, and operational notes.
 
-Shared controls live in `src/components/ui`, with shadcn configuration in
-`components.json` and Base UI handling context menus and popovers. Keep the
-existing WildBots colors, typography and spacing when adding controls.
+## WildBots for Mac
 
-Base UI is not part of the first load. Import its components only from modules the
-entry reaches through `import()`, such as the assistant menu in `src/app/BotMenuPopup.tsx`.
-Until that menu has loaded, `src/app/BotMenu.tsx` stands in for it and catches the first
-right click, menu key or long press, so none is lost. `npm run build` fails when Base UI
-returns to the entry's static imports.
+[`mac/`](mac/) holds WildBots for Mac, a menu bar app that lets your personal assistants run commands, read and write files in folders you choose, and take a screenshot on your Mac, unattended when you allow it. The Mac decides what each assistant may do and connects out to this server, so it needs no open port. Enable on the server with `MAC_LINK_KEY`; see [docs/MacLink.md](docs/MacLink.md).
 
-### Motion and ambience
+## Native iOS
 
-`src/motion.css` holds the web client's motion layer and loads after `src/styles.css`. Every
-timed animation in it runs only when the system allows motion, and the existing reduced-motion rules
-still win. The header's lift follows scroll position rather than time, and the phone slide is a view
-transition the app does not start under reduced motion. The built app links some component stylesheets
-after it, so a property the layer sets on a selector, whether an animation or a depth style such as the dark
-lit edge and the rail's grain, is that selector's only one. Springs are sampled `linear()` easings. A browser without
-`linear()` gets the app's ease-out for the soft spring (menus, sheets, the status dock) and a cubic-bezier
-with about 5% overshoot for the livelier one (the toast, the jump button, sent messages, the work strip).
+The SwiftUI app lives in [`ios/`](ios/). It uses the same authenticated API, bot settings, group chats, shared computer viewer, Siri/Shortcuts/Spotlight integration, Widgets, Share Extension, and APNs/Live Activities as the web client. See [ios/Parity.md](ios/Parity.md) and [docs/native-api.md](docs/native-api.md).
 
-- Back on a phone: a phone-width layout is home, or one step in from it. A chat, group chat, Today, Search,
-  or a sheet laid over home is one history entry, pushed when the step is taken. The system Back gesture
-  and the browser's Back button take the step the on-screen Back takes: they close an open sheet through
-  its own close, so an edited form, a new group chat with a name or choices, still asks first, and otherwise return to home with the chat's row
-  focused. A second Back leaves the app. Switching between chats, as a notification tap does, only
-  replaces the address, so entries do not pile up. Two-pane layouts push nothing, and a window
-  resized between the layouts drops or adds the entry to match. A link that names a chat opens it with
-  home one Back below; a page reloaded inside a chat still opens home on Back. The entries carry their
-  depth in `history.state` (`src/app/history-nav.ts`); `e2e/back-navigation.spec.ts` checks them. A change of
-  account, as a sign-out in another tab, pops the step in and puts the address `/` on the entries it leaves,
-  before the next account or sign-in draws, so Back never lands on the previous account's chat.
-- On a phone, opening a chat from home and going Back use the View Transitions API. The avatar
-  flies between its home row and the chat header while the screens slide. Browsers without the
-  API change screens at once.
-- A chat with a drawn avatar takes a light tint from the avatar's color in its header, your own
-  messages and the composer's focus ring. Photo avatars keep the app's green.
-- The chat header lifts with a border and shadow once messages scroll under it. This uses
-  scroll-driven animations where the browser supports them.
-- While a turn runs, the live row shows its tools as a strip that fills in as each finishes.
-- While a reply streams, its text appears at a steady pace instead of jumping at each of the
-  server's updates, up to ten a second. Each update is revealed within about a third of a second
-  of arriving, however long it is, with at most 30 paints a second, and a reply
-  already under way when the chat opens shows at once. A caret at the text's logical end, right of
-  Latin text and left of Arabic or Hebrew, or past the line's end where text of the other direction
-  touches that edge with no space, pulses until the reply is saved, and follows a code
-  block or table scrolled sideways. The text shows at once in a hidden tab, and under reduced
-  motion, where the caret stays lit and still.
-- When a streamed reply is saved under Hermes's own ID, its row usually stays in place: React
-  keeps the same nodes, so a text selection, a code block's copy state and the reader's spot
-  survive. That holds when the client sees the saved copy replace the live reply as the one new
-  row, with the same text. A progress line never takes the live reply's row, and a live reply that
-  starts in the same update as a saved one gets a new row, even when it begins the same way. When
-  more than one row lands at once, such as a progress line saved beside the reply, the reply's row
-  is built again, as before. A steer or another member's message
-  arriving mid-reply starts a new turn, and the live reply moves into it, which also builds its row
-  again, so a selection in it is lost. If the saved reply is longer than 25,000 characters, or its
-  blocks would parse differently from the whole reply, it is parsed whole in the same row, and a
-  selection in it is lost too. The row's time and actions appear in
-  space it already held while streaming. Files the turn made still appear below the reply once it
-  is saved, since their size is not known before.
-- On a computer, pinned avatars glance at a nearby mouse pointer. When a pinned assistant finishes,
-  it hops and the other pinned ones look over. Approving a request or answering a question makes
-  the assistant cheer, and settled approval cards fold away.
-- Dark mode adds a faint glow, rail grain and lit edges on raised panels.
-- Home shows the season with a slight accent shift and a few faint drifting shapes. The calendar
-  decides first. Between holidays, a pinned seasonal character brings its own season.
+- **Direct LAN & tailnet routes:** Set `DIRECT_ROUTES=lan`, `tailnet`, or `lan,tailnet` (with `DIRECT_PORT`, default `3443`) so the iOS app connects directly over the household LAN or Tailscale using a pinned self-signed certificate while keeping sign-in on the HTTPS origin.
+- **Update banner:** Set `IOS_APP_LATEST_BUILD` and `IOS_APP_UPDATE_URL` to notify iOS users when a new TestFlight build is available.
 
-While an assistant uses the computer, a small watch-only view of the desktop docks in the
-transcript's corner on the web and in the iOS app, with its own ticket that never takes control.
-It opens the full computer view, can be dismissed for the turn, and holds no connection when
-hidden, dismissed or failed.
+## Web UI architecture & offline cache
 
-The rest of this section is web-only. The avatar conductor and pose math that iOS mirrors are unchanged.
-
-### Crash reports
-
-A render failure anywhere outside a lazy screen shows a "Something went wrong" page with
-Reload instead of a blank screen. A lazy screen that cannot load, as when a tab stayed
-open across a deploy and the screen's file is gone, says "This screen could not load" with
-Reload, and the rest of the app keeps working. A hashed `/assets/` file the live release no longer
-has is sent from the release it replaced, when the deploy tooling named that release
-(`dist/previous-release.json`, see docs/Hosting.md), so a tab open across one deploy still loads its
-screens. The server answers any other missing `/assets/` path with an uncached plain-text 404,
-never the app shell. The page never reloads itself; Reload
-loads the release the server has now, since the worker fetches the app shell from the network
-first. Chat and group drafts are written to the device on
-every edit, so a reload keeps them. While someone is signed in, the web client sends
-that crash, uncaught errors and unhandled rejections to `POST /api/client-errors`: each
-distinct report once, at most five per page load, and never chunk-load failures the
-screens already handle. The server logs each one as a `Client error` warning with the
-person's id and stores nothing. It accepts 20 reports per person every 10 minutes. The iOS
-app sends the crashes and hangs that MetricKit delivers on the next launch to the same route,
-as `crash` and `hang` reports with `platform: "ios"`; see `docs/native-api.md`.
-
-### Offline cache
-
-`scripts/build-worker.mjs` turns `scripts/service-worker.js` into `sw.js`, and
-`scripts/precache-plan.mjs` sorts the built files into three groups. The install step
-fetches only the pages and the static import graph of both HTML entries, which is enough
-to open offline without racing the first visit. Install fails, and the browser retries it
-later while the old worker keeps serving, if any of those files is an error or comes back
-as `text/html` in place of code. Lazy screens and libraries are fetched in the background,
-three at a time, when the page posts `{ type: "WARM" }` to the active worker after it goes
-idle. The worker runs that under `waitUntil` so the browser keeps it alive, never delays
-activation for it, and skips files already cached, so any later page load finishes what a
-stopped run missed. The terminal and remote desktop chunks wait for first use. A file that
-was never warmed is kept after its first use, unless it is an error or `text/html`.
-Installing a release copies every hashed `assets/name-HASH.ext` file already held by an
-earlier release's cache instead of downloading it again. The pages, icons, manifest and
-unhashed files are always fetched fresh. The worker's hashed-name rule must match
-`src/server/static-cache.ts`; a test compares them.
-
-The worker opens the app shell (`/` and `/index.html`) from its own release's cache, without
-waiting on the network, while it has no sign that the cached shell is out of date. Install
-fills that cache all or nothing, so the shell and the code it loads first come from one
-release. After each such open the worker fetches the server's `index.html` in the background
-and compares the text. The server sends the file as it is on disk, so the text differs only
-when a release changed it.
-
-- A different shell means a new release. The worker notes that in its own cache, which
-  survives the worker being stopped, and runs the update check at once. From the next load
-  on it opens the network's shell, with the cached one as the offline fallback, as it did
-  before this change. So after a deploy the old shell opens until one background check has
-  finished, which is one load in ordinary use, even if the new worker cannot install. Two
-  windows opened before that check finishes both get the old shell. The new release's worker
-  starts with a new cache and no note.
-- A redirect, 401, 403, server error or no network changes nothing. No window reloads and
-  the worker stays, so one bad answer never costs a person their work.
-- With no cached shell, as on a first visit or after storage is cleared, the network answers.
-
-`/boot.js` blocks the page's `<head>` before any of the app's code runs, so no deadline of the
-app's covers it: a download that stalls leaves a blank page, with no title, until the browser
-gives up on it. The worker installs it with the shell and always answers this release's copy at
-once, even after the shell is noted as out of date, so an installed app never waits on the
-network for it. A first visit, or a browser without the worker, fetches it, and a stall there
-looks as a stalled shell or bundle did before. The server sends it with `no-cache`, as it does
-the shell, and answers a missing one with a 404, not the shell. A `boot.js` and an app from
-different releases still work: the app takes the read only when it is the read the app would
-make, so the worst case is one extra bootstrap read.
-
-A release that finishes installing is offered with **Refresh**, as before; the worker never
-switches releases under an open page. The shell is not fetched with navigation preload,
-since the cached copy usually answers first.
-
-Tailwind 4 uses the app's CSS tokens through `src/ui.css`. Utilities have a `tw:`
-prefix so they cannot collide with existing semantic class names. Preflight is
-omitted to preserve native control styling. Keep custom layout, avatar and
-markdown CSS where it is clearer than utilities.
-
-Standard shadcn color utilities map to the live WildBots palette: `primary` is
-the brand green, `accent` is its soft hover background, and `muted` is a quiet
-surface. Use `tw:text-muted-foreground` for subdued text or `tw:text-brand` for
-the brand color. Dark variants follow the app's light, dark and system setting.
-
-Preview additions with `npx shadcn@4.22.0 add <component> --dry-run --diff`, then adapt
-the generated component to the existing controls, icons and styling. Registry
-items can also change `src/ui.css`. The stock card leaves it alone, while custom
-items that supply theme variables can append `:root` and `.dark` palettes.
-Keep the existing token mappings and dark variant. Map any needed new colors
-to app tokens instead of accepting those generated palettes. Do not run preset
-or theme initialization over this file.
-
-The `cn` helper and `@/` alias support generated shadcn components. Native
-wrappers forward existing classes directly, so they do not load the class
-merging helper at startup.
-
-Use the shared `Button`, `Input`, `Textarea` and `NativeSelect` controls in the
-migrated settings and panels. `Button` defaults to `type="button"`; form submit
-actions must explicitly use `type="submit"`. The shared `Dialog` preserves the
-native top layer and owns opening, closing and focus restoration. Pass `open`
-for panels that stay mounted while hidden. Nested overlay wrappers inherit the
-dialog as their portal container.
-
-## Connect Hermes
-
-Hermes runs separately from this application. Guided setup saves `HERMES_URL` and
-`HERMES_TOKEN` on the app server. An existing HTTPS gateway is supported; cleartext
-HTTP is restricted to loopback. File links are signed with a key the app keeps in
-its own database, not with `HERMES_TOKEN`. Before rotating the token, read
-[Hosting](docs/Hosting.md#application-backups) for the order and what it covers.
-Provider credentials remain in Hermes. An assistant on Hermes that needs a service
-it lacks can ask in the chat: its card holds that connection's setup and continues
-once it is set up. Connection changes require an integration administrator.
-See the [integration guide](docs/Integrations.md) for supported services, one-time
-hosting configuration and device limitations.
-
-The [shared computer](docs/SharedComputer.md) provides one persistent desktop and
-browser for all assistants, with human takeover for every household member and a
-real VPS terminal for terminal administrators. The iOS app shows the desktop on its
-own Computer screen with Take over and Hand back; the terminal still opens in Safari.
-On a phone, web and iOS add touch controls with a help sheet: two-finger scroll and
-right-click, pinch to zoom the view, trackpad mode and clipboard copy and paste.
-An assistant can ask for a person in the conversation; the card's Take over opens the
-computer with control in one step, and handing back tells the assistant to continue.
-While a browser tool runs, the live row offers Watch.
-An assistant can also offer the system terminal in chat; its card's Open terminal offers the
-suggested command for you to paste at the prompt, never runs it, and Done tells the assistant to
-check the result.
-
-The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
-revision, native integration probes, and the small revision-bound extension for
-durable admission receipts and event discovery. Read its compatibility and
-rollback instructions before using that extension. The app does not directly
-edit Hermes databases or take over execution from an existing Hermes owner.
-Setup connects to an existing compatible owner; it does not install Hermes or
-change its supervisor. A missing add-on, incompatible revision, rejected token,
-or unreachable gateway gets a distinct diagnostic. When Hermes rejects the server's
-token, requests fail with 502 and keep people signed in to the app.
-
-For a Google-protected Hermes dashboard, run this app on the same host and use
-the private service connection described in the capability matrix. This keeps
-the permanent server credential separate from expiring household Google
-sessions. The original dashboard retains its Google sign-in and address.
-
-Google sign-in requires `GOOGLE_CLIENT_ID`, the app origin registered in the
-Google OAuth client's authorized JavaScript origins, and an explicit comma-separated
-`HOUSEHOLD_EMAILS` allowlist. Setup collects the client ID and household emails;
-Google's external configuration remains a separate step. Production requires HTTPS. Web Push additionally
-requires the three `VAPID_*` settings in `.env.example`. Accounts, credentials,
-runtime databases and private operating notes stay outside this repository.
-
-After a new release, the web app shows **Update available** at the top of home, and
-above the conversation on phones, until you choose **Refresh**. An open tab or installed
-app checks for a new release every 30 minutes and whenever it returns to the foreground.
-Drafts are saved before it reloads. The iOS app shows the same notice with an **Update**
-link when the host sets `IOS_APP_LATEST_BUILD` and `IOS_APP_UPDATE_URL`; see the
-[native API contract](docs/native-api.md#app-updates).
-
-During an outage, the app retains loaded conversations and personal drafts,
-rechecks the connection automatically, and refreshes when the browser comes back
-online or into view. Each event stream the web app opens asks the server to ping every 10 seconds,
-and a stream silent for 25 seconds is replaced, as when a proxy, a sleeping laptop or a phone's radio
-cut it without closing it. A refused, dropped or silent stream waits before its next attempt: 1 to 2
-seconds after the first failure, doubling to at most 5 minutes, each wait a random half or more of its
-ceiling so a household's tabs do not reconnect in step. Periodic checks never start an attempt sooner.
-The count starts over once a stream stays healthy past its opening ping, so a server that greets and
-then stalls keeps backing off. A timer that fires far late, as after a laptop wakes, gives the stream
-one more deadline instead of replacing it. A hidden tab holds no stream but keeps its place in the
-backoff: showing it connects at once if the stream never failed or its next attempt fell due while
-hidden, and otherwise when that attempt falls due. The network returning or a manual reconnect connects
-at once the first time in an outage, or when the tab is shown if it arrived while hidden; repeats start
-the next attempt 2 to 4 seconds after the last one they forced, or sooner if the ordinary retry is due
-first, until a stream proves itself.
-
-Streams are the fast path and polls the safety net, so polls slow down while their stream is live and
-never stop. The open chat's conversation and draft are read every 30 seconds while the chat's stream is
-down and every 2 minutes while it is live. Bootstrap is read every 45 seconds while the household stream
-is down and every 5 minutes while it is live. Every conversation read carries the draft, so a draft
-changed while the stream was reconnecting shows with the reconnect's read, and a new canonical session
-in bootstrap reloads the open chat and reconnects its stream. A stream counts as live only on data
-after its opening ping, never on connecting alone. Today, chat presence and device activity keep their
-own intervals. When the household stream or the open chat's has been down for 20 seconds, the
-connection notice says live updates are delayed, above the composer in a chat and at the top of
-Today, Find and group chats. It clears once the stream is live again. A screen reader hears each
-connection change once, from one status region the whole app shares, and hears once that the
-connection is back, and that live updates are, which it says only when every stream the notice watches
-has heard from the server again; the sidebar's chip and the notice show the state without announcing
-it again.
-
-A lost connection is not shown the moment it is noticed. The web app waits 3 seconds, which covers a
-deploy's restart, a network handoff and a phone waking before its radio does, and most losses never
-show. That holds for every kind: a failed conversation read, a failed bootstrap, a bootstrap that
-finds Hermes down, and the browser going offline. From the first moment, actions that need the
-connection are refused: Send, Stop, the model picker, approvals, reply cards, and saving or listening
-to a reply. Until the loss shows, a refused Send or Stop says the connection is being checked, and a
-send refused from the keyboard says so in the composer's status line. Three cases skip the wait
-because there is nothing to wait out: a connection that needs setup or repair, Hermes never reached
-since the page opened, and live updates already down for 20 seconds.
-
-Once shown, the notice above the composer is one line, "Reconnecting…", with no button, because the
-app is already retrying. After 10 seconds it names what is down (the app, Hermes, or this chat alone)
-and adds Reconnect now and the connection details. It says a draft is kept only when the message box
-holds one. Assistants dim without a badge, and the sidebar says it once beside the account button. A
-chat whose own reads fail while bootstrap still finds Hermes connected shows the loss in that chat
-alone, not in the list of assistants; a failed read asks bootstrap at once which it is, and opening
-another chat leaves that loss behind. A notice stays at least 1 second from when it was drawn, so one
-that is answered as it appears does not flash. The live region announces a loss when the connection
-changes, not when a draft does.
-
-A failed conversation read is retried after 1, 2, 4, 8 and 16 seconds, then every 30. A bootstrap that
-failed, found Hermes down or brought a stale roster is retried after 1, 2, 4, 8 and 16 seconds, then by
-the 45-second poll. The server marks a roster stale by listing its rows as disconnected, while Hermes is
-down or after a roster read that failed; the list of assistants then keeps what each was doing for up
-to 30 seconds from the first stale roster, and takes who is on it from the server at once. A server
-with no roster from its current Hermes connection says so with bootstrap's `rosterUnknown`, and the
-list, the open chat and the saved home stay as they were.
-A hidden page or an offline device skips these and reads when shown or back online. A failure belongs
-to its chat, so it refuses nothing once that chat is closed or gone. The transport bounds
-stalled requests and backs off repeated failures. It never automatically replays
-messages or configuration changes; uncertain admissions are reconciled through
-Hermes's durable receipts.
-Known native admission refusals return the message to its draft. Crashes and
-unrecognized native errors keep the saved request ID for receipt checks.
-
-## Household experience
-
-The app opens **Today** unless you choose an assistant start page or follow a notification. Today shows pending decisions, scheduled work, recent results and files
-across your assistants. **Mark caught up** shares your recap position between
-web and iOS. Voice messages are transcribed into a draft for review before you
-send. The speaker button in any reply's action row reads that reply with Hermes speech on web and iOS, one reply at a time. On the web, **Talk** holds a live spoken conversation with an assistant: a voice model listens and answers out loud while the assistant does the work, passes on what the assistant says it is checking as it goes, and each assistant has its own voice. Assistants say what they will check before slow tool work, and the chat shows that as a quiet progress line; see [Progress lines](docs/HouseholdExperience.md#progress-lines). See [Live Talk](docs/HouseholdExperience.md#live-talk). Each message shows its time under its bubble beside its actions, and a reply made of several parts shows the time once, under the last. A name appears above a message only for another household member or a scheduled prompt. Copy is available on your own messages too.
-
-Hermes questions on web and iOS show each suggested answer as a card to tap, with
-**Write my own answer** last. A question that allows several answers shows checkboxes.
-On a computer, number keys pick an option. Choosing an answer moves on to the next
-question, and Send answers waits until every question has one.
-
-**Search & saved** searches native answers, attachment names, and routine previews across your visible assistants as you type. A match in an assistant's current conversation opens that chat at the message. Results mark the matching words. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
-
-Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
-
-The avatar at the top of home opens your profile menu: **Usage**, **Settings** and **Sign out**. **Usage** shows plan limits and credits for each provider account your assistants run on, as Hermes reads them from the provider: ChatGPT session and weekly limits with banked resets, Claude sign-in session and weekly limits, OpenRouter credits and key quota, Nous Portal credits, and any provider plugin that reports usage. Each account shows once, with the assistants that use it and whether it is only a fallback. A banked ChatGPT reset can be spent after a confirmation, which warns when no limit is used up yet. Providers without a usage endpoint say so. Usage reads each account at most once a minute, or every 15 seconds with Refresh.
-
-Attach images, PDFs, and text files with the paperclip, by pasting a screenshot or copied file into the message box, or by dropping files anywhere on the conversation. Markdown and CSV files are sent as plain text. Each attachment shows a thumbnail or file card with its upload progress; select an image to preview it. A message holds up to 10 files of up to 20 MB each. The browser shrinks a photo before it uploads: a JPEG or WebP of 1 MB or more is decoded with its EXIF rotation applied, capped at 2048 px on the long side, and re-encoded at quality 0.85 as WebP, or as JPEG where the browser cannot encode WebP (Safari), so a 5 MB phone photo uploads as a few hundred KB and loads quickly in the chat. Its chip reads "Preparing…" until then, and Send waits like any upload. The shrunk file keeps the photo's name with its new extension and is used only when it is smaller than the original. GIFs go whole so they keep their animation. PNGs go whole too: screenshots are flat color and text, which PNG stores smaller and sharper than a lossy format, and a PNG may be transparent. A JPEG or WebP under 1 MB goes whole, and so does one the browser cannot decode, since the server accepts it. HEIC and HEIF photos can be attached where the browser can decode them (Safari does; Chromium on Linux and Windows may not) and are converted the same way, because the server never receives HEIC; where the browser cannot, the photo is refused with that reason. The server's accepted types and the 20 MB limit are unchanged, and a file over the limit is refused before it is decoded. Unsupported files are explained instead of uploaded, and a failed upload offers Retry and blocks Send until you retry or remove it, so a message never goes out without a file you meant to include. Images in the conversation hold their space while they load. A sent image keeps the shape its preview had; an image this tab has not shown before, such as a reply's generated picture, holds a 4:3 frame while it loads, and if its own shape is more than 10% off it takes that shape once loaded. While you are scrolled up with that image's message in view, it waits until the message leaves the view or you return to the end of the chat, so nothing you are reading moves; in a chat too short for the message ever to leave the view, it takes its shape at once, and what follows it moves by the difference. A tall image, such as a phone screenshot, sits in a narrower card at the 400 px height cap instead of between bars. An image that fails to load keeps its frame and says it couldn't load. Hermes reports no image sizes.
-
-An empty conversation on web and iOS offers a role discussion using the assistant's description and adds it to the draft. Settings include a start page, quiet hours in your timezone, and notification batching. Quiet hours delay notifications except security alerts; decisions and failures skip batching outside them. Digest notifications open Today.
-
-The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
-
-The iPhone and iPad app also works with Siri, Shortcuts and Spotlight: ask WildBots to open an assistant or Today, or to put a question in an assistant's draft for you to review and send. Assistant names show in Spotlight search, and the Assistants widget can be edited to show only the assistants you choose. None of these hold your sign-in token, and they clear when you sign out. An iPad with a keyboard opens pinned assistants with Cmd+1 to 9 and any destination with Cmd+K.
-
-Assistant settings has five sections: **Profile** (name, description, sharing,
-avatar, live Talk voice), **Behavior** (instructions, harness, model, tools and skills),
-**Access** (logins, always-allowed commands and, in Advanced presentation, MCP servers),
-**Automation** (routines) and **Memory & learning**. The harness is the agent that runs
-the assistant's turns: Codex, Claude Code, Grok or Pi, with Hermes kept for assistants
-already on it. Simple presentation hides the choice while Hermes is the only one. On a phone it
-opens on that list. One **Save changes** saves everything in Profile, Behavior and
-Access; it stays visible on other sections while those changes are unsaved.
-Memory keeps its own Save, and list actions such as adding a routine or a login
-save at once.
-
-**Memory & learning** lets you inspect, correct and forget native
-Hermes profile memory. Existing conversations keep their memory snapshot until
-a new Hermes session starts. In **Behavior**, enable interactive replies to add
-checklists, itineraries and reviewed calendar proposals to assistant answers.
-Your checks and itinerary notes are saved for your account.
-
-Assistant replies can also contain interactive charts, calculators, diagrams and
-small tools inline on web and iOS. These generated views follow your theme and
-resize to their content. **Reset view** starts over, and **View source** shows the
-HTML. Their controls affect only the view; changes reset when you reopen the
-conversation. Hermes receives the format instructions automatically in WildBots
-conversations. See [inline views](docs/HouseholdExperience.md#inline-views) for
-the reply format and supported behavior.
-
-Assistants can also hand you an email draft to open in your mail app or Gmail, or
-a short form to fill in. **Send answers** posts your answers as your own message
-without touching your draft. When an assistant connected to T3 Code starts a
-thread, the chat shows a card with **Open in T3 Code**. These work on web and
-iOS. See [email drafts and forms](docs/HouseholdExperience.md#email-drafts-and-forms)
-and [T3 Code threads](docs/HouseholdExperience.md#t3-code-threads).
-<!-- BEGIN draft revisions -->
-
-When an assistant revises an email draft from earlier in the chat, the new draft
-marks the words it added and removed, with **Hide changes** to read it clean.
-<!-- END draft revisions -->
-
-**Routines** includes morning brief, meal plan and VPS health recipes, schedule
-previews in the actual Hermes timezone, and **Try once** with durable run
-receipts. See the [household experience guide](docs/HouseholdExperience.md) for
-controls, supported reply cards, voice requirements and recovery behavior.
-
-In Advanced presentation, routine **Advanced** options include skills,
-model/provider pins, toolsets, profile scripts, script-only runs and context from
-other routines; Simple presentation keeps saved overrides without showing them.
-Behavior's skill rows read and lock installed skills, and **Memory & learning**
-reviews proposed skill changes. New work
-requires an explicit start. Memory edits apply to the canonical conversation at
-the next safe turn boundary, with pending/applied status and preserved history.
-
-Each routine run also appears in its assistant's conversation, in time order with the
-messages, as a collapsed card: a status dot, the routine's name, when it ran and a line of
-its output. Failed, running and undelivered runs say so in words beside the dot. Open a
-card to read the output with its files, save it, or open all results. A run whose output
-Hermes delivered into the chat shows once, as that message. Cards follow the loaded
-history, so paging back brings in earlier runs, and they update while the chat is open.
-**Hide this routine in chat** on a card, with Undo, or **Show runs in chat** in the
-routine's settings, keeps a routine such as a certificate check out of your chat. It
-is your own setting and doesn't change the routine for anyone else. Run status needs the
-current Hermes add-on; with an older one, runs show as "Status unknown".
-
-Use **View results** beside a routine to read its saved runs, including trials.
-Routine notifications name the routine and quote the start of its answer, or the
-error for a failed run, and open this history directly. Results stay within the selected
-Hermes profile; a run with only a saved preview says so.
-
-**Group chats** lets 2–6 local assistants discuss a task in one room. Rooms are rows
-in the home list beside the assistants, with overlapping member faces, the last
-message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
-the roster's order and do not jump. Home reads Hermes's room catalog when the household event stream
-says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback,
-as it does for a catalog that says group chats are unsupported.
-While any household stream is open, the server checks the catalog once for everyone at most every
-30 seconds, and right away after a group or assistant change made in the app, and tells only the people
-whose visible rooms changed. It adds each room's newest message to the catalog and re-reads a room's log
-only when the room has a newer message, so home never polls room logs. Home has no group unread dot, since
-the app keeps no read position for rooms. Choose a room to open it like a conversation
-(`?view=group&room=ID`; the old `?view=groups` link opens home). Make a group from the **+** button's
-New group chat, which opens it. Create a
-named group, address assistants with `@handle` (typing `@` suggests members),
-reply in a thread, approve a pending action or stop the discussion. Messages show
-which household member sent them, and new messages arrive live. While assistants work, the room
-names each one, as "Planner is working..."; Advanced presentation adds the tool it is in and its
-round, such as "Round 2 of 3". **Group settings** in the room sets its purpose, shared notes
-that every assistant reads from the next message on, and an optional lead assistant who picks who
-answers a message that names no one; the room then shows each hand-off. Anyone who can open the
-room can change them. A routine can also post its results in group chats you choose in its
-editor. Its posts show under the routine's name, marked Routine, and assistants answer one only when
-it @mentions them. A personal assistant's routine can post only in groups with one of your personal
-assistants. While a routine posts in a group, a sharing change, or a new assistant reusing a deleted
-one's name, that would let someone who can't see the routine's assistant read the group is refused
-until that group is removed from the routine. A group that lists a deleted assistant closes for everyone. These need a Hermes with room
-activity and settings, such as `3a1e9ef`; with an older one the room says only that assistants
-are discussing, and settings and routine posts stay hidden.
-Hermes owns the persistent coordinator.
-If that coordinator is unavailable, rooms remain readable and sending is disabled.
-After an uncertain send or creation, retry the saved request to check its status
-without creating a duplicate. Bot messages appear in chat with the sender's and recipient's
-avatars and names. Consecutive exchanges collapse into a counted group, with sending and
-failed delivery status visible in its summary. Single exchanges stay readable. Search opens
-the matching group, and known assistants offer a link to their chat. History uses the same display.
-Conversation activity keeps scheduled-job handoffs, subagents, background processes, and diagnostics
-in separate collapsed sections in both presentations. Expand them to inspect the original input and results. Scheduled
-answers stay in the conversation with a Scheduled label. Decisions and requests
-for input stay visible. Unknown messages from other clients remain in chat;
-only recognized automation sources move into activity.
-
-Assistant settings > **Access** manages the selected Hermes profile's encrypted
-login vault. Native login, code, vault-unlock and secret requests appear inline
-with masked fields, outside chat and drafts. Each card shows when it is sending and
-when Hermes took the answer, then folds to one line. Sending a message instead
-closes the request so the assistant reads it and can ask again. Ownership and source controls follow
-Hermes. See [passwords and logins](docs/PasswordsAndLogins.md) for storage scope,
-external password managers and uncertain-request recovery.
-
-## Chatting
-
-Each finished reply offers **Copy reply**, **Share reply** where the device can share,
-**Save reply** and **Quote in reply**. On a computer they appear when you point at or
-tab to the reply; on touch screens and in the iOS long-press menu they are always
-there. Select part of a web reply to quote just that part. In the iOS app, **Select text**
-in the long-press menu of a reply or your own message opens it in a sheet where you can
-select any part and copy it; a reply shows there as rendered, without Markdown marks.
-Code blocks are colored by language, and tables can be copied as Markdown or CSV.
-
-Replies read in bubbles. Each run of a reply's paragraphs, lists, quotes and headings
-sits in one bubble up to 600 px wide, about 77 characters a line, while tables, code,
-images and cards stay full width between them, so a reply can read bubble, table,
-bubble. A list or quote that holds code, a table or an image stays full width too, as in
-Classic. Progress lines, tool work and cards keep their own look. A reply that is still
-arriving groups the same way, so saving it usually moves nothing. A link whose definition
-comes later in the reply redraws the reply once that definition arrives, which clears a
-selection inside it. A table wider
-than the chat fades at each side that has more to scroll to. Your own messages hug
-their text at the right edge. In Settings, **Chat style** switches between **Bubbles**
-and **Classic**, which shows replies as flat text across the column, and **Your
-messages** chooses **Tinted** or **Solid color**. Solid fills your messages with the
-assistant's avatar color, darkened where needed so white text keeps at least 4.5:1
-contrast; a chat without an avatar color, such as one with a photo, keeps the tint.
-Both are saved with your preferences, like Appearance, so they follow you to your other
-devices. Group chats follow Chat style too: in Bubbles your messages sit at the right and
-everyone else's at the left under their name, and Solid color fills yours with the app's
-green, since a group has no one assistant's color.
-
-When a reply fails, **Retry** under it sends your message again without touching
-your draft. A failed turn can be retried once, by anyone, from any device: a second
-tap, tab or phone gets the first retry's result instead of starting another turn.
-
-After you send, your message moves near the top and the reply grows below it.
-While it grows, a short stretch of bold, italics, strikethrough, inline code or a link waits at
-the end and appears whole once its closing marker arrives, instead of flashing as raw Markdown.
-One longer than about a short sentence shows as typed until it closes. A table header waits
-while its line is typed, shows as typed while the delimiter row, the `| --- |` line under it,
-arrives, and becomes a table once that row is recognized. Code blocks show every character as
-it arrives, and a code block still arriving keeps your text selection.
-On the web, the reply keeps growing across tool calls: after each tool the server reads the
-running turn itself and sends its saved parts with the reply, so text resumes about one Hermes
-read later instead of waiting for the chat to reload. The iOS app still reloads after each tool.
-Scrolling up stops the view from following; it follows again once you return to
-the end. Each finished turn folds its tool calls and delegated work into one row,
-such as "Worked for 2m 14s · 3 tool calls". Expand it for the details. While the
-assistant works, one live line shows its current tool and, in Advanced, its latest
-reasoning. Decisions and requests for input stay outside the fold.
-
-**Find in chat** (Cmd/Ctrl+F on web, Find on iOS) matches loaded messages at once and
-adds older matches from the conversation's history; choosing one opens the chat at
-that message. On a wide web window with a mouse or trackpad, a long chat also shows a
-**message rail** at its right edge: one tick for each message a person sent among the
-loaded messages, with the turn in view marked. Hovering or focusing a tick previews the
-message and the start of its reply; choosing one brings that message to the top of the
-view. When more ticks exist than fit, the rail shows the ones around the turn you are
-reading, with a chevron above or below where more are hidden. The rail is one tab stop;
-Up, Down, Home and End reach every loaded message you sent.
-It does not appear on phones. A status area above the message box gathers send problems, the
-interrupted-task review, waiting decisions with **Review**, and connection trouble,
-most urgent first.
-
-On a computer, Cmd/Ctrl+K opens a command palette for assistants, group chats, Today,
-Search, Settings and appearance. Cmd/Ctrl+1 to 9 open pinned assistants in the
-installed app (browsers keep those keys for tabs), Cmd/Ctrl+. stops the current
-reply after asking, and `?` lists every shortcut. An iPad with a keyboard has Cmd+K
-"Go to…" and Cmd+1 to 9. In an empty message box, Up recalls your earlier messages
-in that chat. With a mouse or trackpad, Enter sends and Shift+Enter starts a new line.
-On a touch screen with no mouse or trackpad, Return starts a new line and the Send button
-sends. Ctrl+Enter or Cmd+Enter sends on every device. This holds in assistant and group
-chats alike, and follows a trackpad connected or removed while the page is open. The app
-cannot tell a hardware keyboard from an on-screen one, so a tablet with a keyboard but no
-trackpad also gets a new line from Enter, and sends with Ctrl+Enter, Cmd+Enter or the Send
-button. `src/app/enter-key.ts` holds the rule. While a Japanese,
-Chinese or Korean input method is composing a word, Enter, Escape and the arrow keys
-belong to it, in every browser including Safari, so confirming a word never sends the
-message, moves a find, or picks a palette entry. Pasting 32 KB of text or more attaches it as `Pasted text.txt`. Pinning
-or moving an assistant on home shows Undo for five seconds. Web text follows the
-browser's text size setting.
-
-On a phone, the message box sits directly above the on-screen keyboard and the latest
-message stays in view as the keyboard opens and closes. Android browsers resize the page
-for the keyboard through the viewport's `interactive-widget=resizes-content`. Safari on
-iPhone and iPad and the installed iOS web app ignore it through iOS 27.2, so
-`src/app/keyboard-viewport.ts` sizes the app to the visible area while the keyboard is up.
-WebKit added the setting in the iOS 27.3 beta ([bug 259770](https://bugs.webkit.org/show_bug.cgi?id=259770)),
-where a report says the field still ends up behind the keyboard; the app's behavior on that
-beta is unverified. The code compares the visible area with the page instead of checking the
-browser, so it steps aside wherever the browser resizes the page itself. A pinch zoom leaves
-the app's size alone, except one within 1% of normal scale, which counts as unzoomed.
-
-When the visible area is too short for everything, the transcript gives up its space first,
-then the notices, the Talk panel, the attachment tray and the message box, which scroll inside
-their own boxes down to one line of text, and last the header, cut from the top. Send and Stop
-stay on screen whenever the area is at least as tall as one line of text and the row of
-buttons, about 112 pixels. A shorter area, as in landscape on a small iPhone where Safari's
-bars take most of what the keyboard leaves, keeps the app at full height and lets Safari
-scroll the message box into view. A group chat's composer stays at the bottom of the chat as it
-scrolls and follows the same order. `.agents/tools/check-send-visible.mjs` checks both in Chromium.
-On a harness that cannot steer a running reply, a message sent during one waits in a
-queue above the message box. Each waiting message can be edited, moved, sent now or
-cancelled until its turn starts; the queue hides when it is empty and never shows for
-Hermes. See [native API](docs/native-api.md#harnesses-and-the-message-queue).
-Pressing Send or Stop leaves focus in the message box, so the keyboard stays up between
-messages. Attach and Talk switch to the file picker or your voice, so they let it close.
-
-## Hermes updates and activity
-
-Open Hermes and updates in web Settings, or Hermes updates in iOS
-Preferences. The entry disappears once a server that runs harnesses has no
-assistant left on Hermes; while the roster is unknown it stays, since it holds the
-restart that recovers Hermes. Administrators can check the next official Hermes revision before
-choosing to upgrade. Checking stages the exact source and tests it in a disposable
-home. It never installs an update. Progress survives closing the client and
-restarting the app server. An uncertain request is reconciled without replay.
-
-The installer must enable the [Linux upgrade hooks](docs/HermesUpgradeLinux.md)
-and administrator allowlist first. Installation waits for native work to finish,
-backs up the current source and runtime, and verifies the original sign-in and
-connections before releasing maintenance. Failed verification restores the
-previous version when rollback is safe. A failed or uncertain recovery keeps
-maintenance closed. Administrators can retry a failed update, request safe
-cancellation, or restart and verify Hermes when the recorded operation allows it.
-Cancellation restores the previous version when needed; recovery never clears
-maintenance without verifying the resulting runtime. Unverifiable legacy failures
-still require installer repair. The app does not silently update Hermes.
-
-The add-on turns off the native Hermes dashboard's own updater, which would skip
-qualification and disable the add-on. The dashboard hides its update control, and
-its update routes refuse with a message pointing to the app. Running
-`hermes update` on the host still bypasses the app; the capability matrix
-describes recovery.
-
-Conversations show an animated avatar inline after the latest message while
-Hermes thinks or uses tools. A message sent while nothing is running shows the
-assistant thinking at once, beside the message, and Hermes's own report takes over
-the same row without a second announcement, also when Hermes's saved copy of the
-message arrives one read before that report. That early row goes if the send is
-refused, fails or is unconfirmed; if its request has not answered within 5 seconds,
-when the message reads "Sending…" alone until Hermes accepts it; and if Hermes's
-copy arrives and no report of the turn follows within 5 seconds. A reply already
-after the copy ends the row on that read. A failed or interrupted report can be
-the last turn's while Hermes admits the message, since Hermes saves the message
-before it opens the run. When Hermes's answer says the turn started, only a read
-the server asked after that answer arrived ends the row on such a report, and that
-can be the read that brings the copy; a read asked earlier never does, however late
-it arrives. Without that answer, as from an older add-on, the row keeps thinking
-through the read that brings the copy, until the next read or the 5 seconds; a turn
-that fails before any read sees it running therefore shows its failure, and its
-Retry, that much late, and two reads asked during one admission can still show the
-last turn's Retry. A message sent while the assistant works adds none, and neither
-does one Hermes puts into the running turn. Stop appears once Hermes reports the
-turn. Hermes's typed stop phrase, which acts only while Hermes's own voice mode is
-on for the session, admits nothing: the message leaves the chat, its words and files
-stay in the server's draft and in the web composer, and the composer says Hermes
-ended its voice chat. The iOS app does not read this yet and empties its own
-composer as for any accepted message. WildBots never turns that mode on. An older
-add-on reports the phrase as accepted like any message, which shows thinking for
-the echo's 30 seconds with nothing running. Thinking keeps the character visible with a gentle
-tilt and upward gaze. Completed work leaves the final reply without a separate
-Done status. Tool calls and delegated work appear in counted accordions inside each turn's fold.
-Advanced view adds tool inputs, outputs, errors and timestamps, plus reasoning
-Hermes exposes. Approval buttons show submission feedback immediately. Stop
-replaces Send while a response is active and the draft has no text or attachments;
-adding a draft brings Send back for guidance. Sending spins the Send button; a
-notice with Retry appears only when a send ends without a receipt. Replies do not
-repeat the assistant's name, and tool-call rows without reply text stay in the
-tool accordion. While a recognizable tool runs, the web avatar holds a small prop:
-a magnifying glass for search and browsing, a laptop for terminal and code, a book
-for reading, or a notepad for writing. Disconnecting marks activity unknown;
-the last tool event is not evidence that execution is still running.
-
-Drawn avatars are one flat silhouette with two eyes, picked from 54 shapes in four
-groups: Classic, Objects, Creatures and Seasonal. Both web and native iOS offer every
-shape, and each keeps the eye, accessory and color controls and the working and
-thinking animation. A shape takes whichever color is already chosen, except the six
-seasonal ones (Pumpkin, Bat, Turkey, Santa hat, Reindeer and Snowman), which arrive in
-their own. Very light bodies get a soft edge so they stay visible on the light theme.
-Twenty-three shapes come from Open Bot Avatar (MIT); the rest are original artwork.
-[docs/AvatarShapes.md](docs/AvatarShapes.md) lists each shape's source and how to add
-one.
-
-Open Artifacts from the assistant's details (tap its name in the conversation header) to browse its generated
-outputs and shared attachments. Search filenames, filter by type, and preview
-images, text, or supported media. PDFs and other files can be opened or downloaded.
-External file sources open only when you choose their link.
-<!-- BEGIN reply files -->
-
-A reply whose turn produced files it does not already show as attachments lists
-them as chips under it, up to four and then **+N more**. A chip opens Artifacts on
-that file; **+N more** opens the whole list. Files you shared yourself are not chips.
-<!-- END reply files -->
+- **Shared controls:** `src/components/ui` (Tailwind 4 with `tw:` prefix + shadcn tokens mapped to WildBots CSS variables; Base UI menus stay lazily loaded outside the initial bundle).
+- **Drawn avatars:** 54 flat-silhouette shapes across Classic, Objects, Creatures, and Seasonal, shared across web and iOS ([docs/AvatarShapes.md](docs/AvatarShapes.md)). Standalone specimen at `/avatar-specimen/` in Vite dev.
+- **Service worker & fast boot:** `public/boot.js` starts `/api/bootstrap` and applies the saved theme before app JS loads; `scripts/service-worker.js` caches the app shell, warms lazy chunks in the background, serves retired assets from `dist/previous-release.json` across deploys, and offers **Refresh** when a new release installs.
+- **Crash reports:** Web render/runtime errors and iOS MetricKit crashes/hangs report to `POST /api/client-errors`.
 
 ## Validate
 
 ```sh
-npm test
-npm run lint
-npm run test:py
-npm run lint:py
-npm run build
-npm run test:e2e
-python3 .agents/tools/source-state.py
+npm run verify:ci          # lint, typecheck, build, and Vitest in parallel
+npm run build:server:bun   # Bun server bundle
+npm run smoke:bun          # Bun runtime smoke test
+npm run test:py            # Python unit tests
+npm run lint:py            # Ruff check (Python 3.12 target)
+npm run test:e2e           # Playwright Chromium + WebKit smoke suite
+.agents/tools/check-all    # Full local validation gate (handles WebKit container on Fedora)
 ```
 
-`npm test` runs the application tests with Vitest. It refuses to start on a Node
-outside the `engines` range in `package.json`, and `.npmrc` makes `npm ci` refuse too:
-older Node 24 releases hang the event-stream tests. `npm run lint` runs type-aware oxlint (engine: tsrs-lint) over the
-TypeScript and JavaScript, with warnings failing the run. `npm run test:py` runs every
-Python test file it discovers in `tests/*_test.py`, `scripts/*-test.py` and
-`scripts/spike/*_test.py`, one subprocess each, and fails if a test-looking file
-sits outside those paths. Pass file paths to run a subset, for example
-`npm run test:py -- tests/hermes_vault_test.py`. Use Python 3.14, which the managed Hermes runtime uses. Deployment tools also run under the host's
-system Python 3.12, so Ruff targets 3.12 syntax. Test files use `unittest`, and a file passes only if at least
-one test ran. A file whose tests all skip, such as the system terminal test
-without `tmux`, shows SKIP locally and fails when `CI=true`.
-`npm run lint:py` runs ruff for undefined names and likely bugs. Install the
-version pinned in `.github/requirements-ci.txt`. CI runs both in its Python job.
-
-The direct-route tests listen on a second loopback address, `127.0.0.2`. Linux has all of
-`127.0.0.0/8`; macOS has only `127.0.0.1` until `sudo ifconfig lo0 alias 127.0.0.2 up`, which
-lasts until a restart. To keep it, run that at boot from a launch daemon:
-
-```sh
-sudo tee /Library/LaunchDaemons/dev.agentinterface.loopback-alias.plist >/dev/null <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>dev.agentinterface.loopback-alias</string>
-  <key>ProgramArguments</key><array>
-    <string>/sbin/ifconfig</string><string>lo0</string><string>alias</string><string>127.0.0.2</string><string>up</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-</dict></plist>
-PLIST
-sudo launchctl bootstrap system /Library/LaunchDaemons/dev.agentinterface.loopback-alias.plist
-```
-
-`npm run test:e2e` runs Playwright against Chromium and WebKit. Run `npm run build`
-first, and `npx playwright install chromium webkit` once per Playwright version. On a Linux host
-without WebKit's system libraries, such as Fedora, run the WebKit project in Playwright's container
-instead; `.agents/tools/check-all` does this on its own:
-`podman run --rm --security-opt label=disable --userns=keep-id --ipc=host -v "$PWD:$PWD" -w "$PWD" -e HOME=/tmp mcr.microsoft.com/playwright:v1.65.0-noble npx playwright test --project=webkit`.
-The image version is the installed `@playwright/test`. A test that routes requests with
-`page.route` or `context.route` must set `test.use({ serviceWorkers: "block" })`, or pass
-`serviceWorkers: "block"` to a context it makes with `browser.newContext`: WebKit sends a
-worker-controlled page's requests past the routes, and `e2e/fixtures.ts` makes such a route fail
-at once in both browsers, in fixtures as in tests. Specs import `test` and `expect` from
-`e2e/fixtures.ts`; lint refuses value imports from Playwright's test package anywhere else in `e2e/`. The accessibility spec
-scans home, a chat with a reply, Settings, assistant details and Today at phone and desktop sizes in
-light and dark. It fails on serious and critical axe WCAG 2.2 AA violations. `e2e/server.ts`
-starts the real app server and built client on loopback ports 4173 and 4174, in memory,
-with local sign-in and a scripted assistant, so it never contacts Hermes, Google or the
-network. It covers sign-in, sending a message and receiving the reply over the live event
-stream, the service worker opening the app offline and recovering, a deploy whose new shell
-reaches the next load and whose release is offered until taken, a deploy whose worker cannot
-install still reaching the next load, a lazy screen whose file a deploy retired offering
-Reload without reloading on its own, a notification's chat opening in the open window
-without a reload, the app badge written through the service worker across a sign-out and
-another member's sign-in, and no page errors,
-console errors or CSP violation reports. It runs in full Chromium (`channel: "chromium"`, which
-`npx playwright install chromium` installs beside the headless shell): the shell crashes the
-page when a service worker calls the badge API, which the worker does for every page it controls,
-and it has no back-forward cache. Playwright WebKit skips the worker badge instrumentation and the two back-forward cache tests. It uses a fake push service. It does not cover real Hermes behavior, push
-delivery, Google sign-in, the iOS app, or other browsers. Main pushes and manual CI runs execute it in the `browser` job, one job per
-browser in Playwright's container image, pinned by digest, while PR CI excludes it. Each job uploads its report and traces when it fails.
-
-The [validation ledger](docs/ledger/README.md) distinguishes application tests,
-real Hermes execution using a deterministic local provider, visual checks, and
-acceptance that needs a physical phone or configured external service. Tests with
-a runtime double do not prove Hermes integration. Simulated push checks do not
-prove delivery to an installed phone app while it is closed.
-
-`npm run verify:ci` runs lint, typecheck, build and unit tests in parallel. `.agents/tools/check-all` runs every local check, chooses a free browser-suite port and queues the heavy suites across worktrees; see the [tools index](.agents/tools/README.md).
-
-Pull requests run the application tests, lint, production build and Python syntax checks
-on both supported Node versions. Native builds and simulator tests run on the
-Mac mini using Xcode 27.0. The isolated Hermes probes remain a separate
-explicit run using the capability matrix's reproduction instructions.
-
-The standalone [avatar specimen](avatar-specimen/index.html) is available at
-`/avatar-specimen/` in the Vite development server. Its
-[reference inventory](docs/AvatarReferenceInventory.md) records observed geometry,
-controls, motion and reuse restrictions. All shipped avatar artwork is original.
-
-The [settled plan](docs/Plan.md) remains the scope and acceptance brief.
-Nicolas authorized hosting this application at `agentui.wildflowersranch.com`
-on the existing Hermes VPS. The [deployment record](docs/Hosting.md) tracks
-that installation and any remaining acceptance steps.
-
-## WildBots for Mac
-
-[`mac/`](mac/) holds WildBots for Mac, a menu bar app that lets your personal
-assistants run commands, read and write files in folders you choose, and take a
-screenshot on your Mac, unattended when you allow it. The Mac decides what each
-assistant may do and connects out to this server, so it needs no open port. Linked
-Macs appear in Settings > Macs, where Revoke disconnects one at once. The server
-turns Mac links on with `MAC_LINK_KEY`; see [WildBots for Mac](docs/MacLink.md) for
-setup, the confinement model, its limits and the protocol.
-
-## Native iOS
-
-The SwiftUI app lives in [`ios/`](ios/). It uses the same authenticated application
-API, bot configuration and canonical conversations as the web client. Its
-[parity record](ios/Parity.md) distinguishes implemented features, simulator
-checks and external acceptance.
-
-Connect to the app server's HTTPS origin. HTTP is limited to loopback development,
-including an iOS simulator on the server's Mac. A physical phone needs an HTTPS
-address it can reach. Household sign-in opens the system authentication browser;
-the resulting app token stays in Keychain, scoped to that server.
-
-### LAN and tailnet routes
-
-Set `DIRECT_ROUTES=lan`, `tailnet` or `lan,tailnet` to let the iOS app reach this
-server over the household network or a Tailscale (or Headscale) tailnet when it
-can, instead of the public origin. The server opens an HTTPS listener on
-`DIRECT_PORT` (default 3443) on each matching private address, and adds and drops
-them as addresses change. It finds LAN addresses on ordinary adapters, never
-container bridges or other VPNs, and tailnet addresses on Tailscale's adapter. A
-cloud server should list only `tailnet`, since its provider's private network is no
-household's LAN. Allow `DIRECT_PORT` through the host firewall on those interfaces
-only, and through the tailnet's access rules for the phones that should use it. Linux
-accepts a packet for any of its addresses on any interface, so the firewall, not the
-listener's address, decides who can connect.
-
-Each listener uses a self-signed certificate kept in `DIRECT_TLS_DIR`, by default
-`direct-tls` beside the database. The app learns each route and the certificate's
-fingerprint over the HTTPS origin, then pins it. The listener serves only the signed-in
-native API; sign-in and the web app stay on the origin. Deleting the directory makes
-a new certificate at the next start, and the app picks it up the next time it
-reaches the origin. See [direct routes](docs/native-api.md#direct-routes) for the
-contract.
-
-Native notifications require the `APNS_*` settings in `.env.example` and a signed
-app whose bundle ID and APNs environment match the server. The
-[native API contract](docs/native-api.md) documents sign-in, expiry and device
-registration. Apple signing and closed-app notification delivery on a physical
-phone remain external acceptance work. Adding the app does not deploy the server
-or configure an Apple account.
-
-The [runtime assessment](docs/HarnessAssessment.md) records the tradeoffs in
-keeping Hermes, replacing it, or wrapping existing executors such as Codex and
-Claude Code. The [runtime plan](docs/RuntimePlan.md) replaces Hermes with wrapped
-harnesses step by step; Hermes remains the execution owner until then.
+- `npm run typecheck` uses pinned Oxc `tsrs --noEmit`.
+- Vitest runs all application tests with `isolate: false` in shared workers. Replay file order with `npm test -- --sequence.shuffle.files --sequence.seed=731 --maxWorkers=1`.
+- Direct-route tests listen on `127.0.0.2` (built-in on Linux; on macOS add `sudo ifconfig lo0 alias 127.0.0.2 up`).
+- See [docs/ledger/README.md](docs/ledger/README.md) for validation logs and red-run proofs, and [docs/Dependencies.md](docs/Dependencies.md) for tool versions.

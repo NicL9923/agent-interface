@@ -93,7 +93,7 @@ describe("native group adapter", () => {
       supported: true,
       canSend: true,
       settings: true,
-      routineDelivery: false,
+      routineDelivery: true,
       rooms: [],
     });
 

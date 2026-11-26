@@ -13,6 +13,15 @@ export interface DirectRoutesConfig {
   /** Holds the listeners' private key and certificate. Owner-private. */
   stateDirectory: string;
 }
+export interface ComputerDesktopConfig {
+  stateDirectory: string;
+  vncPort: number;
+  cdpPort: number;
+  display: string;
+  geometry: string;
+  vncBin?: string;
+  chromeBin?: string;
+}
 export interface Config {
   production: boolean;
   host: string;
@@ -31,6 +40,7 @@ export interface Config {
   integrationAdmins?: string[];
   computerTerminalAdmins?: string[];
   computerTerminal?: { stateDirectory: string; cwd: string; python: string };
+  computerDesktop?: ComputerDesktopConfig;
   /** Optional LAN and tailnet listeners the iOS app prefers when it can reach them. */
   directRoutes?: DirectRoutesConfig;
   /** Shared secret authenticating Mac link relay requests. Unset turns Mac links off. */
@@ -100,6 +110,36 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       stateDirectory: env.COMPUTER_STATE_DIR!,
       cwd: env.COMPUTER_TERMINAL_CWD!,
       python: env.COMPUTER_PYTHON!,
+    };
+  }
+  if (env.COMPUTER_DESKTOP_ENABLED && !["true", "false"].includes(env.COMPUTER_DESKTOP_ENABLED))
+    throw new Error("COMPUTER_DESKTOP_ENABLED must be true or false");
+  if (env.COMPUTER_DESKTOP_ENABLED === "true") {
+    const stateDirectory =
+      env.COMPUTER_DESKTOP_DIR?.trim() ||
+      (config.database === ":memory:" ? "" : join(dirname(config.database), "computer"));
+    if (!stateDirectory.startsWith("/") || stateDirectory.includes("\0"))
+      throw new Error("COMPUTER_DESKTOP_DIR must be an absolute path");
+    const vncPort = Number(env.COMPUTER_VNC_PORT || 5901);
+    const cdpPort = Number(env.COMPUTER_CDP_PORT || 9222);
+    if (!Number.isInteger(vncPort) || vncPort < 1024 || vncPort > 65535)
+      throw new Error("COMPUTER_VNC_PORT must be a port number between 1024 and 65535");
+    if (!Number.isInteger(cdpPort) || cdpPort < 1024 || cdpPort > 65535 || cdpPort === vncPort)
+      throw new Error("COMPUTER_CDP_PORT must be a distinct port number between 1024 and 65535");
+    const display = env.COMPUTER_DISPLAY?.trim() || ":99";
+    if (!/^:\d{1,3}$/.test(display))
+      throw new Error("COMPUTER_DISPLAY must be an X display such as :99");
+    const geometry = env.COMPUTER_GEOMETRY?.trim() || "1280x800";
+    if (!/^\d{3,4}x\d{3,4}$/.test(geometry))
+      throw new Error("COMPUTER_GEOMETRY must be WIDTHxHEIGHT such as 1280x800");
+    config.computerDesktop = {
+      stateDirectory,
+      vncPort,
+      cdpPort,
+      display,
+      geometry,
+      ...(env.COMPUTER_VNC_BIN?.trim() ? { vncBin: env.COMPUTER_VNC_BIN.trim() } : {}),
+      ...(env.COMPUTER_CHROME_BIN?.trim() ? { chromeBin: env.COMPUTER_CHROME_BIN.trim() } : {}),
     };
   }
   if (config.macLinkKey !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(config.macLinkKey))

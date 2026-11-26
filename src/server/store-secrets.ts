@@ -28,6 +28,26 @@ type SecretRow = {
 const keyName = "wildbots_vault_key";
 const keyCheckName = "wildbots_vault_key_check";
 const householdScope: SecretScope = Object.freeze({ kind: "household", id: "" });
+const reservedModelSecretPrefixes = ["login:", "mcp:", "integration_key:"] as const;
+
+export function isReservedSecretName(name: string): boolean {
+  return reservedModelSecretPrefixes.some((prefix) => name.startsWith(prefix));
+}
+
+function extractNestedSecretValues(name: string, rawValue: string): string[] {
+  if (!name.startsWith("login:") && !name.startsWith("mcp:")) return [rawValue];
+  try {
+    const parsed = JSON.parse(rawValue) as Record<string, unknown>;
+    const values: string[] = [];
+    for (const field of ["password", "otpSecret", "token"]) {
+      const value = parsed[field];
+      if (typeof value === "string" && value.length >= 6) values.push(value);
+    }
+    return values.length ? values : [rawValue];
+  } catch {
+    return [rawValue];
+  }
+}
 
 function visibleScopes(bot: SecretBotContext): SecretScope[] {
   return [
@@ -206,6 +226,7 @@ export class SecretRepository {
     name: string,
     signal?: AbortSignal,
   ): Promise<string | undefined> {
+    if (isReservedSecretName(name)) return undefined;
     for (const scope of visibleScopes(bot)) {
       signal?.throwIfAborted();
       const row = this.db
@@ -232,8 +253,9 @@ export class SecretRepository {
       const rows = this.db
         .prepare("SELECT name FROM bot_secrets WHERE scope_kind=? AND scope_id=?")
         .all(scope.kind, scope.id) as { name: string }[];
-      for (const { name } of rows) names.add(name);
-      for (const name of (await this.headnetVault?.listSecrets(scope)) ?? []) names.add(name);
+      for (const { name } of rows) if (!isReservedSecretName(name)) names.add(name);
+      for (const name of (await this.headnetVault?.listSecrets(scope)) ?? [])
+        if (!isReservedSecretName(name)) names.add(name);
     }
     signal?.throwIfAborted();
     return [...names].sort();
@@ -256,7 +278,10 @@ export class SecretRepository {
       const rows = this.db
         .prepare("SELECT name,ciphertext,iv,tag FROM bot_secrets WHERE scope_kind=? AND scope_id=?")
         .all(scope.kind, scope.id) as (SecretRow & { name: string })[];
-      for (const row of rows) known.add(this.decrypt(row, scope, row.name));
+      for (const row of rows) {
+        const decrypted = this.decrypt(row, scope, row.name);
+        for (const value of extractNestedSecretValues(row.name, decrypted)) known.add(value);
+      }
     }
     // A harness may put a tool result in JSON before emitting it as log text.
     const values = [...known].filter((value) => value.length >= 6);
