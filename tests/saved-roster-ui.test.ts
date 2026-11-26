@@ -658,6 +658,9 @@ describe("using the saved home before bootstrap answers", () => {
     expect(mainLandmark()?.textContent).toContain("Connecting to your household");
     // The person opens on their default assistant; Today, chosen there, wins.
     await answer("GET /bootstrap?roster=lean", 200, one);
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(calls.indexOf("GET /today?pending=1")).toBeGreaterThan(
       calls.indexOf("GET /bootstrap?roster=lean"),
     );

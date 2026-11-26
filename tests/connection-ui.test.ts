@@ -1154,6 +1154,7 @@ it.each(["", "?bot=shared"])(
     );
     history.replaceState(null, "", `/${query}`);
     await renderApp();
+    await loaded();
     expect(!!container.querySelector(".today-panel")).toBe(!query);
     expect(!!container.querySelector(".transcript")).toBe(!!query);
   },
