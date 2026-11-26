@@ -139,6 +139,9 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
     }
   }, [userId, vapid]);
   latestRefresh.current = refresh;
+  const invalidateReads = useCallback(() => {
+    ++readEpoch.current;
+  }, []);
   useEffect(() => {
     setPrompt(false);
     registration.current = undefined;
@@ -151,12 +154,12 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
     document.addEventListener("visibilitychange", visible);
     navigator.serviceWorker?.addEventListener("controllerchange", visible);
     return () => {
-      ++readEpoch.current;
+      invalidateReads();
       window.removeEventListener("focus", visible);
       document.removeEventListener("visibilitychange", visible);
       navigator.serviceWorker?.removeEventListener("controllerchange", visible);
     };
-  }, [refresh]);
+  }, [refresh, invalidateReads]);
   useEffect(() => {
     setPrompt(
       !!userId &&

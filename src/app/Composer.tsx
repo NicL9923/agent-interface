@@ -238,6 +238,8 @@ function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files
   return { panel, over };
 }
 // Memoized with stable callbacks from App, so a streaming reply, which changes the conversation up to ten times a second, does not re-render it.
+const EMPTY_DOCK: DockItem[] = [];
+
 export const Composer = memo(function Composer({
   boot,
   selected,
@@ -266,7 +268,7 @@ export const Composer = memo(function Composer({
   discard,
   reviewed,
   setReviewed,
-  dock = [],
+  dock = EMPTY_DOCK,
   stopping,
   onStop,
   waiting,
@@ -371,12 +373,16 @@ export const Composer = memo(function Composer({
   useComposerOverlap(footer);
   // After a declined approval the message box asks what to do instead, until Hermes accepts the next message.
   const declinedStep = useDeclined(botId);
+  const declinedRef = useRef(declinedStep);
+  declinedRef.current = declinedStep;
+  const botIdRef = useRef(botId);
+  botIdRef.current = botId;
   // Only a receipt arriving after the decline counts: the one already showing belongs to an earlier message. A typed
   // stop phrase that ended Hermes's voice chat reached no one, so the question stays.
   useEffect(() => {
-    if (declinedStep && receipt?.status === "accepted" && receipt.turn !== "none")
-      clearDecline(botId);
-  }, [receipt?.requestId, receipt?.status]);
+    if (declinedRef.current && receipt?.status === "accepted" && receipt.turn !== "none")
+      clearDecline(botIdRef.current);
+  }, [receipt?.requestId, receipt?.status, receipt?.turn]);
   // Up and Down in an empty composer browse this person's earlier messages here, newest first.
   const [recall, setRecall] = useState<Recall>(null);
   const caret = useRef<"start" | "end" | null>(null);

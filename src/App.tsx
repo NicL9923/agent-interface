@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ActivityState, Bot, FileRef, Preferences, SubmissionReceipt } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
 import { request } from "./client-api";
@@ -561,10 +569,14 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // Home is memoized, so its handlers keep one identity across renders.
   const scrolled = useCallback(() => persistPosition(), [persistPosition]);
   const showView = useStableCallback((next: View) => {
-    setView(next);
-    setRailOpen(false);
+    startTransition(() => {
+      setView(next);
+      setRailOpen(false);
+    });
   });
-  const openPanel = useStableCallback((next: Panel) => setPanel(next));
+  const openPanel = useStableCallback((next: Panel) => {
+    startTransition(() => setPanel(next));
+  });
   const newBot = useStableCallback(() => setPanel({ kind: "settings", bot: "new" }));
   const newGroup = useStableCallback(() => setCreatingGroup(true));
   const groupCreated = useStableCallback((room: GroupRoom) => {

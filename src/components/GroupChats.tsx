@@ -246,7 +246,7 @@ export function GroupRoomView({
     setSettingsOpen(false);
     setDraft(saved<string>(`${key}:draft`) || "");
     setPending(saved<PendingMessage>(key));
-  }, [roomId, key]);
+  }, [roomId, key, setError]);
   const send = () => {
     const input = pending || {
       requestId: crypto.randomUUID(),

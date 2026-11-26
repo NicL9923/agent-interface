@@ -1,6 +1,6 @@
 import { Avatar } from "./Avatar";
 import type { Avatar as AvatarConfig } from "../shared/types";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../client-api.js";
 import { Icon } from "./Icon.js";
 import { talkLive } from "../app/talk-live.js";
@@ -50,18 +50,18 @@ export function VoiceControls({
   const generation = useRef(0);
   const discarded = useRef(false);
   const active = useRef<VoiceState>("idle");
-  const transition = (next: VoiceState) => {
+  const transition = useCallback((next: VoiceState) => {
     active.current = next;
     setState(next);
     callbacks.current.onStateChange?.(next);
-  };
-  const releaseMic = () => {
+  }, []);
+  const releaseMic = useCallback(() => {
     if (timer.current) clearInterval(timer.current);
     timer.current = null;
     stream.current?.getTracks().forEach((track) => track.stop());
     stream.current = null;
-  };
-  const cancel = () => {
+  }, []);
+  const abortVoice = useCallback(() => {
     generation.current++;
     discarded.current = true;
     request.current?.abort();
@@ -69,22 +69,20 @@ export function VoiceControls({
     if (media.current?.state !== "inactive") media.current?.stop();
     media.current = null;
     releaseMic();
+  }, [releaseMic]);
+  const cancel = useCallback(() => {
+    abortVoice();
     transition("idle");
-  };
+  }, [abortVoice, transition]);
   useEffect(() => {
     return () => {
-      generation.current++;
-      discarded.current = true;
-      request.current?.abort();
-      if (media.current?.state !== "inactive") media.current?.stop();
-      media.current = null;
-      releaseMic();
+      abortVoice();
       callbacks.current.onStateChange?.("idle");
     };
-  }, [botId]);
+  }, [botId, abortVoice]);
   useEffect(() => {
     if (disabled && active.current !== "idle") cancel();
-  }, [disabled]);
+  }, [disabled, cancel]);
 
   async function transcribe(blob: Blob) {
     const run = ++generation.current;

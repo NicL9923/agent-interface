@@ -139,6 +139,8 @@ export function useDraft({
       }),
     [],
   );
+  const setErrorRef = useRef(setError);
+  setErrorRef.current = setError;
   const [draftReady, setDraftReady] = useState(false);
   useEffect(() => {
     if (!botId || !userId) return;
@@ -164,7 +166,7 @@ export function useDraft({
           mergeDraft(current, saved, { settled: !inFlight.has(draftKey(userId, botId)) }).draft,
       );
       setDraftReady(true);
-      setError((previous) =>
+      setErrorRef.current((previous) =>
         previous.startsWith("Your saved draft could not be loaded.") ? "" : previous,
       );
     };
@@ -184,7 +186,9 @@ export function useDraft({
         // Unsaved text on screen is already the person's draft, and a loaded draft stays usable;
         // keep retrying quietly.
         if (live && !draftLoaded && !cached?.dirty)
-          setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
+          setErrorRef.current(
+            `Your saved draft could not be loaded. Retrying. ${(e as Error).message}`,
+          );
       } finally {
         loadingDraft = false;
         if (loadAgain && live) {
@@ -232,7 +236,7 @@ export function useDraft({
       window.removeEventListener("online", wake);
       window.removeEventListener("agent-interface:reconnect", wake);
     };
-  }, [botId, userId]);
+  }, [botId, userId, setDraft]);
   const latestDraft = useRef(draft);
   latestDraft.current = draft;
   const ready = useRef(draftReady);
@@ -579,5 +583,16 @@ export function useDraftPersistence({
       // Leaving this assistant sends the pending edit now. A newer edit here replaces it instead.
       if (open.current.botId !== botId || open.current.userId !== user) save(true);
     };
-  }, [draft, botId, draftReady, userId, offline, appUnavailable, pending, settled]);
+  }, [
+    draft,
+    botId,
+    draftReady,
+    userId,
+    offline,
+    appUnavailable,
+    pending,
+    settled,
+    identityEpoch,
+    setDraft,
+  ]);
 }

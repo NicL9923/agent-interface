@@ -41,18 +41,19 @@ export function useLeaving<T>(
   scope: string,
 ): Shown<T>[] {
   const shown = useRef<{ scope: string; list: Shown<T>[] }>({ scope, list: [] });
-  const [tick, setTick] = useState(0);
+  const keyOfRef = useRef(keyOf);
+  keyOfRef.current = keyOf;
+  const [tickAt, setTickAt] = useState(0);
   const list = useMemo(
     () =>
       mergeLeaving(
         shown.current.scope === scope ? shown.current.list : [],
         items,
-        keyOf,
-        Date.now(),
+        (item) => keyOfRef.current(item),
+        Math.max(Date.now(), tickAt),
         ms,
       ),
-    // keyOf is read fresh each time; the list only changes with the items, the scope or a finished exit.
-    [items, scope, ms, tick],
+    [items, scope, ms, tickAt],
   );
   useLayoutEffect(() => {
     shown.current = { scope, list };
@@ -60,7 +61,7 @@ export function useLeaving<T>(
     if (!leaving.length) return;
     const end = Math.min(...leaving.map((entry) => entry.leavingSince! + ms));
     const timer = window.setTimeout(
-      () => setTick((count) => count + 1),
+      () => setTickAt((previous) => Math.max(Date.now(), previous + 1)),
       Math.max(0, end - Date.now()) + 16,
     );
     return () => clearTimeout(timer);

@@ -813,17 +813,21 @@ export function useConversation(
       else element.scrollTop = element.scrollHeight;
     } else returnToPlace();
   };
+  const placeLatest = useRef(place);
+  placeLatest.current = place;
+  const atAttentionRef = useRef(atAttention);
+  atAttentionRef.current = atAttention;
   // Placement runs before paint, so an opened, grown or extended transcript never flickers.
   useLayoutEffect(() => {
     const element = scroll.current;
     if (!element || !conversation || conversation.botId !== botId) return;
     if (
-      atAttention &&
+      atAttentionRef.current &&
       ![
         ...element.querySelectorAll<HTMLElement>(
           '[data-attention-kind="clarify"], [data-attention-kind="approval"]',
         ),
-      ].some((card) => card.id === atAttention)
+      ].some((card) => card.id === atAttentionRef.current)
     ) {
       setAtAttention(null);
       mode.current = "follow";
@@ -859,7 +863,7 @@ export function useConversation(
     } else {
       // A message that could not be found leaves the reader at the latest one.
       if (opening) mode.current = "follow";
-      place();
+      placeLatest.current();
     }
     restored.current = true;
     lastTop.current = element.scrollTop;
@@ -919,8 +923,6 @@ export function useConversation(
       element.removeEventListener("pointerdown", press);
     };
   };
-  const placeLatest = useRef(place);
-  placeLatest.current = place;
   const listenLatest = useRef(listen);
   listenLatest.current = listen;
   // The transcript body, observed so late images and cards keep a follower at the end.

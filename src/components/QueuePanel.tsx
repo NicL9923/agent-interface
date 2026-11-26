@@ -73,8 +73,9 @@ function LiveQueue({ bot, active }: { bot: Bot; active: boolean }) {
   }, [queue.data, editing]);
   // An item that left the queue, because it started or another device removed it, ends its edit.
   useEffect(() => {
-    if (editing && queue.data && !items.some((item) => item.id === editing.id)) setEditing(null);
-  }, [queue.data]);
+    if (editing && queue.data && !queue.data.items.some((item) => item.id === editing.id))
+      setEditing(null);
+  }, [queue.data, editing]);
   if (!items.length) return null;
 
   const change = (

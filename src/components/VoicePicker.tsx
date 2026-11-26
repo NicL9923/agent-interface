@@ -90,11 +90,13 @@ export function VoicePicker({
   const [chosen, setChosen] = useState<TalkVoice>(voice ?? DEFAULT_TALK_VOICE);
   const [provider, setProvider] = useState<TalkProvider>(() => talkProviderForVoice(voice));
   const [saving, setSaving] = useState<TalkVoice | null>(null);
+  const savingRef = useRef(saving);
+  savingRef.current = saving;
   const [error, setError] = useState("");
   const preview = usePreview();
   const group = useId();
   useEffect(() => {
-    if (!saving) {
+    if (!savingRef.current) {
       const next = voice ?? DEFAULT_TALK_VOICE;
       setChosen(next);
       setProvider(talkProviderForVoice(next));

@@ -2,6 +2,7 @@ import {
   Children,
   Fragment,
   createContext,
+  createElement,
   isValidElement,
   memo,
   useContext,
@@ -425,11 +426,7 @@ export function parseBlock({
         key: element?.key ?? `text-${index}`,
         tag,
         kind: pieceKind(node, tag),
-        node: element ? (
-          <ReplyContext.Provider value={context}>{element}</ReplyContext.Provider>
-        ) : (
-          node
-        ),
+        node: element ? createElement(ReplyContext.Provider, { value: context }, element) : node,
       };
     });
 }

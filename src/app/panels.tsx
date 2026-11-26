@@ -107,7 +107,7 @@ function DelayedOpening() {
 /** Shows a quiet status while a lazy screen loads slowly, and a reload notice if it cannot. */
 export function Loading({
   children,
-  loadingFallback = <DelayedOpening />,
+  loadingFallback,
   errorFallback,
 }: {
   children: ReactNode;
@@ -116,7 +116,7 @@ export function Loading({
 }) {
   return (
     <LoadFailure fallback={errorFallback}>
-      <Suspense fallback={loadingFallback}>{children}</Suspense>
+      <Suspense fallback={loadingFallback ?? <DelayedOpening />}>{children}</Suspense>
     </LoadFailure>
   );
 }

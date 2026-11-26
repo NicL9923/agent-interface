@@ -16,47 +16,57 @@ export const useRevisedDraft = (messageId: string | undefined, cardId: string) =
 const blank = (text: string) => !/[^ \t\r\n]/.test(text);
 /** Changed words marked in place. Screen readers hear "added" and "removed" before each change. */
 function DiffText({ parts }: { parts: DiffPart[] }) {
+  let offset = 0;
   return (
     <>
-      {parts.map((part, index) =>
-        part.kind === "same" ? (
-          <span key={index}>{part.text}</span>
+      {parts.map((part) => {
+        const start = offset;
+        offset += part.text.length;
+        const key = `${part.kind}:${start}`;
+        return part.kind === "same" ? (
+          <span key={key}>{part.text}</span>
         ) : part.kind === "added" ? (
-          <ins key={index} className={`draft-added${blank(part.text) ? " draft-space" : ""}`}>
+          <ins key={key} className={`draft-added${blank(part.text) ? " draft-space" : ""}`}>
             <span className="sr-only">Added: </span>
             {part.text}
           </ins>
         ) : (
-          <del key={index} className={`draft-removed${blank(part.text) ? " draft-space" : ""}`}>
+          <del key={key} className={`draft-removed${blank(part.text) ? " draft-space" : ""}`}>
             <span className="sr-only">Removed: </span>
             {part.text}
           </del>
-        ),
-      )}
+        );
+      })}
     </>
   );
 }
 function Addresses({ parts }: { parts: AddressPart[] }) {
+  const counts = new Map<string, number>();
   return (
     <>
-      {parts.map((part, index) => (
-        <span key={index}>
-          {index > 0 && ", "}
-          {part.kind === "same" ? (
-            part.address
-          ) : part.kind === "added" ? (
-            <ins className="draft-added">
-              <span className="sr-only">Added: </span>
-              {part.address}
-            </ins>
-          ) : (
-            <del className="draft-removed">
-              <span className="sr-only">Removed: </span>
-              {part.address}
-            </del>
-          )}
-        </span>
-      ))}
+      {parts.map((part, index) => {
+        const base = `${part.kind}:${part.address}`;
+        const seen = counts.get(base) ?? 0;
+        counts.set(base, seen + 1);
+        return (
+          <span key={`${base}:${seen}`}>
+            {index > 0 && ", "}
+            {part.kind === "same" ? (
+              part.address
+            ) : part.kind === "added" ? (
+              <ins className="draft-added">
+                <span className="sr-only">Added: </span>
+                {part.address}
+              </ins>
+            ) : (
+              <del className="draft-removed">
+                <span className="sr-only">Removed: </span>
+                {part.address}
+              </del>
+            )}
+          </span>
+        );
+      })}
     </>
   );
 }

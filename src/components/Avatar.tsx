@@ -353,7 +353,9 @@ export function Avatar({
     trailLevel > 0.01 && (
       <g fill="none" strokeWidth="3" strokeLinecap="round" opacity={trailLevel * 0.9}>
         {trailArcs.map((arcs, i) =>
-          arcs[part].map((d, j) => <path key={`${i}-${j}`} d={d} stroke={trailColors[i]} />),
+          arcs[part].map((d) => (
+            <path key={`${trailColors[i]}:${d}`} d={d} stroke={trailColors[i]} />
+          )),
         )}
       </g>
     );
@@ -447,8 +449,8 @@ export function Avatar({
       opacity={Math.min(pose.ticks, 1)}
       className="avatar-ticks"
     >
-      {tickMarks(pose.ticks, pose.tickSide, anchor.top).map((d, i) => (
-        <path key={i} d={d} />
+      {tickMarks(pose.ticks, pose.tickSide, anchor.top).map((d) => (
+        <path key={d} d={d} />
       ))}
     </g>
   );

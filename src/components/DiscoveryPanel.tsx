@@ -1,7 +1,8 @@
 import type { SaveItem } from "../shared/api";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, request } from "../client-api";
 import { useAction } from "../app/use-action";
+import { useStableCallback } from "../app/use-stable-callback";
 import { FormMessage } from "./ui/form-message";
 import type { Bootstrap, Message } from "../shared/types";
 import type {
@@ -66,18 +67,18 @@ export function DiscoveryPanel({
     "Saved conversation";
   const [savedMessage, setSavedMessage] = useState<string | undefined>();
   const { busy, error, notice, run, setNotice, reset } = useAction();
-  function changeTab(next: typeof tab) {
+  const changeTab = useStableCallback((next: typeof tab) => {
     reset();
     setSavingKey(null);
     setPage(null);
     setTab(next);
-  }
+  });
   // Each search outdates the ones before it, so a slow answer for older words never replaces newer results.
   const searchSeq = useRef(0);
   const searched = useRef("");
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
-  async function find(text: string) {
+  const find = useStableCallback(async (text: string) => {
     const seq = ++searchSeq.current;
     searched.current = text.trim();
     setSearching(true);
@@ -98,7 +99,7 @@ export function DiscoveryPanel({
     } finally {
       if (seq === searchSeq.current) setSearching(false);
     }
-  }
+  });
   useEffect(() => {
     if (tab !== "search") return;
     const text = query.trim();
@@ -118,17 +119,19 @@ export function DiscoveryPanel({
       if (text !== searched.current) void find(text);
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [query, tab]);
+  }, [query, tab, find, setNotice]);
   // A pointer user opens search to type. On touch, focusing would cover the page with the keyboard.
   useEffect(() => {
     if (window.matchMedia?.("(pointer: fine)").matches) searchInput.current?.focus();
   }, []);
+  const lastSearchId = useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (!search) return;
+    if (!search || search.id === lastSearchId.current) return;
+    lastSearchId.current = search.id;
     changeTab("search");
     setQuery(search.text);
     if (search.text.trim()) void find(search.text);
-  }, [search?.id]);
+  }, [search, changeTab, find]);
   const live = (hit: SearchHit) =>
     !!onOpenMessage &&
     !!hit.messageId &&
@@ -154,7 +157,7 @@ export function DiscoveryPanel({
         if (current()) setOverview(value);
       }
     });
-  }, [tab, bootstrap.user.id]);
+  }, [tab, bootstrap.user.id, run]);
   async function history(
     botId: string,
     sessionId: string,
@@ -271,6 +274,10 @@ export function DiscoveryPanel({
               : message.role === "system"
                 ? "System"
                 : "Tool";
+  const exchangeBots = useMemo(
+    () => (page ? { bots: bootstrap.bots, currentBotId: page.botId } : null),
+    [bootstrap.bots, page],
+  );
   return (
     <div className="discovery-panel">
       <nav className="view-tabs" aria-label="Search, saved items and automations">
@@ -290,8 +297,8 @@ export function DiscoveryPanel({
       )}
       {notice && <FormMessage tone="notice">{notice}</FormMessage>}
       {busy && <p role="status">Loading...</p>}
-      {page ? (
-        <ExchangeBots.Provider value={{ bots: bootstrap.bots, currentBotId: page.botId }}>
+      {page && exchangeBots ? (
+        <ExchangeBots.Provider value={exchangeBots}>
           <section className="discovery-history">
             <header className="history-heading">
               <button className="discovery-back" onClick={back}>
@@ -481,13 +488,19 @@ export function DiscoveryPanel({
                         )}
                       </small>
                       <small className="discovery-snippet">
-                        {snippetParts(hit.snippet).map((part, index) =>
-                          part.match ? (
-                            <mark key={index}>{part.text}</mark>
-                          ) : (
-                            <span key={index}>{part.text}</span>
-                          ),
-                        )}
+                        {(() => {
+                          let offset = 0;
+                          return snippetParts(hit.snippet).map((part) => {
+                            const start = offset;
+                            offset += part.text.length;
+                            const key = `${start}:${part.match ? "m" : "t"}`;
+                            return part.match ? (
+                              <mark key={key}>{part.text}</mark>
+                            ) : (
+                              <span key={key}>{part.text}</span>
+                            );
+                          });
+                        })()}
                       </small>
                     </span>
                     <span aria-hidden="true">›</span>

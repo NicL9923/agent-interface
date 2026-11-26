@@ -189,7 +189,10 @@ export function AttentionCard({
                   {[...options, null].map((option, position) => {
                     const checked = option === null ? draft.own : draft.selected.includes(option);
                     return (
-                      <label className={`option-card${checked ? " checked" : ""}`} key={position}>
+                      <label
+                        className={`option-card${checked ? " checked" : ""}`}
+                        key={option === null ? "__own__" : `option:${option}`}
+                      >
                         <input
                           type={kind}
                           name={name}

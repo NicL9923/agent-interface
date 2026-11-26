@@ -51,8 +51,21 @@ export type Resource<T> = {
  * A null path has nothing to load and no data, and a reload kept from an older path does nothing.
  * Quiet refreshes (poll, wake) never stack and never raise `loading`.
  */
+const EMPTY_DEPS: readonly unknown[] = [];
+
 export function useResource<T>(path: string | null, options: ResourceOptions<T> = {}): Resource<T> {
-  const { deps = [], enabled = true, pollMs, wake } = options;
+  const { deps = EMPTY_DEPS, enabled = true, pollMs, wake } = options;
+  const depsTracker = useRef<{ deps: readonly unknown[]; version: number }>({
+    deps,
+    version: 0,
+  });
+  if (
+    deps.length !== depsTracker.current.deps.length ||
+    deps.some((value, index) => !Object.is(value, depsTracker.current.deps[index]))
+  ) {
+    depsTracker.current = { deps, version: depsTracker.current.version + 1 };
+  }
+  const depsVersion = depsTracker.current.version;
   const [data, setData] = useState<T | null>(null);
   const active = path !== null && (typeof enabled === "function" ? enabled(data) : enabled);
   const [error, setError] = useState("");
@@ -160,12 +173,12 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
       inflight.current = undefined;
       for (const stop of stops) stop();
     };
-  }, [load, active, wake, ...deps]);
+  }, [path, load, active, wake, depsVersion]);
   // Its own effect, so a new interval restarts only the timer: the poll's first read comes one
   // interval later, never at once, and the load above does not run again.
   useEffect(() => {
     if (!active || !pollMs) return;
     return pollWhileVisible(() => void load(true), pollMs);
-  }, [load, active, pollMs, ...deps]);
+  }, [load, active, pollMs, depsVersion]);
   return { data, error, loading, reload, setData: replace, invalidate };
 }

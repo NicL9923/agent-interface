@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
+import { useStableCallback } from "./use-stable-callback";
 import type { SubmissionReceipt } from "../shared/types";
 import { ApiError, request as apiRequest } from "../client-api";
 import {
@@ -59,12 +60,13 @@ export function useSubmission({
     });
   const activeBotRef = useRef(botId);
   activeBotRef.current = botId;
-  const clearSent = (user: string, request: Pending) =>
+  const clearSent = useStableCallback((user: string, request: Pending) =>
     setDraft((current) =>
       current.botId === request.botId && current.userId === user
         ? sentCopy(current, request)
         : current,
-    );
+    ),
+  );
   // Until the server shows the send, a save of the sent text from this copy is not new work.
   const markSent = (user: string, request: Pending, sent: boolean) => {
     // The copy's edit sequence identifies it as the sent copy until someone types in it again.
@@ -86,7 +88,7 @@ export function useSubmission({
     );
   };
   // A refused message goes back into its draft, in front of anything that replaced it meanwhile.
-  const refused = (user: string, request: Pending) => {
+  const refused = useStableCallback((user: string, request: Pending) => {
     markSent(user, request, false);
     const key = draftKey(user, request.botId);
     const saved = localRead<Draft>(key);
@@ -96,7 +98,7 @@ export function useSubmission({
         ? restoreSent(current, request)
         : current,
     );
-  };
+  });
   useEffect(() => {
     setReceipt(null);
     if (!botId || !userId) {
@@ -142,7 +144,7 @@ export function useSubmission({
       live = false;
       clearInterval(timer);
     };
-  }, [pending, userId, botId, sending]);
+  }, [pending, userId, botId, sending, identityEpoch, clearSent, refused]);
   /** `onStart` hears the request once it is on its way, such as to anchor the view to it. */
   const send = async (onStart?: (request: Pending) => void) => {
     if (

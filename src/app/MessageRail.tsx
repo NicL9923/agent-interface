@@ -286,6 +286,7 @@ export const MessageRail = memo(function MessageRail({
           });
     columnChanges.current = joined;
     if (view.firstElementChild) joined?.observe(view.firstElementChild, { childList: true });
+    const watchedNodes = watched.current;
     return () => {
       cancelAnimationFrame(frame);
       view.removeEventListener("scroll", scrolled);
@@ -294,7 +295,7 @@ export const MessageRail = memo(function MessageRail({
       joined?.disconnect();
       columnChanges.current = undefined;
       turnObserver.current = undefined;
-      watched.current.clear();
+      watchedNodes.clear();
     };
   }, [scroll]);
   const asked = hoverId ?? (focus?.visible ? focus.id : undefined);
@@ -324,6 +325,8 @@ export const MessageRail = memo(function MessageRail({
   const ticks = entries.slice(span.start, span.end);
   useLayoutEffect(() => {
     if (shown && span.start !== windowStart) setWindowStart(span.start);
+  }, [shown, span.start, windowStart]);
+  useLayoutEffect(() => {
     const id = focusNext.current;
     if (!id) return;
     focusNext.current = undefined;

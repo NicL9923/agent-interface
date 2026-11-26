@@ -90,9 +90,10 @@ export function FindBar({
   const chosen = selected ? matches.findIndex((match) => match.messageId === selected) : -1;
   const index = chosen >= 0 ? chosen : matches.length - 1;
   const current = matches[index];
+  const currentId = current?.messageId;
   useEffect(() => {
-    if (current && chosen < 0) setSelected(current.messageId);
-  }, [current?.messageId, chosen]);
+    if (currentId && chosen < 0) setSelected(currentId);
+  }, [currentId, chosen]);
   useEffect(() => {
     if (current?.loaded && needle) openMessage(current.messageId, false, needle);
   }, [current?.messageId, current?.loaded, needle, openMessage]);

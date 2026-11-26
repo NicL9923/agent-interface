@@ -3,6 +3,7 @@ import { ApiError, pollWhileVisible, request } from "../client-api";
 import type { RoutinePreview, RoutineRunReceipt } from "../shared/experience";
 import type { Routine } from "../shared/types";
 import { routineTrialKey } from "../app/storage";
+import { useStableCallback } from "../app/use-stable-callback";
 import "./experience.css";
 import { FormMessage } from "./ui/form-message";
 function runTime(instant: string, timezone: string) {
@@ -96,7 +97,7 @@ export function RoutineEnhancements({
   const checking = useRef(false);
 
   const canStart = !requestId || receipt?.status === "completed" || receipt?.status === "failed";
-  async function check(id: string) {
+  const check = useStableCallback(async (id: string) => {
     if (checking.current) return;
     checking.current = true;
     setBusy(true);
@@ -115,14 +116,18 @@ export function RoutineEnhancements({
       checking.current = false;
       setBusy(false);
     }
-  }
+  });
+  const receiptRef = useRef(receipt);
+  receiptRef.current = receipt;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   useEffect(() => {
-    if (requestId && !receipt && !busy) void check(requestId);
-  }, [requestId]);
+    if (requestId && !receiptRef.current && !busyRef.current) void check(requestId);
+  }, [requestId, check]);
   useEffect(() => {
     if (receipt?.status !== "accepted" || !requestId || disabled) return;
     return pollWhileVisible(() => void check(requestId), 5000);
-  }, [receipt?.status, requestId, disabled]);
+  }, [receipt?.status, requestId, disabled, check]);
   async function start(retryId?: string) {
     const id = retryId || crypto.randomUUID();
     try {

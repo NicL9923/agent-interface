@@ -1,5 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["unicorn", "oxc", "typescript", "react"],
   "options": {
     "typeAware": true
   },
@@ -23,13 +24,38 @@
     ],
     "unicorn/no-useless-spread": "off",
     "unicorn/no-new-array": "off",
-    "typescript/no-floating-promises": "warn",
-    "typescript/no-misused-promises": "warn"
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "error",
+    "react/jsx-no-constructed-context-values": "error",
+    "react/no-unstable-nested-components": ["error", { "allowAsProps": true }],
+    "react/no-array-index-key": "error",
+    "react/no-deriving-state-in-effects": "error",
+    "react/no-object-type-as-default-prop": "error",
+    "react/set-state-in-render": "error",
+    "react/use-memo": "error",
+    "react/error-boundaries": "error",
+    "react/static-components": "error",
+    "react/refs": "off",
+    "react/set-state-in-effect": "off",
+    "react/immutability": "off",
+    "react/purity": "off"
   },
   "overrides": [
     {
+      "files": ["tests/**"],
+      "rules": {
+        "react/jsx-no-constructed-context-values": "off",
+        "react/no-array-index-key": "off",
+        "react/globals": "off",
+        "react/no-children-prop": "off"
+      }
+    },
+    {
       "files": ["e2e/**"],
       "rules": {
+        "react/rules-of-hooks": "off",
         "no-restricted-imports": [
           "error",
           {

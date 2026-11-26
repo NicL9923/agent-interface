@@ -6,6 +6,8 @@ import { ConnectionRequestCard } from "../components/ConnectionRequestCard";
 import { AttentionCard } from "./AttentionCard";
 import { useSettledRequests } from "./waiting-input";
 
+const EMPTY_BOTS: Bot[] = [];
+
 /**
  * The requests an assistant is waiting on, in the transcript after its live row. A request this
  * tab just settled keeps a one-line receipt for a moment after Hermes stops listing it.
@@ -14,7 +16,7 @@ export function AttentionList({
   conversation,
   botId,
   userId,
-  bots = [],
+  bots = EMPTY_BOTS,
   assistantName,
   disconnected,
   report,

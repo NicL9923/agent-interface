@@ -1,4 +1,11 @@
-import { cloneElement, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  cloneElement,
+  createElement,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type {
   ComponentProps,
   ComponentType,
@@ -104,6 +111,12 @@ export function BotMenu({
     if (press.current) clearTimeout(press.current.timer);
     press.current = null;
   };
+  const release = () => {
+    clearTimeout(settle.current);
+    if (!holding.current) return;
+    holding.current = false;
+    touchEnded();
+  };
   useEffect(() => {
     mounted.current = true;
     preloadWhenIdle();
@@ -113,12 +126,6 @@ export function BotMenu({
       release();
     };
   }, []);
-  const release = () => {
-    clearTimeout(settle.current);
-    if (!holding.current) return;
-    holding.current = false;
-    touchEnded();
-  };
   const open = (at: Point) => {
     if (disabled) return;
     const gesture = (pendingGesture = {});
@@ -138,10 +145,10 @@ export function BotMenu({
   if (Popup) {
     // A row focused when it is swapped keeps its focus, unless the menu is opening and takes it.
     restoreFocus.current ??= !opened && !!row.current && row.current === document.activeElement;
-    return (
-      <Popup {...props} opensAt={opened?.at} restoreFocus={restoreFocus.current}>
-        {children}
-      </Popup>
+    return createElement(
+      Popup as ComponentType<Omit<BotMenuProps, "children">>,
+      { ...props, opensAt: opened?.at, restoreFocus: restoreFocus.current },
+      children,
     );
   }
 
