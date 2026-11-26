@@ -117,12 +117,12 @@ release or Hermes recovery.
    `APP_BASE/runtime/bun-v1.4.5/bun`. Keep each Bun version in its own directory
    under `APP_BASE/runtime/bun-vX.Y.Z/`. [Bun 1.4.5 release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.5)
 2. In the activated release, build the server with Bun first on the build
-   command's `PATH`. The guarded release already ran `npm ci` and built the web
-   client. For a fresh checkout, run `npm ci` and `npm run build` first.
+   command's `PATH`. The guarded release already ran `pnpm install --frozen-lockfile` and built the web
+   client. For a fresh checkout, run `pnpm install --frozen-lockfile` and `pnpm run build` first.
 
    ```sh
    cd "$APP_BASE/current" &&
-     PATH="$APP_BASE/runtime/bun-v1.4.5:$PATH" npm run build:server:bun &&
+     PATH="$APP_BASE/runtime/bun-v1.4.5:$PATH" pnpm run build:server:bun &&
      python3 scripts/bun-service-check.py "$APP_BASE/runtime/bun-v1.4.5/bun"
    ```
 

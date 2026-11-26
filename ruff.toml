@@ -1,5 +1,5 @@
 # Static check that catches undefined names and other likely bugs. CI runs it in
-# the Python job with a pinned ruff version; run `npm run lint:py` locally.
+# the Python job with a pinned ruff version; run `pnpm run lint:py` locally.
 # Host release tools load application modules with the system Python 3.12.
 target-version = "py312"
 

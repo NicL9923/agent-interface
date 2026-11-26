@@ -65,7 +65,7 @@ import type {
 // renamed or retyped field changes a committed fixture and the Swift decoding test sees it.
 const directory = fileURLToPath(new URL("../ios/AgentInterfaceTests/Contract/", import.meta.url));
 const instruction =
-  "If the API change is intended, run `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`, commit the fixtures, update the Swift types and ios/AgentInterfaceTests/ContractFixtureTests.swift, then run the iOS contract tests on the Mac mini: `bash .agents/tools/validate-ios.sh SIMULATOR_UUID test -only-testing:AgentInterfaceTests/ContractFixtureTests`.";
+  "If the API change is intended, run `UPDATE_CONTRACT=1 pnpm exec vitest run tests/native-contract.test.ts`, commit the fixtures, update the Swift types and ios/AgentInterfaceTests/ContractFixtureTests.swift, then run the iOS contract tests on the Mac mini: `bash .agents/tools/validate-ios.sh SIMULATOR_UUID test -only-testing:AgentInterfaceTests/ContractFixtureTests`.";
 const now = "2026-10-01T12:00:00.000Z";
 const origin = "http://127.0.0.1:3000";
 const at = (time: string) => `2026-10-01T${time}:00.000Z`;

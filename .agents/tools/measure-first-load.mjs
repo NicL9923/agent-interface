@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Measures how soon a production build shows something useful, in Chromium against the real app server
-// (e2e/server.ts) with a slow phone's network and CPU. Run `npm run build` first; the server must not be
+// (e2e/server.ts) with a slow phone's network and CPU. Run `pnpm run build` first; the server must not be
 // running, since this starts it on the e2e port.
 //
 //   node .agents/tools/measure-first-load.mjs [--runs 7] [--json out.json] [--theme dark|light|system] [--only cold,warm,worker] [--chat ID]
@@ -97,10 +97,10 @@ const NETWORK = {
 const CPU_SLOWDOWN = 4;
 
 const server = serverCores
-  ? spawn("taskset", ["-c", serverCores, "npx", "tsx", "e2e/server.ts"], {
+  ? spawn("taskset", ["-c", serverCores, "pnpm", "exec", "tsx", "e2e/server.ts"], {
       stdio: ["ignore", "inherit", "inherit"],
     })
-  : spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "inherit", "inherit"] });
+  : spawn("pnpm", ["exec", "tsx", "e2e/server.ts"], { stdio: ["ignore", "inherit", "inherit"] });
 const stop = () => {
   if (server.exitCode === null) server.kill("SIGTERM");
 };

@@ -2,7 +2,7 @@
 // Checks that Send and Stop stay whole and tappable above a phone's on-screen keyboard, in an assistant chat and a
 // group chat, across phone sizes, keyboard heights and drafts. Chromium shows no keyboard, so the visual viewport
 // is replaced with one this script shrinks, as Safari's does. Run against the loopback preview:
-//   npm run build && node .agents/tools/preview-app.mjs   (another shell)
+//   pnpm run build && node .agents/tools/preview-app.mjs   (another shell)
 //   node .agents/tools/check-send-visible.mjs [http://127.0.0.1:3000] [report.json]
 // Exits 1 when any case leaves the button outside the visible frame or covered.
 import { writeFileSync } from "node:fs";

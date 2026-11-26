@@ -3,7 +3,7 @@
  * in a browser. Each send streams a short first segment, runs a tool for a moment, which saves that
  * segment and starts a new live reply, then streams a long Markdown answer and saves it.
  *
- *   npm run build && npx tsx .agents/tools/streaming-preview.ts [port]
+ *   pnpm run build && pnpm exec tsx .agents/tools/streaming-preview.ts [port]
  *
  * Open http://127.0.0.1:4190, choose "Enter local workspace" and then Ranch Hand. STREAM_CHARS
  * sets how many characters arrive every 40 ms (default 6, about 150 a second). With CODE_BLOCK=1 the
@@ -44,7 +44,7 @@ import type {
 } from "../../src/shared/types.js";
 
 if (!existsSync("dist/client/index.html"))
-  throw new Error("Run `npm run build` first: the preview serves dist/client.");
+  throw new Error("Run `pnpm run build` first: the preview serves dist/client.");
 const port = Number(process.argv[2] ?? 4190);
 const step = Number(process.env.STREAM_CHARS ?? 6),
   stepMs = Number(process.env.STREAM_MS ?? 40);

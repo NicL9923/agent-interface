@@ -32,7 +32,7 @@ it(
       throw error;
     });
     const bun = stdout.trim();
-    // Each run gets its own dist and database. Bun resolves dependencies from the worktree's npm ci.
+    // Each run gets its own dist and database. Bun resolves dependencies from the worktree's pnpm install.
     const release = await mkdtemp(join(root, "node_modules", ".wildbots-bun-"));
     try {
       await mkdir(join(release, "scripts"));
@@ -56,7 +56,7 @@ it(
         stderr: expect.stringContaining("Expected Bun 1.4.5"),
       });
       await expect(preflight(bun)).rejects.toMatchObject({
-        stderr: expect.stringContaining("Run npm run build:server:bun."),
+        stderr: expect.stringContaining("Run pnpm run build:server:bun."),
       });
 
       await run(process.execPath, [build], { cwd: release, timeout: 10_000 });

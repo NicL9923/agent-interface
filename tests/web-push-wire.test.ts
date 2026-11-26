@@ -1,10 +1,17 @@
 import { createECDH, randomBytes } from "node:crypto";
 import https from "node:https";
 import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
 import { afterEach, expect, it, vi } from "vitest";
 import * as webpush from "web-push";
-// @ts-expect-error http_ece, web-push's own encryption dependency, ships no types.
-import ece from "http_ece";
+
+// Load http_ece from web-push's own dependency graph (pnpm does not hoist transitive packages).
+const ece = createRequire(import.meta.resolve("web-push"))("http_ece") as {
+  decrypt: (
+    buffer: Buffer,
+    params: { version: string; privateKey: ReturnType<typeof createECDH>; authSecret: Buffer },
+  ) => Buffer;
+};
 
 afterEach(() => vi.restoreAllMocks());
 

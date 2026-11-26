@@ -22,7 +22,9 @@ names = (
 )
 top = {
     "package.json",
-    "package-lock.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    ".npmrc",
     "tsconfig.json",
     ".node-version",
     ".env.example",

@@ -6,7 +6,7 @@
 // With --blackout, new connections hang too, for --blackout-ms, then the network returns: it reports
 // when the connection notice showed, how many showed at once and their titles, saves a screenshot to
 // --screenshot, and reports how long the notice took to clear once the network returned.
-// Run `npm run build` first; ports 4173, 4174 and 4180 must be free.
+// Run `pnpm run build` first; ports 4173, 4174 and 4180 must be free.
 //   node .agents/tools/measure-dead-stream.mjs [--give-up-ms 180000] [--blackout --blackout-ms 60000 --screenshot FILE]
 import { spawn } from "node:child_process";
 import { createServer, connect } from "node:net";
@@ -25,7 +25,7 @@ const SCREENSHOT = flag("--screenshot", undefined);
 const PROXY = 4180,
   APP = 4173;
 
-const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+const server = spawn("pnpm", ["exec", "tsx", "e2e/server.ts"], {
   stdio: ["ignore", "inherit", "inherit"],
   detached: true,
 });

@@ -88,24 +88,24 @@ Web Push notifications switch an open window directly to the chat without reload
 
 ## Run locally
 
-Use Node 24.22+ (or 26.13+) and npm (`.node-version` selects the tested Node 24 LTS release), or Bun 1.4.5+ for the bundled production server.
+Use Node 24.22+ (or 26.13+) and pnpm (`.node-version` selects the tested Node 24 LTS release; `packageManager` pins pnpm), or Bun 1.4.5+ for the bundled production server.
 
 ```sh
-npm ci
-npm run setup
-npm run build
-npm start
+pnpm install --frozen-lockfile
+pnpm run setup
+pnpm run build
+pnpm start
 ```
 
-- `npm run setup` configures a private `.env` with Google sign-in + `HOUSEHOLD_EMAILS` allowlist (or `LOCAL_DEV_AUTH=true` for loopback development) and checks harness availability.
-- `npm run doctor` checks the active configuration, database, and available harness binaries.
-- For hot reload, set `APP_ORIGIN=http://127.0.0.1:5173`, run `npm run dev` and `npm run dev:client` in separate terminals, and open port 5173.
+- `pnpm run setup` configures a private `.env` with Google sign-in + `HOUSEHOLD_EMAILS` allowlist (or `LOCAL_DEV_AUTH=true` for loopback development) and checks harness availability.
+- `pnpm run doctor` checks the active configuration, database, and available harness binaries.
+- For hot reload, set `APP_ORIGIN=http://127.0.0.1:5173`, run `pnpm run dev` and `pnpm run dev:client` in separate terminals, and open port 5173.
 - To build and smoke-test the Bun server bundle:
 
 ```sh
-npm run build
-npm run build:server:bun
-npm run smoke:bun
+pnpm run build
+pnpm run build:server:bun
+pnpm run smoke:bun
 ```
 
 ## Deploy
@@ -139,16 +139,16 @@ The SwiftUI app lives in [`ios/`](ios/). It uses the same authenticated API, bot
 ## Validate
 
 ```sh
-npm run verify:ci          # lint, typecheck, build, and Vitest in parallel
-npm run build:server:bun   # Bun server bundle
-npm run smoke:bun          # Bun runtime smoke test
-npm run test:py            # Python unit tests
-npm run lint:py            # Ruff check (Python 3.12 target)
-npm run test:e2e           # Playwright Chromium + WebKit smoke suite
-.agents/tools/check-all    # Full local validation gate (handles WebKit container on Fedora)
+pnpm run verify:ci          # lint, typecheck, build, and Vitest in parallel
+pnpm run build:server:bun   # Bun server bundle
+pnpm run smoke:bun          # Bun runtime smoke test
+pnpm run test:py            # Python unit tests
+pnpm run lint:py            # Ruff check (Python 3.12 target)
+pnpm run test:e2e           # Playwright Chromium + WebKit smoke suite
+.agents/tools/check-all     # Full local validation gate (handles WebKit container on Fedora)
 ```
 
-- `npm run typecheck` uses pinned Oxc `tsrs --noEmit`.
-- Vitest runs all application tests with `isolate: false` in shared workers. Replay file order with `npm test -- --sequence.shuffle.files --sequence.seed=731 --maxWorkers=1`.
+- `pnpm run typecheck` uses pinned Oxc `tsrs --noEmit`.
+- Vitest runs all application tests with `isolate: false` in shared workers. Replay file order with `pnpm test --sequence.shuffle.files --sequence.seed=731 --maxWorkers=1`.
 - Direct-route tests listen on `127.0.0.2` (built-in on Linux; on macOS add `sudo ifconfig lo0 alias 127.0.0.2 up`).
 - See [docs/ledger/README.md](docs/ledger/README.md) for validation logs and red-run proofs, and [docs/Dependencies.md](docs/Dependencies.md) for tool versions.

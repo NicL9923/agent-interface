@@ -18,7 +18,7 @@
 // app's own observers and so reads the position the frame paints. Each reports the largest step between two frames.
 // A move larger than the transcript's content height cannot be real; it is reported as a measurement fault with both
 // readings and that height, never as a number of pixels. The open scenario reports each image frame's box.
-// Run `npm run build` first. It uses port 4187 and the next one; E2E_PORT picks others. It can measure another build:
+// Run `pnpm run build` first. It uses port 4187 and the next one; E2E_PORT picks others. It can measure another build:
 // run it with that build's checkout as the working directory.
 //   node .agents/tools/measure-image-shift.mjs [--runs 3] [--only open,reader,send,send-images,failed,special] [--shapes mixed|far] [--viewport 390x844]
 import { spawn } from "node:child_process";
@@ -44,7 +44,7 @@ if (
   )
 )
   throw new Error(`Port ${port} is taken; set E2E_PORT.`);
-const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+const server = spawn("pnpm", ["exec", "tsx", "e2e/server.ts"], {
   stdio: ["ignore", "ignore", "inherit"],
   detached: true,
   env: { ...process.env, E2E_PORT: String(port) },

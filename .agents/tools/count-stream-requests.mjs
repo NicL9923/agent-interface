@@ -2,7 +2,7 @@
 // Counts the app's /api requests in real Chromium against e2e/server.ts, for a cold load of a chat,
 // a tab woken after a minute in the background, an idle stretch on a chat and on home, and a turn that streams through
 // a tool (the Trail Cook's scripted reply, whose tool finishes in the middle of it).
-// Run `npm run build` first; port 4173 must be free. Prints JSON: per scenario, requests by path.
+// Run `pnpm run build` first; port 4173 must be free. Prints JSON: per scenario, requests by path.
 //   node .agents/tools/count-stream-requests.mjs [--idle-ms 600000] [--only cold,wake,idle,turn]
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -18,7 +18,7 @@ const HIDDEN_MS = Number(flag("--hidden-ms", 70_000));
 const ONLY = new Set(flag("--only", "cold,wake,idle,turn").split(","));
 const base = "http://127.0.0.1:4173";
 
-const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+const server = spawn("pnpm", ["exec", "tsx", "e2e/server.ts"], {
   stdio: ["ignore", "inherit", "inherit"],
   detached: true,
 });
