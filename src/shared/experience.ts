@@ -9,6 +9,33 @@ import type {
 import type { HistoryPage, SearchHit, UsageSummary } from "./discovery.js";
 import type { RoutineOutput, RoutineResult } from "./collaboration.js";
 import type { AccountSnapshot, ResetOutcome } from "./account-usage.js";
+import type { ActionConfirmation } from "./confirmations.js";
+import type { WireRevision } from "./memory.js";
+import type { EmailCard, EventCard, ReplyCard } from "./reply-cards.js";
+import type { NativeTask } from "./tasks.js";
+
+export interface TodayLearningProposal {
+  botId: string;
+  botName: string;
+  revision: WireRevision;
+}
+
+export interface TodayMorningBrief {
+  botId: string;
+  botName: string;
+  messageId: string;
+  text: string;
+  createdAt: string;
+  cards: ReplyCard[];
+}
+
+export interface TodayReadyDraft {
+  botId: string;
+  botName: string;
+  messageId: string;
+  createdAt?: string;
+  card: EmailCard | EventCard;
+}
 export interface TodayItem {
   botId: string;
   botName: string;
@@ -33,6 +60,11 @@ export interface TodayOverview {
   events: RuntimeEvent[];
   unavailableBots: string[];
   upcoming?: import("./types.js").Routine[];
+  confirmations?: ActionConfirmation[];
+  tasks?: NativeTask[];
+  learningProposals?: TodayLearningProposal[];
+  morningBrief?: TodayMorningBrief;
+  readyDrafts?: TodayReadyDraft[];
 }
 export interface MemoryEntry {
   id: string;

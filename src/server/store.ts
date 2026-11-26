@@ -20,6 +20,9 @@ import { SecretRepository } from "./store-secrets.js";
 import { MemorySkillsRepository } from "./store-memory.js";
 import { NativeRoutineRepository } from "./store-native-routines.js";
 import { NativeGroupRepository } from "./group-coordinator.js";
+import { TaskRepository } from "./store-tasks.js";
+import { ConfirmationRepository } from "./store-confirmations.js";
+import { ChannelRepository } from "./store-channels.js";
 import type { FileSigner } from "./file-signer.js";
 
 export { schemaVersion } from "./store-database.js";
@@ -66,6 +69,9 @@ export class Store {
   readonly memory: MemorySkillsRepository;
   readonly nativeRoutines: NativeRoutineRepository;
   readonly nativeGroups: NativeGroupRepository;
+  readonly tasks: TaskRepository;
+  readonly confirmations: ConfirmationRepository;
+  readonly channels: ChannelRepository;
   private secretRepository?: SecretRepository;
   constructor(path: string) {
     this.database = new StoreDatabase(path);
@@ -111,6 +117,9 @@ export class Store {
     this.macs = new MacRepository(this.database);
     this.managedBots = new ManagedBotRepository(this.database);
     this.nativeGroups = new NativeGroupRepository(this.database, this.managedBots);
+    this.tasks = new TaskRepository(this.database);
+    this.confirmations = new ConfirmationRepository(this.database);
+    this.channels = new ChannelRepository(this.database);
   }
   /**
    * The mini-vault. Opened on first use, because opening it derives the vault key from WILDBOTS_VAULT_KEY or

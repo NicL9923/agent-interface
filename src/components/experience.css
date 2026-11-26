@@ -943,4 +943,252 @@
     }
   }
   /* END email draft revisions */
+
+  /* Inline Today triage, tasks, morning brief, outputs gallery & brain dump */
+  .today-status-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .today-status-actions > button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    font-size: 0.8125rem;
+    padding: 7px 10px;
+  }
+  .today-triage-stack {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .today-triage-card {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 14px 16px;
+    background: var(--raised);
+    display: grid;
+    gap: 8px;
+  }
+  .today-triage-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.8125rem;
+    color: var(--muted);
+  }
+  .today-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 2px 9px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .today-pill.attention,
+  .today-pill.status-needs_input {
+    color: var(--attention);
+    background: color-mix(in srgb, var(--attention) 16%, transparent);
+  }
+  .today-pill.status-ready_for_review {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .today-triage-summary,
+  .today-triage-preview,
+  .today-brief-body {
+    margin: 0;
+    font-size: 0.875rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .today-triage-preview {
+    color: var(--muted);
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .today-triage-fields {
+    margin: 0;
+    display: grid;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--surface);
+    font-size: 0.8125rem;
+  }
+  .today-triage-fields > div {
+    display: grid;
+    grid-template-columns: minmax(76px, auto) 1fr;
+    gap: 8px;
+  }
+  .today-triage-fields dt {
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .today-triage-fields dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .today-triage-controls {
+    display: grid;
+    gap: 8px;
+  }
+  .today-triage-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .today-inline-question {
+    padding: 0 4px 12px;
+    display: grid;
+    gap: 8px;
+  }
+  .today-inline-question-footer {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .today-inline-draft {
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+  .today-task-form {
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--raised);
+  }
+  .today-task-form-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 180px) 1fr auto;
+    gap: 8px;
+    align-items: center;
+  }
+  .outputs-content {
+    width: 100%;
+    max-width: 1040px;
+    margin-inline: auto;
+    display: grid;
+    gap: 16px;
+  }
+  .outputs-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .outputs-filter-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .outputs-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .outputs-grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 300px) 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  .outputs-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+  }
+  .outputs-item {
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: var(--raised);
+    display: grid;
+    gap: 4px;
+  }
+  .outputs-item.selected {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .outputs-item strong {
+    font-size: 0.9375rem;
+    overflow-wrap: anywhere;
+  }
+  .outputs-item small {
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .outputs-preview {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 16px;
+    background: var(--raised);
+    display: grid;
+    gap: 12px;
+  }
+  .outputs-preview-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .outputs-preview-header h2 {
+    margin: 2px 0 0;
+    font-size: 1.125rem;
+  }
+  .outputs-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .outputs-checklist {
+    margin: 0;
+    padding-left: 20px;
+    display: grid;
+    gap: 6px;
+    font-size: 0.9375rem;
+  }
+  .outputs-file-image {
+    max-width: 100%;
+    border-radius: 10px;
+  }
+  .brain-dump-form {
+    display: grid;
+    gap: 12px;
+  }
+  .brain-dump-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .channel-field {
+    display: grid;
+    gap: 6px;
+    font-size: 0.875rem;
+  }
+  @media (max-width: 720px) {
+    .outputs-grid,
+    .today-task-form-row {
+      grid-template-columns: 1fr;
+    }
+  }
 }

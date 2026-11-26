@@ -150,12 +150,14 @@ export interface Preferences {
   mainBotId?: string;
   /** Proactive check-ins by the main assistant. Server-owned like mainBotId; PUT /preferences/check-ins. */
   checkIns?: CheckInSettings;
+  /** Daily morning brief by the main assistant. Server-owned; PUT /preferences/morning-brief. */
+  morningBrief?: MorningBriefSettings;
   /** This person dismissed the suggestion to choose a main assistant. */
   mainSuggestionDismissed?: boolean;
   // --- End main assistant ---
 }
 /** Preferences fields only their own routes change. A partial save ignores them. */
-export type RoutedPreference = "modelFavorites" | "mainBotId" | "checkIns";
+export type RoutedPreference = "modelFavorites" | "mainBotId" | "checkIns" | "morningBrief";
 /** Fields a partial save may clear with `null`. Leaving any field out keeps it. */
 export type ClearablePreference =
   | "defaultBotId"
@@ -190,6 +192,13 @@ export interface CheckInSettings {
   /** Whole hours between check-ins, 1 to 4. */
   everyHours: number;
   /** The IANA timezone the main assistant reads as night, when it stays silent. */
+  timezone: string;
+}
+export interface MorningBriefSettings {
+  enabled: boolean;
+  /** Local HH:MM clock time (24h, e.g. "07:30") when the main assistant delivers the morning brief. */
+  timeOfDay: string;
+  /** The IANA timezone the daily schedule runs in. */
   timezone: string;
 }
 // --- End main assistant ---

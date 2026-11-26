@@ -9,7 +9,9 @@ import { createDefaultHarnessDrivers, type HarnessVoiceDelegate } from "./harnes
 import { createNativeComputerService } from "./harness/native-computer.js";
 import { createServerHarnessRuntime } from "./harness/wiring.js";
 import { createComputerMcpTools } from "./mcp/computer-tools.js";
+import { createConfirmationMcpTools } from "./mcp/confirmation-tools.js";
 import { createMacMcpTools, type MacLinkRelay } from "./mcp/mac-tools.js";
+import { createTaskMcpTools } from "./mcp/task-tools.js";
 import { createVaultMcpTools } from "./mcp/vault-tools.js";
 import { createWildbotsMcpServer, type McpToolProvider } from "./mcp/wildbots-mcp.js";
 import { createMemoryMcpTools } from "./memory-learning.js";
@@ -32,16 +34,46 @@ export interface ServerRuntime {
 }
 
 /** The memory and skill tools, as the WildBots MCP server's provider for the calling session's bot. */
-export function memoryToolProvider(memory: MemorySkillsRepository): McpToolProvider {
+export function memoryToolProvider(
+  memory: MemorySkillsRepository,
+  ownerPersonalBots?: (ownerId: string) => string[],
+): McpToolProvider {
   const tools = new Map(createMemoryMcpTools(memory).map((tool) => [tool.name, tool]));
   const definitions = [...tools.values()].map(({ name, description, inputSchema }) => ({
     name,
     description,
     inputSchema,
   }));
+  const sharedReadDef = {
+    name: "shared_memory_read",
+    description:
+      "Read active personal facts shared across your owner's other personal assistants (unavailable to shared household assistants).",
+    inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false },
+  };
   return {
-    listTools: () => definitions,
+    listTools: (ctx) =>
+      ownerPersonalBots && ctx.shared === false && ctx.ownerId
+        ? [...definitions, sharedReadDef]
+        : definitions,
     callTool: (ctx, name, args) => {
+      if (name === "shared_memory_read") {
+        if (!ownerPersonalBots || ctx.shared !== false || !ctx.ownerId)
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Shared personal memory is only available to personal assistants.",
+              },
+            ],
+            isError: true,
+          };
+        const text = memory.renderSharedOwnerMemoryMarkdown(
+          ctx.ownerId,
+          ctx.botId,
+          ownerPersonalBots(ctx.ownerId),
+        );
+        return { content: [{ type: "text", text: text || "_No shared personal facts yet._" }] };
+      }
       const tool = tools.get(name);
       if (!tool)
         return { content: [{ type: "text", text: "Unknown memory tool." }], isError: true };
@@ -102,8 +134,15 @@ export async function composeServerRuntime({
   let deliverMessage:
     | ((input: { sourceBotId: string; targetBotId: string; message: string }) => Promise<void>)
     | undefined;
+  const ownerPersonalBots = (ownerId: string) =>
+    store.managedBots
+      .listManagedBots()
+      .filter((row) => row.archivedAt == null && row.shared === false && row.ownerId === ownerId)
+      .map((row) => row.id);
   const extraToolProviders: McpToolProvider[] = [
-    memoryToolProvider(store.memory),
+    memoryToolProvider(store.memory, ownerPersonalBots),
+    createTaskMcpTools(store.tasks),
+    createConfirmationMcpTools(store.confirmations),
     createMacMcpTools({ store, relay }),
     createVaultMcpTools({
       secrets: store.secrets,

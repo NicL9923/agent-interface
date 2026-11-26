@@ -59,11 +59,23 @@ export function installMemoryRoutes(
   };
   const actor = (req: FastifyRequest<{ Params: { id: string } }>) => `user:${member(req).id}`;
 
+  const wireSettingsWithSharing = (
+    botId: string,
+    settings: LearningSettings,
+  ): WireLearningSettings => {
+    const base = wireSettings(settings);
+    const presentation = store.presentation(botId);
+    if (presentation.shared === false && presentation.ownerId) {
+      return { ...base, sharePersonalMemory: memory.sharedPersonalMemoryEnabled(botId) };
+    }
+    return base;
+  };
+
   apiRoute(app, "GET /bots/:id/learning", { before }, async (req) => {
     member(req);
     const botId = req.params.id;
     return {
-      settings: wireSettings(memory.settings(botId)),
+      settings: wireSettingsWithSharing(botId, memory.settings(botId)),
       entries: memory.listEntries(botId).map((entry) => wireItem(entry) satisfies WireMemoryEntry),
       skills: memory.listSkills(botId).map((skill) => wireItem(skill) satisfies WireSkill),
       pending: memory.listPending(botId).map(wireRevision),
@@ -79,9 +91,16 @@ export function installMemoryRoutes(
     app,
     "PUT /bots/:id/learning/settings",
     { before, body: learningSettingsBody },
-    async (req, { autoApply }) => {
+    async (req, { autoApply, sharePersonalMemory }) => {
       member(req);
-      return wireSettings(memory.updateSettings(req.params.id, { autoApply }));
+      const botId = req.params.id;
+      const updated = memory.updateSettings(botId, { autoApply });
+      if (sharePersonalMemory !== undefined) {
+        const presentation = store.presentation(botId);
+        if (presentation.shared === false && presentation.ownerId)
+          memory.setSharedPersonalMemoryEnabled(botId, sharePersonalMemory);
+      }
+      return wireSettingsWithSharing(botId, updated);
     },
   );
 

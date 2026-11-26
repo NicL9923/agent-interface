@@ -77,6 +77,20 @@ import type {
   QueueSendNowResponse,
 } from "./queue.js";
 import type {
+  ActionConfirmation,
+  ConfirmationDecisionInput,
+  ConfirmationListResponse,
+} from "./confirmations.js";
+import type { ChannelListResponse, CreateChannelInput, TopicChannel } from "./channels.js";
+import type { DeliverableKind, DeliverablesResponse } from "./deliverables.js";
+import type {
+  CreateTaskInput,
+  NativeTask,
+  TaskListResponse,
+  TaskStatus,
+  UpdateTaskInput,
+} from "./tasks.js";
+import type {
   Avatar,
   Bootstrap,
   Bot,
@@ -86,6 +100,7 @@ import type {
   InferenceSettings,
   ModelCatalog,
   ModelChoice,
+  MorningBriefSettings,
   Preferences,
   PreferencesPatch,
   CheckInSettings,
@@ -619,6 +634,27 @@ export interface ApiRoutes {
     body: SecureRequestAnswer;
     response: { status: "ok" | "expired" };
   };
+
+  // --- Morning brief, tasks, confirmations, deliverables & topic channels ---
+  "PUT /preferences/morning-brief": { body: MorningBriefSettings; response: Preferences };
+  "GET /tasks": {
+    query: { botId?: string; status?: TaskStatus | "open" };
+    response: TaskListResponse;
+  };
+  "POST /tasks": { body: CreateTaskInput; response: { task: NativeTask } };
+  "PATCH /tasks/:id": { body: UpdateTaskInput; response: { task: NativeTask } };
+  "DELETE /tasks/:id": { response: Ok };
+  "GET /confirmations": { response: ConfirmationListResponse };
+  "POST /bots/:id/confirmations/:confirmationId": {
+    body: ConfirmationDecisionInput;
+    response: { confirmation: ActionConfirmation };
+  };
+  "GET /deliverables": {
+    query: { botId?: string; kind?: "all" | DeliverableKind; q?: string; limit?: number };
+    response: DeliverablesResponse;
+  };
+  "GET /channels": { response: ChannelListResponse };
+  "POST /channels": { body: CreateChannelInput; response: { channel: TopicChannel; bot: Bot } };
 }
 export type ApiRoute = keyof ApiRoutes;
 export type ApiResponse<K extends ApiRoute> = ApiRoutes[K]["response"];

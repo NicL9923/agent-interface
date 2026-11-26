@@ -156,7 +156,7 @@ describe("group chats on home", () => {
       [...container.querySelectorAll(".home-links button")].map((button) =>
         button.textContent?.trim(),
       ),
-    ).toEqual(["Today"]);
+    ).toEqual(["Today", "Outputs"]);
     const [fence, supperRow, quietRow] = roomRows();
     expect(fence.querySelector("small")?.textContent).toContain("You: Posts are ordered.");
     expect(supperRow.querySelector("small")?.textContent).toContain(

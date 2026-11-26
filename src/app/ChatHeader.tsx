@@ -10,6 +10,7 @@ import type { View } from "./view";
 const titles: Record<Exclude<View, "conversation" | "group">, [string, string]> = {
   find: ["Search & saved", "Past answers, saved items and automations"],
   today: ["Today", "Your assistants, at a glance"],
+  outputs: ["Outputs", "Interactive views, drafts, cards and files across your assistants"],
 };
 /** Who the assistant belongs to. The model is shown only in Advanced, as its own chip. */
 export function botSummary(bot: Bot) {
