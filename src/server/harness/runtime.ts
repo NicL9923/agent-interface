@@ -2338,6 +2338,7 @@ export function createHarnessRuntime({
       assertOpen();
       return nativeGroups.handle(input);
     },
+    watchGroup: (roomId, listener) => nativeGroups.watch(roomId, listener),
     vaultRequest: (input) => {
       assertOpen();
       return nativeVault(input);
