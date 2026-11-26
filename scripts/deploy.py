@@ -64,8 +64,13 @@ def build_remote_script(
     backup_flag = "1" if skip_backup else "0"
 
     return f"""set -euo pipefail
-export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 ROOT={q_root}
+for candidate in $(ls -1d "$ROOT"/runtime/node-v24*/bin "$ROOT"/runtime/node-v26*/bin "$ROOT"/runtime/bun-v* 2>/dev/null | sort -V); do
+  if [ -d "$candidate" ]; then
+    PATH="$candidate:$PATH"
+  fi
+done
+export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 REL_NAME={q_rel}
 REL_DIR="$ROOT/releases/$REL_NAME"
 TARBALL={q_tar}
@@ -93,7 +98,7 @@ if [ -n "$PREV" ] && [ -d "$PREV/dist/client/assets" ]; then
 fi
 
 if [ "$SKIP_BACKUP" = "0" ] && [ -n "$PREV" ] && [ -f "$PREV/.agents/tools/backup-app.mjs" ] && [ -f "$ROOT/shared/app.env" ]; then
-  (set -a; source "$ROOT/shared/app.env"; set +a; node "$PREV/.agents/tools/backup-app.mjs") || echo "Warning: pre-deploy backup returned non-zero; continuing." >&2
+  (set -a; source "$ROOT/shared/app.env"; set +a; if [ -n "${{APP_DATABASE:-}}" ] && [ -n "${{APP_BACKUP_DIR:-}}" ]; then node "$PREV/.agents/tools/backup-app.mjs" "$APP_DATABASE" "$APP_BACKUP_DIR"; fi) || echo "Warning: pre-deploy backup returned non-zero; continuing." >&2
 fi
 
 rollback() {{

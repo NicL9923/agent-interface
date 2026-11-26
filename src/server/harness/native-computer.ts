@@ -445,10 +445,13 @@ export function createNativeComputerService(
 
       if (cdp && !(await cdp.isReady()) && chromeBin) {
         const [width, height] = config.geometry.split("x");
+        const xdgConfig = join(config.stateDirectory, "xdg", "config");
+        const xdgCache = join(config.stateDirectory, "xdg", "cache");
+        mkdirSync(xdgConfig, { recursive: true, mode: 0o700 });
+        mkdirSync(xdgCache, { recursive: true, mode: 0o700 });
         chromeProc = spawn(
           chromeBin,
           [
-            `--remote-debugging-address=127.0.0.1`,
             `--remote-debugging-port=${config.cdpPort}`,
             `--user-data-dir=${profileDir}`,
             "--no-first-run",
@@ -466,6 +469,8 @@ export function createNativeComputerService(
               ...process.env,
               DISPLAY: config.display,
               HOME: config.stateDirectory,
+              XDG_CONFIG_HOME: xdgConfig,
+              XDG_CACHE_HOME: xdgCache,
             },
           },
         );
