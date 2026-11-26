@@ -743,11 +743,14 @@ describe("conversation change stream", () => {
       });
     });
 
-    // The turn ends with a structural notice. Growth still waiting for its tick is dropped, not sent after the
-    // notice, and the notice goes at once: the client's read on it brings the saved reply.
-    it.each(["1", "2"])(
-      "?inflight=%s drops growth held for the tick when the turn ends, and sends the change notice at once",
-      async (mode) => {
+    // A mid-turn control barrier (such as tool.started or question.asked) arrives while live growth is
+    // still waiting for its tick: flush the buffered update strictly before `data: change`, never after.
+    it.each([
+      ["1", ["Hello", "Hello there"]],
+      ["2", ["Hello", " there"]],
+    ] as const)(
+      "?inflight=%s flushes pending growth before a control barrier's change notice, with nothing after",
+      async (mode, expected) => {
         const s = await setup();
         const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
         await events.until(() => events.text.includes("retry"));
@@ -762,10 +765,88 @@ describe("conversation change stream", () => {
         await pass(LIVE_TICK_MS * 2);
         expect(
           frames(events.text).map(([, data]) => data.message?.text ?? data.appendText),
+        ).toEqual(expected);
+        // The flushed live frame must strictly precede the structural change notice on the wire.
+        const changeIndex = events.text.indexOf("data: change\n\n");
+        const lastEventIndex = events.text.lastIndexOf("event: ");
+        expect(changeIndex).toBeGreaterThan(-1);
+        expect(lastEventIndex).toBeLessThan(changeIndex);
+        await events.close();
+      },
+    );
+
+    // When the turn has already ended (no live reply left), the structural notice sends at once with no extra frame.
+    it.each(["1", "2"])(
+      "?inflight=%s sends no extra live frame when the turn already ended before the change notice",
+      async (mode) => {
+        const s = await setup();
+        const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
+        await events.until(() => events.text.includes("retry"));
+        s.runtime.inflight = () => live("Hello");
+        s.change("shared", "inflight");
+        await pass(0);
+        s.runtime.inflight = () => live("Hello there");
+        s.change("shared", "inflight");
+        s.runtime.inflight = () => undefined;
+        s.change("shared");
+        await pass(0);
+        expect(events.notices()).toBe(1);
+        await pass(LIVE_TICK_MS * 2);
+        expect(
+          frames(events.text).map(([, data]) => data.message?.text ?? data.appendText),
         ).toEqual(["Hello"]);
         await events.close();
       },
     );
+
+    // If privacy changed mid-turn, skip the synchronous barrier flush so hidden content never leaks.
+    it("skips synchronous barrier flush when privacy version changed mid-turn", async () => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=2`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      s.runtime.inflight = () => live("Hello");
+      s.change("shared", "inflight");
+      await pass(0);
+      s.runtime.inflight = () =>
+        live("Hello secret", {
+          origin: { kind: "agent", visibility: "activity", handle: "hidden" },
+        });
+      s.store.savePresentation("hidden", { shared: false, ownerId: "local-two" });
+      s.change("shared", "inflight");
+      s.change("shared");
+      await pass(0);
+      expect(events.notices()).toBe(1);
+      expect(events.text).not.toContain("secret");
+      expect(frames(events.text).map(([, data]) => data.message?.text ?? data.appendText)).toEqual([
+        "Hello",
+      ]);
+      await events.close();
+    });
+
+    it("?inflight=3 flushes buffered growth on a versioned control barrier and skips redundant hold when covered", async () => {
+      const s = await setup();
+      let built: NonNullable<ReturnType<NonNullable<Runtime["turn"]>>> | undefined;
+      s.runtime.followTurns = () => () => {};
+      s.runtime.turn = () => built;
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      built = { ...live("Hello"), version: "b:1:1", turn: { messages: [], after: null } };
+      s.change("shared", "inflight");
+      await pass(0);
+      // Buffer growth within TURN_TICK_MS, then emit a versioned control barrier at b:1:2.
+      built = { ...live("Hello there"), version: "b:1:2", turn: { messages: [], after: null } };
+      s.change("shared", "inflight");
+      s.change("shared", undefined, "b:1:2");
+      await pass(0);
+      expect(frames(events.text).map(([event, data]) => [event, data.message?.text])).toEqual([
+        ["turn", "Hello"],
+        ["turn", "Hello there"],
+      ]);
+      // Because the flushed turn event already reached b:1:2, no fallback change notice fires.
+      await pass(TURN_HOLD_MS * 2);
+      expect(events.notices()).toBe(0);
+      await events.close();
+    });
 
     it("writes nothing more to a client that stops reading until it catches up, then sends all it missed as one delta", async () => {
       const s = await setup();
@@ -983,6 +1064,145 @@ describe("conversation change stream", () => {
     await mine.close();
     await theirs.close();
     await legacy.close();
+  });
+
+  it("announces queue changes only on ?queue=1 streams for queue writes, conversation writes, and version advances", async () => {
+    const s = await setup();
+    const optedIn = await stream(`${s.base}/api/bots/shared/events?queue=1`, s.cookie);
+    const legacy = await stream(`${s.base}/api/bots/shared/events?inflight=2`, s.cookie);
+    for (const opened of [optedIn, legacy]) await opened.until(() => opened.text.includes("retry"));
+    const queueCount = (target: typeof optedIn) =>
+      target.text.split("event: queue\ndata: queue\n\n").length - 1;
+    const headers = {
+      cookie: s.cookie,
+      origin,
+      "x-csrf-token": s.csrfToken,
+      "content-type": "application/json",
+    };
+    const item = s.store.queue.enqueue({
+      botId: "shared",
+      requestId: randomUUID(),
+      senderId: "local-one",
+      senderName: "First member",
+      text: "Queued item",
+    });
+    // PATCH /queue/:itemId emits event: queue on ?queue=1.
+    expect(
+      (
+        await fetch(`${s.base}/api/bots/shared/queue/${item.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ text: "Updated queued item" }),
+        })
+      ).status,
+    ).toBe(200);
+    await optedIn.until(() => queueCount(optedIn) === 1);
+    // A failed queue write (400) does not emit event: queue.
+    expect(
+      (
+        await fetch(`${s.base}/api/bots/shared/queue/${item.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ text: "   " }),
+        })
+      ).status,
+    ).toBe(400);
+    // POST /messages emits event: queue too.
+    expect(
+      (
+        await fetch(`${s.base}/api/bots/shared/messages`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ requestId: randomUUID(), text: "Hello" }),
+        })
+      ).status,
+    ).toBe(200);
+    await optedIn.until(() => queueCount(optedIn) === 2);
+    // DELETE /queue/:itemId emits event: queue.
+    expect(
+      (
+        await fetch(`${s.base}/api/bots/shared/queue/${item.id}`, {
+          method: "DELETE",
+          headers: { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken },
+        })
+      ).status,
+    ).toBe(200);
+    await optedIn.until(() => queueCount(optedIn) === 3);
+    // Background runtime queue transition advancing conversation version + structural notice emits event: queue.
+    s.store.queue.bumpVersion("shared");
+    s.change("shared");
+    await optedIn.until(() => queueCount(optedIn) === 4);
+    await pass(200);
+    expect(queueCount(optedIn)).toBe(4);
+    expect(legacy.text).not.toContain("event: queue");
+    await optedIn.close();
+    await legacy.close();
+  });
+
+  it("runs bootstrap snapshot.read() concurrently with probeHarnesses() and runtime.status() concurrently with listBots()", async () => {
+    const fake = runtimeDouble();
+    let releaseBots!: () => void;
+    let releaseStatus!: () => void;
+    let releaseProbe!: () => void;
+    let botsStarted = false;
+    let statusStarted = false;
+    let probeStarted = false;
+    const botsGate = new Promise<void>((resolve) => {
+      releaseBots = resolve;
+    });
+    const statusGate = new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    fake.runtime.listBots = vi.fn(async () => {
+      botsStarted = true;
+      await botsGate;
+      return fake.bots;
+    });
+    fake.runtime.status = vi.fn(async () => {
+      statusStarted = true;
+      await statusGate;
+      return { connected: true };
+    });
+    const probeHarnesses = vi.fn(async () => {
+      probeStarted = true;
+      await probeGate;
+      return [{ id: "codex", available: true }];
+    });
+    const { app } = await createApp(
+      loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+      fake.runtime,
+      { background: false, probeHarnesses },
+    );
+    apps.push(app);
+    const base = await app.listen({ port: 0, host: "127.0.0.1" });
+    const signIn = await fetch(`${base}/api/auth/local`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ member: "one" }),
+    });
+    const cookie = signIn.headers.getSetCookie()[0].split(";")[0];
+
+    const pending = fetch(`${base}/api/bootstrap?roster=lean`, { headers: { cookie } });
+    // All three must start concurrently before any of them resolves.
+    await vi.waitFor(() => {
+      expect(botsStarted).toBe(true);
+      expect(statusStarted).toBe(true);
+      expect(probeStarted).toBe(true);
+    });
+    releaseBots();
+    releaseStatus();
+    releaseProbe();
+    const response = await pending;
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      connection: { connected: boolean };
+      harnesses: { id: string; available: boolean }[];
+    };
+    expect(body.connection).toEqual({ connected: true });
+    expect(body.harnesses).toEqual([{ id: "codex", available: true }]);
   });
 
   it("ends the stream instead of notifying once its session is signed out", async () => {

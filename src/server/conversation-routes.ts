@@ -64,13 +64,11 @@ const sharedReadMargin = 60000;
  */
 export const LIVE_TICK_MS = 250;
 /**
- * The least time between two live updates on a `?inflight=3` turn stream, the web client's. Its paced reveal
- * spreads each update over CATCH_UP_MS (src/components/streaming-reveal.ts), so at 100 ms instead of 250 a word
- * showed 230 to 264 ms after Hermes produced it instead of 300 to 305 (medians at 150 characters a second; p95
- * 292 to 315 against 338 to 349), with paints still 33 ms apart. Six streams of growth cost the server 7.7 ms
- * of CPU and 12 KB a second, against 3.4 ms and 5.5 KB at 250. Measured as for LIVE_TICK_MS.
+ * The least time between two live updates on a `?inflight=3` turn stream, the web client's. Tightened to 50 ms
+ * to cut streaming latency while keeping coalesced frames bounded; its paced reveal spreads each update over
+ * CATCH_UP_MS (src/components/streaming-reveal.ts).
  */
-export const TURN_TICK_MS = 100;
+export const TURN_TICK_MS = 50;
 /**
  * How long a `?inflight=3` stream holds its change notice for a change its turn event will carry, such as a tool
  * finishing, before sending it anyway. The server's turn read after the change takes tens of milliseconds, so
@@ -383,6 +381,9 @@ export function installConversationRoutes(
   // Change notices for one conversation, so open chats refetch instead of polling. Sign-in
   // and assistant access are the conversation read's own hooks; each notice rechecks the session.
   const watchers = new Map<string, Set<() => void>>();
+  // Opt-in queue notices (`?queue=1`) per assistant, notified on queue route writes, conversation
+  // writes, and runtime structural transitions that advance the queue's conversation version.
+  const queueStreams = new Map<string, Set<() => void>>();
   // The app's own conversation writes notify at once, before Hermes reports their effect.
   const conversationWrites = new Set(
     [
@@ -398,9 +399,22 @@ export function installConversationRoutes(
       "connection-requests/:requestId",
     ].map((path) => `POST /api/bots/:id/${path}`),
   );
+  const queueWrites = new Set([
+    "PATCH /api/bots/:id/queue/:itemId",
+    "POST /api/bots/:id/queue/:itemId/reorder",
+    "POST /api/bots/:id/queue/:itemId/send-now",
+    "DELETE /api/bots/:id/queue/:itemId",
+  ]);
   app.addHook("onResponse", async (req, reply) => {
-    if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))
-      for (const changed of watchers.get((req.params as { id: string }).id) ?? []) changed();
+    if (reply.statusCode >= 400) return;
+    const route = `${req.method} ${routePattern(req)}`;
+    const isConversationWrite = conversationWrites.has(route);
+    const isQueueWrite = queueWrites.has(route);
+    if (!isConversationWrite && !isQueueWrite) return;
+    const botId = (req.params as { id?: string }).id;
+    if (!botId) return;
+    if (isConversationWrite) for (const changed of watchers.get(botId) ?? []) changed();
+    for (const queueChanged of queueStreams.get(botId) ?? []) queueChanged();
   });
   // Each person's open streams per assistant hear their own draft's new revisions, so a chat open
   // on another device reloads the draft at once instead of polling for it. Only the revision is
@@ -435,6 +449,8 @@ export function installConversationRoutes(
     // ?drafts=1 adds `event: draft` notices. Without it none are sent: the iOS app reads any
     // unnamed or unknown data line as a conversation change and would refetch on every draft save.
     const draftNotices = (req.query as { drafts?: string }).drafts === "1";
+    // ?queue=1 adds `event: queue` notices, opt-in for the same reason as ?drafts=1.
+    const queueNotices = (req.query as { queue?: string }).queue === "1";
     // The privacy version the redaction below was built for. Every change to who owns or shares an
     // assistant advances it, so comparing versions replaces re-reading and comparing the private list.
     let seen = store.privacyVersion;
@@ -445,6 +461,11 @@ export function installConversationRoutes(
     let livePending: ReturnType<typeof setTimeout> | undefined,
       liveLast = 0;
     let stream: EventStream | undefined;
+    let lastQueueVersion = queueNotices ? store.queue.version(botId) : 0;
+    const queueChanged = () => {
+      if (queueNotices) lastQueueVersion = store.queue.version(botId);
+      stream?.send("event: queue\ndata: queue\n\n");
+    };
     // What this stream last sent of the live reply, after redaction, so growth is measured on what
     // the viewer may see and never on the raw reply.
     // A turn stream's growth is based on the version its last whole event carried.
@@ -493,19 +514,121 @@ export function installConversationRoutes(
         held = undefined;
       }
     };
+    const emitLive = (
+      currentRedact: Awaited<ReturnType<typeof redactAgents>>,
+    ): { hasValue: boolean; turnVersion?: string } => {
+      // A turn stream's reply carries the read it is built on, so a runtime without turns sends it nothing live.
+      const turn = turns ? runtime.turn?.(botId) : undefined;
+      const value = turns ? turn : runtime.inflight?.(botId);
+      // A structural read is already pending when its snapshot was invalidated. On a turn stream that read is
+      // the server's own, and the reply it restores goes at once.
+      if (!value) return { hasValue: false };
+      const message = currentRedact.message(value.message),
+        toolCalls = value.toolCalls.map(currentRedact.call);
+      if (deltas) {
+        const reasoning = message.reasoning ?? "";
+        const next = {
+          id: message.id,
+          text: message.text,
+          reasoning,
+          tools: JSON.stringify(toolCalls),
+          // Everything else about the message, which a growth notice cannot carry.
+          rest: JSON.stringify({ ...message, text: "", reasoning: undefined }),
+          activity: JSON.stringify(value.activity),
+          ...(turn ? { version: turn.version } : {}),
+        };
+        const base = sent;
+        sent = next;
+        if (
+          base &&
+          base.id === next.id &&
+          base.rest === next.rest &&
+          base.version === next.version &&
+          next.text.startsWith(base.text) &&
+          reasoning.startsWith(base.reasoning)
+        ) {
+          const appendText = next.text.slice(base.text.length),
+            appendReasoning = reasoning.slice(base.reasoning.length);
+          const toolsChanged = base.tools !== next.tools;
+          if (!appendText && !appendReasoning && !toolsChanged && base.activity === next.activity)
+            return { hasValue: true };
+          const delta: InflightDelta = {
+            botId: value.botId,
+            messageId: message.id,
+            baseTextLength: base.text.length,
+            baseReasoningLength: base.reasoning.length,
+            ...(appendText ? { appendText } : {}),
+            ...(appendReasoning ? { appendReasoning } : {}),
+            activity: value.activity,
+            ...(toolsChanged ? { toolCalls } : {}),
+          };
+          if (stream?.send(`event: inflight-delta\ndata: ${JSON.stringify(delta)}\n\n`))
+            timings.written(botId, value.activity.runId);
+          return { hasValue: true };
+        }
+      }
+      if (turn) {
+        const event: TurnEvent = {
+          botId: turn.botId,
+          version: turn.version,
+          messages: shownMessages(store, botId, currentRedact, turn.turn.messages),
+          ...(turn.turn.after !== undefined ? { after: turn.turn.after } : {}),
+          message,
+          activity: turn.activity,
+          toolCalls,
+        };
+        if (stream?.send(`event: turn\ndata: ${JSON.stringify(event)}\n\n`)) {
+          timings.written(botId, turn.activity.runId);
+          covered(turn.version);
+          return { hasValue: true, turnVersion: turn.version };
+        }
+        return { hasValue: true };
+      }
+      if (
+        stream?.send(
+          `event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`,
+        )
+      )
+        timings.written(botId, value.activity.runId);
+      return { hasValue: true };
+    };
     const holds = turns && !!runtime.turn && !!runtime.followTurns;
     // The server's own turn read has landed, and the next tick answers it.
     let restoredRead = false;
     const notice = (kind?: "inflight", turnVersion?: string) => {
       if (!optedIn || kind !== "inflight") {
+        const hadPendingLive = livePending !== undefined;
         clearTimeout(livePending);
         livePending = undefined;
+        let flushedVersion: string | undefined;
         if (optedIn) {
+          // Flush any coalesced live growth synchronously before the structural control barrier
+          // (such as tool.started or question.asked) so buffered tokens are not dropped while
+          // keeping frame order strict (live frame before change/hold) and respecting backpressure
+          // and privacy updates.
+          if (
+            hadPendingLive &&
+            redact &&
+            store.privacyVersion === seen &&
+            stream &&
+            !reply.raw.writableNeedDrain
+          ) {
+            try {
+              const result = emitLive(redact);
+              if (result.hasValue) liveLast = Date.now();
+              flushedVersion = result.turnVersion;
+            } catch {
+              // Fall through to the structural notice below so the client refetches.
+            }
+          }
           redact = undefined;
           seen = -1;
         }
-        if (holds && turnVersion) hold(turnVersion);
-        else changed();
+        if (queueNotices && store.queue.version(botId) !== lastQueueVersion) queueChanged();
+        if (holds && turnVersion) {
+          if (!flushedVersion || (compareVersions(flushedVersion, turnVersion) ?? -1) < 0)
+            hold(turnVersion);
+        } else changed();
         return;
       }
       livePending ??= setTimeout(
@@ -533,87 +656,12 @@ export function installConversationRoutes(
               }
               seen = version;
             }
-            // A turn stream's reply carries the read it is built on, so a runtime without turns sends it nothing live.
-            const turn = turns ? runtime.turn?.(botId) : undefined;
-            const value = turns ? turn : runtime.inflight?.(botId);
-            // A structural read is already pending when its snapshot was invalidated. On a turn stream that read is
-            // the server's own, and the reply it restores goes at once.
-            if (!value || !redact) {
+            const result = redact ? emitLive(redact) : { hasValue: false };
+            if (!result.hasValue) {
               if (turns) liveLast = previous;
               return;
             }
-            const message = redact.message(value.message),
-              toolCalls = value.toolCalls.map(redact.call);
-            if (deltas) {
-              const reasoning = message.reasoning ?? "";
-              const next = {
-                id: message.id,
-                text: message.text,
-                reasoning,
-                tools: JSON.stringify(toolCalls),
-                // Everything else about the message, which a growth notice cannot carry.
-                rest: JSON.stringify({ ...message, text: "", reasoning: undefined }),
-                activity: JSON.stringify(value.activity),
-                ...(turn ? { version: turn.version } : {}),
-              };
-              const base = sent;
-              sent = next;
-              if (
-                base &&
-                base.id === next.id &&
-                base.rest === next.rest &&
-                base.version === next.version &&
-                next.text.startsWith(base.text) &&
-                reasoning.startsWith(base.reasoning)
-              ) {
-                const appendText = next.text.slice(base.text.length),
-                  appendReasoning = reasoning.slice(base.reasoning.length);
-                const toolsChanged = base.tools !== next.tools;
-                if (
-                  !appendText &&
-                  !appendReasoning &&
-                  !toolsChanged &&
-                  base.activity === next.activity
-                )
-                  return;
-                const delta: InflightDelta = {
-                  botId: value.botId,
-                  messageId: message.id,
-                  baseTextLength: base.text.length,
-                  baseReasoningLength: base.reasoning.length,
-                  ...(appendText ? { appendText } : {}),
-                  ...(appendReasoning ? { appendReasoning } : {}),
-                  activity: value.activity,
-                  ...(toolsChanged ? { toolCalls } : {}),
-                };
-                if (stream?.send(`event: inflight-delta\ndata: ${JSON.stringify(delta)}\n\n`))
-                  timings.written(botId, value.activity.runId);
-                return;
-              }
-            }
-            if (turn) {
-              const event: TurnEvent = {
-                botId: turn.botId,
-                version: turn.version,
-                messages: shownMessages(store, botId, redact, turn.turn.messages),
-                ...(turn.turn.after !== undefined ? { after: turn.turn.after } : {}),
-                message,
-                activity: turn.activity,
-                toolCalls,
-              };
-              if (stream?.send(`event: turn\ndata: ${JSON.stringify(event)}\n\n`)) {
-                timings.written(botId, turn.activity.runId);
-                delivered = true;
-                covered(turn.version);
-              }
-              return;
-            }
-            if (
-              stream?.send(
-                `event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`,
-              )
-            )
-              timings.written(botId, value.activity.runId);
+            if (result.turnVersion !== undefined) delivered = true;
           })()
             .catch(() => changed())
             .finally(() => {
@@ -626,6 +674,7 @@ export function installConversationRoutes(
       );
     };
     const listeners = watchers.get(botId) ?? new Set();
+    const queues = queueStreams.get(botId) ?? new Set();
     const ownDraft = draftKey(signedIn(req).id, botId);
     const drafts = draftStreams.get(ownDraft) ?? new Set();
     const draftChanged = (revision: number) => stream?.send(`event: draft\ndata: ${revision}\n\n`);
@@ -635,6 +684,8 @@ export function installConversationRoutes(
       unfollow?.();
       listeners.delete(changed);
       if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
+      queues.delete(queueChanged);
+      if (!queues.size && queueStreams.get(botId) === queues) queueStreams.delete(botId);
       drafts.delete(draftChanged);
       if (!drafts.size && draftStreams.get(ownDraft) === drafts) draftStreams.delete(ownDraft);
       clearTimeout(pending);
@@ -644,6 +695,7 @@ export function installConversationRoutes(
     stream = connection.open(streams, {
       reserve: () => {
         watchers.set(botId, listeners.add(changed));
+        if (queueNotices) queueStreams.set(botId, queues.add(queueChanged));
         if (draftNotices) draftStreams.set(ownDraft, drafts.add(draftChanged));
         unwatch = runtime.watch?.(botId, notice);
         // Only turn streams hear the server's own turn reads; ?inflight=1 and ?inflight=2 wait for a client's read.

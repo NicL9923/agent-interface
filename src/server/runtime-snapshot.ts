@@ -109,15 +109,15 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
     const began = begin();
     // Share only runtime reads, undecorated: presentation, identity, preferences and CSRF stay request-scoped.
     const reading: Promise<RuntimeSnapshot> = (async () => {
-      const [listed, capabilities] = await Promise.all([
-        runtime.listBots(),
+      const [bots, capabilities, connection] = await Promise.all([
+        runtime.listBots().then((listed) => withBotCapabilities(runtime, listed)),
         runtime.capabilities(),
+        runtime.status(),
       ]);
-      const bots = await withBotCapabilities(runtime, listed);
       return {
         bots,
         capabilities,
-        connection: await runtime.status(),
+        connection,
         rosterUnknown: isUnknownRoster(bots),
       };
     })();
