@@ -76,7 +76,6 @@ export class RetentionRepository {
         "retry_claims",
         "routine_trials",
         "push_action_tokens",
-        "bot_queue",
         "native_tasks",
         "action_confirmations",
         "bot_shared_memory_prefs",
@@ -89,7 +88,7 @@ export class RetentionRepository {
         .prepare("UPDATE morning_brief_jobs SET removed_at=? WHERE bot_id=? AND removed_at IS NULL")
         .run(Date.now(), botId);
       // A new assistant reusing this ID must reject actions written against its predecessor.
-      this.queue.bumpVersion(botId);
+      this.queue.forgetBot(botId);
       for (const job of this.checkIns?.current().filter((job) => job.botId === botId) ?? [])
         this.checkIns!.removed(botId, job.jobId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);

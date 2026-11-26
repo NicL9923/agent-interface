@@ -1154,6 +1154,7 @@ it.each(["", "?bot=shared"])(
     );
     history.replaceState(null, "", `/${query}`);
     await renderApp();
+    await loaded();
     expect(!!container.querySelector(".today-panel")).toBe(!query);
     expect(!!container.querySelector(".transcript")).toBe(!!query);
   },
@@ -1267,7 +1268,7 @@ describe("pushed conversation updates", () => {
     await advance(20);
     expect(FakeEventSource.created).toEqual([
       "/api/events?ping=10",
-      "/api/bots/shared/events?inflight=3&drafts=1&ping=10",
+      "/api/bots/shared/events?inflight=3&drafts=1&queue=1&ping=10",
     ]);
     const stream = [...FakeEventSource.streams].find((stream) => stream.url.includes("/bots/"))!;
     // A change between the first read and the subscription would be lost, so connecting reloads.

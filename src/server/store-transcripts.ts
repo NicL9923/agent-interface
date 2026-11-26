@@ -81,6 +81,10 @@ function messageFromRow(row: MessageRow): TranscriptMessage {
 /** One canonical ordering per bot. Append and snapshot inputs are oldest first. */
 export class TranscriptRepository {
   private readonly backfills = new Map<string, Promise<TranscriptSyncState | undefined>>();
+  private readonly previewCache = new Map<
+    string,
+    { messageId: string; text: string; at?: string } | undefined
+  >();
 
   constructor(private readonly database: StoreDatabase) {}
   private get db() {
@@ -115,6 +119,7 @@ export class TranscriptRepository {
         lastAllocatedSeq,
       );
     });
+    this.previewCache.delete(botId);
     this.backfills.delete(botId);
     return state;
   }
@@ -160,6 +165,7 @@ export class TranscriptRepository {
         lastAllocatedSeq,
       );
     });
+    this.previewCache.delete(botId);
     this.backfills.delete(botId);
     return state;
   }
@@ -260,6 +266,10 @@ export class TranscriptRepository {
   }
 
   latestPreview(botId: string): { messageId: string; text: string; at?: string } | undefined {
+    if (this.previewCache.has(botId)) {
+      const cached = this.previewCache.get(botId);
+      return cached ? { ...cached } : undefined;
+    }
     const rows = this.db
       .prepare(
         `SELECT * FROM transcript_messages
@@ -267,13 +277,18 @@ export class TranscriptRepository {
         ORDER BY seq DESC`,
       )
       .iterate(botId) as IterableIterator<MessageRow>;
+    let preview: { messageId: string; text: string; at?: string } | undefined;
     for (const row of rows) {
       const message = messageFromRow(row);
       if (isActivityMessage(message) || !message.text.trim()) continue;
       const text = excerpt(markdownPlain(message.text), 160);
-      if (text) return { messageId: message.id, text, at: message.createdAt };
+      if (text) {
+        preview = { messageId: message.id, text, at: message.createdAt };
+        break;
+      }
     }
-    return undefined;
+    this.previewCache.set(botId, preview);
+    return preview ? { ...preview } : undefined;
   }
 
   syncState(botId: string): TranscriptSyncState | undefined {
@@ -315,6 +330,7 @@ export class TranscriptRepository {
   forgetBot(botId: string) {
     this.db.prepare("DELETE FROM transcript_messages WHERE bot_id=?").run(botId);
     this.db.prepare("DELETE FROM transcript_sync WHERE bot_id=?").run(botId);
+    this.previewCache.delete(botId);
     this.backfills.delete(botId);
   }
 

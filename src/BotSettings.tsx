@@ -143,6 +143,8 @@ function LoadedBotSettings({
     avatar: existing?.avatar || defaultAvatar,
   }));
   const savedName = baseline.form.name || existing?.name || "";
+  const [form, setForm] = useState<BotForm>(baseline.form);
+  const [avatar, setAvatar] = useState<AvatarConfig>(baseline.avatar);
   // The dialog stays mounted while detail loads; only authoritative detail seeds the form.
   const wasLoading = useRef(!!loading);
   useEffect(() => {
@@ -156,9 +158,7 @@ function LoadedBotSettings({
     setBaseline({ form, avatar: existing.avatar || defaultAvatar });
     setForm(form);
     setAvatar(existing.avatar || defaultAvatar);
-  }, [loading, existing]);
-  const [form, setForm] = useState<BotForm>(baseline.form);
-  const [avatar, setAvatar] = useState<AvatarConfig>(baseline.avatar);
+  }, [loading, existing, bootstrap]);
   const actions = useAction();
   const { busy, error, notice, setError, setNotice } = actions;
   const catalogOptions = (kind: "tools" | "skills") => ({

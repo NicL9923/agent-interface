@@ -146,16 +146,28 @@ function AccountCard({
       </div>
       {account.windows.length > 0 && (
         <ul className="usage-windows">
-          {account.windows.map((window, index) => (
-            <Allowance key={`${window.label}:${index}`} window={window} />
-          ))}
+          {(() => {
+            const counts = new Map<string, number>();
+            return account.windows.map((window) => {
+              const seen = counts.get(window.label) ?? 0;
+              counts.set(window.label, seen + 1);
+              return <Allowance key={`${window.label}:${seen}`} window={window} />;
+            });
+          })()}
         </ul>
       )}
-      {account.details.map((line, index) => (
-        <p key={index} className="usage-detail">
-          {line}
-        </p>
-      ))}
+      {(() => {
+        const counts = new Map<string, number>();
+        return account.details.map((line) => {
+          const seen = counts.get(line) ?? 0;
+          counts.set(line, seen + 1);
+          return (
+            <p key={`${line}:${seen}`} className="usage-detail">
+              {line}
+            </p>
+          );
+        });
+      })()}
       {account.unavailableReason && (
         <p className="usage-detail muted">{account.unavailableReason}</p>
       )}

@@ -6,6 +6,7 @@ import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { ModelChipFace, modelChipTitle } from "../components/ModelChip";
 import { ChatModelPicker, Loading } from "./panels";
+import { intentPrefetchHandlers, preloadBotDetails } from "./intent-prefetch";
 import type { View } from "./view";
 const titles: Record<Exclude<View, "conversation" | "group">, [string, string]> = {
   find: ["Search & saved", "Past answers, saved items and automations"],
@@ -105,6 +106,7 @@ export const ChatHeader = memo(function ChatHeader({
           <span
             className="chat-identity-avatar"
             aria-hidden="true"
+            {...intentPrefetchHandlers(preloadBotDetails)}
             onClick={() => {
               identityButton.current?.focus({ preventScroll: true });
               onDetails(selected);
@@ -125,6 +127,7 @@ export const ChatHeader = memo(function ChatHeader({
               className="chat-identity"
               aria-haspopup="dialog"
               title="Details, pin, artifacts and settings"
+              {...intentPrefetchHandlers(preloadBotDetails)}
               onClick={() => onDetails(selected)}
             >
               <span className="chat-title">

@@ -1,6 +1,6 @@
 import { routeUrl } from "../shared/api";
 import { useEffect, useState } from "react";
-import { request } from "../client-api";
+import { pollWhileVisible, request } from "../client-api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import { AttentionCard } from "../app/AttentionCard";
@@ -103,12 +103,20 @@ function ConfirmationTriageCard({
               <dd>{item.target}</dd>
             </div>
           )}
-          {item.fields.map((field, index) => (
-            <div key={`${field.label}-${index}`}>
-              <dt>{field.label}</dt>
-              <dd>{field.value}</dd>
-            </div>
-          ))}
+          {(() => {
+            const seen = new Map<string, number>();
+            return item.fields.map((field) => {
+              const base = `${field.label}\0${field.value}`;
+              const count = (seen.get(base) ?? 0) + 1;
+              seen.set(base, count);
+              return (
+                <div key={count === 1 ? base : `${base}#${count}`}>
+                  <dt>{field.label}</dt>
+                  <dd>{field.value}</dd>
+                </div>
+              );
+            });
+          })()}
         </dl>
       )}
       <div className="today-triage-controls">
@@ -356,8 +364,7 @@ export function TodayPanel({
   const waiting = !!overview?.items.some((item) => item.pending);
   useEffect(() => {
     if (!waiting) return;
-    const timer = setInterval(() => void reload(), TODAY_RECHECK_MS);
-    return () => clearInterval(timer);
+    return pollWhileVisible(() => void reload(), TODAY_RECHECK_MS);
   }, [waiting, reload]);
 
   async function submitNewTask(event: React.FormEvent) {

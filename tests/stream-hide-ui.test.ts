@@ -25,7 +25,7 @@ vi.mock("../src/client-api", async (original) =>
 );
 
 const START = Date.parse("2026-11-10T12:00:00Z");
-const CHAT = "/api/bots/shared/events?inflight=3&drafts=1&ping=10";
+const CHAT = "/api/bots/shared/events?inflight=3&drafts=1&queue=1&ping=10";
 const HOUSEHOLD = "/api/events?ping=10";
 const ROOM = "/api/events?group=room&ping=10";
 let unexpected: string[];

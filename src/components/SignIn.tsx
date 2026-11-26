@@ -22,7 +22,12 @@ export function AvatarTrio() {
     <div className="avatar-trio" aria-hidden="true">
       {/* Distinct names give each its own idle gesture timing. */}
       {trio.map((avatar, i) => (
-        <Avatar key={i} avatar={avatar} size={i === 1 ? 84 : 64} name={`Welcome ${i + 1}`} />
+        <Avatar
+          key={avatar.shape}
+          avatar={avatar}
+          size={i === 1 ? 84 : 64}
+          name={`Welcome ${i + 1}`}
+        />
       ))}
     </div>
   );

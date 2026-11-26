@@ -41,10 +41,12 @@ const themes: [Preferences["theme"], string][] = [
   ["system", "Follow device"],
 ];
 
+const EMPTY_ROOMS: GroupRoom[] = [];
+
 export function CommandPalette({
   boot,
   botId,
-  rooms = [],
+  rooms = EMPTY_ROOMS,
   onSelectRoom,
   onNewGroup,
   shownBotId,
@@ -340,15 +342,19 @@ export function CommandPalette({
     onFind,
     main,
     onAsk,
+    onBrainDump,
+    onNewChannel,
   ]);
   const searching = !!query.trim();
   const results = useMemo(() => rankItems(query, commands), [query, commands]);
   useEffect(() => setActive(0), [query]);
   const current = results[Math.min(active, results.length - 1)];
   const optionId = (command: Command) => `${listId}-${command.id.replace(/[^\w-]/g, "_")}`;
+  const currentOptionId = current ? optionId(current) : undefined;
   useEffect(() => {
-    if (current) document.getElementById(optionId(current))?.scrollIntoView?.({ block: "nearest" });
-  }, [current?.id]);
+    if (currentOptionId)
+      document.getElementById(currentOptionId)?.scrollIntoView?.({ block: "nearest" });
+  }, [currentOptionId]);
   const choose = (command: Command | undefined) => {
     if (!command) return;
     onClose();
@@ -387,15 +393,17 @@ export function CommandPalette({
     );
   };
   // Unfiltered, the list keeps its groups; filtered, it is one ranked list naming each group.
-  let index = 0;
   const groups = searching
     ? null
-    : results.reduce<{ name: string; items: Command[] }[]>((all, command) => {
-        const last = all.at(-1);
-        if (last?.name === command.group) last.items.push(command);
-        else all.push({ name: command.group, items: [command] });
-        return all;
-      }, []);
+    : results.reduce<{ name: string; items: Command[]; startIndex: number }[]>(
+        (all, command, position) => {
+          const last = all.at(-1);
+          if (last?.name === command.group) last.items.push(command);
+          else all.push({ name: command.group, items: [command], startIndex: position });
+          return all;
+        },
+        [],
+      );
   return (
     <Dialog
       className="command-palette"
@@ -450,14 +458,18 @@ export function CommandPalette({
         </kbd>
       </div>
       <div ref={list} id={listId} role="listbox" aria-label="Results" className="palette-list">
-        {/* Keyed by position too: a name that ever repeats must not leave a stale group behind when filtering starts. */}
+        {/* Keyed by starting command too: a name that ever repeats must not leave a stale group behind when filtering starts. */}
         {groups
-          ? groups.map((group, position) => (
-              <div key={`${position}:${group.name}`} role="group" aria-label={group.name}>
+          ? groups.map((group) => (
+              <div
+                key={`${group.name}:${group.items[0]?.id ?? group.startIndex}`}
+                role="group"
+                aria-label={group.name}
+              >
                 <div className="palette-heading" aria-hidden="true">
                   {group.name}
                 </div>
-                {group.items.map((command) => option(command, index++))}
+                {group.items.map((command, offset) => option(command, group.startIndex + offset))}
               </div>
             ))
           : results.map((command, position) => option(command, position))}

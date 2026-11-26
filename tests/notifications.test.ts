@@ -2,7 +2,7 @@ import { createApp } from "../src/server/app.js";
 import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { expect, it, vi } from "vitest";
 import { Store } from "../src/server/store.js";
-import { BackgroundWorker } from "../src/server/notifications.js";
+import { BackgroundWorker, WORKER_WAKE_MS } from "../src/server/notifications.js";
 import { loadConfig } from "../src/server/config.js";
 import * as apns from "../src/server/apns.js";
 import type { RuntimeEvent } from "../src/shared/types.js";
@@ -906,4 +906,98 @@ it("stops a push already being delivered to a member's endpoints when another me
   } finally {
     store.close();
   }
+});
+
+it("coalesces BackgroundWorker.wake() bursts to WORKER_WAKE_MS and ignores wakes after stop", async () => {
+  vi.useFakeTimers();
+  const store = storeWithUsers();
+  store.subscribe("one", {
+    endpoint: "https://push.example.test/one",
+    keys: { p256dh: "key", auth: "auth" },
+  });
+  const discoverEvents = vi.fn(async (cursor: string) => ({ cursor, events: [] }));
+  const send = vi.fn(async () => {});
+  const worker = new BackgroundWorker(
+    store,
+    fakeRuntime({
+      capabilities: async () =>
+        capabilitiesFixture({
+          idempotency: { supported: false },
+          durableEvents: { supported: true },
+        }),
+      discoverEvents,
+      listBots: async () => [],
+    }),
+    household(),
+    send,
+  );
+  try {
+    queue(store, "woken", Date.now());
+    // Ten rapid wakes collapse into a single pass after WORKER_WAKE_MS.
+    for (let i = 0; i < 10; i++) worker.wake();
+    await vi.advanceTimersByTimeAsync(WORKER_WAKE_MS - 1);
+    expect(discoverEvents).toHaveBeenCalledTimes(0);
+    expect(send).toHaveBeenCalledTimes(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(discoverEvents).toHaveBeenCalledTimes(1);
+
+    // A pending wake is cancelled by stop(), and wakes after stop() are no-ops.
+    queue(store, "after-stop", Date.now());
+    worker.wake();
+    await worker.stop();
+    worker.wake();
+    await vi.advanceTimersByTimeAsync(WORKER_WAKE_MS * 10);
+    expect(discoverEvents).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
+  } finally {
+    await worker.stop();
+    store.close();
+    vi.useRealTimers();
+  }
+});
+
+it("wires runtime.watchRoster to wake the background worker on roster changes and unsubscribes on close", async () => {
+  vi.useFakeTimers();
+  const store = storeWithUsers();
+  const rosterListeners = new Set<() => void>();
+  const unwatch = vi.fn();
+  const discoverEvents = vi.fn(async (cursor: string) => ({ cursor, events: [] }));
+  const runtime = fakeRuntime({
+    capabilities: async () =>
+      capabilitiesFixture({
+        idempotency: { supported: false },
+        durableEvents: { supported: true },
+      }),
+    discoverEvents,
+    listBots: async () => [],
+    status: async () => ({ connected: true }),
+    routines: async () => [],
+    close: async () => {},
+    watchRoster: (listener) => {
+      rosterListeners.add(listener);
+      return () => {
+        rosterListeners.delete(listener);
+        unwatch();
+      };
+    },
+  });
+  const { app } = await createApp(household(), runtime, { store, background: true });
+  let subscribed = 0;
+  try {
+    await app.ready();
+    // Initial start() pass runs once.
+    await vi.waitFor(() => expect(discoverEvents).toHaveBeenCalledTimes(1));
+    subscribed = rosterListeners.size;
+    expect(subscribed).toBeGreaterThanOrEqual(1);
+    // Firing watchRoster wakes the worker within WORKER_WAKE_MS (not 5000ms).
+    for (const listener of rosterListeners) listener();
+    await vi.advanceTimersByTimeAsync(WORKER_WAKE_MS);
+    await vi.waitFor(() => expect(discoverEvents).toHaveBeenCalledTimes(2));
+  } finally {
+    await app.close();
+    vi.useRealTimers();
+  }
+  expect(unwatch).toHaveBeenCalledTimes(subscribed);
+  expect(rosterListeners.size).toBe(0);
 });

@@ -1,6 +1,7 @@
 import { request, responseScope } from "../client-api";
 import { routeUrl, type ApiQuery, type ApiResponse } from "../shared/api";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
+import { isSaveData } from "./intent-prefetch";
 
 export type PageQuery = ApiQuery<"GET /bots/:id/conversation">;
 export const firstQuery: PageQuery = { turns: HISTORY_PAGE_TURNS };
@@ -82,6 +83,7 @@ export function prefetchLinkedPage(botId: string) {
 export function prefetchFirstPage(botId: string) {
   if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  if (isSaveData()) return;
   current();
   const path = firstPage(botId);
   if (inflight.has(path) || inflight.size >= MAX_PREFETCHES) return;

@@ -56,6 +56,8 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     func hideFamilyBot(_ value: Bool = true) { lock.withLock { familyHidden = value } }
     private var assistantsChanged = 0
     private var history: [String]?
+    private var conversationVersion: String?
+    func serveVersion(_ value: String?) { lock.withLock { conversationVersion = value } }
     private var heldOnce: Set<String> = []
     private var fileOwners: [String: [String]] = [:]
     private var readAnchor = "message-one"
@@ -273,6 +275,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         body["files"] = [String]()
         body["draft"] = draft
         body["readPosition"] = readPosition
+        if let version = lock.withLock({ conversationVersion }) { body["version"] = version }
         if let history {
             let window = Self.window(history, query: query)
             body["messages"] = window.ids.map { (id: String) -> [String: Any] in messageBody(id) }
@@ -1671,6 +1674,17 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         value.unconfirmedDepartures = ["gone": Bot(id: "gone", name: "Gone", model: "m", shared: true, activity: .idle)]
         value.rosterFromCache = true; value.staleRosterSince = .now; value.bootstrapAnswered = true; value.everConnected = true
         value.readFailures = 2; value.readFailedFor = "bot"; value.connectionNews = "Member one's loss"; value.announcedRecoveries = 1
+        let memberOneTurn = TurnEvent(
+            botId: "bot",
+            version: "boot-one:1:2",
+            messages: [Message(id: "u1", role: "user", text: "One")],
+            message: Message(id: "sid-inflight", role: "assistant", text: "Live one"),
+            activity: Activity(state: .thinking, runId: "run-one"),
+            toolCalls: []
+        )
+        value.conversationBoot = "boot-one"
+        value.heldTurn = memberOneTurn
+        value.pendingTurn = PendingTurn(turn: memberOneTurn, ask: 1)
         server.user = "two"; server.hold("/api/bootstrap")
         let switching = Task { await value.signIn() }
         try await server.waitForHeld("/api/bootstrap")
@@ -1685,7 +1699,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         // Kept on purpose: chat screens the views count, haptic and keyboard events, and request counters,
         // which only grow so that an answer to an older request is never taken for a newer one.
         let kept: Set<String> = ["conversationScreens", "haptic", "hapticCount", "commandCount", "bootstrapReads", "appliedBootstrapRead",
-            "conversationReads", "appliedConversationRead", "conversationRefreshes", "openRequests", "selections", "accountUsageGeneration", "windowGeneration",
+            "conversationReadAsks", "conversationReads", "appliedConversationRead", "conversationRefreshes", "openRequests", "selections", "accountUsageGeneration", "windowGeneration",
             "computerEpoch", "announcements"]
         let mine = Self.storedState(value), theirs = Self.storedState(fresh)
         let left = mine.keys.filter { !kept.contains($0) && mine[$0] != theirs[$0] }.sorted()
@@ -1705,24 +1719,26 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         authConfig authSession awaitingDesktopCleanup bootstrap bootstrapAnswered bootstrapReads bootstrapRefreshedAt bot
         cachedArtifacts cachedChats canSend chatCovers chatOutage chatReadAt chatReadFailed commandCount computerEpoch
         computerStatus computerWrites confirmingIdentity connected connectionError connectionNews conversation
-        conversationCache conversationCapturedAt conversationReads conversationReadsInFlight conversationRefreshAgain
-        conversationRefreshedAt conversationRefreshes conversationRefreshing conversationRequest conversationScreens date
-        declinedApprovals deletedBotId desktopCleanup desktopCleanupWait deviceNotifications deviceOffline dismissedPolls
-        draft draftBackgroundTask draftPersistTask draftReady draftRetryAt draftRevisions draftSaveFailures draftSavesInFlight
-        draftSeqs draftTask earlierFileCache earlierFilesFailure earlyAdditions echoDeadline echoTimer echoes error eventBotId
-        eventTask everConnected failures fileTask focus focusedMessage generation groupCatalog groupLoadId groupNoticeScope
-        haptic hapticCount historyStarts homeRequest host interruptionReviewed keyboardCommand knownBots latestInflight
-        leftBotId listedActivity listenRequest loading loadingEarlier loadingEarlierFiles makeClient notice now
-        offlineLibraryRoot offlineSavedAt offlineWriteDelay offlineWriter openComputer openRequests openTerminal openedFile
-        openingBotId outageDeadline outagePause outageTimer ownRows ownSends pending pendings pollTask preferenceSaves
-        preferencesDraft preferencesFailureMessage preferencesNotice preferencesSaveFailed preferencesSaving prefetchAgain
-        prefetchRoot prefetchRun prefetchTask presenceBeat presenceReports presenceScope queuedChoices queuedPreferences readFailedFor
-        readFailures readHere readRetry readRetryPause receipt receipts recentChats removeDeliveredChats renewalAttemptedAt
-        replyAnnouncement replyFiles replyWatch requestedWindow restoredRosterAt restoring resyncPause retryAttempt
-        retryCheckDelays retryCheckKey retryChecks revokeWait rosterFromCache rosterTask routineResult scheduledDraftSave
-        scope searchFocusPending selectedBotId selectionGeneration selections senderAvatars sending sendingRequests
-        sessionExpired signingIn spotlight staleRosterSince stayHome streamHeardAt submissionChecks suspended todayRequest
-        transcript turns unconfirmedDepartures uploads viewingBotId widgetSnapshotURL windowGeneration uploads.items
+        conversationBoot conversationCache conversationCapturedAt conversationReadAsks conversationReads
+        conversationReadsInFlight conversationRefreshAgain conversationRefreshedAt conversationRefreshes
+        conversationRefreshing conversationRequest conversationScreens date declinedApprovals deletedBotId
+        desktopCleanup desktopCleanupWait deviceNotifications deviceOffline dismissedPolls draft draftBackgroundTask
+        draftPersistTask draftReady draftRetryAt draftRevisions draftSaveFailures draftSavesInFlight draftSeqs draftTask
+        earlierFileCache earlierFilesFailure earlyAdditions echoDeadline echoTimer echoes error eventBotId eventTask
+        everConnected failures fileTask focus focusedMessage generation groupCatalog groupLoadId groupNoticeScope
+        haptic hapticCount heldTurn historyStarts homeRequest host interruptionReviewed keyboardCommand knownBots
+        latestInflight leftBotId listedActivity listenRequest loading loadingEarlier loadingEarlierFiles makeClient
+        notice now offlineLibraryRoot offlineSavedAt offlineWriteDelay offlineWriter openComputer openRequests
+        openTerminal openedFile openingBotId outageDeadline outagePause outageTimer ownRows ownSends pending
+        pendingTurn pendings pollTask preferenceSaves preferencesDraft preferencesFailureMessage preferencesNotice
+        preferencesSaveFailed preferencesSaving prefetchAgain prefetchRoot prefetchRun prefetchTask presenceBeat
+        presenceReports presenceScope queuedChoices queuedPreferences readFailedFor readFailures readHere readRetry
+        readRetryPause receipt receipts recentChats removeDeliveredChats renewalAttemptedAt replyAnnouncement replyFiles
+        replyWatch requestedWindow restoredRosterAt restoring resyncPause retryAttempt retryCheckDelays retryCheckKey
+        retryChecks revokeWait rosterFromCache rosterTask routineResult scheduledDraftSave scope searchFocusPending
+        selectedBotId selectionGeneration selections senderAvatars sending sendingRequests sessionExpired signingIn
+        spotlight staleRosterSince stayHome streamHeardAt submissionChecks suspended todayRequest transcript turns
+        unconfirmedDepartures uploads viewingBotId widgetSnapshotURL windowGeneration uploads.items
         """.split(whereSeparator: \.isWhitespace).map(String.init))
     /// Each stored property of the store as text. Tasks and closures are handles, not state. Identities, clocks
     /// and dates differ between any two stores, so for those only whether one is set counts.
@@ -2059,7 +2075,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     func testGrowthNoticesExtendTheWholeLiveReplyWithoutRereading() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         try await openLiveStream(server, value)
-        XCTAssertEqual(server.conversationStreams.first?.request.url?.query, "inflight=2", "The app asks for growth instead of the whole reply on every tick")
+        XCTAssertEqual(server.conversationStreams.first?.request.url?.query, "inflight=3", "The app opens a turn stream for turn events and growth")
         let reads = server.conversationQueries.count
         let running: [String: Any] = ["id": "call-1", "name": "web_search", "status": "running"]
         // An emoji, a combining accent and an ideograph outside the basic plane: 11 UTF-16 code
@@ -2244,6 +2260,284 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(server.requestCount("/api/bots/family/events"), 1, "The chat now open has its own stream")
     }
     @MainActor private final class Flag { var raised = false }
+
+    /// A `turn` event for "bot" on a `?inflight=3` stream.
+    private func turnPayload(
+        version: String,
+        messages: [[String: Any]],
+        after: Any? = nil,
+        includeNullAfter: Bool = false,
+        liveText: String = "",
+        reasoning: String? = nil,
+        state: String = "thinking",
+        runId: String = "live-run",
+        toolCalls: [[String: Any]] = []
+    ) -> [String: Any] {
+        var liveMessage: [String: Any] = ["id": "sid-inflight", "role": "assistant", "text": liveText]
+        if let reasoning { liveMessage["reasoning"] = reasoning }
+        var body: [String: Any] = [
+            "botId": "bot",
+            "version": version,
+            "messages": messages,
+            "message": liveMessage,
+            "activity": ["state": state, "runId": runId],
+            "toolCalls": toolCalls,
+        ]
+        if let after { body["after"] = after }
+        else if includeNullAfter { body["after"] = NSNull() }
+        return body
+    }
+
+    func testTurnEventsAdvanceAcrossToolCallsAndContinueWithGrowthWithoutRereading() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-a:1:1")
+        try await openLiveStream(server, value)
+        let reads = server.conversationQueries.count
+        XCTAssertEqual(value.conversation?.version, "boot-a:1:1")
+
+        let file: [String: Any] = ["id": "f-tool", "name": "chart.png", "mime": "image/png"]
+        let doneTool: [String: Any] = ["id": "call-1", "name": "web_search", "status": "completed", "result": "3 results"]
+        server.sendLive("turn", turnPayload(
+            version: "boot-a:1:2",
+            messages: [
+                ["id": "u1", "role": "user", "text": "u1"],
+                ["id": "t1", "role": "tool", "text": "3 results", "toolCall": doneTool, "files": [file]],
+            ],
+            liveText: "Step 2",
+            state: "working",
+            toolCalls: [doneTool]
+        ))
+        try await until { value.conversation?.version == "boot-a:1:2" && live(value)?.text == "Step 2" }
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ["u1", "t1", "sid-inflight"])
+        XCTAssertEqual(value.conversation?.files.map(\.id), ["f-tool"], "Files from the turn's saved rows merge into the conversation file list")
+        XCTAssertEqual(value.conversation?.toolCalls?.map(\.status), ["completed"])
+        XCTAssertEqual(server.conversationQueries.count, reads, "Turn event advances across tool calls without rereading")
+
+        // Growth deltas continue the turn event's live reply without rereading.
+        server.sendLive("inflight-delta", growth(textLength: 6, reasoningLength: 0, ["appendText": " done"]))
+        try await until { live(value)?.text == "Step 2 done" }
+        XCTAssertEqual(server.conversationQueries.count, reads, "Growth after a turn event reads nothing")
+
+        // A settled turn event carries the final saved message and drops the -inflight row.
+        server.sendLive("turn", turnPayload(
+            version: "boot-a:1:3",
+            messages: [
+                ["id": "u1", "role": "user", "text": "u1"],
+                ["id": "t1", "role": "tool", "text": "3 results", "toolCall": doneTool, "files": [file]],
+                ["id": "reply-final", "role": "assistant", "text": "Step 2 done"],
+            ],
+            liveText: "",
+            state: "done",
+            toolCalls: [doneTool]
+        ))
+        try await until { value.conversation?.version == "boot-a:1:3" }
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ["u1", "t1", "reply-final"])
+        XCTAssertNil(live(value))
+        XCTAssertEqual(value.conversation?.activity.state, .done)
+        XCTAssertEqual(server.conversationQueries.count, reads, "Settled turn event needs no refetch")
+    }
+
+    func testAnOlderOverlappingReadIsOverlaidByHeldTurnAndItsGrownReply() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-a:1:1")
+        try await openLiveStream(server, value)
+
+        // Start a read that samples the older version (boot-a:1:1) before the turn event arrives.
+        let path = "/api/bots/bot/conversation"
+        server.holdNext(path)
+        let olderRead = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+
+        server.sendLive("turn", turnPayload(
+            version: "boot-a:1:2",
+            messages: [
+                ["id": "u1", "role": "user", "text": "u1"],
+                ["id": "reply-1", "role": "assistant", "text": "Progress"],
+            ],
+            liveText: "Hello"
+        ))
+        try await until { live(value)?.text == "Hello" }
+        server.sendLive("inflight-delta", growth(textLength: 5, reasoningLength: 0, ["appendText": " world"]))
+        try await until { live(value)?.text == "Hello world" }
+
+        // Release the older read (still answering boot-a:1:1 with only ["u1"]).
+        server.release(path)
+        await olderRead.value
+        XCTAssertEqual(value.conversation?.version, "boot-a:1:2", "The held turn overlays the older overlapping read")
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ["u1", "reply-1", "sid-inflight"])
+        XCTAssertEqual(live(value)?.text, "Hello world", "The overlaid read keeps the grown live reply")
+
+        // A newer read clears heldTurn and never overlays the older versioned live reply onto it.
+        server.serveHistory(["u1", "reply-1", "reply-2"])
+        server.serveVersion("boot-a:1:3")
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.version, "boot-a:1:3")
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ["u1", "reply-1", "reply-2"])
+        XCTAssertNil(live(value), "A live reply built on boot-a:1:2 is not overlaid onto boot-a:1:3")
+        XCTAssertNil(value.heldTurn, "A newer read clears heldTurn")
+    }
+
+    func testAChangeNoticeKeepsAVersionedTurnReplyForSubsequentDeltas() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-a:1:1")
+        try await openLiveStream(server, value)
+
+        server.serveHistory(["u1", "reply-1"])
+        server.serveVersion("boot-a:1:2")
+        server.sendLive("turn", turnPayload(
+            version: "boot-a:1:2",
+            messages: [
+                ["id": "u1", "role": "user", "text": "u1"],
+                ["id": "reply-1", "role": "assistant", "text": "reply-1"],
+            ],
+            liveText: "Howdy"
+        ))
+        try await until { live(value)?.text == "Howdy" }
+        let reads = server.conversationQueries.count
+
+        // On ?inflight=3, the server does not reset its delta base on `data: change`.
+        server.notifyChange()
+        try await until { server.conversationQueries.count == reads + 1 && value.conversationReadsInFlight == 0 }
+        XCTAssertEqual(live(value)?.text, "Howdy", "Matching version keeps the live reply after the read")
+
+        server.sendLive("inflight-delta", growth(textLength: 5, reasoningLength: 0, ["appendText": " partner"]))
+        try await until { live(value)?.text == "Howdy partner" }
+        XCTAssertEqual(server.conversationStreams.count, 1, "Growth after a change notice continues on the same stream")
+    }
+
+    func testUnplaceableAndMalformedTurnEventsReloadOnceWithoutGuessing() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-a:1:1")
+        try await openLiveStream(server, value)
+
+        // First establish a heldTurn so we can verify an unplaceable turn drops it.
+        server.sendLive("turn", turnPayload(
+            version: "boot-a:1:2",
+            messages: [
+                ["id": "u1", "role": "user", "text": "u1"],
+                ["id": "reply-1", "role": "assistant", "text": "Step 1"],
+            ],
+            liveText: "Step 1"
+        ))
+        try await until { value.heldTurn?.version == "boot-a:1:2" }
+
+        let beforeUnplaceable = server.conversationQueries.count
+        server.serveHistory(["u1", "reply-1", "u9"])
+        server.serveVersion("boot-a:1:3")
+        server.sendLive("turn", turnPayload(
+            version: "boot-a:1:3",
+            messages: [["id": "u9", "role": "user", "text": "u9"]],
+            liveText: "Cannot place"
+        ))
+        try await until { server.conversationQueries.count == beforeUnplaceable + 1 && value.conversationReadsInFlight == 0 }
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ["u1", "reply-1", "u9", "sid-inflight"])
+        XCTAssertEqual(server.conversationStreams.count, 1, "Unplaceable turn reloads without cycling the stream")
+
+        // Malformed turn JSON drops latestInflight and reloads once without crashing.
+        let beforeMalformed = server.conversationQueries.count
+        server.serveVersion("boot-a:1:4")
+        server.sendLive("turn", raw: #"{"botId":"bot","version":"#)
+        try await until { server.conversationQueries.count == beforeMalformed + 1 && value.conversationReadsInFlight == 0 }
+        XCTAssertNil(value.latestInflight, "Malformed turn drops latestInflight")
+        XCTAssertEqual(value.conversation?.version, "boot-a:1:4")
+        // Absence: confirm no second reload follows the first.
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.conversationQueries.count, beforeMalformed + 1, "Malformed turn triggers one reload")
+    }
+
+    func testCrossProcessBootTurnWaitsForANewerReadAndAppliesItsGrownReply() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-a:1:5")
+        try await openLiveStream(server, value)
+        XCTAssertEqual(value.conversationBoot, "boot-a")
+
+        // Server restarts under boot-b. Hold the read the pending turn asks for.
+        let path = "/api/bots/bot/conversation"
+        server.holdNext(path)
+        server.sendLive("turn", turnPayload(
+            version: "boot-b:1:2",
+            messages: [
+                ["id": "u1", "role": "user", "text": "u1"],
+                ["id": "reply-b", "role": "assistant", "text": "From B saved"],
+            ],
+            includeNullAfter: true,
+            liveText: "From B"
+        ))
+        try await server.waitForHeld(path)
+        XCTAssertEqual(value.conversation?.version, "boot-a:1:5", "A turn from another boot never changes the view before a read settles it")
+        XCTAssertEqual(value.pendingTurn?.turn.version, "boot-b:1:2")
+
+        // Growth arriving while the pending turn waits updates the pending turn without touching the boot-a view.
+        server.sendLive("inflight-delta", growth(textLength: 6, reasoningLength: 0, ["appendText": "!"]))
+        try await until { value.pendingTurn?.turn.message.text == "From B!" }
+        XCTAssertEqual(value.conversation?.version, "boot-a:1:5")
+        XCTAssertNil(live(value))
+
+        // The held read answers from boot-b at an older version (boot-b:1:1): the pending turn and its grown reply go on top.
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-b:1:1")
+        server.release(path)
+        try await until { value.conversation?.version == "boot-b:1:2" && value.conversationReadsInFlight == 0 }
+        XCTAssertEqual(value.conversationBoot, "boot-b")
+        XCTAssertNil(value.pendingTurn)
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ["u1", "reply-b", "sid-inflight"])
+        XCTAssertEqual(live(value)?.text, "From B!", "Settling brings back the grown live reply")
+
+        // Now a turn from boot-c arrives while boot-b holds a newer turn, and the read stays on boot-b:
+        // the boot-c turn is dropped and boot-b's heldTurn live reply is restored.
+        server.holdNext(path)
+        server.sendLive("turn", turnPayload(
+            version: "boot-c:1:1",
+            messages: [["id": "u1", "role": "user", "text": "u1"]],
+            includeNullAfter: true,
+            liveText: "From C"
+        ))
+        try await server.waitForHeld(path)
+        server.serveVersion("boot-b:1:1")
+        server.release(path)
+        try await until { value.pendingTurn == nil && value.conversationReadsInFlight == 0 }
+        XCTAssertEqual(value.conversationBoot, "boot-b")
+        XCTAssertEqual(value.conversation?.version, "boot-b:1:2")
+        XCTAssertEqual(live(value)?.text, "From B!", "Dropping the other process's turn restores boot-b's grown reply")
+    }
+
+    func testCrossBootTurnQueuedBeforeFirstRefreshTaskStartsSettlesPendingTurn() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-a:1:5")
+        try await openLiveStream(server, value)
+        XCTAssertEqual(value.conversationBoot, "boot-a")
+
+        // Server restarts under boot-b. Queue one refresh and then immediately deliver a cross-boot
+        // turn before the first refresh Task begins executing on the MainActor.
+        server.serveHistory(["u1"])
+        server.serveVersion("boot-b:1:1")
+        let turn = TurnEvent(
+            botId: "bot",
+            version: "boot-b:1:2",
+            messages: [
+                Message(id: "u1", role: "user", text: "u1"),
+                Message(id: "reply-b", role: "assistant", text: "From B saved"),
+            ],
+            after: .start,
+            message: Message(id: "sid-inflight", role: "assistant", text: "From B"),
+            activity: Activity(state: .thinking, runId: "run-b"),
+            toolCalls: []
+        )
+        value.requestConversationRefresh()
+        value.showTurn(turn)
+        XCTAssertEqual(value.pendingTurn?.turn.version, "boot-b:1:2")
+
+        try await until { value.conversationBoot == "boot-b" && value.pendingTurn == nil && !value.conversationRefreshing }
+        XCTAssertEqual(value.conversation?.version, "boot-b:1:2")
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ["u1", "reply-b", "sid-inflight"])
+        XCTAssertEqual(live(value)?.text, "From B")
+    }
 
     func testAGroupsNoticeRereadsTheGroupCatalogAndUnknownNoticesChangeNothing() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }

@@ -155,4 +155,51 @@ describe("shared avatar frame loop", () => {
     expect(fine.advance).toHaveBeenCalledTimes(2);
     expect(reported).toEqual([new Error("bad pose")]);
   });
+
+  it("pauses rAF and sleeping timers while hidden and resumes cleanly on return to visible", () => {
+    let visibility: DocumentVisibilityState = "visible";
+    const listeners = new Set<() => void>();
+    const fakeDocument = {
+      get visibilityState() {
+        return visibility;
+      },
+      addEventListener: vi.fn((type: string, listener: () => void) => {
+        if (type === "visibilitychange") listeners.add(listener);
+      }),
+      removeEventListener: vi.fn((type: string, listener: () => void) => {
+        if (type === "visibilitychange") listeners.delete(listener);
+      }),
+    };
+    vi.stubGlobal("document", fakeDocument);
+    try {
+      const sleeper = avatar(40);
+      const runner = avatar(0);
+      refresh();
+      expect(queued.size).toBe(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      visibility = "hidden";
+      for (const listener of [...listeners]) listener();
+      expect(queued.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+
+      // Nothing schedules while hidden.
+      vi.advanceTimersByTime(1000);
+      expect(queued.size).toBe(0);
+      expect(runner.advance).toHaveBeenCalledTimes(1);
+      expect(sleeper.advance).toHaveBeenCalledTimes(1);
+
+      visibility = "visible";
+      for (const listener of [...listeners]) listener();
+      expect(queued.size).toBe(1);
+      refresh();
+      expect(runner.advance).toHaveBeenCalledTimes(2);
+      expect(sleeper.advance).toHaveBeenCalledTimes(2);
+
+      stops.splice(0).forEach((stop) => stop());
+      expect(listeners.size).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

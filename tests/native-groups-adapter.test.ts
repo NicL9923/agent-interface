@@ -22,6 +22,7 @@ function setup(
     bot: ManagedBotRecord,
     prompt: string,
     signal: AbortSignal,
+    roomId: string,
   ) => Promise<string> = async (bot) => `Reply from ${bot.name}`,
 ) {
   let clock = 1_790_000_000_000;
@@ -137,9 +138,9 @@ describe("native group adapter", () => {
   });
 
   it("sends new topics and thread replies, deduplicates by requestId, and emits GroupEvent wire format", async () => {
-    const turns: { botId: string; prompt: string }[] = [];
-    const { adapter, advance } = setup(async (bot, prompt) => {
-      turns.push({ botId: bot.id, prompt });
+    const turns: { botId: string; prompt: string; roomId: string }[] = [];
+    const { adapter, advance } = setup(async (bot, prompt, _signal, roomId) => {
+      turns.push({ botId: bot.id, prompt, roomId });
       return `Ack from ${bot.name}`;
     });
     await adapter.handle({
@@ -192,6 +193,7 @@ describe("native group adapter", () => {
     });
     expect(retry).toEqual(sent);
     expect(turns).toHaveLength(1);
+    expect(turns[0]?.roomId).toBe("r1");
 
     // Reply inside the existing thread using root event_id as threadId.
     advance(5_000);
@@ -405,5 +407,85 @@ describe("native group adapter", () => {
     await expect(adapter.handle({ operation: "state", roomId: "missing" })).rejects.toThrow(
       NotFound,
     );
+  });
+
+  it("notifies watch listeners on messages, turn lifecycle, context updates, stop, and routines", async () => {
+    let release!: () => void;
+    const { adapter } = setup(async (_bot, _prompt, signal) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+        signal.addEventListener("abort", () => resolve());
+      });
+      return "Done";
+    });
+    await adapter.handle({
+      operation: "create",
+      roomId: "r-watch",
+      name: "Watch Room",
+      members,
+      actorId: "one",
+    });
+
+    const events: string[] = [];
+    let runningAtLastEvent = false;
+    const unwatch = adapter.watch("r-watch", () => {
+      events.push("changed");
+    });
+    // Verify context update triggers watch.
+    await adapter.handle({
+      operation: "context",
+      roomId: "r-watch",
+      requestId: randomUUID(),
+      purpose: "Watch test",
+      notes: "Notes",
+      routing: "lead",
+      leadMemberId: "alpha",
+    });
+    expect(events).toHaveLength(1);
+
+    // Send starts a discussion (message + turn_started), then finishing clears running before notifying.
+    await adapter.handle({
+      operation: "send",
+      roomId: "r-watch",
+      requestId: randomUUID(),
+      threadId: randomUUID(),
+      text: "Hello watchers",
+      actorId: "one",
+    });
+    await waitUntil(async () => events.length >= 3, "message and turn_started notifications");
+    const stateCheckUnsub = adapter.watch("r-watch", () => {
+      void adapter.handle({ operation: "state", roomId: "r-watch" }).then((state) => {
+        runningAtLastEvent = Boolean((state as GroupState).driver_status?.running);
+      });
+    });
+    const beforeFinish = events.length;
+    release();
+    await waitUntil(async () => events.length >= beforeFinish + 2, "bot reply and round_finished");
+    await waitUntil(async () => runningAtLastEvent === false, "running cleared at round_finished");
+    stateCheckUnsub();
+
+    // Routine delivery notifies watchers too.
+    const beforeRoutine = events.length;
+    adapter.deliverRoutine("r-watch", {
+      routineId: "rt-1",
+      routineName: "Daily check",
+      text: "All green",
+    });
+    expect(events.length).toBeGreaterThan(beforeRoutine);
+
+    // Unsubscribe stops further notifications and is idempotent.
+    unwatch();
+    unwatch();
+    const afterUnsub = events.length;
+    await adapter.handle({
+      operation: "context",
+      roomId: "r-watch",
+      requestId: randomUUID(),
+      purpose: "Quiet update",
+      notes: "",
+      routing: "lead",
+      leadMemberId: "alpha",
+    });
+    expect(events.length).toBe(afterUnsub);
   });
 });

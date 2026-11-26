@@ -100,30 +100,38 @@ export function installBootstrapRoutes(
   // Someone else's private assistant leaves this person's lists, so their saved
   // preferences stop naming it too.
   const preferencesFor = (userId: string): Preferences => visiblePreferences(store, userId);
-  apiRoute(app, "GET /bootstrap", {}, async (req) => ({
-    user: signedIn(req),
-    household: store.users().filter((user) => allowedIdentity(config, user)),
-    preferences: preferencesFor(signedIn(req).id),
-    ...(await snapshot.read().then(async (value) => ({
-      ...value,
-      bots: await directory.rosterFor(
-        signedIn(req).id,
-        value.bots,
-        value.capabilities.avatarMetadata.supported,
-        (req.query as { roster?: string }).roster === "lean",
-      ),
-    }))),
-    csrfToken: req.csrfToken,
-    formKey: store.formKey(signedIn(req).id),
-    vapidPublicKey: config.vapidPublicKey || undefined,
-    nativeApp: config.nativeApp,
-    ...(probeHarnesses && {
-      harnesses: await probeHarnesses().catch((error: unknown) => {
-        req.log.warn({ error: safeError(error) }, "Native harness probes failed");
-        return undefined;
-      }),
-    }),
-  }));
+  apiRoute(app, "GET /bootstrap", {}, async (req) => {
+    const user = signedIn(req);
+    const lean = (req.query as { roster?: string }).roster === "lean";
+    const [read, harnesses] = await Promise.all([
+      snapshot.read().then(async (value) => ({
+        ...value,
+        bots: await directory.rosterFor(
+          user.id,
+          value.bots,
+          value.capabilities.avatarMetadata.supported,
+          lean,
+        ),
+      })),
+      probeHarnesses
+        ? probeHarnesses().catch((error: unknown) => {
+            req.log.warn({ error: safeError(error) }, "Native harness probes failed");
+            return undefined;
+          })
+        : Promise.resolve(undefined),
+    ]);
+    return {
+      user,
+      household: store.users().filter((member) => allowedIdentity(config, member)),
+      preferences: preferencesFor(user.id),
+      ...read,
+      csrfToken: req.csrfToken,
+      formKey: store.formKey(user.id),
+      vapidPublicKey: config.vapidPublicKey || undefined,
+      nativeApp: config.nativeApp,
+      ...(probeHarnesses ? { harnesses } : {}),
+    };
+  });
   apiRoute(app, "POST /connection/retry", {}, async () => {
     snapshot.invalidate();
     const status = await (runtime.reconnect ? runtime.reconnect() : runtime.status());

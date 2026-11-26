@@ -115,6 +115,36 @@ it("discovers models without creating or authenticating a session and falls back
   ]);
 });
 
+it("caches authenticated model lists for modelCacheTtlMs, dedupes concurrent calls, and skips caching unauthenticated results", async () => {
+  let clock = 5_000;
+  const cached = await fixture(undefined, { modelCacheTtlMs: 300_000, now: () => clock });
+  const [first, concurrent] = await Promise.all([
+    cached.driver.listModels(),
+    cached.driver.listModels(),
+  ]);
+  expect(concurrent).toBe(first);
+  expect((await cached.messages()).filter(({ method }) => method === "initialize")).toHaveLength(1);
+
+  clock += 299_999;
+  expect(await cached.driver.listModels()).toBe(first);
+  expect((await cached.messages()).filter(({ method }) => method === "initialize")).toHaveLength(1);
+
+  clock += 1;
+  const refreshed = await cached.driver.listModels();
+  expect(refreshed).toEqual(first);
+  expect((await cached.messages()).filter(({ method }) => method === "initialize")).toHaveLength(2);
+
+  const unauthenticated = await fixture("catalog-fallback", {
+    modelCacheTtlMs: 300_000,
+    now: () => clock,
+  });
+  await unauthenticated.driver.listModels();
+  await unauthenticated.driver.listModels();
+  expect(
+    (await unauthenticated.messages()).filter(({ method }) => method === "initialize"),
+  ).toHaveLength(2);
+});
+
 it("starts and resumes sessions with scoped MCP servers and chooses the advertised model and effort", async () => {
   const { open, messages, cwd } = await fixture("config");
   const mcpServers: HarnessSessionSpec["mcpServers"] = [

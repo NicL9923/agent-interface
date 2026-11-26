@@ -27,6 +27,76 @@ export interface HarnessMcpServerSpec {
   /** For Streamable HTTP transport. */
   url?: string;
   headers?: Record<string, string>;
+  /**
+   * Stable identity for session fingerprinting when the server mints ephemeral per-session
+   * credentials via `open`. Static servers omit this and fingerprint by their full spec.
+   */
+  fingerprint?: string;
+  /**
+   * Materializes a plain server spec for one newly opened harness session and returns an optional
+   * `revoke` callback invoked when that harness session is disposed.
+   */
+  open?: (context: { sessionKey: string }) => {
+    spec: HarnessMcpServerSpec;
+    revoke?: () => void;
+  };
+}
+
+export function mcpServerFingerprint(server: HarnessMcpServerSpec): Record<string, unknown> {
+  if (server.fingerprint !== undefined) {
+    return { name: server.name, transport: server.transport, fingerprint: server.fingerprint };
+  }
+  return {
+    name: server.name,
+    transport: server.transport,
+    ...(server.command !== undefined ? { command: server.command } : {}),
+    ...(server.args !== undefined ? { args: server.args } : {}),
+    ...(server.env !== undefined ? { env: server.env } : {}),
+    ...(server.url !== undefined ? { url: server.url } : {}),
+    ...(server.headers !== undefined ? { headers: server.headers } : {}),
+  };
+}
+
+function stripMcpLifecycle(server: HarnessMcpServerSpec): HarnessMcpServerSpec {
+  const { fingerprint: _fingerprint, open: _open, ...plain } = server;
+  return plain;
+}
+
+/**
+ * Materializes dynamic per-session MCP servers (such as WildBots loopback MCP) into plain specs
+ * suitable for harness drivers, returning an idempotent `revoke` callback that cleans up every
+ * minted MCP session. Rolls back any already-opened sessions if a later server throws.
+ */
+export function materializeMcpServers(
+  servers: readonly HarnessMcpServerSpec[] | undefined,
+  sessionKey: string,
+): { mcpServers: HarnessMcpServerSpec[] | undefined; revoke: () => void } {
+  if (!servers) return { mcpServers: undefined, revoke: () => {} };
+  const revokers: (() => void)[] = [];
+  let revoked = false;
+  const revoke = () => {
+    if (revoked) return;
+    revoked = true;
+    for (const fn of revokers.splice(0).reverse()) {
+      try {
+        fn();
+      } catch {
+        // Best-effort cleanup across all opened MCP sessions.
+      }
+    }
+  };
+  try {
+    const mcpServers = servers.map((server) => {
+      if (!server.open) return stripMcpLifecycle(server);
+      const opened = server.open({ sessionKey });
+      if (opened.revoke) revokers.push(opened.revoke);
+      return stripMcpLifecycle(opened.spec);
+    });
+    return { mcpServers, revoke };
+  } catch (error) {
+    revoke();
+    throw error;
+  }
 }
 
 export interface HarnessSessionSpec {

@@ -4,6 +4,7 @@ import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertPopupLibraryIsLazy, precachePlan } from "./precache-plan.mjs";
+import { checkBundleBudget } from "./check-bundle-budget.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const output = join(root, "dist/client");
@@ -30,6 +31,13 @@ const version = hash.digest("hex").slice(0, 16);
 const names = files.map((file) => relative(output, file).split("\\").join("/"));
 const manifest = JSON.parse(await readFile(join(output, ".vite/manifest.json"), "utf8"));
 assertPopupLibraryIsLazy(manifest, (file) => readFileSync(join(output, file), "utf8"));
+const budgetConfig = JSON.parse(await readFile(join(root, "scripts/bundle-budget.json"), "utf8"));
+const budgetResults = checkBundleBudget({
+  manifest,
+  readBuffer: (file) => readFileSync(join(output, file)),
+  budgets: budgetConfig.targets,
+});
+const entryBudget = budgetResults.find((item) => item.key === "index.html");
 const plan = precachePlan(manifest, names);
 // The cached shell runs boot.js before anything else, so the worker must install the two together.
 if (!plan.install.includes("boot.js"))
@@ -44,5 +52,5 @@ const worker = template
   .replace("__ON_DEMAND__", slash(plan.onDemand));
 await writeFile(join(output, "sw.js"), worker);
 console.log(
-  `Built service worker ${version} with ${plan.install.length} installed files, ${plan.warm.length} cached in the background, ${plan.onDemand.length} on first use and ${plan.network.length} never cached.`,
+  `Built service worker ${version} with ${plan.install.length} installed files, ${plan.warm.length} cached in the background, ${plan.onDemand.length} on first use and ${plan.network.length} never cached.${entryBudget ? ` Entry gzip closure: ${(entryBudget.totalBytes / 1024).toFixed(2)} KiB (${budgetResults.length} budgets checked).` : ""}`,
 );

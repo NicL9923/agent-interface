@@ -10,10 +10,13 @@ import "../automation.css";
 
 function SkillDiffPreview({ text, id }: { text: string; id: string }) {
   const lines = (text || "No textual diff.").split("\n");
+  let offset = 0;
   return (
     <pre id={id} className="automation-code automation-diff">
       <code>
         {lines.map((line, index) => {
+          const start = offset;
+          offset += line.length + 1;
           if (index === lines.length - 1 && line === "") return null;
           const kind = /^(diff |index |@@|---|\+\+\+)/.test(line)
             ? "meta"
@@ -23,7 +26,7 @@ function SkillDiffPreview({ text, id }: { text: string; id: string }) {
                 ? "removed"
                 : "context";
           return (
-            <Fragment key={index}>
+            <Fragment key={start}>
               <span className={`automation-diff-line automation-diff-${kind}`}>{line}</span>
               {index < lines.length - 1 ? "\n" : ""}
             </Fragment>

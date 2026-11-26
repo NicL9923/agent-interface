@@ -575,15 +575,17 @@ export class GroupCoordinator {
     });
     const controller = new AbortController();
     this.running.set(roomId, controller);
-    const round = this.discuss(room, members, message, controller.signal)
+    const clearRunning = () => {
+      if (this.running.get(roomId) === controller) this.running.delete(roomId);
+    };
+    const round = this.discuss(room, members, message, controller.signal, clearRunning)
       .catch((): GroupRoundResult => {
+        clearRunning();
         // A failed save ends the discussion; its listeners still learn that it ended.
         this.emit({ type: "round_finished", roomId, reason: "failed", turns: 0 });
         return { reason: "failed", turns: 0, replies: [] };
       })
-      .finally(() => {
-        if (this.running.get(roomId) === controller) this.running.delete(roomId);
-      });
+      .finally(clearRunning);
     return { message, round };
   }
 
@@ -614,14 +616,16 @@ export class GroupCoordinator {
     if (!mentions.length || this.running.has(roomId)) return { message };
     const controller = new AbortController();
     this.running.set(roomId, controller);
-    const round = this.discuss(room, members, message, controller.signal)
+    const clearRunning = () => {
+      if (this.running.get(roomId) === controller) this.running.delete(roomId);
+    };
+    const round = this.discuss(room, members, message, controller.signal, clearRunning)
       .catch((): GroupRoundResult => {
+        clearRunning();
         this.emit({ type: "round_finished", roomId, reason: "failed", turns: 0 });
         return { reason: "failed", turns: 0, replies: [] };
       })
-      .finally(() => {
-        if (this.running.get(roomId) === controller) this.running.delete(roomId);
-      });
+      .finally(clearRunning);
     return { message, round };
   }
 
@@ -638,6 +642,7 @@ export class GroupCoordinator {
     members: ManagedBotRecord[],
     message: NativeGroupMessage,
     signal: AbortSignal,
+    onFinish: () => void,
   ): Promise<GroupRoundResult> {
     const byId = new Map(members.map((bot) => [bot.id, bot]));
     const threadId = this.options.replyThreadId?.(message) ?? message.threadId;
@@ -649,6 +654,7 @@ export class GroupCoordinator {
     const replies: NativeGroupMessage[] = [];
     let turns = 0;
     const finish = (reason: GroupRoundEnd): GroupRoundResult => {
+      onFinish();
       this.emit({ type: "round_finished", roomId: room.id, reason, turns });
       return { reason, turns, replies };
     };

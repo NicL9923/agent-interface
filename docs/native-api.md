@@ -275,7 +275,7 @@ stream open and reconnect; the server sends no initial notice. Streams without t
 one-change-per-second streaming cadence.
 
 `?inflight=2` opts in to the same stream with growth sent as deltas, so a long
-reply is not resent whole every 250 ms. It keeps the same 250 ms between updates. The iOS app uses it, and so do web bundles
+reply is not resent whole every 250 ms. It keeps the same 250 ms between updates. Older iOS builds from before turn events use it, and so do web bundles
 cached from before the web client moved to `?inflight=3`. `?inflight=1` is unchanged
 and stays served, because iOS builds released before the iOS app moved to
 `?inflight=2` and older cached web bundles still use it. A `?inflight=2` stream
@@ -307,8 +307,8 @@ carries everything since the last it got: the whole reply on `?inflight=1`, and 
 connection never makes the server hold an unbounded queue of updates.
 
 `?inflight=3` opts in to turn events, so a reply keeps streaming across tool calls
-without waiting for a refetch. The web client uses it. `?inflight=1` and
-`?inflight=2` are unchanged, so the iOS app and cached web bundles are not
+without waiting for a refetch. Both the web client and the iOS app use it. `?inflight=1` and
+`?inflight=2` are unchanged, so older iOS builds and cached web bundles are not
 affected. A server that predates `?inflight=3` treats it as no opt-in and sends
 only change notices.
 
@@ -330,8 +330,8 @@ does not land, or lands with no live reply to send, the notice is released at on
 A released notice still goes through the stream's one-notice-a-second limit, so one that follows another by less than a
 second waits out the rest of it: the worst case, no read landing, is about 2.5 seconds after the change.
 Every other change still sends its notice at once, whatever else it carries: a turn starting or ending, an
-approval or any other request, an error. A turn event's `messages` carry the files of the saved rows, and the
-web client adds them to its file list, which a read otherwise builds. `?inflight=1` and `?inflight=2` streams
+approval or any other request, an error. A turn event's `messages` carry the files of the saved rows, and both the
+web client and the iOS app add them to their file list, which a read otherwise builds. `?inflight=1` and `?inflight=2` streams
 get every notice as before.
 
 Each whole live reply then arrives as `event: turn` with JSON `{botId, version,
@@ -351,9 +351,9 @@ messages, after?, message, activity, toolCalls}`:
 - `version`: that read's structural version.
 
 Growth of that reply arrives as `inflight-delta`, as on `?inflight=2`, based on the
-last `turn` event's `message`, at most ten times a second (every 100 ms,
+last `turn` event's `message`, at most twenty times a second (every 50 ms,
 `TURN_TICK_MS`). A `turn` event from the server's own read goes as soon as that
-read lands, without waiting for the next 100 ms, so the finished turn's saved reply
+read lands, without waiting for the next 50 ms, so the finished turn's saved reply
 is not held back. The server sends a whole `turn` event instead
 whenever the read the reply is built on changed, in every case where `?inflight=2`
 sends a whole `inflight` except after a `data: change` notice, and on a new stream.

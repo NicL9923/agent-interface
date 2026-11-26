@@ -192,8 +192,32 @@ describe("WildBots loopback MCP", () => {
     const expiring = mcp.createSessionSpec(personal);
     vi.setSystemTime(Date.now() + 59_999);
     expect((await send(expiring, rpc("ping"))).status).toBe(200);
-    vi.setSystemTime(Date.now() + 1);
+    // Sliding TTL extends the session by another full window after authorized activity.
+    vi.setSystemTime(Date.now() + 59_999);
+    expect((await send(expiring, rpc("ping"))).status).toBe(200);
+    // Once idle for the full TTL without activity, the session expires.
+    vi.setSystemTime(Date.now() + 60_000);
     expect((await send(expiring, rpc("ping"))).status).toBe(401);
+
+    // An untouched idle session still expires at its initial TTL.
+    const idleExpiring = mcp.createSessionSpec(personal);
+    vi.setSystemTime(Date.now() + 60_000);
+    expect((await send(idleExpiring, rpc("ping"))).status).toBe(401);
+  });
+
+  it("extends the expiry timer on active MCP usage and still revokes immediately on revoke()", async () => {
+    const mcp = await listen({ sessionTtlMs: 90 });
+    const session = mcp.createSessionSpec(personal);
+    for (let step = 0; step < 3; step += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 45));
+      expect((await send(session, rpc("ping"))).status).toBe(200);
+    }
+    session.revoke();
+    expect((await send(session, rpc("ping"))).status).toBe(401);
+
+    const idle = mcp.createSessionSpec(personal);
+    await new Promise((resolve) => setTimeout(resolve, 130));
+    expect((await send(idle, rpc("ping"))).status).toBe(401);
   });
 
   it("validates the request envelope, origin, and protocol version on the loopback endpoint", async () => {

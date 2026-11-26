@@ -271,15 +271,17 @@ describe("conversation state", () => {
       };
       await render();
       expect(FakeEventSource.created).toContain(
-        "/api/bots/shared/events?inflight=3&drafts=1&ping=10",
+        "/api/bots/shared/events?inflight=3&drafts=1&queue=1&ping=10",
       );
       await act(async () => open().emit("inflight", whole("Growing")));
       const before = vi.mocked(api).mock.calls.length;
       await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));
       expect(container.textContent).toContain("Growing reply");
+      // Rapid deltas in the same animation frame coalesce and commit on the next frame.
       await act(async () =>
         open().emit("inflight-delta", growth({ baseTextLength: 13, appendText: " grows" })),
       );
+      await advance(20);
       expect(container.textContent).toContain("Growing reply grows");
       expect(vi.mocked(api).mock.calls).toHaveLength(before);
     });

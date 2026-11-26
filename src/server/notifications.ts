@@ -83,9 +83,13 @@ const apnsTokenDead = (error: unknown) =>
 const approvalCheckInterval = 60000;
 const approvalChecksPerPass = 5;
 export const approvalPassBudget = 20000;
+/** Coalescing floor for event-driven worker wakes so roster bursts do not thrash reconciliation. */
+export const WORKER_WAKE_MS = 50;
 type Job = "runtime" | "outbox" | "live" | "widgets" | "approvals";
 export class BackgroundWorker {
   private timer?: ReturnType<typeof setInterval>;
+  private wakeTimer?: ReturnType<typeof setTimeout>;
+  private lastWakeAt = 0;
   private jobs = makeJobs<Job>((error) => this.loop.failure(error));
   private outbox?: Promise<void>;
   private outboxRequested = false;
@@ -154,9 +158,25 @@ export class BackgroundWorker {
     this.timer.unref();
     void this.schedule();
   }
+  /** Schedules a coalesced pass so event-driven state changes reconcile without waiting for the 5 s interval. */
+  wake() {
+    if (this.stopped || this.wakeTimer) return;
+    const delay = Math.max(WORKER_WAKE_MS, this.lastWakeAt + WORKER_WAKE_MS - Date.now());
+    this.wakeTimer = setTimeout(() => {
+      this.wakeTimer = undefined;
+      if (this.stopped) return;
+      this.lastWakeAt = Date.now();
+      void this.schedule();
+    }, delay);
+    this.wakeTimer.unref();
+  }
   stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.wakeTimer) {
+      clearTimeout(this.wakeTimer);
+      this.wakeTimer = undefined;
+    }
     return (this.stopping ??= (async () => {
       // Recovery can request another delivery pass while shutdown is draining.
       await this.jobs.interrupt("approvals");

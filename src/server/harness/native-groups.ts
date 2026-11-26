@@ -36,6 +36,7 @@ export interface NativeGroupAdapter {
     roomId: string,
     input: { routineId: string; routineName: string; text: string; failed?: boolean },
   ): GroupEvent;
+  watch(roomId: string, listener: () => void): () => void;
   close(): void;
 }
 
@@ -49,12 +50,29 @@ export function createNativeGroupAdapter({
   now = Date.now,
 }: {
   store: Store;
-  executeTurn: (bot: ManagedBotRecord, prompt: string, signal: AbortSignal) => Promise<string>;
+  executeTurn: (
+    bot: ManagedBotRecord,
+    prompt: string,
+    signal: AbortSignal,
+    roomId: string,
+  ) => Promise<string>;
   now?: () => number;
 }): NativeGroupAdapter {
   const repository = store.nativeGroups;
   const activeWork = new Map<string, GroupMemberActivity>();
   const activeRooms = new Set<string>();
+  const roomWatchers = new Map<string, Set<() => void>>();
+
+  function notifyRoom(roomId: string) {
+    const listeners = roomWatchers.get(roomId);
+    if (!listeners?.size) return;
+    for (const listener of [...listeners])
+      try {
+        listener();
+      } catch {
+        // One broken watcher never stops the others or the room.
+      }
+  }
 
   function readExtras(roomId: string): StoredRoomExtras {
     const row = store.db
@@ -164,7 +182,7 @@ export function createNativeGroupAdapter({
       const fullPrompt = extras.notes.trim()
         ? `${prompt}\n\n# Shared room notes\n${extras.notes.trim()}`
         : prompt;
-      const text = await executeTurn(bot, fullPrompt, signal);
+      const text = await executeTurn(bot, fullPrompt, signal, room.id);
       return { text };
     },
   });
@@ -184,6 +202,7 @@ export function createNativeGroupAdapter({
       } else if (event.type === "round_finished") {
         activeWork.delete(roomId);
       }
+      notifyRoom(roomId);
     });
   }
 
@@ -293,6 +312,7 @@ export function createNativeGroupAdapter({
       case "stop": {
         repository.openRoom(input.roomId);
         const stopped = coordinator.stopRoom(input.roomId);
+        if (stopped) notifyRoom(input.roomId);
         return { cancelled: stopped ? 1 : 0 };
       }
       case "context": {
@@ -321,6 +341,7 @@ export function createNativeGroupAdapter({
           },
           now(),
         );
+        notifyRoom(current.id);
         return { context: toContext(updated), event: toEvent(notice) };
       }
       case "approve": {
@@ -339,12 +360,28 @@ export function createNativeGroupAdapter({
     return toEvent(message);
   }
 
+  function watch(roomId: string, listener: () => void): () => void {
+    ensureSubscribed(roomId);
+    let set = roomWatchers.get(roomId);
+    if (!set) roomWatchers.set(roomId, (set = new Set()));
+    const entry = () => listener();
+    set.add(entry);
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      set.delete(entry);
+      if (!set.size && roomWatchers.get(roomId) === set) roomWatchers.delete(roomId);
+    };
+  }
+
   function close() {
     for (const roomId of activeRooms) coordinator.stopRoom(roomId);
     activeWork.clear();
+    roomWatchers.clear();
   }
 
-  return { handle, deliverRoutine, close };
+  return { handle, deliverRoutine, watch, close };
 }
 
 export { NotFound };

@@ -197,13 +197,15 @@ function ArtifactsView({
   // The dialog focuses without scrolling, and on a phone the list shows only its first rows. The
   // dialog opens after its children's effects run, so the row is brought into view a frame later.
   const list = useRef<HTMLElement>(null);
+  const scrolledFocus = useRef(false);
   useEffect(() => {
-    if (!focused) return;
+    if (!focused || scrolledFocus.current) return;
+    scrolledFocus.current = true;
     const frame = requestAnimationFrame(() =>
       list.current?.querySelector<HTMLElement>(focused)?.scrollIntoView?.({ block: "nearest" }),
     );
     return () => cancelAnimationFrame(frame);
-  }, []);
+  }, [focused]);
   return (
     <Dialog
       className="artifacts-dialog"

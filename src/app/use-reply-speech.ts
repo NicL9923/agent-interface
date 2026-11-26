@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { request as apiRequest } from "../client-api";
 import { MAX_SPOKEN_TEXT, MAX_VOICE_BYTES, STOP_SPEECH } from "../shared/voice";
 import { talkLive } from "./talk-live";
+import { useStableCallback } from "./use-stable-callback";
 
 /** Preparing is the request and download, ready is audio the browser would not start by itself, speaking is playing. */
 export type SpeechPhase = "preparing" | "ready" | "speaking";
@@ -137,11 +138,13 @@ export function useReplySpeech(botId: string, disabled: boolean): ReplySpeech {
       if (request.current === controller) request.current = null;
     }
   }
+  const playStable = useStableCallback(play);
+  const speakStable = useStableCallback(speak);
   const toggle = useCallback(
     (message: { id: string; text: string }) => {
       const now = live.current;
       if (now?.id === message.id) {
-        if (now.phase === "ready") void play(message.id, generation.current);
+        if (now.phase === "ready") void playStable(message.id, generation.current);
         else stop();
         return;
       }
@@ -153,10 +156,9 @@ export function useReplySpeech(botId: string, disabled: boolean): ReplySpeech {
         });
         return;
       }
-      void speak(message);
-      // `play`, `speak` and `stop` only touch refs and state setters, so they never need to be dependencies.
+      void speakStable(message);
     },
-    [botId, stop],
+    [playStable, speakStable, stop],
   );
   return useMemo(() => ({ current, error, toggle }), [current, error, toggle]);
 }

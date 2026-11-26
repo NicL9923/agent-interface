@@ -1,0 +1,34 @@
+{
+  "description": "Gzipped static-closure byte ceilings for index.html and key lazy dynamic entries (~12-15% headroom above measured Vite 8 / Rolldown build).",
+  "targets": {
+    "index.html": {
+      "maxJsGzipBytes": 333000,
+      "maxCssGzipBytes": 38000,
+      "maxTotalGzipBytes": 371000
+    },
+    "src/BotSettings.tsx": {
+      "maxTotalGzipBytes": 186000
+    },
+    "src/components/ComputerPanel.tsx": {
+      "maxTotalGzipBytes": 111000
+    },
+    "src/components/DiscoveryPanel.tsx": {
+      "maxTotalGzipBytes": 230000
+    },
+    "src/components/GroupChats.tsx": {
+      "maxTotalGzipBytes": 236000
+    },
+    "src/app/PreferencesDialog.tsx": {
+      "maxTotalGzipBytes": 149000
+    },
+    "src/components/TodayPanel.tsx": {
+      "maxTotalGzipBytes": 138000
+    },
+    "src/app/CommandPalette.tsx": {
+      "maxTotalGzipBytes": 121000
+    },
+    "src/components/code-highlight.ts": {
+      "maxTotalGzipBytes": 42000
+    }
+  }
+}

@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { chown, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { StringDecoder } from "node:string_decoder";
 
 import type { ModelProvider } from "../../shared/types.js";
 import type {
@@ -68,6 +68,10 @@ export interface ClaudeDriverOptions {
   closeGraceMs?: number;
   /** Time to wait after SIGTERM before sending SIGKILL. */
   killGraceMs?: number;
+  /** How long a discovered model catalog stays cached. Default 5 minutes. */
+  modelCacheTtlMs?: number;
+  /** Clock for model cache expiry. Defaults to `Date.now`. */
+  now?: () => number;
 }
 
 const CAPABILITIES: HarnessDriverCapabilities = {
@@ -93,6 +97,42 @@ const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image
 /** Linux caps one argv string at 128 KiB; longer prompts go through a file. */
 const INLINE_SYSTEM_PROMPT_LIMIT = 64 * 1024;
 const STDERR_TAIL_LIMIT = 4096;
+const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60_000;
+/** Claude tool outputs can carry base64 images; bound one record so a runaway line cannot exhaust memory. */
+const MAX_RECORD_CHARS = 64 * 1024 * 1024;
+
+/**
+ * Splits stream-json records strictly on LF (stripping optional CR), never on U+2028/U+2029 which
+ * are valid unescaped characters inside JSON strings and would be split by `node:readline`.
+ */
+export function createClaudeJsonlFramer(maxRecordChars = MAX_RECORD_CHARS) {
+  let buffer = "";
+  let dropping = false;
+  return (chunk: string): string[] => {
+    const lines: string[] = [];
+    let start = 0;
+    while (start < chunk.length) {
+      const newline = chunk.indexOf("\n", start);
+      const end = newline < 0 ? chunk.length : newline;
+      if (!dropping) {
+        if (buffer.length + end - start > maxRecordChars) {
+          buffer = "";
+          dropping = true;
+        } else {
+          buffer += chunk.slice(start, end);
+        }
+      }
+      if (newline < 0) break;
+      if (!dropping && buffer.length > 0) {
+        lines.push(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
+      }
+      buffer = "";
+      dropping = false;
+      start = newline + 1;
+    }
+    return lines;
+  };
+}
 
 /** WildBots reasoning levels mapped onto `claude --effort` (low, medium, high, xhigh, max). */
 const EFFORT_BY_REASONING: Record<string, string> = {
@@ -111,7 +151,11 @@ export function createClaudeDriver(options: ClaudeDriverOptions = {}): HarnessDr
   const prefixArgs = options.args ?? [];
   const catalog = options.models ?? CLAUDE_MODEL_CATALOG;
   const getuid = options.getuid ?? (() => process.getuid?.());
+  const modelCacheTtlMs = options.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
+  const clock = options.now ?? Date.now;
   let probed: Promise<HarnessProbeResult> | undefined;
+  let cachedModels: { at: number; providers: ModelProvider[] } | undefined;
+  let pendingModels: Promise<ModelProvider[]> | undefined;
 
   const baseEnv = (): NodeJS.ProcessEnv => ({ ...process.env, ...options.env });
 
@@ -145,48 +189,60 @@ export function createClaudeDriver(options: ClaudeDriverOptions = {}): HarnessDr
       probed = probe();
       return probed;
     },
-    async listModels(): Promise<ModelProvider[]> {
-      const [status, auth] = await Promise.all([
-        (probed ??= probe()),
-        runCommand(
-          command,
-          [...prefixArgs, "auth", "status", "--json"],
-          baseEnv(),
-          options.probeTimeoutMs ?? 10_000,
-        ),
-      ]);
-      const authenticated = parseLoggedIn(auth.stdout);
-      const warnings: string[] = [];
-      if (!status.available) warnings.push(status.reason ?? "Claude Code is unavailable.");
-      else if (!authenticated)
-        warnings.push("Claude Code is not signed in. Run `claude auth login`.");
-      const models = catalog.map((model) => {
-        const supported =
-          status.version !== undefined &&
-          (!model.minVersion || compareVersions(status.version, model.minVersion) >= 0);
-        return { id: model.id, name: model.name, available: status.available && supported };
-      });
-      const outdated = catalog.filter(
-        (model) =>
-          status.version !== undefined &&
-          model.minVersion &&
-          compareVersions(status.version, model.minVersion) < 0,
-      );
-      if (outdated.length > 0) {
-        warnings.push(
-          `Update Claude Code to use ${outdated.map((model) => model.name).join(", ")}.`,
-        );
+    listModels(): Promise<ModelProvider[]> {
+      if (modelCacheTtlMs > 0 && cachedModels && clock() - cachedModels.at < modelCacheTtlMs) {
+        return Promise.resolve(cachedModels.providers);
       }
-      return [
-        {
-          id: "anthropic",
-          name: "Anthropic",
-          aliases: ["claude", "claude-code"],
-          authenticated,
-          ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
-          models,
-        },
-      ];
+      pendingModels ??= (async () => {
+        const [status, auth] = await Promise.all([
+          (probed ??= probe()),
+          runCommand(
+            command,
+            [...prefixArgs, "auth", "status", "--json"],
+            baseEnv(),
+            options.probeTimeoutMs ?? 10_000,
+          ),
+        ]);
+        const authenticated = parseLoggedIn(auth.stdout);
+        const warnings: string[] = [];
+        if (!status.available) warnings.push(status.reason ?? "Claude Code is unavailable.");
+        else if (!authenticated)
+          warnings.push("Claude Code is not signed in. Run `claude auth login`.");
+        const models = catalog.map((model) => {
+          const supported =
+            status.version !== undefined &&
+            (!model.minVersion || compareVersions(status.version, model.minVersion) >= 0);
+          return { id: model.id, name: model.name, available: status.available && supported };
+        });
+        const outdated = catalog.filter(
+          (model) =>
+            status.version !== undefined &&
+            model.minVersion &&
+            compareVersions(status.version, model.minVersion) < 0,
+        );
+        if (outdated.length > 0) {
+          warnings.push(
+            `Update Claude Code to use ${outdated.map((model) => model.name).join(", ")}.`,
+          );
+        }
+        const providers: ModelProvider[] = [
+          {
+            id: "anthropic",
+            name: "Anthropic",
+            aliases: ["claude", "claude-code"],
+            authenticated,
+            ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
+            models,
+          },
+        ];
+        if (status.available && authenticated && modelCacheTtlMs > 0) {
+          cachedModels = { at: clock(), providers };
+        }
+        return providers;
+      })().finally(() => {
+        pendingModels = undefined;
+      });
+      return pendingModels;
     },
     openSession: (spec) =>
       openClaudeSession(spec, {
@@ -390,8 +446,15 @@ class ClaudeSession implements HarnessSession {
       this.stderrTail = (this.stderrTail + chunk).slice(-STDERR_TAIL_LIMIT);
     });
     if (child.stdout) {
-      const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-      lines.on("line", (line) => this.onLine(line));
+      const decoder = new StringDecoder("utf8");
+      const frame = createClaudeJsonlFramer();
+      const handleText = (text: string) => {
+        for (const line of frame(text)) this.onLine(line);
+      };
+      child.stdout.on("data", (chunk: Buffer | string) => {
+        handleText(typeof chunk === "string" ? chunk : decoder.write(chunk));
+      });
+      child.stdout.once("end", () => handleText(`${decoder.end()}\n`));
     }
 
     // The SDK's initialize handshake proves the CLI is alive and speaking stream-json.

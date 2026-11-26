@@ -73,6 +73,8 @@ export function createServerHarnessRuntime({
     workspaceRoot,
     files,
     defaultMcpServers,
+    probeTtlMs,
+    now,
     startScheduler,
     fallback,
     voice,
@@ -82,25 +84,10 @@ export function createServerHarnessRuntime({
   // a crash. Each would hold its assistant's queue shut forever, because a claim waits for no running row.
   const sweptQueueItems = store.queue.markRunningInterrupted();
 
-  let cached: { at: number; options: HarnessOption[] } | undefined;
-  let pending: Promise<HarnessOption[]> | undefined;
-
   return {
     runtime: harnessRuntime,
     harnessRuntime,
     sweptQueueItems,
-    probeHarnesses: () => {
-      if (cached && now() - cached.at < probeTtlMs) return Promise.resolve(cached.options);
-      pending ??= harnessRuntime
-        .harnessOptions()
-        .then((options) => {
-          cached = { at: now(), options };
-          return options;
-        })
-        .finally(() => {
-          pending = undefined;
-        });
-      return pending;
-    },
+    probeHarnesses: () => harnessRuntime.harnessOptions(),
   };
 }

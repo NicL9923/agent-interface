@@ -29,6 +29,10 @@ import {
 import type { Intent, ScrollMode } from "./scroll-follow";
 import { clearMessageParam, initialMessage } from "./view";
 import { prefersReducedMotion } from "./reduced-motion";
+import { observeResize } from "../lib/observers";
+
+/** Dispatched on `window` when the chat SSE stream receives a queue change notice for `botId`. */
+export const QUEUE_EVENT = "wildbots:queue";
 /** Within this distance of the end, the reader counts as at the latest message and the jump control hides. */
 const LATEST_DISTANCE = 100;
 /** How long a message opened from find or a link stays highlighted. */
@@ -424,6 +428,7 @@ export function useConversation(
           )
             latestInflight = inflightOf(heldTurn);
         }
+        cancelDelta();
         setConversation(compose(result));
         lastRead = Date.now();
         // Every read carries this person's draft. A reconnect's read is how a draft changed while the
@@ -467,6 +472,27 @@ export function useConversation(
       void load();
     };
     void load();
+    // Rapid inflight-delta events in one animation frame coalesce into a single commit: the first
+    // delta when no frame is pending commits immediately (0ms latency), and any subsequent deltas
+    // arriving in the same frame flush together on the next frame (or synchronously on hide/turn/load).
+    let deltaFrame = 0;
+    let pendingDelta: Inflight | undefined;
+    const cancelDelta = () => {
+      if (deltaFrame) {
+        cancelAnimationFrame(deltaFrame);
+        deltaFrame = 0;
+      }
+      pendingDelta = undefined;
+    };
+    const flushDelta = () => {
+      if (deltaFrame) {
+        cancelAnimationFrame(deltaFrame);
+        deltaFrame = 0;
+      }
+      const queued = pendingDelta;
+      pendingDelta = undefined;
+      if (queued && live) showInflight(queued);
+    };
     const showInflight = (value: Inflight) => {
       latestInflight = value;
       holdPlace();
@@ -475,6 +501,7 @@ export function useConversation(
       );
     };
     const showTurn = (turn: TurnEvent) => {
+      cancelDelta();
       const from = versionBoot(turn.version);
       // Growth on the stream continues this reply. It shows only beside a read of its own version (`patch`).
       latestInflight = inflightOf(turn);
@@ -509,10 +536,11 @@ export function useConversation(
     // A turn stream: the server sends each whole live reply with its turn's saved messages, versioned, so a
     // change notice's read no longer gates the reply. A server that predates it sends change notices only.
     const stream = changeStream(
-      `/bots/${encodeURIComponent(botId)}/events?inflight=3&drafts=1`,
+      `/bots/${encodeURIComponent(botId)}/events?inflight=3&drafts=1&queue=1`,
       () => void load(),
       (value) => {
         if (!live || value.botId !== botId) return;
+        cancelDelta();
         showInflight(value);
       },
       {
@@ -521,6 +549,10 @@ export function useConversation(
           window.dispatchEvent(
             new CustomEvent(DRAFT_EVENT, { detail: { botId, revision: Number(data) } }),
           ),
+        queue: () => {
+          if (!live) return;
+          window.dispatchEvent(new CustomEvent(QUEUE_EVENT, { detail: { botId } }));
+        },
         turn: (data) => {
           if (!live) return;
           let turn: TurnEvent;
@@ -537,10 +569,27 @@ export function useConversation(
         if (!live || delta.botId !== botId) return true;
         // Growth that does not continue the held reply is dropped for a reload, never guessed at.
         const value = applyInflightDelta(latestInflight, delta);
-        if (!value) return false;
-        heldTurn = grown(heldTurn, latestInflight!.message, value);
-        if (pending) pending.turn = grown(pending.turn, latestInflight!.message, value)!;
-        showInflight(value);
+        if (!value) {
+          cancelDelta();
+          return false;
+        }
+        const before = latestInflight!.message;
+        latestInflight = value;
+        heldTurn = grown(heldTurn, before, value);
+        if (pending) pending.turn = grown(pending.turn, before, value)!;
+        if (!deltaFrame) {
+          showInflight(value);
+          if (typeof requestAnimationFrame === "function") {
+            deltaFrame = requestAnimationFrame(() => {
+              deltaFrame = 0;
+              const queued = pendingDelta;
+              pendingDelta = undefined;
+              if (queued && live) showInflight(queued);
+            });
+          }
+        } else {
+          pendingDelta = value;
+        }
         return true;
       },
       { onHealth: (up) => reportStream(chatStream(botId), up) },
@@ -574,13 +623,17 @@ export function useConversation(
     };
     // A hidden page holds no stream; showing it again reloads and reopens one when its retry budget allows.
     const hide = () => {
-      if (document.visibilityState === "hidden") stream.suspend();
+      if (document.visibilityState === "hidden") {
+        flushDelta();
+        stream.suspend();
+      }
     };
     window.addEventListener("online", revive);
     window.addEventListener("agent-interface:reconnect", revive);
     document.addEventListener("visibilitychange", hide);
     return () => {
       live = false;
+      cancelDelta();
       stopRetrying();
       requestEarlier.current = () => {};
       requestStart.current = () => {};
@@ -763,17 +816,21 @@ export function useConversation(
       else element.scrollTop = element.scrollHeight;
     } else returnToPlace();
   };
+  const placeLatest = useRef(place);
+  placeLatest.current = place;
+  const atAttentionRef = useRef(atAttention);
+  atAttentionRef.current = atAttention;
   // Placement runs before paint, so an opened, grown or extended transcript never flickers.
   useLayoutEffect(() => {
     const element = scroll.current;
     if (!element || !conversation || conversation.botId !== botId) return;
     if (
-      atAttention &&
+      atAttentionRef.current &&
       ![
         ...element.querySelectorAll<HTMLElement>(
           '[data-attention-kind="clarify"], [data-attention-kind="approval"]',
         ),
-      ].some((card) => card.id === atAttention)
+      ].some((card) => card.id === atAttentionRef.current)
     ) {
       setAtAttention(null);
       mode.current = "follow";
@@ -809,7 +866,7 @@ export function useConversation(
     } else {
       // A message that could not be found leaves the reader at the latest one.
       if (opening) mode.current = "follow";
-      place();
+      placeLatest.current();
     }
     restored.current = true;
     lastTop.current = element.scrollTop;
@@ -869,8 +926,6 @@ export function useConversation(
       element.removeEventListener("pointerdown", press);
     };
   };
-  const placeLatest = useRef(place);
-  placeLatest.current = place;
   const listenLatest = useRef(listen);
   listenLatest.current = listen;
   // The transcript body, observed so late images and cards keep a follower at the end.
@@ -884,15 +939,15 @@ export function useConversation(
     }
     if (element && mode.current === "follow") element.scrollTop = element.scrollHeight;
     const stop = element ? listenLatest.current(element) : undefined;
-    if (typeof ResizeObserver === "undefined") return stop;
     // Browser scroll anchoring is off, so late images above the reader are offset here too.
-    const observer = new ResizeObserver(() => placeLatest.current());
-    observer.observe(node);
+    const onResize = () => placeLatest.current();
+    const stopNode = observeResize(node, onResize);
     // The view shrinks when a phone's keyboard opens or the composer grows, which moves no content,
     // so a follower would otherwise end up with the latest message under the composer.
-    if (element) observer.observe(element);
+    const stopElement = element ? observeResize(element, onResize) : undefined;
     return () => {
-      observer.disconnect();
+      stopNode();
+      stopElement?.();
       stop?.();
     };
   }, []);

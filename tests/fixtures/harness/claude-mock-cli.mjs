@@ -27,6 +27,7 @@ if (argv.includes("--version")) {
 }
 
 if (argv[0] === "auth" && argv[1] === "status") {
+  record({ authStatus: true });
   const loggedIn = process.env.CLAUDE_MOCK_LOGGED_IN !== "0";
   process.stdout.write(`${JSON.stringify({ loggedIn, authMethod: loggedIn ? "claude.ai" : "none" })}\n`);
   process.exit(loggedIn ? 0 : 1);
@@ -235,6 +236,13 @@ async function runTurn(text) {
     if (decision?.behavior === "allow") toolResult("toolu_bash", [{ type: "text", text: "file.txt" }]);
     else toolResult("toolu_bash", decision?.message ?? "denied", true);
     result({ result: "tool done" });
+    busy = false;
+    return;
+  }
+  if (text.includes("unicode-sep")) {
+    const payload = "before\u2028middle\u2029after";
+    delta(0, { type: "text_delta", text: payload });
+    result({ result: payload });
     busy = false;
     return;
   }

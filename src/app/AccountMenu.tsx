@@ -6,6 +6,7 @@ import { useResource } from "./use-resource";
 import { request } from "../client-api";
 import { routeUrl } from "../shared/api";
 import { useMenu } from "./use-menu";
+import { intentPrefetchHandlers, preloadPreferences, preloadUsage } from "./intent-prefetch";
 
 export const initials = (name: string) =>
   name
@@ -76,17 +77,32 @@ export function AccountMenu({
             <strong>{user.name}</strong>
             <small>{user.email}</small>
           </div>
-          <button type="button" role="menuitem" onClick={() => choose(onUsage)}>
+          <button
+            type="button"
+            role="menuitem"
+            {...intentPrefetchHandlers(preloadUsage, !disabled, { pointerOnly: true })}
+            onClick={() => choose(onUsage)}
+          >
             <Icon name="gauge" size={16} />
             <span className="account-menu-text">
               Usage<small>{summary}</small>
             </span>
           </button>
-          <button type="button" role="menuitem" onClick={() => choose(onSettings)}>
+          <button
+            type="button"
+            role="menuitem"
+            {...intentPrefetchHandlers(preloadPreferences, !disabled, { pointerOnly: true })}
+            onClick={() => choose(onSettings)}
+          >
             <Icon name="gear" size={16} />
             Settings
           </button>
-          <button type="button" role="menuitem" onClick={() => choose(onSignOut)}>
+          <button
+            type="button"
+            role="menuitem"
+            {...intentPrefetchHandlers(preloadPreferences, !disabled, { pointerOnly: true })}
+            onClick={() => choose(onSignOut)}
+          >
             <Icon name="signout" size={16} />
             Sign out
           </button>

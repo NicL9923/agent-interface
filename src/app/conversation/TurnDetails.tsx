@@ -38,8 +38,8 @@ export function HistorySkeleton() {
   return (
     <div className="history-skeleton" role="status">
       <span className="sr-only">Opening your conversation…</span>
-      {["reply", "prompt", "reply long"].map((kind, index) => (
-        <div key={index} className={`skeleton-message ${kind}`} aria-hidden="true">
+      {["reply", "prompt", "reply long"].map((kind) => (
+        <div key={kind} className={`skeleton-message ${kind}`} aria-hidden="true">
           <span />
           <span />
           <span />
@@ -185,6 +185,12 @@ export const isReplyRow = (message: Message) =>
   message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
 
 export function Reasoning({ parts }: { parts: string[] }) {
+  const counts = new Map<string, number>();
+  const keyed = parts.map((part) => {
+    const seen = counts.get(part) ?? 0;
+    counts.set(part, seen + 1);
+    return { key: `${part.slice(0, 32)}:${seen}`, part };
+  });
   return (
     <details className="tool-calls reasoning-calls">
       <summary>
@@ -193,8 +199,8 @@ export function Reasoning({ parts }: { parts: string[] }) {
         {parts.length > 1 && <span className="tool-count">{parts.length}</span>}
       </summary>
       <div className="tool-calls-content">
-        {parts.map((part, index) => (
-          <p className="reasoning-part" key={index}>
+        {keyed.map(({ key, part }) => (
+          <p className="reasoning-part" key={key}>
             {part}
           </p>
         ))}

@@ -80,6 +80,7 @@ type Session = {
   expected: Buffer;
   expiresAt: number;
   signal: AbortSignal;
+  touch: () => void;
   revoke: () => void;
   protocolVersion?: string;
   calls: Map<RequestId, AbortController>;
@@ -359,6 +360,7 @@ export async function createWildbotsMcpServer(options: WildbotsMcpOptions) {
       session.revoke();
       return unauthorized(res);
     }
+    session.touch();
     if (req.method !== "POST") {
       res.setHeader("Allow", "POST");
       return send(res, 405);
@@ -437,6 +439,7 @@ export async function createWildbotsMcpServer(options: WildbotsMcpOptions) {
         : textResult(await builtIns.get(params.name)!.call(context, args, signal));
       signal.throwIfAborted();
       assertSession(context);
+      session.touch();
       reply(result);
     } catch (error) {
       if (!signal.aborted)
@@ -477,20 +480,29 @@ export async function createWildbotsMcpServer(options: WildbotsMcpOptions) {
       const id = randomBytes(12).toString("base64url");
       const secret = randomBytes(32).toString("base64url");
       const controller = new AbortController();
+      let timer: NodeJS.Timeout | undefined;
       const revoke = () => {
         sessions.delete(id);
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
+        timer = undefined;
         controller.abort();
       };
-      const timer = setTimeout(revoke, sessionTtlMs).unref();
-      sessions.set(id, {
+      const session: Session = {
         context,
         expected: digest(secret),
         signal: controller.signal,
+        touch: () => {
+          if (controller.signal.aborted || !sessions.has(id)) return;
+          session.expiresAt = Date.now() + sessionTtlMs;
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(revoke, sessionTtlMs).unref();
+        },
         revoke,
         expiresAt: Date.now() + sessionTtlMs,
         calls: new Map(),
-      });
+      };
+      timer = setTimeout(revoke, sessionTtlMs).unref();
+      sessions.set(id, session);
       return {
         spec: {
           name: "wildbots",

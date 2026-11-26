@@ -63,7 +63,7 @@ import {
   previousAssetFile,
   readPreviousAssets,
 } from "./static-cache.js";
-import { isApiRequest } from "./route-path.js";
+import { isApiRequest, routePattern } from "./route-path.js";
 import { MAX_UPLOAD_BYTES } from "../shared/uploads.js";
 import {
   DirectRoutes,
@@ -166,6 +166,11 @@ export async function createApp(
   await installAccountUsageRoutes(app, runtime, store);
   const collaboration = await installCollaborationRoutes(app, runtime, store, roster);
   const groups = new GroupWatch(runtime);
+  app.addHook("onResponse", async (req, reply) => {
+    if (req.method === "GET" || req.method === "HEAD" || reply.statusCode >= 400) return;
+    const roomId = (req.params as { roomId?: string } | undefined)?.roomId;
+    if (roomId && routePattern(req).startsWith("/api/groups/:roomId/")) groups.notify(roomId);
+  });
   const catalogs = collaboration.catalogRead && new GroupCatalogWatch(collaboration.catalogRead);
   await installVaultRoutes(app, runtime);
   await registerVoiceRoutes(app, runtime, {
@@ -313,13 +318,16 @@ export async function createApp(
   });
   const eventLoop = new EventLoopMonitor(app.log);
   installHealthRoutes(app, health, eventLoop);
+  let unwatchWorkerRoster: (() => void) | undefined;
   if (options.background !== false) {
     worker.start();
+    unwatchWorkerRoster = runtime.watchRoster?.(() => worker.wake());
     health.start();
     eventLoop.start();
     mains.start();
   }
   app.addHook("onClose", async () => {
+    unwatchWorkerRoster?.();
     await directRoutes?.close();
     groups.close();
     catalogs?.close();

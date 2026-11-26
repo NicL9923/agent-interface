@@ -23,6 +23,7 @@ import { Avatar } from "./Avatar";
 import { When } from "./When";
 import { imeKey } from "../app/ime";
 import { sendsOnKey, useEnterSends } from "../app/enter-key";
+import { observeResize } from "../lib/observers";
 import "./collaboration.css";
 type PendingMessage = { requestId: string; threadId: string; text: string };
 type RoomView = { state: GroupState; page: GroupPage };
@@ -245,7 +246,7 @@ export function GroupRoomView({
     setSettingsOpen(false);
     setDraft(saved<string>(`${key}:draft`) || "");
     setPending(saved<PendingMessage>(key));
-  }, [roomId, key]);
+  }, [roomId, key, setError]);
   const send = () => {
     const input = pending || {
       requestId: crypto.randomUUID(),
@@ -378,10 +379,7 @@ export function GroupRoomView({
     if (!box || !view) return;
     const reserve = () => view.style.setProperty("--group-notes", `${box.offsetHeight}px`);
     reserve();
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(reserve);
-    observer.observe(box);
-    return () => observer.disconnect();
+    return observeResize(box, reserve);
   }, [gone]);
   // Errors and notes sit inside the conversation's section. The composer sticks to the bottom of the panel only
   // within that section, so a note above the section would push the section down and the composer's buttons with

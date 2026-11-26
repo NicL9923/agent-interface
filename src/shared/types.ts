@@ -709,6 +709,8 @@ export interface Runtime {
   routineResults?: (botId: string, routineId: string) => Promise<RoutineResult[]>;
   routineOutput?: (botId: string, routineId: string, resultId: string) => Promise<RoutineOutput>;
   groupRequest?: (input: GroupRequest) => Promise<GroupResponse>;
+  /** Announces a change to one group chat (messages, turn activity, settings, stop). Unsubscribe with the returned function. */
+  watchGroup?: (roomId: string, changed: () => void) => () => void;
   transcribeVoice?: (
     botId: string,
     input: { mime: string; data: Buffer },

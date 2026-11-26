@@ -7,6 +7,8 @@ import { loadConfig } from "../src/server/config.js";
 import { eventStreamConnection } from "../src/server/event-stream.js";
 import {
   GROUP_POLL_MAX_MS,
+  GROUP_SAFETY_POLL_MS,
+  GROUP_WAKE_COALESCE_MS,
   GROUP_WATCHED_ROOMS,
   GROUP_WATCHES_PER_PERSON,
   GroupWatch,
@@ -198,6 +200,93 @@ describe("group room watcher", () => {
     expect(watch.watched).toHaveLength(GROUP_WATCHED_ROOMS);
     for (const stop of [...people, joined]) stop();
     watch.close();
+  });
+
+  it("wakes immediately via watchGroup with coalescing, safety-net polling, dirty re-poll, and unsubscribe cleanup", async () => {
+    vi.useFakeTimers();
+    let seq = 1;
+    let holdNext: (() => void) | undefined;
+    const roomListeners = new Map<string, Set<() => void>>();
+    const unsubSpy = vi.fn();
+    const watchGroup = vi.fn((roomId: string, listener: () => void) => {
+      let set = roomListeners.get(roomId);
+      if (!set) roomListeners.set(roomId, (set = new Set()));
+      set.add(listener);
+      return () => {
+        set.delete(listener);
+        unsubSpy();
+      };
+    });
+    const emit = (roomId: string) => {
+      for (const listener of roomListeners.get(roomId) ?? []) listener();
+    };
+    const groupRequest = vi.fn(async (input: GroupRequest) => {
+      if (holdNext) {
+        const gate = new Promise<void>((resolve) => {
+          holdNext = resolve;
+        });
+        await gate;
+      }
+      return state((input as { roomId: string }).roomId, seq);
+    });
+    const watch = new GroupWatch({ groupRequest, watchGroup });
+    const heard = vi.fn();
+    const stop = watch.watch("ranch", "one", heard);
+    expect(watchGroup).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(groupRequest).toHaveBeenCalledTimes(1);
+
+    // Burst of 5 room events coalesces into a single poll after GROUP_WAKE_COALESCE_MS, not 2000ms.
+    seq = 2;
+    for (let i = 0; i < 5; i++) emit("ranch");
+    await vi.advanceTimersByTimeAsync(GROUP_WAKE_COALESCE_MS - 1);
+    expect(groupRequest).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(groupRequest).toHaveBeenCalledTimes(2);
+    expect(heard).toHaveBeenCalledTimes(2);
+    expect(heard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ room: expect.objectContaining({ latest_seq: 2 }) }),
+    );
+
+    // Without events, safety-net poll waits GROUP_SAFETY_POLL_MS (not 2000ms).
+    await vi.advanceTimersByTimeAsync(GROUP_SAFETY_POLL_MS - 1);
+    expect(groupRequest).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(groupRequest).toHaveBeenCalledTimes(3);
+
+    // Event arriving while a poll is in flight triggers a dirty follow-up read so the change is never lost.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    groupRequest.mockImplementationOnce(async () => {
+      await held;
+      return state("ranch", 3);
+    });
+    seq = 3;
+    emit("ranch");
+    await vi.advanceTimersByTimeAsync(GROUP_WAKE_COALESCE_MS);
+    expect(groupRequest).toHaveBeenCalledTimes(4);
+    seq = 4;
+    emit("ranch");
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ room: expect.objectContaining({ latest_seq: 3 }) }),
+    );
+    await vi.advanceTimersByTimeAsync(GROUP_WAKE_COALESCE_MS);
+    expect(groupRequest).toHaveBeenCalledTimes(5);
+    expect(heard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ room: expect.objectContaining({ latest_seq: 4 }) }),
+    );
+
+    // Unsubscribing cleans up watchGroup and ignores subsequent notify calls.
+    stop();
+    expect(unsubSpy).toHaveBeenCalledTimes(1);
+    watch.notify("ranch");
+    await vi.advanceTimersByTimeAsync(GROUP_SAFETY_POLL_MS * 2);
+    expect(groupRequest).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -451,6 +540,99 @@ describe("watching a group chat on the app event stream", () => {
         open.flatMap((response) => (response.body ? [response.body.cancel()] : [])),
       );
       await s.app.close();
+    }
+  });
+
+  it("wakes group watchers immediately on POST /api/groups/:roomId/messages without waiting for the 2s poll", async () => {
+    let seq = 1;
+    const rooms = [state("shared", 1).room];
+    const groupRequest = vi.fn(async (input: GroupRequest) => {
+      if (input.operation === "list") return { supported: true, canSend: true, rooms };
+      if (input.operation === "send") {
+        seq = 2;
+        return {
+          accepted: true,
+          event: {
+            event_id: "evt-2",
+            seq: 2,
+            kind: "message.user",
+            created_at: 1,
+            actor: { kind: "user", id: "local-one", display_name: "First member" },
+            payload: { text: "Ping", thread_id: "t1" },
+          },
+        };
+      }
+      return {
+        ...state("shared", seq),
+        room: { ...rooms[0], latest_seq: seq },
+      };
+    });
+    const runtime: Runtime = fakeRuntime({
+      groupRequest,
+      status: async () => ({ connected: true }),
+      close: async () => {},
+      capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
+      listBots: async () => [botFixture({ id: "ranch" }), botFixture({ id: "planner" })],
+    });
+    const { app } = await createApp(
+      loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+      runtime,
+      { background: false },
+    );
+    const base = await app.listen({ port: 0, host: "127.0.0.1" });
+    const signIn = await fetch(`${base}/api/auth/local`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ member: "one" }),
+    });
+    const cookie = signIn.headers.getSetCookie()[0].split(";")[0];
+    const { csrfToken } = (await signIn.json()) as { csrfToken: string };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const response = await fetch(`${base}/api/events?group=shared`, { headers: { cookie } });
+      expect(response.status).toBe(200);
+      const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+      let text = "";
+      const pump = (async () => {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) return;
+          text += chunk.value;
+        }
+      })().catch(() => {});
+      const waitForText = async (needle: string, maxFakeMs: number) => {
+        for (let elapsed = 0; !text.includes(needle); elapsed += 5) {
+          if (elapsed > maxFakeMs)
+            throw new Error(
+              `Expected ${needle} within ${maxFakeMs}ms, got ${JSON.stringify(text)}`,
+            );
+          await vi.advanceTimersByTimeAsync(5);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      };
+      await waitForText('"latestSeq":1', 50);
+      const sent = await fetch(`${base}/api/groups/shared/messages`, {
+        method: "POST",
+        headers: {
+          cookie,
+          origin,
+          "x-csrf-token": csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          requestId: "11111111-1111-4111-8111-111111111111",
+          text: "Ping",
+          threadId: "t1",
+        }),
+      });
+      expect(sent.status).toBe(200);
+      // Must arrive within GROUP_WAKE_COALESCE_MS + small margin, well under the 2000ms poll.
+      await waitForText('"latestSeq":2', GROUP_WAKE_COALESCE_MS + 50);
+      await reader.cancel();
+      await pump;
+    } finally {
+      vi.useRealTimers();
+      await app.close();
     }
   });
 });

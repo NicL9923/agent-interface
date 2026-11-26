@@ -273,6 +273,76 @@ describe("durable queue", () => {
     );
     expect(enqueue(queue, "New conversation", { expectedVersion: 2 }).conversationVersion).toBe(3);
   });
+  it("serves latest-settlement lookups from bot_queue_settled without a temp sort", () => {
+    const store = open();
+    const first = enqueue(store.queue, "First");
+    store.queue.claimNext("family", "run-1");
+    store.queue.complete("family", first.id);
+    const plan = store.db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT run_id AS runId, status, settled_at AS at FROM bot_queue
+         WHERE bot_id=? AND status IN ('completed','interrupted')
+         ORDER BY settled_at DESC, rowid DESC LIMIT 1`,
+      )
+      .all("family")
+      .map((row) => (row as { detail: string }).detail)
+      .join("\n");
+    expect(plan).toContain("bot_queue_settled");
+  });
+
+  it("notifies watchQueue listeners only on actual bot_queue mutations and not on bumpVersion or no-ops", () => {
+    const store = open();
+    const { queue } = store;
+    const seen: string[] = [];
+    const unwatch = store.watchQueue((botId) => seen.push(botId));
+
+    // Unrelated conversation version bumps must not fire queue watchers.
+    queue.bumpVersion("family");
+    expect(seen).toEqual([]);
+
+    const a = enqueue(queue, "First");
+    const b = enqueue(queue, "Second");
+    // Idempotent replay of an existing requestId does not notify again.
+    enqueue(queue, "First", { requestId: a.requestId });
+    expect(seen).toEqual(["family", "family"]);
+
+    // No-op edit and no-op reorder do not notify.
+    queue.edit("family", a.id, "local-one", "First");
+    queue.reorder("family", a.id, a.id);
+    expect(seen).toHaveLength(2);
+
+    queue.edit("family", a.id, "local-one", "First edited");
+    queue.reorder("family", b.id, a.id);
+    queue.promoteToSendNow("family", a.id);
+    queue.cancel("family", b.id);
+    queue.claimNext("family", "run-1");
+    // Claiming when already running is a no-op.
+    queue.claimNext("family", "run-2");
+    queue.complete("family", a.id);
+    // Idempotent repeat complete is a no-op.
+    queue.complete("family", a.id);
+    expect(seen).toHaveLength(8);
+
+    const c = enqueue(queue, "Will fail");
+    queue.claimNext("family", "run-3");
+    queue.fail("family", c.id, "boom");
+    const d = enqueue(queue, "Will interrupt");
+    queue.claimNext("family", "run-4");
+    expect(queue.markRunningInterrupted("family")).toBe(1);
+    expect(queue.markRunningInterrupted("family")).toBe(0);
+    expect(seen).toHaveLength(14);
+
+    // forgetBot notifies when queue rows are removed and stays silent when none exist.
+    store.forgetBot("family");
+    expect(seen).toHaveLength(15);
+    store.forgetBot("empty-bot");
+    expect(seen).toHaveLength(15);
+
+    unwatch();
+    enqueue(queue, "After unwatch");
+    expect(seen).toHaveLength(15);
+    expect(d.botId).toBe("family");
+  });
 });
 
 const origin = "http://127.0.0.1:3000";

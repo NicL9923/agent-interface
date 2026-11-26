@@ -227,4 +227,33 @@ describe("createServerHarnessRuntime probeHarnesses", () => {
       { id: "grok", available: true, reason: undefined },
     ]);
   });
+
+  it("shares the probe cache and in-flight round between runtime.status() and probeHarnesses(), bypassing on reconnect()", async () => {
+    const { codex, grok, compose, advance } = await setup();
+    const { runtime, probeHarnesses } = compose();
+
+    const [status, options] = await Promise.all([runtime.status(), probeHarnesses()]);
+    expect(status).toEqual({ connected: true, code: "ready" });
+    expect(options).toEqual([
+      { id: "codex", available: true, reason: undefined },
+      { id: "grok", available: true, reason: undefined },
+    ]);
+    expect([codex.probes, grok.probes]).toEqual([1, 1]);
+
+    // Subsequent status() within the TTL reuses the cached probe round.
+    advance(10_000);
+    await runtime.status();
+    expect([codex.probes, grok.probes]).toEqual([1, 1]);
+
+    // Explicit reconnect() clears the cache and forces a fresh probe immediately.
+    codex.result = { available: false, reason: "missing" };
+    grok.result = { available: false, reason: "missing" };
+    const reconnected = await runtime.reconnect!();
+    expect(reconnected).toEqual({
+      connected: true,
+      code: "ready",
+      detail: "No registered harness passed its availability probe.",
+    });
+    expect([codex.probes, grok.probes]).toEqual([2, 2]);
+  });
 });

@@ -51,9 +51,12 @@ export function BotMenuPopup({
   const [keyboardAnchor, setKeyboardAnchor] = useState(false);
   const suppressTouchClick = useRef(false);
   const replayed = useRef(false);
+  const restored = useRef(false);
   useEffect(() => {
-    if (restoreFocus) trigger.current?.focus();
-  }, []);
+    if (!restoreFocus || restored.current) return;
+    restored.current = true;
+    trigger.current?.focus();
+  }, [restoreFocus]);
   useEffect(() => {
     if (!opensAt || replayed.current) return;
     replayed.current = true;

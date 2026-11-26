@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearResponseCache, setCsrf } from "../src/client-api";
+import { QUEUE_EVENT } from "../src/app/use-conversation";
 import { QUEUE_POLL_MS, QueuePanel } from "../src/components/QueuePanel";
 import type { QueuedMessage } from "../src/shared/queue";
 import type { Bootstrap, Bot } from "../src/shared/types";
@@ -72,7 +73,6 @@ beforeEach(() => {
   mount = mountRoot();
 });
 afterEach(() => {
-  vi.useRealTimers();
   expect(unexpected).toEqual([]);
 });
 
@@ -116,6 +116,26 @@ describe("when it shows", () => {
     await advance(QUEUE_POLL_MS);
     expect(texts()).toEqual(["Check the north fence"]);
     expect(mount.container.querySelector("h2")?.textContent).toContain("1 message queued");
+  });
+
+  it("reloads immediately on wildbots:queue events for its own assistant without waiting for the poll", async () => {
+    queue = [];
+    await render();
+    await advance(0);
+    expect(reads()).toBe(1);
+    // Notices for another assistant are ignored.
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(QUEUE_EVENT, { detail: { botId: "other" } }));
+    });
+    await advance(0);
+    expect(reads()).toBe(1);
+    queue = [item("x", "Arrived over SSE")];
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(QUEUE_EVENT, { detail: { botId: "ranch" } }));
+    });
+    await advance(0);
+    expect(reads()).toBe(2);
+    expect(texts()).toEqual(["Arrived over SSE"]);
   });
 });
 

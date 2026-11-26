@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Message, SubmissionReceipt, User } from "../shared/types";
 import { compareVersions } from "../shared/inflight";
 import { isSentCopy, sameDraft } from "./storage";
@@ -477,18 +477,21 @@ export function useSentEchoes(input: Omit<EchoInput, "now">) {
       });
     };
   };
-  const step = () =>
-    setState((current) =>
-      advance(current, { pending, receipt, sending, conversation, sender, now: Date.now() }),
-    );
-  useEffect(step, [pending, receipt, sending, conversation, sender?.id]);
+  const step = useCallback(
+    () =>
+      setState((current) =>
+        advance(current, { pending, receipt, sending, conversation, sender, now: Date.now() }),
+      ),
+    [pending, receipt, sending, conversation, sender],
+  );
+  useEffect(step, [step]);
   const waiting = echoes.some((echo) => echo.status === "accepted" && !echo.ran);
   // An accepted message that never shows is checked again once its patience runs out.
   useEffect(() => {
     if (!waiting) return;
     const timer = setTimeout(step, ECHO_PATIENCE + 100);
     return () => clearTimeout(timer);
-  }, [waiting, pending, receipt, sending, conversation, sender?.id]);
+  }, [waiting, step]);
   // The early row's two bounds: a request still out, and Hermes's copy without the turn's report.
   const deadline = Math.min(
     ...echoes.map((echo) =>
@@ -503,6 +506,6 @@ export function useSentEchoes(input: Omit<EchoInput, "now">) {
     if (deadline === Infinity) return;
     const timer = setTimeout(step, Math.max(0, deadline - Date.now()));
     return () => clearTimeout(timer);
-  }, [deadline, pending, receipt, sending, conversation, sender?.id]);
+  }, [deadline, step]);
   return { echoes, sends, beginFormSend };
 }

@@ -6,6 +6,7 @@ import type { FormAnswers, FormCard, FormField, FormValue } from "../shared/repl
 import { formRequestId } from "../shared/retry-id";
 import type { SubmissionReceipt } from "../shared/types";
 import { formReplyKey, localRead, localSave } from "../app/storage";
+import { useStableCallback } from "../app/use-stable-callback";
 import { TranscriptTools } from "../app/ReplyActions";
 import { AccountChanged, accountMark, accountStill } from "../app/account-epoch";
 import { useReceiptCheck } from "../app/use-receipt-check";
@@ -199,28 +200,31 @@ export function FormReplyCard({
   const [error, setError] = useState("");
   const inFlight = useRef(false);
   const formId = useId();
-  const save = (next: Saved, change: Change = {}) => {
+  const cardRef = useRef(card);
+  cardRef.current = card;
+  const cardId = card.id;
+  const save = useStableCallback((next: Saved, change: Change = {}) => {
     const record = nextRecord(readSaved(key), next, change);
     if (record) localSave(key, record);
-  };
+  });
   // A checking record saved without a usable ID follows the ID its attempt derives.
   const recovering = status === "checking" && !pending;
   useEffect(() => {
     if (!recovering || !first) return;
     let live = true;
-    void formRequestId(personKey, botId, messageId, card.id, first.attempt).then((id) => {
+    void formRequestId(personKey, botId, messageId, cardId, first.attempt).then((id) => {
       if (live)
         setPending({
           id,
           attempt: first.attempt,
-          answers: restore(card, first.answers),
+          answers: restore(cardRef.current, first.answers),
           elsewhere: !!first.elsewhere,
         });
     });
     return () => {
       live = false;
     };
-  }, [recovering]);
+  }, [recovering, first, personKey, botId, messageId, cardId]);
 
   // Attempts run in order and each one only after Hermes refused the one before, so the lookup
   // skips refusals until the first attempt that was not refused, which tells where the form stands.
@@ -238,7 +242,7 @@ export function FormReplyCard({
         let receipt: SubmissionReceipt | null = null;
         try {
           receipt = await request("GET /submissions/:id", {
-            params: { id: await formRequestId(personKey, botId, messageId, card.id, next) },
+            params: { id: await formRequestId(personKey, botId, messageId, cardId, next) },
           });
         } catch {
           /* Unknown: the person may send, and the server admits the request once. */
@@ -247,7 +251,7 @@ export function FormReplyCard({
         if (receipt?.status === "rejected") continue;
         const found: Saved = {
           attempt: next,
-          answers: formStart(card),
+          answers: formStart(cardRef.current),
           state:
             receipt?.status === "accepted"
               ? "sent"
@@ -268,7 +272,7 @@ export function FormReplyCard({
     return () => {
       live = false;
     };
-  }, [looking]);
+  }, [looking, personKey, botId, messageId, cardId, save]);
 
   /** Settles the one request `from` names, with the attempt and answers it carried. */
   const settle = (from: Pending, receipt: SubmissionReceipt) => {

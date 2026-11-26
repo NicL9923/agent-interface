@@ -2,6 +2,7 @@ import {
   Children,
   Fragment,
   createContext,
+  createElement,
   isValidElement,
   memo,
   useContext,
@@ -25,6 +26,7 @@ import { InlineUi } from "./InlineUi";
 import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
 import { streamingHoldBack } from "./streaming-hold-back";
 import { graphemeCut, useRevealed } from "./streaming-reveal";
+import { observeResize } from "../lib/observers";
 import "./message-markdown.css";
 
 type Highlighter = typeof import("./code-highlight");
@@ -253,12 +255,12 @@ function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
     update();
     element.addEventListener("scroll", update, { passive: true });
     // A narrower column, or a row arriving while the reply streams, changes the overflow.
-    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
-    observer?.observe(element);
-    if (table.current) observer?.observe(table.current);
+    const stopScroller = observeResize(element, update);
+    const stopTable = table.current ? observeResize(table.current, update) : undefined;
     return () => {
       element.removeEventListener("scroll", update);
-      observer?.disconnect();
+      stopScroller();
+      stopTable?.();
     };
   }, []);
   async function copy(format: "Markdown" | "CSV") {
@@ -424,11 +426,7 @@ export function parseBlock({
         key: element?.key ?? `text-${index}`,
         tag,
         kind: pieceKind(node, tag),
-        node: element ? (
-          <ReplyContext.Provider value={context}>{element}</ReplyContext.Provider>
-        ) : (
-          node
-        ),
+        node: element ? createElement(ReplyContext.Provider, { value: context }, element) : node,
       };
     });
 }
@@ -693,13 +691,14 @@ export const ReplyMarkdown = memo(function ReplyMarkdown({
   const [streamed, setStreamed] = useState(live);
   if (live && !streamed) setStreamed(true);
   const text = useRevealed(props.text, live);
-  // Checked once per saved text. A reply the splitter parses whole needs no check, and one longer
-  // than MAX_CHECKED_REPLY parses whole without it.
+  // Checked once per saved text. A reply the splitter parses whole or in a single block needs no
+  // check, and one longer than MAX_CHECKED_REPLY parses whole without it.
   const whole = useMemo(() => {
     if (live || !streamed) return false;
     if (text.length > MAX_CHECKED_REPLY) return true;
     const blocks = streamingBlocks(text);
-    return !!blocks && !blocksAgree(text, blocks);
+    if (!blocks || blocks.length <= 1) return false;
+    return !blocksAgree(text, blocks);
   }, [live, streamed, text]);
   if (!live && !streamed) return <MessageMarkdown {...props} />;
   return (
@@ -907,15 +906,11 @@ function StreamingCaret({ text }: { text: string }) {
     };
     box.addEventListener("scroll", scrolled, { capture: true, passive: true });
     // A narrower window or a late image moves the text without changing it.
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? undefined
-        : new ResizeObserver(() => placeCaret(element));
-    observer?.observe(box);
+    const stopResize = observeResize(box, () => placeCaret(element));
     return () => {
       box.removeEventListener("scroll", scrolled, { capture: true });
       cancelAnimationFrame(frame);
-      observer?.disconnect();
+      stopResize();
     };
   }, []);
   return <span ref={caret} className="streaming-caret" aria-hidden="true" />;

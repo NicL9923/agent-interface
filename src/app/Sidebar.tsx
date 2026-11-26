@@ -11,6 +11,16 @@ import type { AppUpdate } from "./use-browser";
 import { UpdateNotice } from "./UpdateNotice";
 import { BotMenu } from "./BotMenu";
 import { prefetchFirstPage } from "./conversation-page";
+import {
+  cancelIntentPrefetch,
+  intentPrefetchHandlers,
+  preloadBotSettings,
+  preloadDiscovery,
+  preloadGroupCreate,
+  preloadGroupRoom,
+  preloadToday,
+  scheduleIntentPrefetch,
+} from "./intent-prefetch";
 import { NewMenu } from "./NewMenu";
 import { memberNames, roomFaces, roomPreview, type PendingGroup } from "./home-rooms";
 import { isUnread, type ReadThrough } from "./unread";
@@ -143,11 +153,14 @@ export const Sidebar = memo(function Sidebar({
   const unread = (bot: Bot) => isUnread(bot, shownBotId, readThrough);
   // A pinned assistant that finishes its work hops, and the other pinned ones look over at it.
   const before = useRef(new Map<string, ActivityState>());
-  const pinnedStates = JSON.stringify(pinned.map((bot) => [bot.id, activity(bot)]));
+  const pinnedPairs = pinned.map((bot) => [bot.id, activity(bot)] as const);
+  const pinnedKey = pinnedPairs.map(([id, now]) => `${id}\0${now}`).join("\n");
+  const latestPinned = useRef(pinnedPairs);
+  latestPinned.current = pinnedPairs;
   useEffect(() => {
     const seen = before.current,
       next = new Map<string, ActivityState>();
-    for (const [id, now] of JSON.parse(pinnedStates) as [string, ActivityState][]) {
+    for (const [id, now] of latestPinned.current) {
       next.set(id, now);
       const was = seen.get(id);
       if ((was === "working" || was === "thinking") && (now === "done" || now === "idle")) {
@@ -156,12 +169,39 @@ export const Sidebar = memo(function Sidebar({
       }
     }
     before.current = next;
-  }, [pinnedStates]);
-  // The date is read again every hour, so a season starts without a reload.
+  }, [pinnedKey]);
+  // The date is read again every hour while visible, and on return to visible, so a season starts without a reload.
   const [today, setToday] = useState(() => new Date());
   useEffect(() => {
-    const timer = setInterval(() => setToday(new Date()), 3_600_000);
-    return () => clearInterval(timer);
+    const sameDay = (a: Date, b: Date) =>
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate();
+    const refreshIfDayChanged = () => {
+      const now = new Date();
+      setToday((previous) => (sameDay(previous, now) ? previous : now));
+    };
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const start = () => {
+      timer ??= setInterval(() => {
+        if (document.visibilityState !== "hidden") refreshIfDayChanged();
+      }, 3_600_000);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        clearInterval(timer);
+        timer = undefined;
+      } else {
+        refreshIfDayChanged();
+        start();
+      }
+    };
+    if (document.visibilityState !== "hidden") start();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
   const season = homeSeason(today, pinned);
   // Pointing at, pressing or focusing a row reads its chat before the click opens it.
@@ -234,6 +274,7 @@ export const Sidebar = memo(function Sidebar({
         <Button
           className={`bot-item bot-row room-row${open ? " selected" : ""}`}
           aria-current={open ? "page" : undefined}
+          {...intentPrefetchHandlers(preloadGroupRoom, !saved)}
           onClick={() => groups.onSelect(room.room_id)}
         >
           <RoomFaces room={room} bots={boot.bots} cluster={mobile ? 52 : 44} />
@@ -263,7 +304,11 @@ export const Sidebar = memo(function Sidebar({
   };
   const finishRow = groups.pending && (
     <li key="finish-group">
-      <Button className="bot-item bot-row room-row room-pending" onClick={groups.onCreate}>
+      <Button
+        className="bot-item bot-row room-row room-pending"
+        {...intentPrefetchHandlers(preloadGroupCreate, !saved)}
+        onClick={groups.onCreate}
+      >
         <span
           className="home-row-avatar room-faces"
           aria-hidden="true"
@@ -331,17 +376,54 @@ export const Sidebar = memo(function Sidebar({
             aria-label="Search & saved"
             aria-pressed={view === "find"}
             disabled={saved}
+            {...intentPrefetchHandlers(preloadDiscovery, !saved)}
             onClick={() => onView("find")}
           >
             <Icon name="search" />
           </Button>
-          <NewMenu
-            canGroup={groups.canCreate}
-            groupHint={groups.hint}
-            disabled={saved}
-            onNewBot={onNewBot}
-            onNewGroup={groups.onCreate}
-          />
+          <span
+            style={{ display: "contents" }}
+            onPointerEnter={
+              saved
+                ? undefined
+                : () => {
+                    scheduleIntentPrefetch(preloadBotSettings);
+                    if (groups.canCreate) scheduleIntentPrefetch(preloadGroupCreate);
+                  }
+            }
+            onPointerLeave={
+              saved
+                ? undefined
+                : () => {
+                    cancelIntentPrefetch(preloadBotSettings);
+                    cancelIntentPrefetch(preloadGroupCreate);
+                  }
+            }
+            onFocus={
+              saved
+                ? undefined
+                : () => {
+                    scheduleIntentPrefetch(preloadBotSettings);
+                    if (groups.canCreate) scheduleIntentPrefetch(preloadGroupCreate);
+                  }
+            }
+            onBlur={
+              saved
+                ? undefined
+                : () => {
+                    cancelIntentPrefetch(preloadBotSettings);
+                    cancelIntentPrefetch(preloadGroupCreate);
+                  }
+            }
+          >
+            <NewMenu
+              canGroup={groups.canCreate}
+              groupHint={groups.hint}
+              disabled={saved}
+              onNewBot={onNewBot}
+              onNewGroup={groups.onCreate}
+            />
+          </span>
         </span>
       </header>
       {!saved && <UpdateNotice update={update} />}
@@ -406,15 +488,15 @@ export const Sidebar = memo(function Sidebar({
                     </span>
                   </Button>
                 </BotMenu>
-                {!saved && (onBrainDump || onNewChannel) && (
+                {(onBrainDump || onNewChannel) && (
                   <div className="home-main-actions">
                     {onBrainDump && (
-                      <Button className="home-main-chip" onClick={onBrainDump}>
+                      <Button className="home-main-chip" disabled={saved} onClick={onBrainDump}>
                         <Icon name="sparkle" size={14} /> Brain dump
                       </Button>
                     )}
                     {onNewChannel && (
-                      <Button className="home-main-chip" onClick={onNewChannel}>
+                      <Button className="home-main-chip" disabled={saved} onClick={onNewChannel}>
                         <Icon name="plus" size={14} /> Channel
                       </Button>
                     )}
@@ -501,6 +583,7 @@ export const Sidebar = memo(function Sidebar({
         <nav className="home-links" aria-label="Household">
           <Button
             aria-current={view === "today" ? "page" : undefined}
+            {...intentPrefetchHandlers(preloadToday, !saved)}
             onClick={() => onView("today")}
           >
             <Icon name="today" size={16} /> Today
@@ -540,7 +623,11 @@ export const Sidebar = memo(function Sidebar({
             <p className="muted">
               Create one to help your household plan, remember and get things done.
             </p>
-            <Button className="primary" onClick={onNewBot}>
+            <Button
+              className="primary"
+              {...intentPrefetchHandlers(preloadBotSettings, !saved)}
+              onClick={onNewBot}
+            >
               Create an assistant
             </Button>
           </div>

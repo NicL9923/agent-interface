@@ -157,23 +157,24 @@ export function AgentExchangeGroup({
   if (messages.length < 2) return children;
   const routes = messages.map((message) => exchange(message, recipient, bots, currentBotId));
   const seen = new Set<string>();
-  const unique = routes.filter((route) => {
+  const unique: { key: string; route: (typeof routes)[number] }[] = [];
+  for (const route of routes) {
     const key = JSON.stringify([
       route.sender.bot?.id ?? route.sender.name,
       route.receiver.bot?.id ?? route.receiver.name,
     ]);
-    if (seen.has(key)) return false;
+    if (seen.has(key)) continue;
     seen.add(key);
-    return true;
-  });
+    unique.push({ key, route });
+  }
   const failed = messages.filter((message) => message.toolCall?.status === "failed").length;
   const sending = messages.some((message) => message.toolCall?.status === "running");
   return (
     <details className="agent-exchange-group">
       <summary>
         <span className="agent-exchange-routes">
-          {unique.map((route, index) => (
-            <ExchangeRoute key={index} {...route} />
+          {unique.map(({ key, route }) => (
+            <ExchangeRoute key={key} {...route} />
           ))}
         </span>
         <span className="agent-exchange-count">{messages.length} bot messages</span>

@@ -28,10 +28,8 @@ export function useEarlierFiles(
   retry = false,
 ) {
   const needed = !!window && ((window.earlier ?? 0) > 0 || (window.earlierFiles ?? 0) > 0);
-  const key =
-    needed && wanted
-      ? `${botId}\n${window.sessionId ?? ""}\n${window.messages[0]?.id ?? ""}`
-      : undefined;
+  const before = window?.messages[0]?.id;
+  const key = needed && wanted ? `${botId}\n${window.sessionId ?? ""}\n${before ?? ""}` : undefined;
   const [, changed] = useState(0);
   useEffect(() => {
     const listener = () => changed((value) => value + 1);
@@ -48,7 +46,6 @@ export function useEarlierFiles(
     cache.delete(key);
     cache.set(key, entry);
     while (cache.size > keep) cache.delete(cache.keys().next().value!);
-    const before = window!.messages[0]?.id;
     request("GET /bots/:id/files", { params: { id: botId }, query: { before } })
       .then(
         (value) => {
@@ -63,7 +60,7 @@ export function useEarlierFiles(
       })
       // A listener that throws is a bug; report it as the page would an uncaught error instead of losing it.
       .catch((error) => reportError(error));
-  }, [key, retry]);
+  }, [key, retry, botId, before]);
   const entry = key ? cache.get(key) : undefined;
   return {
     needed,

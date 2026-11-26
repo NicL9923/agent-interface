@@ -104,11 +104,14 @@ export function IntegrationList({
     everything && only
       ? { ...everything, connections: everything.connections.filter((item) => item.id === only) }
       : everything;
+  const onCatalogRef = useRef(onCatalog);
+  onCatalogRef.current = onCatalog;
   useEffect(() => {
-    if (everything) onCatalog?.(everything);
+    if (everything) onCatalogRef.current?.(everything);
   }, [everything]);
   const action = useAction();
   const copyCode = useAction();
+  const { reset: resetCopyCode } = copyCode;
   const { busy } = action;
   useEffect(() => {
     if (busy || loading) return;
@@ -123,8 +126,8 @@ export function IntegrationList({
     }
   }, [disconnect, busy, loading]);
   useEffect(() => {
-    copyCode.reset();
-  }, [flow?.flowId, flow?.userCode]);
+    resetCopyCode();
+  }, [flow?.flowId, flow?.userCode, resetCopyCode]);
   // Which control started the work, to label it "Working…".
   const [working, setWorking] = useState("");
   // A pending sign-in is checked until it finishes. A check that lands after the flow changed is dropped.
