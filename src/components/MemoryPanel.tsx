@@ -7,6 +7,7 @@ import { useResource } from "../app/use-resource";
 import { FormMessage } from "./ui/form-message";
 import { SettingsConfirmation } from "./SettingsConfirmation";
 import { Icon } from "./Icon";
+import { observeResize } from "../lib/observers";
 import type { MemoryDocument, MemoryEntry, ProfileMemory } from "../shared/experience";
 import "./experience.css";
 
@@ -49,20 +50,18 @@ function MemoryText({
   useLayoutEffect(fit, [value, fit]);
   useEffect(() => {
     let width = field.current?.clientWidth;
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? undefined
-        : new ResizeObserver(() => {
-            const next = field.current?.clientWidth;
-            if (next !== width) {
-              width = next;
-              fit();
-            }
-          });
-    if (field.current) observer?.observe(field.current);
+    const stopResize = field.current
+      ? observeResize(field.current, () => {
+          const next = field.current?.clientWidth;
+          if (next !== width) {
+            width = next;
+            fit();
+          }
+        })
+      : undefined;
     window.addEventListener("resize", fit);
     return () => {
-      observer?.disconnect();
+      stopResize?.();
       window.removeEventListener("resize", fit);
     };
   }, [fit]);

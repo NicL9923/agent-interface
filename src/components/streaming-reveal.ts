@@ -22,7 +22,7 @@ import { prefersReducedMotion } from "../app/reduced-motion";
  * sooner, but on bursty input the 95th-percentile gap between paints grew from 83 ms to 201 and 333:
  * docs/ledger/20261110T210126Z-live-tick.md.
  */
-export const CATCH_UP_MS = 300;
+export const CATCH_UP_MS = 200;
 /**
  * The least time between two paced renders. Each one re-parses the reply's last block, so this
  * bounds that work to 30 parses a second on a 60 or 120 Hz screen. Measured with

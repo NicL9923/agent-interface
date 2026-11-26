@@ -5,8 +5,7 @@ import { request } from "./client-api";
 import type { GroupCatalog, GroupRoom } from "./shared/collaboration";
 import { AvatarTrio, SignIn } from "./components/SignIn";
 import { useDeviceNotifications } from "./components/use-device-notifications";
-import { TodayPanel } from "./components/TodayPanel";
-import "./components/discovery.css";
+import { mainBot } from "./shared/main-assistant";
 import {
   hasDestination,
   initialPanel,
@@ -54,11 +53,8 @@ import { Sidebar, type HomeGroups } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
 import { Composer, useOwnPrompts, useStopResponse } from "./app/Composer";
-import { CommandPalette, paletteBots } from "./app/CommandPalette";
-import { MainAssistantPicker } from "./app/MainAssistantPicker";
 import { chooseMain, saveCheckIns } from "./app/main-assistant";
 import { OPEN_CHAT_EVENT } from "./components/AgentExchange";
-import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
 import type { EditPreferences } from "./app/use-preference-edits";
@@ -78,14 +74,18 @@ import { prefetchLinkedChat } from "./app/linked-chat";
 import {
   BotDetails,
   BotSettings,
+  CommandPalette,
   ComputerPanel,
   DiscoveryPanel,
   UsagePanel,
   GroupCreate,
   GroupRoomView,
   Loading,
+  MainAssistantPicker,
   PreferencesDialog,
   RoutineResults,
+  ShortcutsDialog,
+  TodayPanel,
   useOnceActive,
 } from "./app/panels";
 import {
@@ -895,11 +895,15 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       setOverlay((current) => (current === "palette" ? null : "palette"));
     },
     pinned: ({ digit }) => {
-      const bot =
-        boot &&
-        paletteBots(boot).filter((item) => boot.preferences.favorites.includes(item.id))[
-          digit! - 1
-        ];
+      if (!boot) return false;
+      const main = mainBot(boot.preferences, boot.bots);
+      const pinned = [
+        ...(main && boot.preferences.favorites.includes(main.id) ? [main] : []),
+        ...boot.preferences.favorites
+          .map((id) => boot.bots.find((item) => item.id === id))
+          .filter((item): item is Bot => !!item && item !== main),
+      ];
+      const bot = pinned[digit! - 1];
       if (!bot) return false;
       setOverlay(null);
       setPanel(null);
@@ -1170,14 +1174,16 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             />
           </Loading>
         ) : view === "today" ? (
-          <TodayPanel
-            key={boot.user.id}
-            bootstrap={boot}
-            onOpen={(id, routineId) => {
-              selectBot(id);
-              if (routineId) setPanel({ kind: "routine", botId: id, routineId });
-            }}
-          />
+          <Loading key="today">
+            <TodayPanel
+              key={boot.user.id}
+              bootstrap={boot}
+              onOpen={(id, routineId) => {
+                selectBot(id);
+                if (routineId) setPanel({ kind: "routine", botId: id, routineId });
+              }}
+            />
+          </Loading>
         ) : (
           <>
             <Conversation
@@ -1373,56 +1379,64 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         </Loading>
       )}
       {overlay === "palette" && (
-        <CommandPalette
-          boot={boot}
-          botId={botId}
-          rooms={rooms}
-          onSelectRoom={(id) => {
-            setPanel(null);
-            selectRoom(id);
-          }}
-          onNewGroup={
-            homeGroups.canCreate
-              ? () => {
-                  setPanel(null);
-                  newGroup();
-                }
-              : undefined
-          }
-          shownBotId={shownBotId}
-          readThrough={readThrough}
-          connectionLost={appShown}
-          onClose={closeOverlay}
-          onSelectBot={(id) => {
-            setPanel(null);
-            selectBot(id);
-          }}
-          onView={(next) => {
-            setPanel(null);
-            showView(next);
-          }}
-          onSearch={(text) => {
-            setPanel(null);
-            searchMessages(text);
-          }}
-          onSettings={(destination) => setPanel({ kind: "preferences", destination })}
-          onUsage={openUsage}
-          onNewBot={newBot}
-          onTheme={setTheme}
-          onShortcuts={showShortcuts}
-          onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined}
-          onAsk={askMain}
-        />
+        <Loading>
+          <CommandPalette
+            boot={boot}
+            botId={botId}
+            rooms={rooms}
+            onSelectRoom={(id) => {
+              setPanel(null);
+              selectRoom(id);
+            }}
+            onNewGroup={
+              homeGroups.canCreate
+                ? () => {
+                    setPanel(null);
+                    newGroup();
+                  }
+                : undefined
+            }
+            shownBotId={shownBotId}
+            readThrough={readThrough}
+            connectionLost={appShown}
+            onClose={closeOverlay}
+            onSelectBot={(id) => {
+              setPanel(null);
+              selectBot(id);
+            }}
+            onView={(next) => {
+              setPanel(null);
+              showView(next);
+            }}
+            onSearch={(text) => {
+              setPanel(null);
+              searchMessages(text);
+            }}
+            onSettings={(destination) => setPanel({ kind: "preferences", destination })}
+            onUsage={openUsage}
+            onNewBot={newBot}
+            onTheme={setTheme}
+            onShortcuts={showShortcuts}
+            onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined}
+            onAsk={askMain}
+          />
+        </Loading>
       )}
       {choosingMain && (
-        <MainAssistantPicker
-          boot={boot}
-          onChoose={setMain}
-          onMakePersonal={(bot) => setPanel({ kind: "settings", bot })}
-          onClose={() => setChoosingMain(false)}
-        />
+        <Loading>
+          <MainAssistantPicker
+            boot={boot}
+            onChoose={setMain}
+            onMakePersonal={(bot) => setPanel({ kind: "settings", bot })}
+            onClose={() => setChoosingMain(false)}
+          />
+        </Loading>
       )}
-      {overlay === "shortcuts" && <ShortcutsDialog onClose={closeOverlay} />}
+      {overlay === "shortcuts" && (
+        <Loading>
+          <ShortcutsDialog onClose={closeOverlay} />
+        </Loading>
+      )}
       {overlay === "stop" && liveBot && (
         <StopConfirm
           key={`${stopQuestion.run}`}

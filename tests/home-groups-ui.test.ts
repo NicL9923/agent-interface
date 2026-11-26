@@ -432,6 +432,7 @@ describe("group chats on home", () => {
         new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true, cancelable: true }),
       );
     });
+    await loaded();
     const palette = document.body.querySelector<HTMLDialogElement>("dialog.command-palette")!;
     const options = () => [...palette.querySelectorAll<HTMLElement>('[role="option"]')];
     const labels = () =>

@@ -160,6 +160,7 @@ describe("command palette", () => {
     const composer = mount.container.querySelector<HTMLTextAreaElement>("#message")!;
     composer.focus();
     await key({ key: "k", ctrlKey: true }, composer);
+    await loaded();
     expect(palette()?.open).toBe(true);
     expect(document.activeElement).toBe(paletteInput());
     // Pinned assistants lead, with their shortcut and unread state.
@@ -255,6 +256,7 @@ describe("keyboard shortcuts", () => {
     await key({ key: "?", shiftKey: true }, mount.container.querySelector("#message")!);
     expect(document.body.querySelector(".shortcuts-dialog")).toBeNull();
     await key({ key: "?", shiftKey: true });
+    await loaded();
     const dialog = document.body.querySelector(".shortcuts-dialog")!;
     expect(dialog.textContent).toContain("Find in this chat");
     expect(dialog.textContent).toContain("Ctrl+F");

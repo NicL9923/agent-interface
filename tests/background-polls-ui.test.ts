@@ -7,7 +7,7 @@ import { api, write } from "../src/client-api";
 import { GroupRoomView } from "../src/components/GroupChats";
 import { GROUP_FALLBACK_POLL_MS } from "../src/app/use-session";
 import { RoutineEnhancements } from "../src/components/RoutineEnhancements";
-import { TodayPanel } from "../src/components/TodayPanel";
+import { TODAY_RECHECK_MS, TodayPanel } from "../src/components/TodayPanel";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap } from "../src/shared/types";
 import { advance, mountRoot } from "./ui-harness";
@@ -124,4 +124,43 @@ describe("background polls in a hidden tab", () => {
       expect(reads(match)).toBe(opened + 3);
     },
   );
+
+  it("pauses Today pending rechecks while hidden and refreshes immediately on return to visible", async () => {
+    vi.mocked(api).mockImplementation(async (path: string) =>
+      path === "/today?pending=1"
+        ? {
+            generatedAt: "2026-10-14T12:00:00Z",
+            frontier: "0",
+            hasMore: false,
+            since: "2026-10-14T00:00:00Z",
+            unavailableBots: ["ranch"],
+            items: [
+              {
+                botId: "ranch",
+                botName: "Ranch",
+                activity: { state: "idle" },
+                approvals: [],
+                attention: [],
+                files: [],
+                pending: true,
+              },
+            ],
+            events: [],
+          }
+        : {},
+    );
+    const match = (path: string) => path === "/today?pending=1";
+    await act(async () => root.render(createElement(TodayPanel, { bootstrap, onOpen: vi.fn() })));
+    await advance(0);
+    const opened = reads(match);
+    expect(opened).toBe(1);
+    await advance(TODAY_RECHECK_MS);
+    expect(reads(match)).toBe(2);
+    await show("hidden");
+    await advance(TODAY_RECHECK_MS * 10);
+    expect(reads(match)).toBe(2);
+    await show("visible");
+    await advance(0);
+    expect(reads(match)).toBeGreaterThanOrEqual(3);
+  });
 });

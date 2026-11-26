@@ -1,6 +1,6 @@
 import { routeUrl } from "../shared/api";
 import { useEffect, useState } from "react";
-import { request } from "../client-api";
+import { pollWhileVisible, request } from "../client-api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import { FormMessage } from "./ui/form-message";
@@ -106,8 +106,7 @@ export function TodayPanel({
   const waiting = !!overview?.items.some((item) => item.pending);
   useEffect(() => {
     if (!waiting) return;
-    const timer = setInterval(() => void reload(), TODAY_RECHECK_MS);
-    return () => clearInterval(timer);
+    return pollWhileVisible(() => void reload(), TODAY_RECHECK_MS);
   }, [waiting, reload]);
   return (
     <div className="today-panel">

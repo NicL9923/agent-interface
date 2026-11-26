@@ -32,6 +32,7 @@ import { useAvatarAttention, useAvatarReactions, withGaze } from "./avatar-atten
 import "./avatar.css";
 import { sampleOutline, type Points } from "./avatar-outline";
 import { shapes } from "./avatar-shapes";
+import { observeIntersection, useReducedMotion } from "../lib/observers";
 
 export const avatarStates: ActivityState[] = [
   "idle",
@@ -89,19 +90,6 @@ const trailOrbits = [
   [60, 11, 0.38],
   [54, 18, -0.48],
 ] as const;
-
-function useReducedMotion(force?: boolean) {
-  const [system, setSystem] = useState(
-    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-  useEffect(() => {
-    const q = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setSystem(q.matches);
-    q.addEventListener("change", update);
-    return () => q.removeEventListener("change", update);
-  }, []);
-  return system || !!force;
-}
 
 function useShapeTransition(desired: string, reduce: boolean) {
   const points = useRef<Points | null>(null);
@@ -195,10 +183,8 @@ export function Avatar({
   const [visible, setVisible] = useState(true);
   useEffect(() => {
     // Without the observer, as in jsdom or an old browser, the avatar stays visible and keeps moving.
-    if (!wrapper.current || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting));
-    observer.observe(wrapper.current);
-    return () => observer.disconnect();
+    if (!wrapper.current) return;
+    return observeIntersection(wrapper.current, (entry) => setVisible(entry.isIntersecting));
   }, []);
   const reduce = useReducedMotion(reducedMotion);
   const id = useId().replace(/:/g, "");

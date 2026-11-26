@@ -25,6 +25,7 @@ import { withoutBotTag } from "../shared/event-copy";
 import { Icon } from "./Icon";
 import { routineResultLabel, snippetParts } from "../shared/discovery";
 import { When } from "./When";
+import "./discovery.css";
 /** Incremental search waits this long after typing stops, and starts at this many characters. */
 type HistorySave = Extract<SaveItem, { kind: "session" }>;
 export const SEARCH_DEBOUNCE_MS = 300,

@@ -26,6 +26,7 @@ import { formatBytes } from "../shared/uploads";
 import { clearDecline, useDeclined } from "./decline-handoff";
 import { imeKey } from "./ime";
 import { sendsOnKey, useEnterSends } from "./enter-key";
+import { observeResize } from "../lib/observers";
 import {
   CHECKING_CONNECTION,
   NOT_SENT_CHECKING,
@@ -120,17 +121,17 @@ function useComposerInput(text: string, botId: string, voiceState: VoiceState) {
   const ref = useCallback(
     (input: HTMLTextAreaElement | null) => {
       composerInput.current = input;
-      if (!input || typeof ResizeObserver === "undefined") return;
+      if (!input) return;
       // Observe the fixed controls and form, not the textarea width that stacking itself changes.
-      const observer = new ResizeObserver(refit);
+      const stops: (() => void)[] = [];
       const form = input.closest("form");
       if (form) {
-        observer.observe(form);
+        stops.push(observeResize(form, refit));
         for (const controls of form.querySelectorAll(".composer-tools, .voice-actions"))
-          observer.observe(controls);
+          stops.push(observeResize(controls, refit));
       }
       return () => {
-        observer.disconnect();
+        for (const stop of stops) stop();
         composerInput.current = null;
       };
     },
@@ -166,10 +167,9 @@ function useComposerOverlap(footer: React.RefObject<HTMLElement | null>) {
     const measure = () =>
       panel.style.setProperty("--composer-overlap", `${area.getBoundingClientRect().height}px`);
     measure();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    observer?.observe(area);
+    const stopResize = observeResize(area, measure);
     return () => {
-      observer?.disconnect();
+      stopResize();
       panel.style.removeProperty("--composer-overlap");
     };
   }, [footer]);

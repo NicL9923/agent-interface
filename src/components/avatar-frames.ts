@@ -19,13 +19,45 @@ export type FrameAnimation = {
 const awake = new Set<FrameAnimation>();
 const asleep = new Map<FrameAnimation, ReturnType<typeof setTimeout>>();
 let requested = 0;
+let listening = false;
+
+const isHidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
+
+function onVisibilityChange() {
+  if (isHidden()) {
+    if (requested) {
+      cancelAnimationFrame(requested);
+      requested = 0;
+    }
+    for (const [animation, timer] of asleep) {
+      clearTimeout(timer);
+      awake.add(animation);
+    }
+    asleep.clear();
+  } else {
+    request();
+  }
+}
+
+function syncVisibilityListener() {
+  if (typeof document === "undefined") return;
+  const active = awake.size > 0 || asleep.size > 0;
+  if (active && !listening) {
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    listening = true;
+  } else if (!active && listening) {
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    listening = false;
+  }
+}
 
 function request() {
-  if (!requested && awake.size) requested = requestAnimationFrame(frame);
+  if (!requested && awake.size && !isHidden()) requested = requestAnimationFrame(frame);
 }
 
 function frame(now: number) {
   requested = 0;
+  if (isHidden()) return;
   const running = [...awake];
   const pauses = running.map((animation) => {
     try {
@@ -45,8 +77,12 @@ function frame(now: number) {
     if (!awake.has(animation)) return;
     const pause = pauses[index];
     if (pause === 0) return;
+    if (pause === null) {
+      awake.delete(animation);
+      return;
+    }
+    if (isHidden()) return;
     awake.delete(animation);
-    if (pause === null) return;
     asleep.set(
       animation,
       setTimeout(() => {
@@ -56,12 +92,14 @@ function frame(now: number) {
       }, pause),
     );
   });
+  syncVisibilityListener();
   request();
 }
 
 /** Runs `animation` on the shared frame loop from the next frame until the returned function is called. */
 export function startFrames(animation: FrameAnimation) {
   awake.add(animation);
+  syncVisibilityListener();
   request();
   return () => {
     awake.delete(animation);
@@ -71,5 +109,6 @@ export function startFrames(animation: FrameAnimation) {
       cancelAnimationFrame(requested);
       requested = 0;
     }
+    syncVisibilityListener();
   };
 }

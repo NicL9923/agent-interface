@@ -240,6 +240,43 @@ describe("a live reply in the transcript", () => {
     expect(replyText("m2")).toBe(`The north gate${rest}`);
     expect(mount.container.querySelector(".streaming-caret")).toBeNull();
   });
+
+  it("delivers the first delta immediately and coalesces burst deltas in the same frame", async () => {
+    stubMatchMedia((query) => query.includes("prefers-reduced-motion: reduce"));
+    await open();
+    await send("inflight", live("One"));
+    expect(replyText("s1-inflight")).toBe("One");
+    // First delta arrives with no frame pending: commits immediately.
+    await send("inflight-delta", {
+      botId: "home",
+      messageId: "s1-inflight",
+      baseTextLength: 3,
+      baseReasoningLength: 0,
+      appendText: " two",
+      activity: running,
+    });
+    expect(replyText("s1-inflight")).toBe("One two");
+    // Burst deltas arriving in the same animation frame coalesce until the next frame.
+    await send("inflight-delta", {
+      botId: "home",
+      messageId: "s1-inflight",
+      baseTextLength: 7,
+      baseReasoningLength: 0,
+      appendText: " three",
+      activity: running,
+    });
+    await send("inflight-delta", {
+      botId: "home",
+      messageId: "s1-inflight",
+      baseTextLength: 13,
+      baseReasoningLength: 0,
+      appendText: " four",
+      activity: running,
+    });
+    expect(replyText("s1-inflight")).toBe("One two");
+    await advance(20);
+    expect(replyText("s1-inflight")).toBe("One two three four");
+  });
 });
 
 const saved = (id: string, text: string): Message => ({

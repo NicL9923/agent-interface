@@ -6,6 +6,7 @@ import type { Bootstrap, Bot } from "../shared/types";
 import { botCapability } from "../app/harness";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
+import { QUEUE_EVENT } from "../app/use-conversation";
 import { Icon } from "./Icon";
 import "./queue-panel.css";
 
@@ -37,6 +38,15 @@ function LiveQueue({ bot, active }: { bot: Bot; active: boolean }) {
     wake: true,
     onData: (value) => setWaiting(value.items.length > 0),
   });
+  const reloadQueue = queue.reload;
+  useEffect(() => {
+    const onQueue = (event: Event) => {
+      const detail = (event as CustomEvent<{ botId?: string }>).detail;
+      if (detail?.botId === bot.id) void reloadQueue();
+    };
+    window.addEventListener(QUEUE_EVENT, onQueue);
+    return () => window.removeEventListener(QUEUE_EVENT, onQueue);
+  }, [bot.id, reloadQueue]);
   const items = queue.data?.items ?? [];
   const action = useAction();
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);

@@ -1442,6 +1442,9 @@ describe("the saved home while preference saves wait", () => {
         target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init })),
       );
     await key({ key: "k", ctrlKey: true });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     const search = document.querySelector<HTMLInputElement>("dialog.command-palette input")!;
     await typeInto(search, "light");
     await key({ key: "Enter" }, search);
