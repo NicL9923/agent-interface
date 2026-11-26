@@ -42,6 +42,7 @@ const exec = promisify(execFile);
 const DEFAULT_MODEL = "grok-build";
 const CANCELLED = { outcome: "cancelled" };
 const PROMPT_TIMEOUT_MS = 60 * 60 * 1000;
+const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60_000;
 const XAI_SESSION_UPDATES = new Set([
   "x.ai/session_notification",
   "_x.ai/session_notification",
@@ -62,6 +63,10 @@ export interface GrokDriverOptions {
   probeTimeoutMs?: number;
   requestTimeoutMs?: number;
   promptTimeoutMs?: number;
+  /** How long a discovered model catalog stays cached. Default 5 minutes. */
+  modelCacheTtlMs?: number;
+  /** Clock for model cache expiry. Defaults to `Date.now`. */
+  now?: () => number;
 }
 
 function records(value: unknown): AcpObject[] {
@@ -606,6 +611,10 @@ class GrokSession implements HarnessSession {
 
 export function createGrokDriver(options: GrokDriverOptions = {}): HarnessDriver {
   const command = options.command ?? "grok";
+  const modelCacheTtlMs = options.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
+  const clock = options.now ?? Date.now;
+  let cachedModels: { at: number; providers: ModelProvider[] } | undefined;
+  let pendingModels: Promise<ModelProvider[]> | undefined;
   const args = (tail: string[]) => [...(options.args ?? []), "--no-auto-update", ...tail];
   const environment = (sessionEnv?: Record<string, string>): NodeJS.ProcessEnv => ({
     ...process.env,
@@ -651,33 +660,47 @@ export function createGrokDriver(options: GrokDriverOptions = {}): HarnessDriver
         return { available: false, reason };
       }
     },
-    async listModels(): Promise<ModelProvider[]> {
-      const client = new AcpStdio({
-        command,
-        args: sessionArgs(false),
-        env: environment(),
-        requestTimeoutMs: options.requestTimeoutMs,
-      });
-      let authenticated = false;
-      let warning: string | undefined;
-      const models: ModelProvider["models"] = [];
-      try {
-        const response = await initialize(client);
-        const meta = acpRecord(response._meta);
-        authenticated = Boolean(asString(meta?.defaultAuthMethodId));
-        const modelState = acpRecord(response.models ?? meta?.modelState);
-        for (const model of records(modelState?.availableModels)) {
-          const id = asString(model.modelId);
-          if (id) models.push({ id, name: asString(model.name) ?? id, available: true });
-        }
-      } catch (error) {
-        warning = errorMessage(error);
-      } finally {
-        await client.close();
+    listModels(): Promise<ModelProvider[]> {
+      if (modelCacheTtlMs > 0 && cachedModels && clock() - cachedModels.at < modelCacheTtlMs) {
+        return Promise.resolve(cachedModels.providers);
       }
-      if (models.length === 0)
-        models.push({ id: DEFAULT_MODEL, name: "Grok Build", available: !warning });
-      return [{ id: "grok", name: "Grok", authenticated, models, warning }];
+      pendingModels ??= (async (): Promise<ModelProvider[]> => {
+        const client = new AcpStdio({
+          command,
+          args: sessionArgs(false),
+          env: environment(),
+          requestTimeoutMs: options.requestTimeoutMs,
+        });
+        let authenticated = false;
+        let warning: string | undefined;
+        const models: ModelProvider["models"] = [];
+        try {
+          const response = await initialize(client);
+          const meta = acpRecord(response._meta);
+          authenticated = Boolean(asString(meta?.defaultAuthMethodId));
+          const modelState = acpRecord(response.models ?? meta?.modelState);
+          for (const model of records(modelState?.availableModels)) {
+            const id = asString(model.modelId);
+            if (id) models.push({ id, name: asString(model.name) ?? id, available: true });
+          }
+        } catch (error) {
+          warning = errorMessage(error);
+        } finally {
+          await client.close();
+        }
+        if (models.length === 0)
+          models.push({ id: DEFAULT_MODEL, name: "Grok Build", available: !warning });
+        const providers: ModelProvider[] = [
+          { id: "grok", name: "Grok", authenticated, models, warning },
+        ];
+        if (authenticated && !warning && modelCacheTtlMs > 0) {
+          cachedModels = { at: clock(), providers };
+        }
+        return providers;
+      })().finally(() => {
+        pendingModels = undefined;
+      });
+      return pendingModels;
     },
     async openSession(spec) {
       if (spec.osUser !== undefined && spec.osUser !== userInfo().username) {

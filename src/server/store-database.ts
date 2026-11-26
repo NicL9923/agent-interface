@@ -211,6 +211,7 @@ const additions = `
     error TEXT
   );
   CREATE INDEX IF NOT EXISTS bot_queue_order ON bot_queue(bot_id,status,position);
+  CREATE INDEX IF NOT EXISTS bot_queue_settled ON bot_queue(bot_id, status, settled_at desc);
   CREATE TABLE IF NOT EXISTS bot_conversation_versions(bot_id TEXT PRIMARY KEY NOT NULL,version INTEGER NOT NULL);
   -- END bot_queue
   -- BEGIN transcripts

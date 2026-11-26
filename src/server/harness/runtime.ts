@@ -65,6 +65,7 @@ import type { NativeRoutine, NativeRoutineRun } from "../store-native-routines.j
 import type { TranscriptMessage } from "../store-transcripts.js";
 import {
   HARNESS_DRIVER_IDS,
+  materializeMcpServers,
   type HarnessDriver,
   type HarnessDriverId,
   type HarnessEvent,
@@ -78,7 +79,11 @@ import { createNativeGroupAdapter } from "./native-groups.js";
 import { createNativeIntegrationsHandler } from "./native-integrations.js";
 import { createNativeVaultHandler } from "./native-vault.js";
 import { otherHarnessUser, reservedHarnessEnvironment } from "./process-spawn.js";
-import { HarnessSessionCoordinator } from "./session-coordinator.js";
+import {
+  DEFAULT_IDLE_SESSION_TTL_MS,
+  DEFAULT_MAX_IDLE_SESSIONS,
+  HarnessSessionCoordinator,
+} from "./session-coordinator.js";
 
 const runtimeId = "harness";
 const eventPrefix = `${runtimeId}:`;
@@ -169,6 +174,18 @@ export interface HarnessRuntimeOptions {
   files: FileSigner;
   defaultMcpServers?: (bot: ManagedBotRecord) => HarnessMcpServerSpec[];
   contextFraction?: number;
+  /** How long one round of harness probes stays cached for `status()` and `harnessOptions()`. Default 30s. */
+  probeTtlMs?: number;
+  /** Clock for probe caching and idle session reaping. Defaults to `Date.now`. */
+  now?: () => number;
+  /** Idle TTL for warm chat sessions. Default 15 minutes. */
+  idleSessionTtlMs?: number;
+  /** Maximum number of idle warm chat sessions kept alive (LRU cap). Default 8. */
+  maxIdleSessions?: number;
+  /** Idle TTL for pooled group chat sessions. Default 2 minutes. */
+  groupSessionIdleTtlMs?: number;
+  /** Injectable ACL grant callback (defaults to `/usr/bin/setfacl`). */
+  grantAcl?: (path: string, user: string, permissions: string) => Promise<void>;
   /** Starts the background native routine scheduler. Default false. */
   startScheduler?: boolean;
   /** Automatic fallback harness/model used when a primary harness fails before streaming a reply. */
@@ -228,6 +245,15 @@ const publicMessage = ({
   ...message
 }: TranscriptMessage): Message => message;
 
+const DEFAULT_PROBE_TTL_MS = 30_000;
+const DEFAULT_GROUP_SESSION_IDLE_TTL_MS = 2 * 60_000;
+
+type GroupTurn = {
+  runId: string;
+  promptSeq: number;
+  onEvent?: (event: HarnessEvent) => void;
+};
+
 export function createHarnessRuntime({
   store,
   drivers,
@@ -235,6 +261,12 @@ export function createHarnessRuntime({
   files,
   defaultMcpServers = () => [],
   contextFraction,
+  probeTtlMs = DEFAULT_PROBE_TTL_MS,
+  now: clock = Date.now,
+  idleSessionTtlMs = DEFAULT_IDLE_SESSION_TTL_MS,
+  maxIdleSessions = DEFAULT_MAX_IDLE_SESSIONS,
+  groupSessionIdleTtlMs = DEFAULT_GROUP_SESSION_IDLE_TTL_MS,
+  grantAcl = allowUser,
   startScheduler = false,
   fallback,
   voice,
@@ -248,15 +280,29 @@ export function createHarnessRuntime({
   directory(workspaces);
   directory(uploads);
 
-  const coordinator = new HarnessSessionCoordinator<ActiveTurn>(store.transcripts, contextFraction);
+  const coordinator = new HarnessSessionCoordinator<ActiveTurn>(
+    store.transcripts,
+    contextFraction,
+    { idleTtlMs: idleSessionTtlMs, maxIdleSessions, now: clock },
+  );
+  const groupCoordinator = new HarnessSessionCoordinator<GroupTurn>(
+    store.transcripts,
+    contextFraction,
+    { idleTtlMs: groupSessionIdleTtlMs, maxIdleSessions, now: clock },
+  );
   const watching = new Map<string, Set<WatchListener>>();
+  const turnFollowers = new Map<string, Set<() => void>>();
   const turnWatchers = new Set<TurnWatcher>();
   const rosterWatchers = new Set<() => void>();
   const deleting = new Set<string>();
   const preparations = new Map<string, Set<Promise<void>>>();
+  const grantedCwdAcls = new Set<string>();
+  const botCwdAclKeys = new Map<string, Set<string>>();
   const bootId = randomUUID();
   let closed = false;
   let closing: Promise<void> | undefined;
+  let cachedProbes: { at: number; options: HarnessOption[] } | undefined;
+  let pendingProbes: Promise<HarnessOption[]> | undefined;
 
   function trackPreparation<T>(botId: string, work: Promise<T>): Promise<T> {
     const pending = preparations.get(botId) ?? new Set<Promise<void>>();
@@ -314,9 +360,14 @@ export function createHarnessRuntime({
     for (const listener of rosterWatchers) listener();
   }
 
+  function notifyTurnFollowers(botId: string) {
+    for (const restored of turnFollowers.get(botId) ?? []) restored();
+  }
+
   function structural(botId: string, turn?: ActiveTurn) {
     const generation = store.queue.bumpVersion(botId);
     changed(botId, undefined, turn ? `${bootId}:0:${generation}` : undefined);
+    if (turn) notifyTurnFollowers(botId);
   }
 
   async function probe(driver: HarnessDriver): Promise<HarnessProbeResult> {
@@ -325,6 +376,31 @@ export function createHarnessRuntime({
     } catch {
       return { available: false, reason: "The harness probe failed." };
     }
+  }
+
+  function clearProbeCache() {
+    cachedProbes = undefined;
+    pendingProbes = undefined;
+  }
+
+  function probeAll(): Promise<HarnessOption[]> {
+    if (probeTtlMs > 0 && cachedProbes && clock() - cachedProbes.at < probeTtlMs) {
+      return Promise.resolve(cachedProbes.options);
+    }
+    pendingProbes ??= Promise.all(
+      registered.map(async (driver): Promise<HarnessOption> => {
+        const { available, reason } = await probe(driver);
+        return { id: driver.id, available, reason };
+      }),
+    )
+      .then((options) => {
+        if (!closed && probeTtlMs > 0) cachedProbes = { at: clock(), options };
+        return options;
+      })
+      .finally(() => {
+        pendingProbes = undefined;
+      });
+    return pendingProbes;
   }
 
   function credentialFor(bot: ManagedBotRecord) {
@@ -417,9 +493,9 @@ export function createHarnessRuntime({
   }
 
   async function grantTraversal(path: string, user: string, parent: string) {
-    await allowUser(workspace, user, "--x");
-    await allowUser(parent, user, "--x");
-    await allowUser(path, user, "--x");
+    await grantAcl(workspace, user, "--x");
+    await grantAcl(parent, user, "--x");
+    await grantAcl(path, user, "--x");
   }
 
   async function cwdFor(bot: ManagedBotRecord) {
@@ -430,8 +506,17 @@ export function createHarnessRuntime({
     directory(cwd);
     const user = otherHarnessUser(bot.ownerOsUser || undefined);
     if (user) {
-      await grantTraversal(parent, user, workspaces);
-      await allowUser(cwd, user, "rwx");
+      const key = `${cwd}\0${user}`;
+      if (!grantedCwdAcls.has(key)) {
+        await grantTraversal(parent, user, workspaces);
+        await grantAcl(cwd, user, "rwx");
+        if (!deleting.has(bot.id) && !closed) {
+          grantedCwdAcls.add(key);
+          const keys = botCwdAclKeys.get(bot.id) ?? new Set<string>();
+          keys.add(key);
+          botCwdAclKeys.set(bot.id, keys);
+        }
+      }
     }
     return cwd;
   }
@@ -455,7 +540,7 @@ export function createHarnessRuntime({
           throw new InvalidInput("Attachment is too large.", "file_too_large");
         if (user) {
           await grantTraversal(attachmentDirectory(bot), user, uploads);
-          await allowUser(path, user, "r--");
+          await grantAcl(path, user, "r--");
         }
         return { id, path, name, mime };
       }),
@@ -904,22 +989,31 @@ export function createHarnessRuntime({
   ): Promise<string> {
     const cwd = await cwdFor(bot);
     const turnId = `${sessionKeyPrefix}-${randomUUID()}`;
-    const session = await target.driver.openSession({
-      botId: bot.id,
-      sessionKey: `${sessionKeyPrefix}-${randomUUID()}`,
-      cwd,
-      osUser: target.osUser,
-      model: target.model,
-      provider: target.provider,
-      reasoning: target.driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
-      speed: target.driver.capabilities.supportsSpeed ? bot.speed : undefined,
-      systemPrompt: systemPromptFor(bot),
-      env: mergedEnvFor(bot, target.env),
-      mcpServers: target.driver.capabilities.supportsMcp
-        ? mcpServersFor(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
-        : undefined,
-      fullPermissions: true,
-    });
+    const sessionKey = `${sessionKeyPrefix}-${randomUUID()}`;
+    const rawMcpServers = target.driver.capabilities.supportsMcp
+      ? mcpServersFor(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
+      : undefined;
+    const { mcpServers, revoke: revokeMcp } = materializeMcpServers(rawMcpServers, sessionKey);
+    let session;
+    try {
+      session = await target.driver.openSession({
+        botId: bot.id,
+        sessionKey,
+        cwd,
+        osUser: target.osUser,
+        model: target.model,
+        provider: target.provider,
+        reasoning: target.driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
+        speed: target.driver.capabilities.supportsSpeed ? bot.speed : undefined,
+        systemPrompt: systemPromptFor(bot),
+        env: mergedEnvFor(bot, target.env),
+        mcpServers,
+        fullPermissions: true,
+      });
+    } catch (error) {
+      revokeMcp();
+      throw error;
+    }
     try {
       let text = "";
       let finished = false;
@@ -961,6 +1055,7 @@ export function createHarnessRuntime({
       if (failure) throw new Error(failure);
       return text.trim();
     } finally {
+      revokeMcp();
       await session.close().catch(() => undefined);
     }
   }
@@ -991,6 +1086,138 @@ export function createHarnessRuntime({
     }
   }
 
+  async function executePooledGroupOn(
+    bot: ManagedBotRecord,
+    slotKey: string,
+    promptText: string,
+    signal: AbortSignal,
+    target: {
+      driver: HarnessDriver;
+      model: string;
+      provider: string | undefined;
+      env: Record<string, string> | undefined;
+      osUser: string | undefined;
+    },
+  ): Promise<string> {
+    signal.throwIfAborted();
+    const cwd = await cwdFor(bot);
+    signal.throwIfAborted();
+    const turnId = `group-${bot.id}-${randomUUID()}`;
+    const turn: GroupTurn = { runId: turnId, promptSeq: 0 };
+    groupCoordinator.reserve(slotKey, turn);
+    let retireOnExit = false;
+    try {
+      const session = await groupCoordinator.open(
+        slotKey,
+        turn,
+        target.driver,
+        {
+          botId: bot.id,
+          cwd,
+          osUser: target.osUser,
+          model: target.model,
+          provider: target.provider,
+          reasoning: target.driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
+          speed: target.driver.capabilities.supportsSpeed ? bot.speed : undefined,
+          systemPrompt: systemPromptFor(bot),
+          env: mergedEnvFor(bot, target.env),
+          mcpServers: target.driver.capabilities.supportsMcp
+            ? mcpServersFor(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
+            : undefined,
+          fullPermissions: true,
+        },
+        (current, event) => {
+          current?.onEvent?.(event);
+        },
+      );
+      if (!session) throw new Error("Group harness session closed before starting the turn.");
+      if (signal.aborted) {
+        retireOnExit = true;
+        signal.throwIfAborted();
+      }
+      let text = "";
+      let finished = false;
+      let failure: string | undefined;
+      let resolveDone!: () => void;
+      const done = new Promise<void>((resolve) => {
+        resolveDone = resolve;
+      });
+      const onAbort = () => {
+        retireOnExit = true;
+        void session.interrupt(turnId).catch(() => undefined);
+        finished = true;
+        resolveDone();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      turn.onEvent = (event) => {
+        if (event.type === "text.delta") text += event.delta;
+        else if (event.type === "turn.completed") {
+          if (event.stopReason === "error") {
+            failure = "The harness reported a turn failure.";
+            retireOnExit = true;
+          } else if (event.text !== undefined) {
+            text = event.text;
+          }
+          finished = true;
+          resolveDone();
+        } else if (event.type === "turn.failed") {
+          failure = event.message;
+          retireOnExit = true;
+          finished = true;
+          resolveDone();
+        } else if (event.type === "session.closed" && !finished) {
+          failure = event.reason || "Session closed unexpectedly.";
+          finished = true;
+          resolveDone();
+        }
+      };
+      try {
+        await session.startTurn({ turnId, text: promptText });
+        await done;
+      } finally {
+        turn.onEvent = undefined;
+        signal.removeEventListener("abort", onAbort);
+      }
+      signal.throwIfAborted();
+      if (failure) throw new Error(failure);
+      return text.trim();
+    } catch (error) {
+      retireOnExit = true;
+      throw error;
+    } finally {
+      groupCoordinator.release(slotKey, turn);
+      if (retireOnExit) await groupCoordinator.retireSession(slotKey).catch(() => undefined);
+    }
+  }
+
+  async function runGroupPrompt(
+    bot: ManagedBotRecord,
+    promptText: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const slotKey = `group:${bot.id}`;
+    if (groupCoordinator.active(slotKey)) {
+      return runOneShotPrompt(bot, `group-${bot.id}`, promptText, signal);
+    }
+    try {
+      const driver = requireDriver(bot);
+      const credential = credentialFor(bot);
+      const env = credentialsEnv(credential);
+      return await executePooledGroupOn(bot, slotKey, promptText, signal, {
+        driver,
+        model: bot.model,
+        provider: bot.provider || undefined,
+        env,
+        osUser: bot.ownerOsUser || undefined,
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      const target = resolveFallback(bot);
+      if (!target) throw error;
+      return executeOneShotOn(bot, `group-${bot.id}`, promptText, signal, target);
+    }
+  }
+
   async function runRoutinePrompt(
     routine: NativeRoutine,
     promptText: string,
@@ -1008,7 +1235,7 @@ export function createHarnessRuntime({
 
   const nativeGroups = createNativeGroupAdapter({
     store,
-    executeTurn: (bot, prompt, signal) => runOneShotPrompt(bot, `group-${bot.id}`, prompt, signal),
+    executeTurn: (bot, prompt, signal) => runGroupPrompt(bot, prompt, signal),
   });
   const nativeVault = createNativeVaultHandler(store, requireBot);
   const nativeIntegrations = createNativeIntegrationsHandler({ store, requireBot });
@@ -1176,6 +1403,7 @@ export function createHarnessRuntime({
     coordinator.reserve(botId, turn);
     void trackPreparation(botId, prepareTurn(turn));
     changed(botId, undefined, version(botId));
+    notifyTurnFollowers(botId);
     rosterChanged();
     return turn;
   }
@@ -1342,29 +1570,40 @@ export function createHarnessRuntime({
     );
   }
 
+  async function currentStatus() {
+    if (closed) return { connected: false, code: "closed" as const };
+    if (!registered.length) return { connected: false, code: "not_configured" as const };
+    const results = await probeAll();
+    return closed
+      ? { connected: false, code: "closed" as const }
+      : {
+          connected: true,
+          code: "ready" as const,
+          ...(!results.some(({ available }) => available) && {
+            detail: "No registered harness passed its availability probe.",
+          }),
+        };
+  }
+
   type HarnessSubmission = Submission & { conversationVersion?: string | number };
   const runtime = {
-    async status() {
-      if (closed) return { connected: false, code: "closed" };
-      if (!registered.length) return { connected: false, code: "not_configured" };
-      const results = await Promise.all(registered.map(probe));
-      return closed
-        ? { connected: false, code: "closed" }
-        : {
-            connected: true,
-            code: "ready",
-            ...(!results.some(({ available }) => available) && {
-              detail: "No registered harness passed its availability probe.",
-            }),
-          };
+    status: currentStatus,
+    reconnect() {
+      clearProbeCache();
+      return currentStatus();
     },
-    async harnessOptions(): Promise<HarnessOption[]> {
-      return Promise.all(
-        registered.map(async (driver) => {
-          const { available, reason } = await probe(driver);
-          return { id: driver.id, available, reason };
-        }),
-      );
+    harnessOptions(): Promise<HarnessOption[]> {
+      return probeAll();
+    },
+    async canonicalSubmit(botId?: string) {
+      if (closed || botId === undefined) return false;
+      const bot = getBot(botId);
+      if (!bot) return false;
+      const driver = driverFor(bot);
+      // Only steering-capable harnesses pass `conversation-routes`'s `if (steering || fast)`
+      // steering capability check, and only idle bots should bypass the busy-state check so active
+      // turns on steering harnesses still route through `runtime.steer`.
+      return Boolean(driver?.capabilities.nativeSteering && !active(botId));
     },
     async capabilities(botId) {
       const driver = botId === undefined ? registered[0] : driverFor(requireBot(botId));
@@ -1504,9 +1743,14 @@ export function createHarnessRuntime({
           current.stopping = true;
           finish(current, "interrupted");
         }
-        await coordinator.closeBot(id);
+        await Promise.all([coordinator.closeBot(id), groupCoordinator.closeBot(`group:${id}`)]);
         const pending = preparations.get(id);
         if (pending) await Promise.all([...pending]);
+        const aclKeys = botCwdAclKeys.get(id);
+        if (aclKeys) {
+          for (const key of aclKeys) grantedCwdAcls.delete(key);
+          botCwdAclKeys.delete(id);
+        }
         // Reused bot IDs must not reopen an old file, queue, or transcript.
         await rm(join(workspaces, id), { recursive: true, force: true });
         await rm(join(uploads, id), { recursive: true, force: true });
@@ -1734,6 +1978,55 @@ export function createHarnessRuntime({
           version: version(botId),
           turn: { messages: [...current.messages], after: current.after },
         }
+      );
+    },
+    followTurns(botId, restored) {
+      const followers = turnFollowers.get(botId) ?? new Set<() => void>();
+      const entry = () => restored();
+      turnFollowers.set(botId, followers);
+      followers.add(entry);
+      return () => {
+        followers.delete(entry);
+        if (!followers.size && turnFollowers.get(botId) === followers) turnFollowers.delete(botId);
+      };
+    },
+    async warmSession(botId: string) {
+      if (closed || deleting.has(botId) || active(botId)) return;
+      const bot = getBot(botId);
+      if (!bot) return;
+      await trackPreparation(
+        botId,
+        (async () => {
+          try {
+            const driver = requireDriver(bot);
+            const credential = credentialFor(bot);
+            const env = credentialsEnv(credential);
+            const cwd = await cwdFor(bot);
+            if (closed || deleting.has(botId) || active(botId)) return;
+            await coordinator.warm(
+              botId,
+              driver,
+              {
+                botId: bot.id,
+                cwd,
+                osUser: bot.ownerOsUser || undefined,
+                model: bot.model,
+                provider: bot.provider || undefined,
+                reasoning: driver.capabilities.supportsReasoning ? bot.reasoning : undefined,
+                speed: driver.capabilities.supportsSpeed ? bot.speed : undefined,
+                systemPrompt: systemPromptFor(bot),
+                env: mergedEnvFor(bot, env),
+                mcpServers: driver.capabilities.supportsMcp
+                  ? mcpServersFor(bot).filter(({ name }) => bot.enabledMcpServers.includes(name))
+                  : undefined,
+                fullPermissions: true,
+              },
+              (current, event) => onEvent(bot.id, current, event),
+            );
+          } catch {
+            // Speculative warming must never fail caller flows or crash background tasks.
+          }
+        })(),
       );
     },
     watchTurns(watcher) {
@@ -2094,6 +2387,7 @@ export function createHarnessRuntime({
     close() {
       return (closing ??= (async () => {
         closed = true;
+        clearProbeCache();
         nativeGroups.close();
         for (const bot of store.managedBots.listManagedBots()) {
           const turn = active(bot.id);
@@ -2102,6 +2396,7 @@ export function createHarnessRuntime({
         const results = await Promise.allSettled([
           scheduler?.stop(),
           coordinator.close(),
+          groupCoordinator.close(),
           ...[...preparations.values()].flatMap((pending) => [...pending]),
         ]);
         const driverResults = await Promise.allSettled(
@@ -2109,8 +2404,11 @@ export function createHarnessRuntime({
         );
         for (const watcher of turnWatchers) watcher.disconnected();
         watching.clear();
+        turnFollowers.clear();
         turnWatchers.clear();
         rosterWatchers.clear();
+        grantedCwdAcls.clear();
+        botCwdAclKeys.clear();
         const failures = [...results, ...driverResults].flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
@@ -2119,6 +2417,7 @@ export function createHarnessRuntime({
     },
   } satisfies Runtime & {
     harnessOptions(): Promise<HarnessOption[]>;
+    warmSession(botId: string): Promise<void>;
     deliverBotMessage(input: {
       sourceBotId: string;
       targetBotId: string;

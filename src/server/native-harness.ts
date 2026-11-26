@@ -51,26 +51,29 @@ export function memoryToolProvider(memory: MemorySkillsRepository): McpToolProvi
 }
 
 /**
- * The WildBots MCP server for one bot. The runtime asks for the list on every roster detail read and needs only
- * its names, so a session, and its bearer token, is minted only when a harness first reads the address or headers.
+ * The WildBots MCP server for one bot. Exposes a stable logical fingerprint so warm harness
+ * sessions are reused across turns; a bearer-token MCP session is minted only when a harness
+ * session is actually opened, and revoked when that session is disposed.
  */
 function wildbotsServer(mcp: WildbotsMcp, bot: ManagedBotRecord): HarnessMcpServerSpec {
-  let minted: HarnessMcpServerSpec | undefined;
-  const mint = () =>
-    (minted ??= mcp.createSessionSpec({
-      botId: bot.id,
-      ownerId: bot.ownerId || undefined,
-      shared: bot.shared,
-    }).spec);
+  const ownerId = bot.ownerId || undefined;
   return {
     name: "wildbots",
     transport: "http",
-    get url() {
-      return mint().url;
-    },
-    get headers() {
-      return mint().headers;
-    },
+    fingerprint: JSON.stringify({
+      name: "wildbots",
+      transport: "http",
+      botId: bot.id,
+      ownerId,
+      shared: bot.shared,
+    }),
+    open: ({ sessionKey }) =>
+      mcp.createSessionSpec({
+        botId: bot.id,
+        ownerId,
+        shared: bot.shared,
+        sessionKey,
+      }),
   };
 }
 

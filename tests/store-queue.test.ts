@@ -273,6 +273,22 @@ describe("durable queue", () => {
     );
     expect(enqueue(queue, "New conversation", { expectedVersion: 2 }).conversationVersion).toBe(3);
   });
+  it("serves latest-settlement lookups from bot_queue_settled without a temp sort", () => {
+    const store = open();
+    const first = enqueue(store.queue, "First");
+    store.queue.claimNext("family", "run-1");
+    store.queue.complete("family", first.id);
+    const plan = store.db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT run_id AS runId, status, settled_at AS at FROM bot_queue
+         WHERE bot_id=? AND status IN ('completed','interrupted')
+         ORDER BY settled_at DESC, rowid DESC LIMIT 1`,
+      )
+      .all("family")
+      .map((row) => (row as { detail: string }).detail)
+      .join("\n");
+    expect(plan).toContain("bot_queue_settled");
+  });
 });
 
 const origin = "http://127.0.0.1:3000";

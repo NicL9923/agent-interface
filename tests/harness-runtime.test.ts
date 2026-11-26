@@ -1041,6 +1041,310 @@ describe("native harness runtime", () => {
       data: Buffer.from("audio:cedar"),
     });
   });
+
+  it("notifies followTurns on turn start, tools, and steer, and gates canonicalSubmit on idle steering-capable bots", async () => {
+    const { runtime, planner, writer, codex } = await setup();
+    // Idle steering-capable bot returns true; non-steering bot always returns false.
+    expect(await runtime.canonicalSubmit(planner.id)).toBe(true);
+    expect(await runtime.canonicalSubmit(writer.id)).toBe(false);
+    expect(await runtime.canonicalSubmit("missing-bot")).toBe(false);
+    expect(await runtime.canonicalSubmit()).toBe(false);
+
+    const restored = vi.fn();
+    const unfollow = runtime.followTurns(planner.id, restored);
+
+    const sent = await runtime.submit(submission(planner.id, "follow-1", "Run tools"));
+    // Turn start notified followers immediately.
+    expect(restored).toHaveBeenCalledTimes(1);
+    // While busy, canonicalSubmit returns false so conversation-routes steers through runtime.steer.
+    expect(await runtime.canonicalSubmit(planner.id)).toBe(false);
+
+    const session = await nextSession(codex, sent.runId);
+    const turnId = sent.runId!;
+
+    // Streaming text deltas do not fire followTurns (they use watch "inflight").
+    session.emit({ type: "text.delta", turnId, delta: "Working..." });
+    expect(restored).toHaveBeenCalledTimes(1);
+
+    // tool.started and tool.completed fire followTurns immediately.
+    session.emit({ type: "tool.started", turnId, callId: "t1", name: "lookup", arguments: "{}" });
+    expect(restored).toHaveBeenCalledTimes(2);
+    session.emit({ type: "tool.completed", turnId, callId: "t1", name: "lookup", output: "ok" });
+    expect(restored).toHaveBeenCalledTimes(3);
+
+    // Steering fires followTurns immediately.
+    await runtime.steer(submission(planner.id, "follow-steer", "Also check fences"));
+    expect(restored).toHaveBeenCalledTimes(4);
+
+    // question.asked intentionally forces a conversation refetch without firing followTurns.
+    session.emit({
+      type: "question.asked",
+      turnId,
+      requestId: "q1",
+      prompt: "Proceed?",
+      questions: [],
+    });
+    expect(restored).toHaveBeenCalledTimes(4);
+
+    const question = (await runtime.conversation(planner.id, { history: false })).attention![0];
+    await runtime.answerRequest(planner.id, question.id, {});
+    session.emit({ type: "turn.completed", turnId, text: "Done" });
+    expect(await runtime.canonicalSubmit(planner.id)).toBe(true);
+
+    unfollow();
+    await runtime.submit(submission(planner.id, "follow-2", "After unfollow"));
+    expect(restored).toHaveBeenCalledTimes(4);
+  });
+
+  it("reaps idle sessions by TTL, enforces maxIdleSessions LRU without touching active turns, and supports warmSession", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "harness-lifecycle-"));
+    const store = new Store(":memory:");
+    const files = fileSigner(store.fileKeys(), undefined);
+    store.user({ id: "sam", name: "Sam", email: "sam@example.net" });
+    store.managedBots.upsertCredential({
+      id: "codex-sub",
+      label: "Codex sub",
+      kind: "subscription",
+      vendor: "openai",
+      ownerId: "sam",
+      osUser: owner,
+      allowedHarnesses: ["codex"],
+    });
+    let clock = 10_000;
+    const codex = new FakeDriver("codex", true);
+    const runtime = createHarnessRuntime({
+      store,
+      files,
+      workspaceRoot: join(directory, "sandbox"),
+      drivers: { codex },
+      idleSessionTtlMs: 80,
+      maxIdleSessions: 2,
+      now: () => clock,
+    });
+    cleanups.push(async () => {
+      await runtime.close();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const mkBot = (name: string) =>
+      runtime.saveBot({
+        ...botInput,
+        name,
+        harness: "codex",
+        ownerId: "sam",
+        credentialId: "codex-sub",
+      });
+    const botA = await mkBot("Alpha");
+    const botB = await mkBot("Beta");
+    const botC = await mkBot("Gamma");
+
+    // warmSession pre-warms botA so the first turn reuses the already-open session.
+    await runtime.warmSession(botA.id);
+    expect(codex.opened).toHaveLength(1);
+    const warmedA = codex.opened[0].session;
+    const turnA = await runtime.submit(submission(botA.id, "warm-a", "Hi A"));
+    const sessionA = await nextSession(codex, turnA.runId);
+    expect(sessionA).toBe(warmedA);
+
+    // warmSession on an active turn must not disturb or replace it.
+    await runtime.warmSession(botA.id);
+    expect(codex.opened).toHaveLength(1);
+    expect(sessionA.closed).toBe(false);
+
+    // Finish botA (idle at t=10_000), then warm botB (idle at t=10_010) and botC (idle at t=10_020).
+    // With maxIdleSessions=2, botA (oldest idle) is evicted while botB and botC remain warm.
+    sessionA.emit({ type: "turn.completed", turnId: turnA.runId! });
+    clock += 10;
+    await runtime.warmSession(botB.id);
+    const sessionB = codex.opened[1].session;
+    clock += 10;
+    await runtime.warmSession(botC.id);
+    const sessionC = codex.opened[2].session;
+    await vi.waitFor(() => expect(sessionA.closed).toBe(true));
+    expect(sessionB.closed).toBe(false);
+    expect(sessionC.closed).toBe(false);
+
+    // Start an active turn on botB, then advance clock past idleSessionTtlMs and wait for the reaper timer.
+    // Active botB must NOT be reaped; idle botC MUST be reaped.
+    const turnB = await runtime.submit(submission(botB.id, "active-b", "Stay alive"));
+    await nextSession(codex, turnB.runId);
+    clock += 100;
+    await vi.waitFor(() => expect(sessionC.closed).toBe(true), { timeout: 1_000 });
+    expect(sessionB.closed).toBe(false);
+    sessionB.emit({ type: "turn.completed", turnId: turnB.runId! });
+  });
+
+  it("memoizes setfacl grants per workspace cwd/user and clears them on deleteBot", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "harness-acl-"));
+    const store = new Store(":memory:");
+    const files = fileSigner(store.fileKeys(), undefined);
+    store.user({ id: "sam", name: "Sam", email: "sam@example.net" });
+    const otherUser = owner === "alice" ? "bob" : "alice";
+    store.managedBots.upsertCredential({
+      id: "other-sub",
+      label: "Other sub",
+      kind: "subscription",
+      vendor: "openai",
+      ownerId: "sam",
+      osUser: otherUser,
+      allowedHarnesses: ["codex"],
+    });
+    const aclCalls: { path: string; user: string; permissions: string }[] = [];
+    const codex = new FakeDriver("codex", true);
+    const runtime = createHarnessRuntime({
+      store,
+      files,
+      workspaceRoot: join(directory, "sandbox"),
+      drivers: { codex },
+      grantAcl: async (path, user, permissions) => {
+        aclCalls.push({ path, user, permissions });
+      },
+    });
+    cleanups.push(async () => {
+      await runtime.close();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const bot = await runtime.saveBot({
+      ...botInput,
+      name: "Isolated",
+      harness: "codex",
+      ownerId: "sam",
+      ownerOsUser: otherUser,
+      credentialId: "other-sub",
+    });
+
+    const first = await runtime.submit(submission(bot.id, "acl-1", "First"));
+    const session = await nextSession(codex, first.runId);
+    expect(aclCalls).toHaveLength(4);
+    session.emit({ type: "turn.completed", turnId: first.runId! });
+
+    // Second turn on the same bot reuses the memoized ACL grant without calling setfacl again.
+    const second = await runtime.submit(submission(bot.id, "acl-2", "Second"));
+    await vi.waitFor(() => expect(session.turns).toHaveLength(2));
+    expect(aclCalls).toHaveLength(4);
+    session.emit({ type: "turn.completed", turnId: second.runId! });
+
+    // Deleting and recreating the bot clears the memoized ACL so setfacl runs again on the fresh directory.
+    await runtime.deleteBot(bot.id);
+    const recreated = await runtime.saveBot({
+      ...botInput,
+      name: "Isolated",
+      harness: "codex",
+      ownerId: "sam",
+      ownerOsUser: otherUser,
+      credentialId: "other-sub",
+    });
+    const third = await runtime.submit(submission(recreated.id, "acl-3", "Third"));
+    await nextSession(codex, third.runId);
+    expect(aclCalls).toHaveLength(8);
+  });
+
+  it("reuses pooled group sessions across rounds and retires them on stop or deleteBot", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "harness-group-pool-"));
+    const store = new Store(":memory:");
+    const files = fileSigner(store.fileKeys(), undefined);
+    store.user({ id: "sam", name: "Sam", email: "sam@example.net" });
+    store.managedBots.upsertCredential({
+      id: "codex-sub",
+      label: "Codex sub",
+      kind: "subscription",
+      vendor: "openai",
+      ownerId: "sam",
+      osUser: owner,
+      allowedHarnesses: ["codex"],
+    });
+    const codex = new FakeDriver("codex", true);
+    const runtime = createHarnessRuntime({
+      store,
+      files,
+      workspaceRoot: join(directory, "sandbox"),
+      drivers: { codex },
+      groupSessionIdleTtlMs: 60_000,
+    });
+    cleanups.push(async () => {
+      await runtime.close();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const alpha = await runtime.saveBot({
+      ...botInput,
+      name: "Alpha",
+      harness: "codex",
+      shared: true,
+      ownerId: "sam",
+      credentialId: "codex-sub",
+    });
+    const beta = await runtime.saveBot({
+      ...botInput,
+      name: "Beta",
+      harness: "codex",
+      shared: true,
+      ownerId: "sam",
+      credentialId: "codex-sub",
+    });
+
+    await runtime.groupRequest({
+      operation: "create",
+      roomId: "ranch-room",
+      name: "Ranch Room",
+      actorId: "sam",
+      members: [
+        { member_id: alpha.id, profile: alpha.id, handle: alpha.id, display_name: alpha.name },
+        { member_id: beta.id, profile: beta.id, handle: beta.id, display_name: beta.name },
+      ],
+    });
+
+    // Round 1 opens a pooled group session for alpha.
+    await runtime.groupRequest({
+      operation: "send",
+      roomId: "ranch-room",
+      requestId: "grp-1",
+      threadId: "thread-1",
+      text: "Check the barn",
+      actorId: "sam",
+      actorName: "Sam",
+    });
+    await vi.waitFor(() => expect(codex.opened).toHaveLength(1));
+    const pooled = codex.opened[0].session;
+    await vi.waitFor(() => expect(pooled.turns).toHaveLength(1));
+    pooled.emit({
+      type: "turn.completed",
+      turnId: pooled.turns[0].turnId,
+      text: "Barn looks fine.",
+      stopReason: "end_turn",
+    });
+    await vi.waitFor(async () => {
+      const state = await runtime.groupRequest({ operation: "state", roomId: "ranch-room" });
+      expect("driver_status" in state && state.driver_status?.running).toBe(false);
+    });
+    expect(pooled.closed).toBe(false);
+
+    // Round 2 reuses the exact same pooled group session without spawning a second process.
+    await runtime.groupRequest({
+      operation: "send",
+      roomId: "ranch-room",
+      requestId: "grp-2",
+      threadId: "thread-2",
+      text: "Check the fence",
+      actorId: "sam",
+      actorName: "Sam",
+    });
+    await vi.waitFor(() => expect(pooled.turns).toHaveLength(2));
+    expect(codex.opened).toHaveLength(1);
+
+    // Stopping the room interrupts and retires the pooled group session cleanly.
+    await runtime.groupRequest({
+      operation: "stop",
+      roomId: "ranch-room",
+      requestId: "grp-stop",
+    });
+    await vi.waitFor(() => expect(pooled.closed).toBe(true));
+    expect(pooled.interrupts).toHaveLength(1);
+  });
 });
 
 describe("harness process spawning", () => {

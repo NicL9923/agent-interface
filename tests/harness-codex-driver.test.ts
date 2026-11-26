@@ -122,6 +122,35 @@ describe("Codex app-server HarnessDriver", () => {
     await expect(driver("bad-cursor").listModels()).rejects.toThrow("repeated a model list cursor");
   });
 
+  it("caches authenticated model lists for modelCacheTtlMs and dedupes concurrent calls", async () => {
+    let clock = 1_000;
+    const cached = createCodexDriver({
+      ...launches,
+      env: { CODEX_MOCK_SCENARIO: "catalog", CODEX_MOCK_SESSION_ENV: "driver setting" },
+      modelCacheTtlMs: 300_000,
+      now: () => clock,
+    });
+    const [first, concurrent] = await Promise.all([cached.listModels(), cached.listModels()]);
+    expect(concurrent).toBe(first);
+    clock += 299_999;
+    expect(await cached.listModels()).toBe(first);
+    clock += 1;
+    const refreshed = await cached.listModels();
+    expect(refreshed).not.toBe(first);
+    expect(refreshed).toEqual(first);
+
+    // Unauthenticated catalogs are not cached.
+    const signedOut = createCodexDriver({
+      ...launches,
+      env: { CODEX_MOCK_SCENARIO: "signed-out" },
+      modelCacheTtlMs: 300_000,
+      now: () => clock,
+    });
+    const firstSignedOut = await signedOut.listModels();
+    const secondSignedOut = await signedOut.listModels();
+    expect(secondSignedOut).not.toBe(firstSignedOut);
+  });
+
   it("resumes the specified thread and closes once on explicit teardown", async () => {
     const session = await open(driver("resume"), { resumeSessionId: "codex-thread" });
     const { events } = observe(session);

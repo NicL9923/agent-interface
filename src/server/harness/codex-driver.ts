@@ -42,6 +42,7 @@ import {
 } from "./json-rpc-stdio.js";
 
 const execFileAsync = promisify(execFile);
+const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60_000;
 type Rpc = ReturnType<typeof openJsonRpcStdio>;
 type WireObject = Record<string, unknown>;
 
@@ -52,6 +53,10 @@ export interface CodexDriverOptions {
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
   probeTimeoutMs?: number;
+  /** How long a discovered model catalog stays cached. Default 5 minutes. */
+  modelCacheTtlMs?: number;
+  /** Clock for model cache expiry. Defaults to `Date.now`. */
+  now?: () => number;
 }
 
 export interface CodexModelProvider extends ModelProvider {
@@ -178,6 +183,10 @@ export function createCodexDriver(options: CodexDriverOptions = {}): HarnessDriv
   const args = options.args ?? ["app-server"];
   const environment = () => ({ ...process.env, ...options.env });
   const transport = { command, args, requestTimeoutMs: options.requestTimeoutMs ?? 15_000 };
+  const modelCacheTtlMs = options.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
+  const clock = options.now ?? Date.now;
+  let cachedModels: { at: number; providers: CodexModelProvider[] } | undefined;
+  let pendingModels: Promise<CodexModelProvider[]> | undefined;
 
   return {
     id: "codex",
@@ -214,32 +223,46 @@ export function createCodexDriver(options: CodexDriverOptions = {}): HarnessDriv
         return { available: false, reason };
       }
     },
-    async listModels() {
-      const rpc = openJsonRpcStdio({ ...transport, env: environment() });
-      try {
-        await initialize(rpc);
-        const account = object(await rpc.request("account/read", { refreshToken: false }));
-        const authenticated = account.requiresOpenaiAuth === false || account.account != null;
-        const models = new Map<string, CodexModelProvider["models"][number]>();
-        const seenCursors = new Set<string>();
-        let cursor: string | undefined;
-        do {
-          const page = object(await rpc.request("model/list", { cursor, includeHidden: false }));
-          if (!Array.isArray(page.data)) throw new Error("Codex returned an invalid model list");
-          for (const model of objects(page.data).flatMap((model) =>
-            mapModel(model, authenticated),
-          )) {
-            models.set(model.id, model);
-          }
-          cursor = string(page.nextCursor);
-          if (cursor && seenCursors.has(cursor))
-            throw new Error("Codex repeated a model list cursor");
-          if (cursor) seenCursors.add(cursor);
-        } while (cursor);
-        return [{ id: "codex", name: "Codex", authenticated, models: [...models.values()] }];
-      } finally {
-        await rpc.close();
+    listModels() {
+      if (modelCacheTtlMs > 0 && cachedModels && clock() - cachedModels.at < modelCacheTtlMs) {
+        return Promise.resolve(cachedModels.providers);
       }
+      pendingModels ??= (async (): Promise<CodexModelProvider[]> => {
+        const rpc = openJsonRpcStdio({ ...transport, env: environment() });
+        try {
+          await initialize(rpc);
+          const account = object(await rpc.request("account/read", { refreshToken: false }));
+          const authenticated = account.requiresOpenaiAuth === false || account.account != null;
+          const models = new Map<string, CodexModelProvider["models"][number]>();
+          const seenCursors = new Set<string>();
+          let cursor: string | undefined;
+          do {
+            const page = object(await rpc.request("model/list", { cursor, includeHidden: false }));
+            if (!Array.isArray(page.data)) throw new Error("Codex returned an invalid model list");
+            for (const model of objects(page.data).flatMap((model) =>
+              mapModel(model, authenticated),
+            )) {
+              models.set(model.id, model);
+            }
+            cursor = string(page.nextCursor);
+            if (cursor && seenCursors.has(cursor))
+              throw new Error("Codex repeated a model list cursor");
+            if (cursor) seenCursors.add(cursor);
+          } while (cursor);
+          const providers: CodexModelProvider[] = [
+            { id: "codex", name: "Codex", authenticated, models: [...models.values()] },
+          ];
+          if (authenticated && modelCacheTtlMs > 0) {
+            cachedModels = { at: clock(), providers };
+          }
+          return providers;
+        } finally {
+          await rpc.close();
+        }
+      })().finally(() => {
+        pendingModels = undefined;
+      });
+      return pendingModels;
     },
     async openSession(spec) {
       // This process launcher has no privilege broker. Never fall back to the host login.

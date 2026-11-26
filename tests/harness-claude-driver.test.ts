@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type ClaudeDriverOptions,
   createClaudeDriver,
+  createClaudeJsonlFramer,
 } from "../src/server/harness/claude-driver.js";
 import type {
   HarnessEvent,
@@ -59,6 +60,7 @@ interface Recorded {
   mcpPath?: string;
   mcpConfig?: unknown;
   stdin?: Record<string, any>;
+  authStatus?: boolean;
 }
 
 function records(): Recorded[] {
@@ -144,6 +146,30 @@ describe("listModels", () => {
     const [provider] = await createClaudeDriver({ command: join(dir, "no-claude") }).listModels();
     expect(provider?.models.every((model) => !model.available)).toBe(true);
     expect(provider?.warning).toContain("was not found");
+  });
+
+  it("caches authenticated model lists for modelCacheTtlMs, dedupes concurrent calls, and skips caching signed-out checks", async () => {
+    let clock = 10_000;
+    const cached = driver({}, { modelCacheTtlMs: 300_000, now: () => clock });
+    const [first, concurrent] = await Promise.all([cached.listModels(), cached.listModels()]);
+    expect(concurrent).toEqual(first);
+    expect(records().filter((entry) => entry.authStatus)).toHaveLength(1);
+
+    clock += 299_999;
+    await cached.listModels();
+    expect(records().filter((entry) => entry.authStatus)).toHaveLength(1);
+
+    clock += 1;
+    await cached.listModels();
+    expect(records().filter((entry) => entry.authStatus)).toHaveLength(2);
+
+    const signedOut = driver(
+      { CLAUDE_MOCK_LOGGED_IN: "0" },
+      { modelCacheTtlMs: 300_000, now: () => clock },
+    );
+    await signedOut.listModels();
+    await signedOut.listModels();
+    expect(records().filter((entry) => entry.authStatus)).toHaveLength(4);
   });
 });
 
@@ -393,6 +419,31 @@ describe("turns", () => {
     await expect(session.answerQuestion(asked.requestId, { q1: "Red" })).rejects.toThrow(
       /No pending/,
     );
+  });
+
+  it("preserves U+2028 and U+2029 inside streamed JSONL text_delta frames", async () => {
+    const { session, events } = await start();
+    await session.startTurn({ turnId: "t-unicode", text: "unicode-sep" });
+    const completed = await until(events, "turn.completed");
+    expect(completed).toEqual({
+      type: "turn.completed",
+      turnId: "t-unicode",
+      text: "before\u2028middle\u2029after",
+      stopReason: "end_turn",
+    });
+    expect(
+      events
+        .filter(
+          (event): event is Extract<HarnessEvent, { type: "text.delta" }> =>
+            event.type === "text.delta",
+        )
+        .map((event) => event.delta)
+        .join(""),
+    ).toBe("before\u2028middle\u2029after");
+
+    // Oversized records are dropped cleanly without corrupting subsequent frames.
+    const framer = createClaudeJsonlFramer(16);
+    expect(framer('0123456789abcdefX\n{"ok":true}\n')).toEqual(['{"ok":true}']);
   });
 
   it("interrupts through a control request and completes as interrupted", async () => {

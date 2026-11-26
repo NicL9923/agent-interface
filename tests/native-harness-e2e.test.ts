@@ -243,6 +243,8 @@ describe("native harnesses in the live server", () => {
       () => claude.opened.flatMap(({ session }) => session.turns).length === 2,
       "the queued message to start",
     );
+    // Both consecutive turns reused the exact same warm HarnessSession even with wildbots MCP enabled.
+    expect(claude.opened).toHaveLength(1);
     expect(claude.opened.flatMap(({ session }) => session.turns).map(({ text }) => text)).toEqual([
       "Count the cattle.",
       "Then check the north fence.",
@@ -250,6 +252,127 @@ describe("native harnesses in the live server", () => {
     expect(
       (await app.inject({ url: `/api/bots/${scout.id}/queue`, headers })).json().items,
     ).toEqual([]);
+  });
+
+  it("reuses warm sessions across turns with wildbots MCP and rotates + revokes the old MCP token on config changes", async () => {
+    const { app, store, headers, claude, create, send } = await boot();
+    const scout = await create("Reuse Scout", "claude-code");
+
+    const pingMcp = (server: { url?: string; headers?: Record<string, string> }) =>
+      fetch(server.url!, {
+        method: "POST",
+        headers: { ...server.headers, "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+      });
+
+    // Turn 1 opens a session and mints an MCP token.
+    await send(scout.id, "First turn.");
+    await until(() => claude.opened.length === 1, "turn 1 to open");
+    const firstMcp = claude.opened[0].spec.mcpServers![0];
+    expect((await pingMcp(firstMcp)).status).toBe(200);
+    claude.session.complete("First answer.");
+    await until(
+      async () =>
+        (
+          (await app.inject({ url: `/api/bots/${scout.id}/conversation`, headers })).json() as {
+            activity: { state: string };
+          }
+        ).activity.state === "idle",
+      "turn 1 idle",
+    );
+
+    // Reading botDetail must not rotate or break session reuse.
+    const detail = await app.inject({ url: `/api/bots/${scout.id}`, headers });
+    expect(detail.statusCode).toBe(200);
+
+    // Turn 2 with unchanged config reuses the exact same session and MCP token.
+    await send(scout.id, "Second turn.");
+    await until(() => claude.opened[0].session.turns.length === 2, "turn 2 on same session");
+    expect(claude.opened).toHaveLength(1);
+    expect((await pingMcp(firstMcp)).status).toBe(200);
+    claude.session.complete("Second answer.");
+    await until(
+      async () =>
+        (
+          (await app.inject({ url: `/api/bots/${scout.id}/conversation`, headers })).json() as {
+            activity: { state: string };
+          }
+        ).activity.state === "idle",
+      "turn 2 idle",
+    );
+
+    // Changing instructions rotates the session and revokes the previous MCP token.
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/api/bots/${scout.id}`,
+      headers,
+      payload: {
+        name: scout.name,
+        instructions: "Updated ranch instructions.",
+        model: "model-1",
+        harness: "claude-code",
+        shared: false,
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    await send(scout.id, "Third turn after instruction change.");
+    await until(() => claude.opened.length === 2, "session rotation on instruction change");
+    expect((await pingMcp(firstMcp)).status).toBe(401);
+    const secondMcp = claude.opened[1].spec.mcpServers![0];
+    expect((await pingMcp(secondMcp)).status).toBe(200);
+    claude.session.complete("Third answer.");
+    await until(
+      async () =>
+        (
+          (await app.inject({ url: `/api/bots/${scout.id}/conversation`, headers })).json() as {
+            activity: { state: string };
+          }
+        ).activity.state === "idle",
+      "turn 3 idle",
+    );
+
+    // Changing active memory also rotates the session and revokes the prior MCP token.
+    store.memory.importItems(scout.id, {
+      entries: [
+        { kind: "memory", key: "pasture", content: "North gate repaired.", reason: "test" },
+      ],
+      skills: [],
+    });
+    await send(scout.id, "Fourth turn after memory update.");
+    await until(() => claude.opened.length === 3, "session rotation on memory change");
+    expect((await pingMcp(secondMcp)).status).toBe(401);
+    const thirdMcp = claude.opened[2].spec.mcpServers![0];
+    expect((await pingMcp(thirdMcp)).status).toBe(200);
+    claude.session.complete("Fourth answer.");
+    await until(
+      async () =>
+        (
+          (await app.inject({ url: `/api/bots/${scout.id}/conversation`, headers })).json() as {
+            activity: { state: string };
+          }
+        ).activity.state === "idle",
+      "turn 4 idle",
+    );
+
+    // Disabling the wildbots MCP server rotates the session and revokes the previous token.
+    const disabledMcp = await app.inject({
+      method: "PATCH",
+      url: `/api/bots/${scout.id}`,
+      headers,
+      payload: {
+        name: scout.name,
+        instructions: "Updated ranch instructions.",
+        model: "model-2",
+        harness: "claude-code",
+        shared: false,
+        enabledMcpServers: [],
+      },
+    });
+    expect(disabledMcp.statusCode).toBe(200);
+    await send(scout.id, "Fifth turn without MCP.");
+    await until(() => claude.opened.length === 4, "session rotation on mcp/model change");
+    expect((await pingMcp(thirdMcp)).status).toBe(401);
+    expect(claude.opened[3].spec.mcpServers).toEqual([]);
   });
 
   it("uploads an attachment to a native assistant and downloads it again", async () => {

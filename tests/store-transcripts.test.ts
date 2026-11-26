@@ -326,6 +326,44 @@ describe("transcript repository", () => {
     });
   });
 
+  it("caches latestPreview in memory per bot and invalidates on append, replace, and forgetBot", () => {
+    const store = open();
+    const { transcripts } = store;
+    const prepareSpy = vi.spyOn(store.db, "prepare");
+
+    // Empty bot caches undefined so repeated calls do not hit SQLite.
+    expect(transcripts.latestPreview(bot)).toBeUndefined();
+    const afterMiss = prepareSpy.mock.calls.length;
+    expect(transcripts.latestPreview(bot)).toBeUndefined();
+    expect(prepareSpy.mock.calls.length).toBe(afterMiss);
+
+    // Appending invalidates only that bot's cached preview.
+    transcripts.appendMessages(bot, [message("m1", { text: "First preview" })], hermes);
+    const first = transcripts.latestPreview(bot);
+    expect(first).toEqual({ messageId: "m1", text: "First preview", at: undefined });
+    // Mutating the returned object must not corrupt the cache.
+    first!.text = "Mutated";
+    const afterHit = prepareSpy.mock.calls.length;
+    expect(transcripts.latestPreview(bot)).toEqual({
+      messageId: "m1",
+      text: "First preview",
+      at: undefined,
+    });
+    expect(prepareSpy.mock.calls.length).toBe(afterHit);
+
+    // replaceFromSnapshot invalidates the cache.
+    transcripts.replaceFromSnapshot(bot, [message("m2", { text: "Replaced preview" })], hermes);
+    expect(transcripts.latestPreview(bot)).toEqual({
+      messageId: "m2",
+      text: "Replaced preview",
+      at: undefined,
+    });
+
+    // forgetBot invalidates the cache.
+    transcripts.forgetBot(bot);
+    expect(transcripts.latestPreview(bot)).toBeUndefined();
+  });
+
   it("tracks diffs and authority independently of the latest successful sync", () => {
     const { transcripts } = open();
     const clock = vi.spyOn(Date, "now").mockReturnValue(100);
