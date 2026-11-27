@@ -130,10 +130,13 @@ extension AppStore {
     guard let scope = publishableScope, let api, supports(.routines), CriticalAlarmManager.shared.isEnabled(for: scope) else { return }
     let startScope = scope
     let startedToken = api.token
-    guard let routines: [Routine] = try? await api.get("/routines"),
-      self.publishableScope == startScope, self.api === api, api.token == startedToken
-    else { return }
-    publishRoutinesSnapshot(routines)
+    do {
+      let routines: [Routine] = try await api.get("/routines")
+      guard self.publishableScope == startScope, self.api === api, api.token == startedToken else { return }
+      publishRoutinesSnapshot(routines)
+    } catch {
+      handleSessionExpiryIfCurrent(error, client: api, token: startedToken)
+    }
   }
   private func syncSystemSearch(_ snapshot: WidgetSnapshot?) {
     if spotlight?.sync(snapshot) == true { WildBotsShortcuts.updateAppShortcutParameters() }

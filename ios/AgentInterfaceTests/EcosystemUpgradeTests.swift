@@ -824,11 +824,18 @@ import os
     let expiredClient = APIClient(baseURL: origin)
     expiredClient.token = nil
 
-    // Exercise the production base64url credential matcher directly!
-    XCTAssertTrue(WatchBridge.scopeMatchesCredential(scope, client: validClient))
-    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: otherHostClient))
-    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: expiredClient))
-    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: nil))
+    // Exercise the production base64url credential matcher (including saved expiry timestamp) directly!
+    let expiryDefaults = isolatedDefaults()
+    let now = Date()
+    expiryDefaults.set(ServerDate.string(now.addingTimeInterval(600)), forKey: DeviceDefaults.expiry(origin))
+    XCTAssertTrue(WatchBridge.scopeMatchesCredential(scope, client: validClient, defaults: expiryDefaults, now: now))
+    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: otherHostClient, defaults: expiryDefaults, now: now))
+    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: expiredClient, defaults: expiryDefaults, now: now))
+    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: nil, defaults: expiryDefaults, now: now))
+    // Once saved token expiry has passed, pending replay and cold refresh must both be rejected!
+    let pastExpiryDefaults = isolatedDefaults()
+    pastExpiryDefaults.set(ServerDate.string(now.addingTimeInterval(-60)), forKey: DeviceDefaults.expiry(origin))
+    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: validClient, defaults: pastExpiryDefaults, now: now))
 
     let validScopeDefaults = isolatedDefaults()
     validScopeDefaults.set(scope, forKey: DeviceDefaults.signedInScope)
@@ -919,6 +926,52 @@ import os
     )
     XCTAssertEqual(expiredRefreshReply["ok"] as? Bool, false)
     XCTAssertEqual(expiredTransport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
+
+    // Cold Watch refresh when `/bootstrap` returns HTTP 401 `session_expired`:
+    // `BackgroundRefresh` must wipe the cached snapshot and token so Watch NEVER receives stale previews.
+    let rejectServer = FakeServer { _ in
+      .init(status: 401, body: #"{"error":"Session expired","code":"session_expired"}"#)
+    }
+    let rejectedClient = rejectServer.api(token: "live-but-revoked")
+    let rejectedScope = AppStore.scope(server: rejectedClient.baseURL, userId: "u1")
+    let tempSnapshotURL = FileManager.default.temporaryDirectory.appendingPathComponent("watch-expiry-\(UUID().uuidString).json")
+    addTeardownBlock { try? FileManager.default.removeItem(at: tempSnapshotURL) }
+    let cachedSnap = WidgetSnapshot(scope: rejectedScope, generatedAt: Date(), assistants: [
+      .init(id: "kitchen", name: "Private Kitchen", activity: "waiting", lastMessage: "Secret preview", lastMessageAt: nil, color: nil, pinned: true),
+    ])
+    XCTAssertTrue(WidgetSnapshotStore.write(cachedSnap, to: tempSnapshotURL))
+
+    let prevBGClient = BackgroundRefresh.client
+    let prevBGURL = BackgroundRefresh.snapshotURL
+    BackgroundRefresh.client = { rejectedClient.token == nil ? nil : rejectedClient }
+    BackgroundRefresh.snapshotURL = tempSnapshotURL
+    defer {
+      BackgroundRefresh.client = prevBGClient
+      BackgroundRefresh.snapshotURL = prevBGURL
+    }
+    let coldScopeDefaults = isolatedDefaults()
+    coldScopeDefaults.set(rejectedScope, forKey: DeviceDefaults.signedInScope)
+    let coldTransport = FakeWatchTransport()
+    let coldBridge = WatchBridge(transport: coldTransport, defaults: isolatedDefaults())
+    let coldResolver: @MainActor () -> String? = {
+      WatchBridge.credentialBackedSavedScope(
+        defaults: coldScopeDefaults,
+        hasCredential: { WatchBridge.scopeMatchesCredential($0, client: rejectedClient.token == nil ? nil : rejectedClient) }
+      )
+    }
+    coldBridge.savedScope = coldResolver
+    coldBridge.refreshHandler = {
+      _ = await BackgroundRefresh.refreshWidgets()
+      guard coldResolver() != nil else { return nil }
+      return WidgetSnapshotStore.read(from: tempSnapshotURL)
+    }
+    let coldAction = WatchAction(scope: rejectedScope, kind: .refresh)
+    let coldReply = await coldBridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(coldAction)])
+    XCTAssertEqual(coldReply["ok"] as? Bool, false, "401 session_expired during cold refresh must never replay cached data")
+    XCTAssertNil(coldReply[WatchPayload.snapshotKey])
+    XCTAssertNil(rejectedClient.token)
+    XCTAssertNil(WidgetSnapshotStore.read(from: tempSnapshotURL))
+    XCTAssertEqual(coldTransport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
   }
 
   func testCriticalAlarmBatchStopsMidBatchOnSignOutAndReschedulesAfterToggleOffAndOn() async throws {
@@ -1095,46 +1148,85 @@ import os
     }
   }
 
-  func testLateResponsesAfterSessionExpiryNeverReindexSpotlight() async throws {
-    let requestArrived = DispatchSemaphore(value: 0)
-    let releaseResponse = DispatchSemaphore(value: 0)
-    let server = FakeServer { request in
-      if request.url?.path == "/api/groups" {
-        requestArrived.signal()
-        releaseResponse.wait()
-        return .init(body: #"{"rooms":[{"room_id":"secret-1","name":"Private Room","members":[]}]}"#)
+  private final class HeldGroupsHost: FakeHost, @unchecked Sendable {
+    let origin = URL(string: "https://held-\(UUID().uuidString.lowercased()).example.test")!
+    private let lock = NSLock()
+    private var heldGroups: FakeExchange?
+    var holdFirstGroups = true
+
+    func receive(_ exchange: FakeExchange) {
+      let path = exchange.request.url?.path ?? ""
+      if path == "/api/saved" {
+        exchange.respond(status: 401, data: Data(#"{"error":"Session expired","code":"session_expired"}"#.utf8))
+        return
       }
-      return .init(body: "{}")
+      if path == "/api/groups" {
+        let shouldHold = lock.withLock { () -> Bool in
+          guard holdFirstGroups else { return false }
+          holdFirstGroups = false
+          heldGroups = exchange
+          return true
+        }
+        if shouldHold { return }
+        exchange.respond(
+          status: 200,
+          data: Data(#"{"supported":true,"canSend":true,"rooms":[{"room_id":"same-1","name":"Family Room","members":[]}]}"#.utf8)
+        )
+        return
+      }
+      exchange.respond(status: 200, data: Data("{}".utf8))
     }
+
+    var isHoldingGroups: Bool { lock.withLock { heldGroups != nil } }
+
+    func releaseGroups() {
+      let ex = lock.withLock { () -> FakeExchange? in
+        let value = heldGroups
+        heldGroups = nil
+        return value
+      }
+      ex?.respond(
+        status: 200,
+        data: Data(#"{"supported":true,"canSend":true,"rooms":[{"room_id":"secret-1","name":"Private Room","members":[]}]}"#.utf8)
+      )
+    }
+  }
+
+  func testLateResponsesAfterSessionExpiryNeverReindexSpotlight() async throws {
+    let host = HeldGroupsHost()
     let defaults = isolatedDefaults()
     let index = DeferredSpotlight()
     let spotlight = AssistantSpotlight(index: index, defaults: defaults)
     let store = AppStore()
     store.widgetSnapshotURL = nil
     store.spotlight = spotlight
-    store.api = server.api(token: "tok")
+    let api = FakeExchange.client(for: host, token: "tok")
+    store.api = api
     store.bootstrap = try sampleBootstrap()
     let startedScope = try XCTUnwrap(store.scope)
-    // Finish the initial bootstrap assistant index cleanly so Spotlight is idle.
     if index.isHolding { index.finishHeldIndex(ok: true) }
+    // Seed an initial room catalog before expiry to also verify re-sign-in reindexing below.
+    store.groupCatalog = GroupCatalog(supported: true, canSend: true, reason: nil, rooms: [GroupRoom(room_id: "same-1", name: "Family Room", members: [])])
     index.events.removeAll()
 
-    // Start Home group refresh in flight; while it awaits the server, session expires.
+    // Start Home group refresh in flight; while it awaits the server, a Discovery `/saved` request
+    // receives HTTP 401 `session_expired` and routes through `handleSessionExpiryIfCurrent`.
     let refreshTask = Task { await store.refreshGroups() }
-    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-      DispatchQueue.global().async {
-        requestArrived.wait()
-        cont.resume()
-      }
+    try await until { host.isHoldingGroups }
+    let discoveryToken = api.token
+    do {
+      let _: [SavedItem] = try await api.get("/saved")
+      XCTFail("Expected HTTP 401 session_expired from /api/saved")
+    } catch {
+      store.handleSessionExpiryIfCurrent(error, client: api, token: discoveryToken)
     }
-    store.report(APIError(message: "Session expired", status: 401, code: APIError.sessionExpiredCode))
     XCTAssertTrue(store.sessionExpired)
     XCTAssertNil(store.api?.token)
 
     // Deliver the late successful `/api/groups` response after session expiry.
-    releaseResponse.signal()
+    host.releaseGroups()
     await refreshTask.value
-    XCTAssertNil(store.groupCatalog, "Late group catalog after session expiry must be ignored")
+    XCTAssertEqual(store.groupCatalog?.rooms.map(\.id), ["same-1"], "Late group catalog after session expiry must be ignored")
     XCTAssertFalse(index.events.contains(where: { $0.contains("secret-1") }), "Late group response must never reindex Spotlight")
 
     // Assistants, routines, and saved-item publishers must also refuse to reindex while expired.
@@ -1148,6 +1240,18 @@ import os
     store.publishSavedSpotlight([saved], expectedScope: startedScope, expectedToken: "tok")
     let postExpiryEvents = index.events.dropFirst(countAfterExpiry)
     XCTAssertFalse(postExpiryEvents.contains(where: { $0.hasPrefix("index:") }), "Expired session must never reindex Spotlight")
+
+    // Same-account re-sign-in after expiry: `groupCatalog` still equals `["same-1"]`, yet
+    // `refreshGroups()` must still pass the unchanged rooms through to Spotlight so they reindex!
+    store.sessionExpired = false
+    api.token = "tok-2"
+    index.events.removeAll()
+    await store.refreshGroups()
+    if index.isHolding { index.finishHeldIndex(ok: true) }
+    XCTAssertTrue(
+      index.events.contains("index:group:same-1"),
+      "Re-signing in as the same member must reindex unchanged rooms into Spotlight"
+    )
     store.suspend()
   }
 

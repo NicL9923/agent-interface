@@ -203,14 +203,28 @@ private final class SentReply: @unchecked Sendable {
     try? await UNUserNotificationCenter.current().add(request)
   }
   var refreshHandler: @MainActor () async -> WidgetSnapshot? = {
-    await BackgroundRefresh.refreshWidgets()
-    return WidgetSnapshotStore.read()
+    _ = await BackgroundRefresh.refreshWidgets()
+    guard WatchBridge.credentialBackedSavedScope() != nil else { return nil }
+    return WidgetSnapshotStore.read(from: BackgroundRefresh.snapshotURL)
   }
-  /// Production credential matcher: verifies `client` holds a live token and that the base64url
-  /// encoded `scope` decodes to `<client.baseURL>|...`.
-  static func scopeMatchesCredential(_ scope: String, client: APIClient?) -> Bool {
+  /// Production credential matcher: verifies `client` holds a live token, that the base64url
+  /// encoded `scope` decodes to `<client.baseURL>|...`, and that any saved token expiry timestamp
+  /// for that server has not passed.
+  static func scopeMatchesCredential(
+    _ scope: String,
+    client: APIClient?,
+    defaults: UserDefaults = .standard,
+    now: Date = Date()
+  ) -> Bool {
     guard let client, client.token != nil else { return false }
-    return AppStore.scope(scope, matchesServer: client.baseURL)
+    guard AppStore.scope(scope, matchesServer: client.baseURL) else { return false }
+    if let expiryRaw = defaults.string(forKey: DeviceDefaults.expiry(client.baseURL)),
+      let expiresAt = ServerDate.parse(expiryRaw),
+      expiresAt <= now
+    {
+      return false
+    }
+    return true
   }
 
   /// Resolves `DeviceDefaults.signedInScope` ONLY when a live Keychain credential still exists for
@@ -218,12 +232,13 @@ private final class SentReply: @unchecked Sendable {
   /// retaining `signedInScope`) from replaying snapshots or serving cold Watch refreshes.
   static func credentialBackedSavedScope(
     defaults: UserDefaults = .standard,
-    hasCredential: @MainActor (String) -> Bool = { scope in
-      WatchBridge.scopeMatchesCredential(scope, client: NotificationController.shared.actionClient())
-    }
+    hasCredential: (@MainActor (String) -> Bool)? = nil
   ) -> String? {
     guard let scope = defaults.string(forKey: DeviceDefaults.signedInScope), !scope.isEmpty else { return nil }
-    return hasCredential(scope) ? scope : nil
+    let check = hasCredential ?? { candidate in
+      WatchBridge.scopeMatchesCredential(candidate, client: NotificationController.shared.actionClient(), defaults: defaults)
+    }
+    return check(scope) ? scope : nil
   }
 
   var savedScope: @MainActor () -> String? = { WatchBridge.credentialBackedSavedScope() }
@@ -327,6 +342,7 @@ private final class SentReply: @unchecked Sendable {
       // Reject stale refresh replies if sign-out or account change occurred while awaiting.
       let currentScope = activeAuthenticatedScope()
       guard accountEpoch == startEpoch, currentScope == activeScope else {
+        if currentScope == nil { sync(nil) }
         return ["ok": false, "error": "Account changed while refreshing."]
       }
       guard let latest, latest.scope == activeScope else {

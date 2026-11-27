@@ -362,9 +362,12 @@ struct DiscoveryView: View {
   private func name(_ id:String, fallback: String = "Assistant")->String { store.bootstrap?.bots.first { $0.id == id }?.name ?? fallback }
   private func cost(_ value:Double?)->String { value.map { String(format:"$%.2f",$0) } ?? "Unknown" }
   private func perform(_ action:(APIClient)async throws->Void) async {
-    guard let api=store.api else { return };let scope=store.scope;let request=UUID();loadId=request;busy=true;error=nil;notice=nil
+    guard let api=store.api else { return };let scope=store.scope;let startedToken=api.token;let request=UUID();loadId=request;busy=true;error=nil;notice=nil
     defer { if scope==store.scope && request==loadId { busy=false } }
-    do { try await action(api) } catch { if scope==store.scope && request==loadId { self.error=error.localizedDescription } }
+    do { try await action(api) } catch {
+      store.handleSessionExpiryIfCurrent(error, client: api, token: startedToken)
+      if scope==store.scope && request==loadId { self.error=error.localizedDescription }
+    }
     if scope != store.scope { hits=[];saved=[];pinned=[];overview=nil;page=nil;notice=nil }
   }
   private func load() async {

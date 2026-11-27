@@ -53,6 +53,7 @@ extension AppStore {
       return .success(value)
     } catch {
       guard !(error is StaleRequest), !Task.isCancelled, scope == context.scope, current() else { return nil }
+      handleSessionExpiryIfCurrent(error, client: api, token: startedToken)
       // The same member signed in again while this ran, which ended it without an answer.
       if error is CancellationError, context.api.retired { return .failure(APIError(message: Self.signInChanged, status: 0)) }
       return .failure(error)

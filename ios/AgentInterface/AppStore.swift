@@ -622,6 +622,17 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if let connectionError { dismissedPolls.insert(connectionError) }
     error = nil
   }
+  /// Routes a `401 session_expired` failure from any view or helper request through `report(_:)`
+  /// when it belongs to the active client and token, immediately invalidating credentials and
+  /// cross-process surfaces so concurrent in-flight responses cannot reindex private titles.
+  func handleSessionExpiryIfCurrent(_ error: Error, client: APIClient, token: String?) {
+    guard (error as? APIError)?.isSessionExpired == true,
+      api === client,
+      api?.token == token
+    else { return }
+    report(error)
+  }
+
   func report(_ error: Error) {
     if error is CancellationError { return }
     self.error = error.localizedDescription

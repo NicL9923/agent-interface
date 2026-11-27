@@ -68,14 +68,16 @@ struct ComputerWindowView: View {
       return
     }
     let scope = store.scope
+    let startedToken = api.token
     loading = conversation == nil
     defer { loading = false }
     do {
       let fetched: Conversation = try await api.get("/bots/\(APIClient.component(botId))/conversation?turns=20")
-      guard store.scope == scope, store.api === api else { return }
+      guard store.scope == scope, store.api === api, !store.sessionExpired else { return }
       conversation = fetched
       error = nil
     } catch {
+      store.handleSessionExpiryIfCurrent(error, client: api, token: startedToken)
       guard store.scope == scope, !(error is CancellationError) else { return }
       self.error = error.localizedDescription
     }
@@ -90,6 +92,7 @@ struct ComputerWindowView: View {
   func send(using store: AppStore, retryRequestId: String? = nil) async {
     guard !sending, let api = store.api, store.householdReachable, !store.sessionExpired else { return }
     let scope = store.scope
+    let startedToken = api.token
     let submission: PendingSubmission
     let submittedText: String
     if let retryRequestId {
@@ -123,6 +126,7 @@ struct ComputerWindowView: View {
       applyReceipt(receipt, submittedText: submittedText)
       await load(using: store)
     } catch {
+      store.handleSessionExpiryIfCurrent(error, client: api, token: startedToken)
       guard store.scope == scope, store.api === api else { return }
       if let failure = error as? APIError, (400..<500).contains(failure.status) {
         let originalDraft = pendingDraftText ?? submission.text

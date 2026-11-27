@@ -19,10 +19,11 @@ extension AppStore {
     let result = await attempt(current: { [weak self] in self?.groupLoadId == id }) { try await $0.api.get("/groups") as GroupCatalog }
     guard case .success(let value)? = result,
       let activeScope = publishableScope,
-      api?.token == startedToken,
-      value != groupCatalog
+      api?.token == startedToken
     else { return }
-    groupCatalog = value
+    if value != groupCatalog { groupCatalog = value }
+    // Always pass through to Spotlight so re-signing in as the same member after session expiry
+    // reindexes unchanged rooms (Spotlight deduplicates against its own stored state).
     spotlight?.syncGroups(value.rooms, scope: activeScope)
   }
   /// A room just made shows at once; the next read of the catalog replaces this copy.

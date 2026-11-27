@@ -82,7 +82,25 @@ import WidgetKit
         expectedEpoch: startEpoch
       )
       return true
-    } catch { return false }
+    } catch {
+      // Explicit server session rejection must clear the rejected token and cross-process previews
+      // immediately so a cold Watch refresh or widget timeline never replays expired household data.
+      if (error as? APIError)?.isSessionExpired == true,
+        let current = client(), current.baseURL == api.baseURL, current.token == token
+      {
+        try? SecureToken.save(nil, host: api.baseURL.absoluteString)
+        api.token = nil
+        current.token = nil
+        if WidgetSnapshotStore.write(nil, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
+        RoutineSnapshotStore.write(nil)
+        WatchBridge.shared.sync(nil)
+        CriticalAlarmManager.shared.cancelAll()
+        if let store = WatchBridge.shared.store, store.api?.baseURL == api.baseURL, store.api?.token == token {
+          store.report(error)
+        }
+      }
+      return false
+    }
   }
 
   /// Registers the refresh task. iOS requires this before launch finishes.
