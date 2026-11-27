@@ -15,7 +15,7 @@ struct TalkButton: View {
       Button {
         if talk.live { talk.end() }
         else if capability.supported { beforeStart(); talk.start() }
-        else { talk.explain(capability.reason ?? "Live Talk is unavailable on this Hermes.") }
+        else { talk.explain(capability.reason ?? "Live Talk is unavailable on this server.") }
       } label: {
         Image(systemName: talk.live ? "waveform.circle.fill" : "waveform").font(.system(size: 20)).frame(width: 44, height: 44)
       }

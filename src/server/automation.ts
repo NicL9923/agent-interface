@@ -66,14 +66,14 @@ export async function installAutomationRoutes(
     if (!runtime.automationRequest)
       throw httpError(
         409,
-        "Update and qualify the Hermes integration to use goals, tasks, event triggers and learned skill review.",
+        "Goals, tasks, event triggers, and learned skill review are unavailable on this runtime.",
       );
     if (
       input.operation !== "overview" &&
       !["task_get", "skill_content", "skill_diff", "approval_settings"].includes(input.operation) &&
       maintenance()
     )
-      throw httpError(409, "Hermes is being upgraded. Automation changes are paused.");
+      throw httpError(409, "WildBots is being upgraded. Automation changes are paused.");
     const task = "task" in input ? input.task : undefined;
     for (const candidate of [
       "assignee" in input ? input.assignee : undefined,
@@ -263,7 +263,7 @@ export async function installAutomationRoutes(
       if (!routineId)
         throw httpError(
           409,
-          "WildBots couldn't find this trigger's routine to check where it posts, so the trigger stays off. Turn it on in Hermes.",
+          "WildBots couldn't find this trigger's routine to check where it posts, so the trigger stays off.",
           { code: "routine_rooms_unknown" },
         );
       return delivering(req, routineId, toggle);
@@ -341,7 +341,7 @@ export async function installAutomationRoutes(
     if (!runtime.automationRequest)
       return {
         supported: false,
-        reason: "This Hermes integration can't list always-allowed commands.",
+        reason: "Always-allowed command lists are unavailable on this runtime.",
         allowlist: [],
         mode: "manual",
         canManageAutoReview: false,
@@ -362,17 +362,14 @@ export async function installAutomationRoutes(
       if (!canManage(req))
         throw httpError(
           403,
-          "Only an integration administrator can change how Hermes reviews commands.",
+          "Only an integration administrator can change how WildBots reviews commands.",
           { code: "approval_policy_forbidden" },
         );
       const current = await request(req, { operation: "approval_settings" });
-      // Hermes set to never ask stays a choice made in Hermes; turning review on here would quietly start asking again.
       if (current.mode === "off")
-        throw httpError(
-          409,
-          "Hermes doesn't ask before commands for this assistant. Change that in Hermes.",
-          { code: "approvals_off" },
-        );
+        throw httpError(409, "Command approvals are turned off for this assistant.", {
+          code: "approvals_off",
+        });
       return settings(
         req,
         await request(req, { operation: "approval_mode", mode: autoReview ? "smart" : "manual" }),

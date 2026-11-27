@@ -7,9 +7,11 @@ import type { AddVaultLogin, ProfileVault, VaultSourceName } from "../shared/vau
 import { FormMessage } from "./ui/form-message";
 import "./vault.css";
 
+const SECRET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
 function validOrigin(value: string) {
   try {
-    const url = new URL(value);
+    const url = new URL(value.trim());
     return (
       ["https:", "http:"].includes(url.protocol) &&
       !url.username &&
@@ -23,8 +25,13 @@ function validOrigin(value: string) {
   }
 }
 
+function validSecretName(value: string) {
+  return SECRET_NAME.test(value.trim());
+}
+
 export function VaultPanel({ botId }: { botId: string }) {
   const addButton = useRef<HTMLButtonElement>(null);
+  const addSecretButton = useRef<HTMLButtonElement>(null);
   const reloadButton = useRef<HTMLButtonElement>(null);
   const removeButtons = useRef(new Map<string, HTMLButtonElement>());
   const keepButton = useRef<HTMLButtonElement>(null);
@@ -32,18 +39,25 @@ export function VaultPanel({ botId }: { botId: string }) {
   const returnToUnlock = useRef<VaultSourceName | null>(null);
   const returnToRemove = useRef<string | null>(null);
   const returnToAdd = useRef(false);
+  const returnToAddSecret = useRef(false);
   const returnToReload = useRef(false);
   const removePromptId = useId();
+  const removeSecretPromptId = useId();
   const errorId = useId();
   const errorMessage = useRef<HTMLParagraphElement>(null);
   const lockButtons = useRef(new Map<VaultSourceName, HTMLButtonElement>());
   const [uncertain, setUncertain] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [addingSecret, setAddingSecret] = useState(false);
   const [remove, setRemove] = useState<string | null>(null);
+  const [removeSecret, setRemoveSecret] = useState<string | null>(null);
   const [unlock, setUnlock] = useState<VaultSourceName | null>(null);
   const [password, setPassword] = useState("");
+  const [otpSecret, setOtpSecret] = useState("");
+  const [secretName, setSecretName] = useState("");
+  const [secretValue, setSecretValue] = useState("");
   const [master, setMaster] = useState("");
-  const [form, setForm] = useState<Omit<AddVaultLogin, "password">>({
+  const [form, setForm] = useState<Omit<AddVaultLogin, "password" | "otpSecret">>({
     label: "",
     origin: "",
     identifier: "",
@@ -52,50 +66,53 @@ export function VaultPanel({ botId }: { botId: string }) {
   const path = routeUrl("GET /bots/:id/vault", { id: botId });
   const vaultResource = useResource<ProfileVault>(path, {
     errorMessage: () =>
-      "Could not load this Hermes profile's logins. Check the connection and reload.",
+      "Could not load this assistant's saved logins and secrets. Check the connection and reload.",
     onData: () => setUncertain(false),
   });
   const { data: vault, loading } = vaultResource;
   const action = useAction();
   const { busy } = action;
   const error = action.error || vaultResource.error;
+  const clearSecretFields = () => {
+    setPassword("");
+    setOtpSecret("");
+    setSecretValue("");
+    setMaster("");
+  };
   useEffect(() => {
-    const clear = () => {
-      setPassword("");
-      setMaster("");
-    };
     const hidden = () => {
-      if (document.visibilityState === "hidden") clear();
+      if (document.visibilityState === "hidden") clearSecretFields();
     };
     document.addEventListener("visibilitychange", hidden);
-    window.addEventListener("pagehide", clear);
+    window.addEventListener("pagehide", clearSecretFields);
     return () => {
       document.removeEventListener("visibilitychange", hidden);
-      window.removeEventListener("pagehide", clear);
+      window.removeEventListener("pagehide", clearSecretFields);
     };
   }, []);
   // Reloading is how a person reviews an uncertain change, so it retires that warning.
   function reload() {
     returnToReload.current = true;
-    setPassword("");
-    setMaster("");
+    clearSecretFields();
     action.setError("");
     void vaultResource.reload();
   }
   async function mutate(work: () => Promise<unknown>, success: string) {
     if (loading || uncertain) return;
-    setPassword("");
-    setMaster("");
+    clearSecretFields();
     await action.run(work, {
       success,
       onSuccess: () => {
         setRemove(null);
+        setRemoveSecret(null);
         setUnlock(null);
         setAdding(false);
+        setAddingSecret(false);
+        setSecretName("");
         void vaultResource.reload();
       },
       onError: (cause) => {
-        // Definite 4xx rejections (other than ambiguous 409 state conflicts) mean Hermes refused
+        // Definite 4xx rejections (other than ambiguous 409 state conflicts) mean the server refused
         // before mutating the vault, so report the reason without locking the panel.
         if (
           cause instanceof ApiError &&
@@ -106,11 +123,15 @@ export function VaultPanel({ botId }: { botId: string }) {
           return `${cause.message} Secret fields have been cleared.`;
         }
         setUncertain(true);
-        return "Hermes could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared.";
+        return "WildBots could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared.";
       },
     });
   }
   const disabled = busy || loading || uncertain;
+  const trimmedOrigin = form.origin.trim();
+  const originInvalid = trimmedOrigin.length > 0 && !validOrigin(trimmedOrigin);
+  const trimmedSecretName = secretName.trim();
+  const secretNameInvalid = trimmedSecretName.length > 0 && !validSecretName(trimmedSecretName);
   useEffect(() => {
     if (busy || loading) return;
     if (uncertain) {
@@ -124,7 +145,7 @@ export function VaultPanel({ botId }: { botId: string }) {
       returnToReload.current = false;
       return;
     }
-    if (remove) {
+    if (remove || removeSecret) {
       keepButton.current?.focus();
       return;
     }
@@ -149,7 +170,12 @@ export function VaultPanel({ botId }: { botId: string }) {
       (!disabled ? addButton.current : reloadButton.current)?.focus();
       returnToAdd.current = false;
     }
-  }, [remove, adding, unlock, busy, loading, disabled, uncertain]);
+    if (!addingSecret && returnToAddSecret.current) {
+      (!disabled ? addSecretButton.current : reloadButton.current)?.focus();
+      returnToAddSecret.current = false;
+    }
+  }, [remove, removeSecret, adding, addingSecret, unlock, busy, loading, disabled, uncertain]);
+  const secrets = vault?.secrets ?? [];
   return (
     <section className="vault-panel">
       <div className="vault-heading">
@@ -162,18 +188,41 @@ export function VaultPanel({ botId }: { botId: string }) {
             disabled={disabled}
             onClick={() => {
               returnToAdd.current = true;
+              returnToAddSecret.current = false;
               returnToUnlock.current = null;
               returnToRemove.current = null;
               setRemove(null);
+              setRemoveSecret(null);
+              setAddingSecret(false);
               if (!adding)
                 setForm({ label: "", origin: "", identifier: "", identifierType: "email" });
               setAdding(!adding);
-              setPassword("");
-              setMaster("");
+              clearSecretFields();
               setUnlock(null);
             }}
           >
             Add login
+          </button>
+          <button
+            ref={addSecretButton}
+            type="button"
+            aria-expanded={addingSecret}
+            disabled={disabled}
+            onClick={() => {
+              returnToAddSecret.current = true;
+              returnToAdd.current = false;
+              returnToUnlock.current = null;
+              returnToRemove.current = null;
+              setRemove(null);
+              setRemoveSecret(null);
+              setAdding(false);
+              if (!addingSecret) setSecretName("");
+              setAddingSecret(!addingSecret);
+              clearSecretFields();
+              setUnlock(null);
+            }}
+          >
+            Add secret
           </button>
           <button
             ref={reloadButton}
@@ -188,15 +237,15 @@ export function VaultPanel({ botId }: { botId: string }) {
         </div>
       </div>
       <p className="muted">
-        Manage this assistant's Hermes vault. Passwords stay out of your conversation and draft;
-        usernames and labels are visible metadata.
+        Manage this assistant's encrypted WildBots vault. Passwords and secrets stay out of your
+        conversation and draft; usernames, labels, and secret names are visible metadata.
       </p>
       {vault && (
         <p className="capability-note">
-          <strong>Profile: {vault.profile}.</strong> {vault.notice}
+          <strong>Assistant: {vault.profile}.</strong> {vault.notice}
         </p>
       )}
-      {loading && <p role="status">Loading Hermes vault...</p>}
+      {loading && <p role="status">Loading WildBots vault...</p>}
       {error && (
         <FormMessage ref={errorMessage} id={errorId} tone="error">
           {error}
@@ -209,16 +258,25 @@ export function VaultPanel({ botId }: { botId: string }) {
           autoComplete="off"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!validOrigin(form.origin)) {
+            const normalizedOrigin = form.origin.trim();
+            if (!validOrigin(normalizedOrigin)) {
               action.setError(
                 "Enter the website address through the hostname, such as https://example.com.",
               );
               return;
             }
-            const input = { ...form, password };
+            const trimmedOtp = otpSecret.trim();
+            const input: AddVaultLogin = {
+              label: form.label.trim(),
+              origin: normalizedOrigin,
+              identifierType: form.identifierType,
+              identifier: form.identifier.trim(),
+              password,
+              ...(trimmedOtp ? { otpSecret: trimmedOtp } : {}),
+            };
             void mutate(
               () => request("POST /bots/:id/vault/logins", { params: { id: botId }, body: input }),
-              "Login saved in Hermes.",
+              "Login saved in WildBots.",
             );
           }}
         >
@@ -240,14 +298,24 @@ export function VaultPanel({ botId }: { botId: string }) {
               required
               type="url"
               maxLength={2048}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              aria-invalid={originInvalid || undefined}
               value={form.origin}
               disabled={disabled}
               onChange={(event) => setForm({ ...form, origin: event.target.value })}
               placeholder="https://example.com"
             />
           </label>
+          {originInvalid && (
+            <FormMessage tone="error">
+              Enter the website address through the hostname, such as https://example.com.
+            </FormMessage>
+          )}
           <p className="muted">
-            Use the exact website, such as https://example.com, without a page path. Hermes checks
+            Use the exact website, such as https://example.com, without a page path. WildBots checks
             the website before filling credentials.
           </p>
           <label>
@@ -277,6 +345,9 @@ export function VaultPanel({ botId }: { botId: string }) {
               required
               maxLength={1000}
               autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
               value={form.identifier}
               disabled={disabled}
               onChange={(event) => setForm({ ...form, identifier: event.target.value })}
@@ -290,16 +361,38 @@ export function VaultPanel({ botId }: { botId: string }) {
               maxLength={4096}
               autoComplete="off"
               autoCorrect="off"
+              autoCapitalize="off"
               spellCheck={false}
               value={password}
               disabled={disabled}
               onChange={(event) => setPassword(event.target.value)}
             />
           </label>
+          <label>
+            Authenticator secret (optional)
+            <input
+              type="password"
+              maxLength={4000}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={otpSecret}
+              disabled={disabled}
+              onChange={(event) => setOtpSecret(event.target.value)}
+              placeholder="Base32 TOTP setup key"
+            />
+          </label>
           <div className="actions">
             <button
               className="primary"
-              disabled={disabled || !password || !validOrigin(form.origin)}
+              disabled={
+                disabled ||
+                !form.label.trim() ||
+                !form.identifier.trim() ||
+                !password ||
+                !validOrigin(form.origin)
+              }
             >
               {busy ? "Saving..." : "Save login"}
             </button>
@@ -308,7 +401,94 @@ export function VaultPanel({ botId }: { botId: string }) {
               disabled={busy}
               onClick={() => {
                 setAdding(false);
-                setPassword("");
+                clearSecretFields();
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+      {addingSecret && (
+        <form
+          className="vault-form"
+          autoComplete="off"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const normalizedName = secretName.trim();
+            if (!validSecretName(normalizedName)) {
+              action.setError(
+                "Secret names use letters, numbers, dots, dashes, and underscores, up to 128 characters.",
+              );
+              return;
+            }
+            const value = secretValue;
+            void mutate(
+              () =>
+                request("POST /bots/:id/vault/secrets", {
+                  params: { id: botId },
+                  body: { name: normalizedName, value },
+                }),
+              "Secret saved in WildBots.",
+            );
+          }}
+        >
+          <label>
+            Secret name
+            <input
+              autoFocus
+              required
+              maxLength={128}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              aria-invalid={secretNameInvalid || undefined}
+              value={secretName}
+              disabled={disabled}
+              onChange={(event) => setSecretName(event.target.value)}
+              placeholder="API_TOKEN"
+            />
+          </label>
+          {secretNameInvalid && (
+            <FormMessage tone="error">
+              Secret names use letters, numbers, dots, dashes, and underscores, up to 128
+              characters.
+            </FormMessage>
+          )}
+          <label>
+            Secret value
+            <input
+              required
+              type="password"
+              maxLength={20000}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={secretValue}
+              disabled={disabled}
+              onChange={(event) => setSecretValue(event.target.value)}
+            />
+          </label>
+          <p className="muted">
+            Encrypted at rest and available to this assistant's tools by name. Saving an existing
+            name replaces its value.
+          </p>
+          <div className="actions">
+            <button
+              className="primary"
+              disabled={disabled || !validSecretName(secretName) || !secretValue}
+            >
+              {busy ? "Saving..." : "Save secret"}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setAddingSecret(false);
+                setSecretName("");
+                clearSecretFields();
               }}
             >
               Cancel
@@ -329,7 +509,7 @@ export function VaultPanel({ botId }: { botId: string }) {
                   <h4>{item.label}</h4>
                   <small className="vault-source-tag">
                     {item.backend === "local"
-                      ? "Hermes vault"
+                      ? "WildBots vault"
                       : item.backend === "onepassword"
                         ? "1Password"
                         : "Bitwarden"}
@@ -341,7 +521,7 @@ export function VaultPanel({ botId }: { botId: string }) {
                 {item.canRemove &&
                   (remove === item.id ? (
                     <div className="vault-remove-confirmation">
-                      <p id={removePromptId}>Remove {item.label} from Hermes?</p>
+                      <p id={removePromptId}>Remove {item.label} from WildBots?</p>
                       <div className="actions">
                         <button
                           aria-describedby={removePromptId}
@@ -354,7 +534,7 @@ export function VaultPanel({ botId }: { botId: string }) {
                                 request("DELETE /bots/:id/vault/logins/:itemId", {
                                   params: { id: botId, itemId: item.id },
                                 }),
-                              "Login removed from Hermes.",
+                              "Login removed from WildBots.",
                             )
                           }
                         >
@@ -381,6 +561,7 @@ export function VaultPanel({ botId }: { botId: string }) {
                       disabled={disabled}
                       onClick={() => {
                         returnToRemove.current = item.id;
+                        setRemoveSecret(null);
                         setRemove(item.id);
                       }}
                     >
@@ -391,7 +572,74 @@ export function VaultPanel({ botId }: { botId: string }) {
             ))}
           </div>
           <div>
-            <h3>Hermes vault sources</h3>
+            <h3>Saved secrets</h3>
+            {!secrets.length && (
+              <p className="muted">No saved API keys or custom secrets for this assistant.</p>
+            )}
+            {secrets.map((secret) => (
+              <article className="vault-entry" key={secret.name}>
+                <div className="vault-entry-heading">
+                  <h4>
+                    <code>{secret.name}</code>
+                  </h4>
+                  <small className="vault-source-tag">WildBots vault</small>
+                </div>
+                {secret.canRemove &&
+                  (removeSecret === secret.name ? (
+                    <div className="vault-remove-confirmation">
+                      <p id={removeSecretPromptId}>Remove secret {secret.name} from WildBots?</p>
+                      <div className="actions">
+                        <button
+                          aria-describedby={removeSecretPromptId}
+                          type="button"
+                          className="danger"
+                          disabled={disabled}
+                          onClick={() =>
+                            void mutate(
+                              () =>
+                                request("DELETE /bots/:id/vault/secrets/:name", {
+                                  params: { id: botId, name: secret.name },
+                                }),
+                              "Secret removed from WildBots.",
+                            )
+                          }
+                        >
+                          Remove secret
+                        </button>
+                        <button
+                          ref={keepButton}
+                          type="button"
+                          aria-describedby={removeSecretPromptId}
+                          disabled={busy}
+                          onClick={() => setRemoveSecret(null)}
+                        >
+                          Keep secret
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      ref={(node) => {
+                        const key = `secret:${secret.name}`;
+                        if (node) removeButtons.current.set(key, node);
+                        else removeButtons.current.delete(key);
+                      }}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => {
+                        returnToRemove.current = `secret:${secret.name}`;
+                        setRemove(null);
+                        setRemoveSecret(secret.name);
+                      }}
+                    >
+                      Remove...
+                    </button>
+                  ))}
+              </article>
+            ))}
+          </div>
+          <div>
+            <h3>Vault sources</h3>
             {vault.sources.map((source) => (
               <div className="vault-source" key={source.name}>
                 <div className="vault-source-summary">
@@ -401,11 +649,11 @@ export function VaultPanel({ botId }: { botId: string }) {
                       {!source.installed
                         ? "CLI is not installed"
                         : source.name === "local"
-                          ? "Available to Hermes in this profile"
+                          ? "Available to this assistant"
                           : !source.enabled
                             ? "Disabled"
                             : source.unlocked
-                              ? "Unlocked for this profile"
+                              ? "Unlocked for this assistant"
                               : "Locked"}
                     </p>
                   </div>
@@ -441,13 +689,15 @@ export function VaultPanel({ botId }: { botId: string }) {
                         disabled={disabled}
                         onClick={() => {
                           returnToAdd.current = false;
+                          returnToAddSecret.current = false;
                           returnToRemove.current = null;
                           setRemove(null);
+                          setRemoveSecret(null);
                           returnToUnlock.current = source.name;
                           setUnlock(source.name);
-                          setMaster("");
-                          setPassword("");
+                          clearSecretFields();
                           setAdding(false);
+                          setAddingSecret(false);
                         }}
                       >
                         Unlock
@@ -491,7 +741,7 @@ export function VaultPanel({ botId }: { botId: string }) {
                             params: { id: botId, source: source.name },
                             body: { password: value },
                           }),
-                        "Vault source unlocked for this profile.",
+                        "Vault source unlocked for this assistant.",
                       );
                     }}
                   >
@@ -502,6 +752,9 @@ export function VaultPanel({ botId }: { botId: string }) {
                         required
                         type="password"
                         autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
                         maxLength={4096}
                         value={master}
                         disabled={disabled}

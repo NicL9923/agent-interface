@@ -28,7 +28,7 @@ struct ModelCatalogSections: View {
           }.buttonStyle(.borderless).accessibilityLabel("Refresh models").disabled(loading)
         }
       }.frame(minHeight: 44)
-      if loading { ProgressView("Loading models from Hermes…") }
+      if loading { ProgressView("Loading models…") }
       if let error {
         ErrorBanner(message: error)
         Button("Retry loading models") { Task { await load() } }
@@ -114,7 +114,7 @@ struct ModelCatalogSections: View {
     else {
       VStack(alignment: .leading, spacing: 4) {
         controls
-        Text("Reconnect in Hermes to use this model").font(.footnote).foregroundStyle(Palette.muted)
+        Text("Check provider credentials to use this model").font(.footnote).foregroundStyle(Palette.muted)
       }
     }
   }
@@ -327,9 +327,9 @@ struct InferenceChoice: View {
 /// The catalog rules that mirror the web selector, kept apart from the views so they can be tested.
 enum ModelPickerRules {
   static let favoriteLimit = 100
-  static let noModelsForProvider = "No models reported. Check this connection in Hermes."
-  static let noModelsReported = "No connected models were reported. Connect a provider in Hermes, then retry."
-  static let savedModelKept = "Your saved model is kept. Hermes did not include it in the current catalog."
+  static let noModelsForProvider = "No models reported. Check this provider's connection."
+  static let noModelsReported = "No connected models were reported. Configure a provider credential, then retry."
+  static let savedModelKept = "Your saved model is kept. It was not included in the current model catalog."
   /// Refresh has nothing to refresh during a load error, where Retry is offered, or with an empty catalog.
   static func refreshVisible(error: String?, providerCount: Int) -> Bool { error == nil && providerCount > 0 }
   /// Starring is its own save, so only a pending save or a full list blocks it, not a blocked model change.

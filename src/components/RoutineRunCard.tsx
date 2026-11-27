@@ -103,7 +103,7 @@ export const RoutineRunCard = memo(function RoutineRunCard({
           {run.status === "failed" && run.error && <p className="routine-run-error">{run.error}</p>}
           {run.deliveryFailed && (
             <p className="routine-run-note">
-              Hermes couldn't deliver this output where the routine sends it.
+              WildBots couldn't deliver this output where the routine sends it.
             </p>
           )}
           {output.error ? (
@@ -118,8 +118,8 @@ export const RoutineRunCard = memo(function RoutineRunCard({
             <div className="routine-run-output">
               {output.data.previewOnly && (
                 <p className="routine-run-note">
-                  Hermes saved a preview of this script run. The full output stays in its cron
-                  output files.
+                  Only a preview was captured for this script run. The full output stays in the
+                  server cron output files.
                 </p>
               )}
               {!output.data.messages.length && (

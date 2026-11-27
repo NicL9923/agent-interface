@@ -191,7 +191,7 @@ it("explains a missing integration add-on without attempting a connection change
   delete s.runtime.integrationRequest;
   const response = await s.app.inject({ url: "/api/integrations?profile=ranch", headers: s.admin });
   expect(response.statusCode).toBe(409);
-  expect(response.json().error).toContain("installed Hermes add-on");
+  expect(response.json().error).toContain("Integrations are unavailable");
   expect(s.integrationRequest).not.toHaveBeenCalled();
 });
 

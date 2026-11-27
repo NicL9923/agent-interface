@@ -579,4 +579,163 @@ describe("native harness configuration", () => {
       }),
     ).rejects.toThrow("WILDBOTS_WORKSPACE_ROOT is required");
   });
+
+  it("coordinates live MCP secret_request and vault_request_login through attention and encrypted storage", async () => {
+    const { app, store, headers, claude, create, send } = await boot();
+    const scout = await create("Vault Scout", "claude-code");
+
+    const callMcp = async (
+      server: { url?: string; headers?: Record<string, string> },
+      name: string,
+      args: Record<string, unknown>,
+    ) => {
+      const response = await fetch(server.url!, {
+        method: "POST",
+        headers: { ...server.headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: randomUUID(),
+          method: "tools/call",
+          params: { name, arguments: args },
+        }),
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        result?: { content: { type: string; text: string }[]; isError?: boolean };
+      };
+    };
+
+    await send(scout.id, "Connect my weather account.");
+    await until(() => claude.opened.length === 1, "turn to open");
+    const mcpServer = claude.opened[0].spec.mcpServers![0];
+
+    const initResp = await fetch(mcpServer.url!, {
+      method: "POST",
+      headers: { ...mcpServer.headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "init",
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1" },
+        },
+      }),
+    });
+    expect(initResp.status).toBe(200);
+
+    // 1. Assistant invokes secret_request via WildBots MCP.
+    const secretCall = callMcp(mcpServer, "secret_request", {
+      name: "WEATHER_API_KEY",
+      prompt: "Enter your Weather API key.",
+    });
+
+    let pendingId = "";
+    let pendingSecure: { epoch: string; sessionId: string; method: string } | undefined;
+    await until(async () => {
+      const conv = (
+        await app.inject({ url: `/api/bots/${scout.id}/conversation`, headers })
+      ).json() as {
+        activity: { state: string };
+        attention: {
+          id: string;
+          secure?: { epoch: string; sessionId: string; method: string; envVar?: string };
+        }[];
+      };
+      const item = conv.attention.find((entry) => entry.secure?.method === "secret");
+      if (conv.activity.state === "blocked" && item?.secure) {
+        pendingId = item.id;
+        pendingSecure = item.secure;
+        return true;
+      }
+      return false;
+    }, "blocked secret attention item");
+
+    const secretCanary = "sk-e2e-weather-canary-9876";
+    const answerResp = await app.inject({
+      method: "POST",
+      url: `/api/bots/${scout.id}/secure-requests/${pendingId}`,
+      headers,
+      payload: {
+        epoch: pendingSecure!.epoch,
+        sessionId: pendingSecure!.sessionId,
+        method: "secret",
+        value: secretCanary,
+      },
+    });
+    expect(answerResp.statusCode).toBe(200);
+    expect(answerResp.json()).toEqual({ status: "ok" });
+
+    const secretResult = await secretCall;
+    expect(secretResult.result?.isError).not.toBe(true);
+    expect(JSON.stringify(secretResult)).not.toContain(secretCanary);
+    expect(
+      await store.secrets.getSecret({ botId: scout.id, shared: false }, "WEATHER_API_KEY"),
+    ).toBe(secretCanary);
+
+    // 2. Assistant invokes vault_request_login via WildBots MCP.
+    const loginCall = callMcp(mcpServer, "vault_request_login", {
+      origin: "https://weather.example.test",
+      label: "Weather Portal",
+      purpose: "Sign in to fetch hourly forecasts.",
+    });
+
+    let loginReqId = "";
+    let loginSecure: { epoch: string; sessionId: string; origin?: string } | undefined;
+    await until(async () => {
+      const conv = (
+        await app.inject({ url: `/api/bots/${scout.id}/conversation`, headers })
+      ).json() as {
+        activity: { state: string };
+        attention: {
+          id: string;
+          secure?: { epoch: string; sessionId: string; method: string; origin?: string };
+        }[];
+      };
+      const item = conv.attention.find((entry) => entry.secure?.method === "vault.save_login");
+      if (conv.activity.state === "blocked" && item?.secure) {
+        loginReqId = item.id;
+        loginSecure = item.secure;
+        return true;
+      }
+      return false;
+    }, "blocked login attention item");
+
+    const pwCanary = "weather-login-password-canary";
+    const loginAnswer = await app.inject({
+      method: "POST",
+      url: `/api/bots/${scout.id}/secure-requests/${loginReqId}`,
+      headers,
+      payload: {
+        epoch: loginSecure!.epoch,
+        sessionId: loginSecure!.sessionId,
+        method: "vault.save_login",
+        identifier: "farmer@example.test",
+        password: pwCanary,
+        origin: loginSecure!.origin,
+      },
+    });
+    expect(loginAnswer.statusCode).toBe(200);
+    const loginResult = await loginCall;
+    expect(loginResult.result?.isError).not.toBe(true);
+    expect(JSON.stringify(loginResult)).not.toContain(pwCanary);
+
+    // Overview lists both the saved login and the named secret without values.
+    const vaultResp = await app.inject({ url: `/api/bots/${scout.id}/vault`, headers });
+    expect(vaultResp.statusCode).toBe(200);
+    const vaultJson = vaultResp.json();
+    expect(vaultJson.items).toHaveLength(1);
+    expect(vaultJson.items[0]).toMatchObject({
+      label: "Weather Portal",
+      origin: "https://weather.example.test",
+      identifier: "farmer@example.test",
+    });
+    expect(vaultJson.secrets).toHaveLength(1);
+    expect(vaultJson.secrets[0].name).toBe("WEATHER_API_KEY");
+    expect(JSON.stringify(vaultJson)).not.toContain(secretCanary);
+    expect(JSON.stringify(vaultJson)).not.toContain(pwCanary);
+
+    claude.session.complete("All connected.");
+  });
 });

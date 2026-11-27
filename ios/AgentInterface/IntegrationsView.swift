@@ -190,7 +190,7 @@ struct IntegrationsView: View {
                 else if field.kind == "secret" { SecureField(field.label, text: fieldBinding(field.key)) }
                 else { TextField(field.label, text: fieldBinding(field.key)).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(field.kind == "url" ? .URL : .default) }
               }
-            } footer: { Text("Credentials stay with Hermes. Secret fields are cleared after saving.") }
+            } footer: { Text("Credentials stay encrypted in WildBots. Secret fields are cleared after saving.") }
             if let error { Text(error).foregroundStyle(.red) }
             Button("Connect") { Task { await operate(connection, "connect"); if error == nil { editing = nil; fields = [:] } } }
               .disabled(busy || connection.setup.contains { $0.required && (fields[$0.key] ?? "").trimmingCharacters(in: .whitespaces).isEmpty })
@@ -249,7 +249,7 @@ struct IntegrationsView: View {
             }
           }
         }
-        if catalog.connections.isEmpty { Text("Hermes has not reported connections for this assistant.").foregroundStyle(.secondary) }
+        if catalog.connections.isEmpty { Text("No connections are configured for this assistant yet.").foregroundStyle(.secondary) }
         if catalog.canManage {
           Section { Button("Add custom MCP connection", systemImage: "plus") { custom = true } }
         }

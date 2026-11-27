@@ -22,17 +22,14 @@ export async function installIntegrationsRoutes(
 ) {
   const request = async (input: IntegrationRequest) => {
     if (!runtime.integrationRequest)
-      throw httpError(
-        409,
-        "The installed Hermes add-on needs integration support. Ask the installer to update and qualify it.",
-      );
+      throw httpError(409, "Integrations are unavailable on this runtime.");
     return runtime.integrationRequest(input);
   };
   const manage = (req: FastifyRequest) => {
     if (!options.canManage(req))
       throw httpError(
         403,
-        "Only a household integration administrator can change shared Hermes connections.",
+        "Only a household integration administrator can change shared connections.",
       );
   };
   apiRoute(app, "GET /integrations", {}, async (req) => ({
@@ -153,10 +150,7 @@ export async function installIntegrationsRoutes(
     async (req, input): Promise<ConnectionRequestResult> => {
       const params = z.object({ id: profile, requestId }).strict().parse(req.params);
       if (!runtime.connectionRequest)
-        throw httpError(
-          409,
-          "The installed Hermes add-on needs connection request support. Ask the installer to update and qualify it.",
-        );
+        throw httpError(409, "Connection requests are unavailable on this runtime.");
       if (input.decision === "connected") {
         const catalog = (await request({
           operation: "list",
@@ -180,7 +174,7 @@ export async function installIntegrationsRoutes(
         requestId: params.requestId,
       });
       if (result?.status !== "ok" && result?.status !== "expired")
-        throw httpError(502, "Hermes returned an invalid answer for this connection request");
+        throw httpError(502, "WildBots returned an invalid answer for this connection request");
       return { status: result.status };
     },
   );

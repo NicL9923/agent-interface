@@ -276,7 +276,7 @@ private final class AutomationFixtureServer: @unchecked Sendable {
     XCTAssertEqual(sent.url?.path, path + "/skills/lock")
     XCTAssertEqual(try body(sent) as NSDictionary, ["name": "ranch/fences", "locked": true] as NSDictionary)
     XCTAssertEqual(control.value?.skills.installed.first?.locked, true)
-    XCTAssertEqual(control.notice, "Saved in Hermes.")
+    XCTAssertEqual(control.notice, "Saved in WildBots.")
   }
   func testDetailRevisionDrivesDecisionsAndTruncatedDiffCannotBeApproved() throws {
     let list: HermesAutomationOverview = try APIClient.decode(overview(), from: path)

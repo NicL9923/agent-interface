@@ -682,7 +682,7 @@ describe("approval settings", () => {
     });
     expect([paused.statusCode, paused.json().error]).toEqual([
       409,
-      "Hermes is being upgraded. Automation changes are paused.",
+      "WildBots is being upgraded. Automation changes are paused.",
     ]);
     expect((await s.app.inject({ url, headers: s.first })).json().allowlist).toEqual(["SQL DROP"]);
   });
@@ -697,7 +697,7 @@ describe("approval settings", () => {
     });
     expect([forbidden.statusCode, forbidden.json().error]).toEqual([
       403,
-      "Only an integration administrator can change how Hermes reviews commands.",
+      "Only an integration administrator can change how WildBots reviews commands.",
     ]);
     expect(s.policy.mode).toBe("manual");
     const on = await s.app.inject({
@@ -735,7 +735,7 @@ describe("approval settings", () => {
     });
     expect([off.statusCode, off.json().error]).toEqual([
       409,
-      "Hermes doesn't ask before commands for this assistant. Change that in Hermes.",
+      "Command approvals are turned off for this assistant.",
     ]);
     expect(s.policy.mode).toBe("off");
   });

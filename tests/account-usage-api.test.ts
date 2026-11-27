@@ -233,7 +233,7 @@ it("keeps answering when one assistant or one account cannot be read", async () 
   const body = (await s.get()).json() as { accounts: UsageAccount[]; unavailableBots: string[] };
   expect(body.unavailableBots).toEqual(["garden"]);
   const claude = body.accounts.find((row) => row.key === CLAUDE)!;
-  expect(claude.unavailableReason).toBe("Hermes could not read this account's limits right now.");
+  expect(claude.unavailableReason).toBe("WildBots could not read this account's limits right now.");
   expect(claude.windows).toEqual([]);
 });
 

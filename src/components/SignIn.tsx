@@ -90,7 +90,7 @@ export function SignIn() {
               <p>Open the WildBots project folder and run the guided setup:</p>
               <SetupCommand />
               <p>
-                It checks Hermes and saves your connection privately. Choose Google sign-in for the
+                It configures your WildBots server privately. Choose Google sign-in for the
                 household, or local test accounts for development.
               </p>
               <p className="muted">

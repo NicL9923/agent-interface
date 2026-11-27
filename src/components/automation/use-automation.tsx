@@ -23,7 +23,7 @@ export function useAutomation(botId: string) {
   const change = <T,>(
     send: () => Promise<T>,
     onRefused?: () => void,
-    successNotice = "Saved in Hermes.",
+    successNotice = "Saved.",
   ): Promise<T | undefined> => {
     if (uncertain || loading) return Promise.resolve(undefined);
     return action.run(async ({ current }) => {
@@ -86,7 +86,7 @@ export function Status({ control }: { control: Controls }) {
   return (
     <>
       <div className="automation-toolbar">
-        <span className="muted">Managed by Hermes</span>
+        <span className="muted">Managed by WildBots</span>
         {/* aria-disabled, not disabled: a disabled button can't take focus, and keyboard users wait on this one while a change or refresh is busy. */}
         <Button
           aria-disabled={control.loading || control.busy || undefined}

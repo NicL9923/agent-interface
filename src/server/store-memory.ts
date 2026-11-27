@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { Conflict, NotFound } from "../shared/errors.js";
+import { createHash, randomUUID } from "node:crypto";
+import { Conflict, InvalidInput, NotFound } from "../shared/errors.js";
 import type {
   LearningItemStatus,
   MemoryKind,
@@ -217,6 +217,29 @@ function revisionFromRow(row: RevisionRow, target: Revision["target"]): Revision
 const targetOf = (revisionId: string): Revision["target"] | undefined =>
   revisionId.startsWith("mrev_") ? "memory" : revisionId.startsWith("srev_") ? "skill" : undefined;
 const missingRevision = () => new NotFound("That change no longer exists.");
+
+/** Stable 64-hex identifier for a memory entry, matching the `/bots/:id/memory` wire contract. */
+export function memoryEntryDigest(entryId: string): string {
+  return createHash("sha256").update(entryId).digest("hex");
+}
+
+function humanEntryKey(kind: MemoryKind, content: string, taken: Set<string>): string {
+  const prefix = kind === "user" ? "user" : "note";
+  const slug = content
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replace(/-+$/, "");
+  const base = slug ? `${prefix}.${slug}` : `${prefix}.entry`;
+  if (!taken.has(base) && base.length <= MEMORY_LIMITS.keyChars) return base;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const suffix = randomUUID().slice(0, 8);
+    const candidate = `${base.slice(0, MEMORY_LIMITS.keyChars - suffix.length - 1)}-${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${prefix}.${randomUUID().replace(/-/g, "")}`;
+}
 
 /** The text a model sees for one entry: continuation lines indented so an entry stays one list item. */
 const entryLine = (entry: Pick<MemoryEntry, "key" | "content">) =>
@@ -877,6 +900,194 @@ export class MemorySkillsRepository {
         "UPDATE bot_skill_revisions SET status='applied',decided_at=?,decided_by=? WHERE id=?",
       )
       .run(now, actor, row.id);
+  }
+
+  /** Stable 64-hex optimistic-concurrency revision for all active entries of one kind. */
+  documentRevision(botId: string, kind: MemoryKind): string {
+    const entries = this.listEntries(botId, "active").filter((entry) => entry.kind === kind);
+    const payload = entries.map((entry) => [entry.id, entry.version, entry.content]);
+    return createHash("sha256")
+      .update(JSON.stringify([kind, payload]))
+      .digest("hex");
+  }
+
+  /**
+   * Direct human edit of one memory document (`memory` or `user`), checked against `expectedRevision`,
+   * prompt-injection guards, and the bot's memory character budget. Every add/edit/retire records an
+   * applied revision so history and undo stay accurate.
+   */
+  replaceEntriesByKind(
+    botId: string,
+    kind: MemoryKind,
+    incoming: readonly { id?: string; text: string }[],
+    expectedRevision: string,
+    actor = "human",
+  ): { changed: boolean; revision: string } {
+    return this.database.transaction(() => {
+      if (this.documentRevision(botId, kind) !== expectedRevision)
+        throw new Conflict("Memory changed since you loaded it. Reload and try again.");
+      const normalized = incoming.map((item) => {
+        const text = item.text.trim();
+        const refused = checkText("Memory", text, MEMORY_LIMITS.entryChars);
+        if (refused) throw new InvalidInput(refused);
+        return { id: item.id, text };
+      });
+      const existing = this.listEntries(botId, "active").filter((entry) => entry.kind === kind);
+      const byDigest = new Map<string, MemoryEntry>();
+      for (const entry of existing) {
+        byDigest.set(memoryEntryDigest(entry.id), entry);
+        byDigest.set(entry.id, entry);
+      }
+      const prevKindChars = existing.reduce((sum, entry) => sum + entry.content.length, 0);
+      const otherKindChars = this.activeMemoryChars(botId) - prevKindChars;
+      const nextKindChars = normalized.reduce((sum, item) => sum + item.text.length, 0);
+      const settings = this.settings(botId);
+      if (
+        nextKindChars > prevKindChars &&
+        otherKindChars + nextKindChars > settings.memoryCharBudget
+      )
+        throw new InvalidInput(
+          `That would put memory over its ${settings.memoryCharBudget}-character budget. Shorten or remove an entry first.`,
+        );
+
+      const seenExistingIds = new Set<string>();
+      const updates: { entry: MemoryEntry; text: string }[] = [];
+      const additions: string[] = [];
+      for (const item of normalized) {
+        const match = item.id ? byDigest.get(item.id) : undefined;
+        if (match && !seenExistingIds.has(match.id)) {
+          seenExistingIds.add(match.id);
+          if (match.content !== item.text) updates.push({ entry: match, text: item.text });
+        } else {
+          additions.push(item.text);
+        }
+      }
+      const retirements = existing.filter((entry) => !seenExistingIds.has(entry.id));
+      let changed = false;
+
+      for (const entry of retirements) {
+        const now = this.now();
+        this.insertMemoryRevision({
+          id: `mrev_${randomUUID()}`,
+          entry,
+          action: "retire",
+          status: "applied",
+          previous: { content: entry.content, status: entry.status },
+          next: { content: entry.content, status: "retired" },
+          reason: "Removed in memory settings.",
+          sourceTaskId: null,
+          actor,
+          now,
+          decidedBy: actor,
+        });
+        this.db
+          .prepare(
+            "UPDATE bot_memory_entries SET status='retired',version=?,updated_at=? WHERE id=?",
+          )
+          .run(entry.version + 1, now, entry.id);
+        changed = true;
+      }
+
+      for (const { entry, text } of updates) {
+        const now = this.now();
+        this.insertMemoryRevision({
+          id: `mrev_${randomUUID()}`,
+          entry,
+          action: "update",
+          status: "applied",
+          previous: { content: entry.content, status: entry.status },
+          next: { content: text, status: "active" },
+          reason: "Edited in memory settings.",
+          sourceTaskId: null,
+          actor,
+          now,
+          decidedBy: actor,
+        });
+        this.db
+          .prepare("UPDATE bot_memory_entries SET content=?,version=?,updated_at=? WHERE id=?")
+          .run(text, entry.version + 1, now, entry.id);
+        changed = true;
+      }
+
+      if (additions.length) {
+        const takenKeys = new Set(this.listEntries(botId).map((entry) => entry.key));
+        for (const content of additions) {
+          const now = this.now();
+          const key = humanEntryKey(kind, content, takenKeys);
+          takenKeys.add(key);
+          const entry: MemoryEntry = {
+            id: `mem_${randomUUID()}`,
+            botId,
+            kind,
+            key,
+            content,
+            sourceTaskId: null,
+            status: "active",
+            version: 0,
+            createdAt: now,
+            updatedAt: now,
+          };
+          this.db
+            .prepare(
+              "INSERT INTO bot_memory_entries(id,bot_id,kind,key,content,source_task_id,status,version,created_at,updated_at) VALUES(?,?,?,?,?,NULL,'active',1,?,?)",
+            )
+            .run(entry.id, botId, kind, key, content, now, now);
+          this.insertMemoryRevision({
+            id: `mrev_${randomUUID()}`,
+            entry,
+            action: "create",
+            status: "applied",
+            previous: null,
+            next: { content, status: "active" },
+            reason: "Added in memory settings.",
+            sourceTaskId: null,
+            actor,
+            now,
+            decidedBy: actor,
+          });
+          changed = true;
+        }
+      }
+
+      return { changed, revision: this.documentRevision(botId, kind) };
+    });
+  }
+
+  /** Direct human deletion (retirement) of one active entry by its digest or raw ID. */
+  retireEntryByDigest(
+    botId: string,
+    kind: MemoryKind,
+    entryId: string,
+    expectedRevision: string,
+    actor = "human",
+  ): { revision: string } {
+    return this.database.transaction(() => {
+      if (this.documentRevision(botId, kind) !== expectedRevision)
+        throw new Conflict("Memory changed since you loaded it. Reload and try again.");
+      const existing = this.listEntries(botId, "active").find(
+        (entry) =>
+          entry.kind === kind && (entry.id === entryId || memoryEntryDigest(entry.id) === entryId),
+      );
+      if (!existing) throw new NotFound("That memory entry no longer exists.");
+      const now = this.now();
+      this.insertMemoryRevision({
+        id: `mrev_${randomUUID()}`,
+        entry: existing,
+        action: "retire",
+        status: "applied",
+        previous: { content: existing.content, status: existing.status },
+        next: { content: existing.content, status: "retired" },
+        reason: "Deleted in memory settings.",
+        sourceTaskId: null,
+        actor,
+        now,
+        decidedBy: actor,
+      });
+      this.db
+        .prepare("UPDATE bot_memory_entries SET status='retired',version=?,updated_at=? WHERE id=?")
+        .run(existing.version + 1, now, existing.id);
+      return { revision: this.documentRevision(botId, kind) };
+    });
   }
 
   // Undo

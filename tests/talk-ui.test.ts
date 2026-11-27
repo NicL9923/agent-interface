@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { existsSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyMock } from "./helpers/mock-of";
@@ -368,5 +370,31 @@ describe("voice picker", () => {
     );
     expect(write).toHaveBeenCalledWith("/bots/ranch/voice", { voice: "rex" }, "PUT");
     expect(saved).toHaveBeenCalledWith("rex");
+  });
+
+  it("plays and stops Grok Voice sample clips and ships all five preview audio files", async () => {
+    for (const voice of ["eve", "ara", "rex", "sal", "leo"]) {
+      const file = resolve(process.cwd(), "public", "voice-previews", `${voice}.m4a`);
+      expect(existsSync(file), `${voice}.m4a should exist`).toBe(true);
+      expect(statSync(file).size, `${voice}.m4a should be non-empty`).toBeGreaterThan(1000);
+    }
+
+    const mount = mountRoot();
+    await mount.render(
+      createElement(VoicePicker, {
+        botId: "ranch",
+        name: "Ranch Hand",
+        voice: "eve",
+        onSaved: vi.fn(),
+      }),
+    );
+    await press("Play Eve sample");
+    expect(players[0]!.url).toBe("/voice-previews/eve.m4a");
+    await press("Play Rex sample");
+    expect(players[0]!.pause).toHaveBeenCalled();
+    expect(players[1]!.url).toBe("/voice-previews/rex.m4a");
+    await press("Stop Rex sample");
+    expect(players[1]!.pause).toHaveBeenCalled();
+    await act(async () => mount.root.unmount());
   });
 });

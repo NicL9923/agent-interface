@@ -100,7 +100,7 @@ export async function installAccountUsageRoutes(
   const providers = new Map<string, string>();
   function experience() {
     if (!runtime.experienceRequest)
-      throw httpError(409, "Account usage needs the current qualified Hermes integration.");
+      throw httpError(409, "Account usage is unavailable on this runtime.");
     return runtime.experienceRequest.bind(runtime);
   }
   async function groups(userId: string, maxAge: number) {
@@ -171,7 +171,7 @@ export async function installAccountUsageRoutes(
         fetchedAt: new Date(now()).toISOString(),
         windows: [],
         details: [],
-        unavailableReason: "Hermes could not read this account's limits right now.",
+        unavailableReason: "WildBots could not read this account's limits right now.",
         bankedResets: 0,
         identity: null,
       };

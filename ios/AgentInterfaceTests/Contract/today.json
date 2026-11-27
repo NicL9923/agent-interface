@@ -167,7 +167,7 @@
         "approvals": [],
         "attention": [],
         "files": [],
-        "error": "Could not read this Hermes conversation. Open it to reconnect."
+        "error": "Could not read this conversation. Open it to reconnect."
       }
     ],
     "events": [

@@ -83,7 +83,7 @@ export interface ProfileMemory {
   botId: string;
   profile: string;
   scope: "profile";
-  owner: "Hermes";
+  owner: "WildBots" | "Hermes";
   documents: MemoryDocument[];
   notice: string;
   refresh?: {

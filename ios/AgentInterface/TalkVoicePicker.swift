@@ -206,15 +206,13 @@ struct TalkVoiceSection: View {
         .disabled(model.saving != nil)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("voiceOption.\(voice)")
-        if !isGrok {
-          let playing = model.playing == voice
-          Button { model.toggleSample(voice) } label: {
-            Image(systemName: playing ? "stop.fill" : "play.fill").foregroundStyle(Palette.accent).frame(minWidth: 44, minHeight: 44)
-          }
-          .buttonStyle(.borderless)
-          .accessibilityLabel(playing ? "Stop \(TalkVoice.title(voice)) sample" : "Play \(TalkVoice.title(voice)) sample")
-          .accessibilityIdentifier("voiceSample.\(voice)")
+        let playing = model.playing == voice
+        Button { model.toggleSample(voice) } label: {
+          Image(systemName: playing ? "stop.fill" : "play.fill").foregroundStyle(Palette.accent).frame(minWidth: 44, minHeight: 44)
         }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(playing ? "Stop \(TalkVoice.title(voice)) sample" : "Play \(TalkVoice.title(voice)) sample")
+        .accessibilityIdentifier("voiceSample.\(voice)")
       }
       if model.failed == voice {
         Text("This sample could not play.").font(.caption).foregroundStyle(Palette.danger)

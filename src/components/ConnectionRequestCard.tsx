@@ -98,7 +98,7 @@ export function ConnectionRequestCard({
         setError(
           cause instanceof ApiError && cause.status < 500
             ? cause.message
-            : `Couldn't reach Hermes. Try ${decision === "connected" ? "Continue" : "Not now"} again.`,
+            : `Couldn't reach WildBots. Try ${decision === "connected" ? "Continue" : "Not now"} again.`,
         );
     } finally {
       if (live.current) setSending(null);
@@ -143,7 +143,7 @@ export function ConnectionRequestCard({
         <dd>{request.reason}</dd>
       </dl>
       <p className="muted handoff-source">
-        In {name}'s words. Credentials go straight to Hermes, never into this chat.
+        In {name}'s words. Credentials go straight to WildBots, never into this chat.
       </p>
       {missing ? (
         <p className="handoff-state" role="status">

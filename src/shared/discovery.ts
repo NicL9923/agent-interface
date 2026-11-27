@@ -80,7 +80,7 @@ export function receipt(call: ToolCall) {
     (typeof call.result === "string"
       ? call.result
       : call.result === undefined
-        ? "Hermes did not report an outcome."
+        ? "The tool did not report an outcome."
         : JSON.stringify(call.result, null, 2));
   const links = Object.entries(data)
     .filter(

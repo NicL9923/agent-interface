@@ -58,7 +58,7 @@ export function errorHandler(options: { production?: boolean } = {}) {
       error:
         err.statusCode && (err.statusCode < 500 || err.expose)
           ? err.message
-          : "The Hermes operation could not be completed",
+          : "The operation could not be completed",
       detail: options.production ? undefined : err.message,
       code: err.code,
       confirmRequired: err.confirmRequired,

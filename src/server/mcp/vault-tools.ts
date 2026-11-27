@@ -1,8 +1,14 @@
 import { createHmac } from "node:crypto";
 import { z } from "zod";
 import type { BrowserPageBridge } from "../harness/native-computer.js";
+import {
+  normalizeVaultOrigin,
+  type CodeInputOutcome,
+  type LoginInputOutcome,
+} from "../harness/native-vault.js";
 import type { SecretRepository } from "../store-secrets.js";
 import { toolDefinition, toolFailure, toolResult, type McpToolProvider } from "./mac-tools.js";
+import type { McpBotContext } from "./wildbots-mcp.js";
 
 const LOGIN_PREFIX = "login:";
 
@@ -26,6 +32,17 @@ const fillTotpSchema = z.strictObject({
   login_id: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/, "Provide a valid login_id."),
   submit: z.boolean().optional(),
 });
+const requestLoginSchema = z.strictObject({
+  origin: z.string().trim().min(1).max(2048),
+  label: z.string().trim().min(1).max(200),
+  purpose: z.string().trim().min(1).max(1000),
+});
+const requestCodeSchema = z.strictObject({
+  origin: z.string().trim().min(1).max(2048),
+  site: z.string().trim().min(1).max(200).optional(),
+  hint: z.string().trim().min(1).max(500).optional(),
+  submit: z.boolean().optional(),
+});
 
 const listDef = toolDefinition(
   "vault_list_logins",
@@ -41,6 +58,16 @@ const fillTotpDef = toolDefinition(
   "vault_totp_fill",
   "Fill a current 6-digit TOTP authenticator code from a saved login directly into the shared browser when the current origin matches.",
   fillTotpSchema,
+);
+const requestLoginDef = toolDefinition(
+  "vault_request_login",
+  "Ask a household member to securely save a website login into this assistant's encrypted WildBots vault. Returns only the saved login handle and username — never the password.",
+  requestLoginSchema,
+);
+const requestCodeDef = toolDefinition(
+  "vault_request_code",
+  "Ask a household member for a one-time verification code and fill it directly into the shared browser when the current origin matches — the code is never returned to the model.",
+  requestCodeSchema,
 );
 
 /** RFC 4648 base32 decode for TOTP secrets (ignores spaces, hyphens, and case). */
@@ -125,13 +152,28 @@ function parseStoredLogin(name: string, raw: string): StoredLogin | undefined {
 export function createVaultMcpTools({
   secrets,
   browserBridge,
+  onRequestLogin,
+  onRequestCode,
   now = Date.now,
 }: {
   secrets: SecretRepository;
   browserBridge?: BrowserPageBridge;
+  onRequestLogin?: (
+    input: { origin: string; label: string; purpose: string; context: McpBotContext },
+    signal: AbortSignal,
+  ) => Promise<LoginInputOutcome>;
+  onRequestCode?: (
+    input: { site?: string; hint?: string; context: McpBotContext },
+    signal: AbortSignal,
+  ) => Promise<CodeInputOutcome>;
   now?: () => number;
 }): McpToolProvider {
-  const definitions = browserBridge ? [listDef, fillLoginDef, fillTotpDef] : [listDef];
+  const definitions = [
+    listDef,
+    ...(browserBridge ? [fillLoginDef, fillTotpDef] : []),
+    ...(onRequestLogin ? [requestLoginDef] : []),
+    ...(browserBridge && onRequestCode ? [requestCodeDef] : []),
+  ];
 
   function loadLogins(botId: string): StoredLogin[] {
     const rows = secrets.listScopeSecrets({ kind: "bot", id: botId }, LOGIN_PREFIX);
@@ -146,6 +188,7 @@ export function createVaultMcpTools({
   return {
     listTools: () => definitions,
     async callTool(ctx, name, args, signal) {
+      const effectiveSignal = signal ?? new AbortController().signal;
       try {
         if (name === "vault_list_logins") {
           const parsed = emptySchema.safeParse(args ?? {});
@@ -226,6 +269,76 @@ export function createVaultMcpTools({
             value: {
               loginId: login.id,
               label: login.label,
+              origin: filled.origin,
+              filledCode: filled.filledCode,
+              submitted: filled.submitted,
+            },
+          });
+        }
+
+        if (name === "vault_request_login") {
+          if (!onRequestLogin)
+            return toolFailure("unavailable", "Interactive login requests are not configured.");
+          const parsed = requestLoginSchema.safeParse(args ?? {});
+          if (!parsed.success)
+            return toolFailure("invalid_arguments", parsed.error.issues[0].message);
+          const origin = normalizeVaultOrigin(parsed.data.origin);
+          const outcome = await onRequestLogin(
+            {
+              origin,
+              label: secrets.redactForBot(ctx.botId, parsed.data.label),
+              purpose: secrets.redactForBot(ctx.botId, parsed.data.purpose),
+              context: ctx,
+            },
+            effectiveSignal,
+          );
+          if (outcome.status === "cancelled")
+            return toolResult({ ok: true, value: { status: "cancelled" } });
+          return toolResult({
+            ok: true,
+            value: {
+              status: "saved",
+              loginId: outcome.loginId,
+              label: outcome.label,
+              origin: outcome.origin,
+              identifier: outcome.identifier,
+            },
+          });
+        }
+
+        if (name === "vault_request_code") {
+          if (!browserBridge || !onRequestCode)
+            return toolFailure("browser_unavailable", "The shared browser is not configured.");
+          const parsed = requestCodeSchema.safeParse(args ?? {});
+          if (!parsed.success)
+            return toolFailure("invalid_arguments", parsed.error.issues[0].message);
+          const origin = normalizeVaultOrigin(parsed.data.origin);
+          const outcome = await onRequestCode(
+            {
+              site: parsed.data.site
+                ? secrets.redactForBot(ctx.botId, parsed.data.site)
+                : new URL(origin).host,
+              hint: parsed.data.hint
+                ? secrets.redactForBot(ctx.botId, parsed.data.hint)
+                : undefined,
+              context: ctx,
+            },
+            effectiveSignal,
+          );
+          if (outcome.status === "cancelled")
+            return toolResult({ ok: true, value: { status: "cancelled" } });
+          const filled = await browserBridge.fillTotpField(
+            {
+              expectedOrigins: [origin],
+              code: outcome.code,
+              submit: parsed.data.submit ?? false,
+            },
+            signal,
+          );
+          return toolResult({
+            ok: true,
+            value: {
+              status: "filled",
               origin: filled.origin,
               filledCode: filled.filledCode,
               submitted: filled.submitted,

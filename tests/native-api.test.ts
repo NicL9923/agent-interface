@@ -930,7 +930,7 @@ it("reports Apple's refusal with its status and reason, which a route never forw
     });
     const response = await app.inject({ url: "/escaped" });
     expect(response.statusCode).toBe(502);
-    expect(response.json()).toEqual({ error: "The Hermes operation could not be completed" });
+    expect(response.json()).toEqual({ error: "The operation could not be completed" });
   } finally {
     await app.close();
     sender.close();

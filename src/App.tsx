@@ -696,10 +696,9 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       hint: pendingCreate
         ? undefined
         : !catalog?.canSend
-          ? (catalog?.reason ??
-            "The Hermes group coordinator must be running to make a group chat.")
+          ? (catalog?.reason ?? "Group chats are unavailable right now.")
           : boot && !boot.connection.connected
-            ? "Reconnect to Hermes to make a group chat."
+            ? "Reconnect to WildBots to make a group chat."
             : undefined,
     };
   }, [rooms, roomId, pendingCreate, selectRoom, newGroup, catalog, boot, roomsSaved]);

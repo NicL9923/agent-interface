@@ -36,7 +36,7 @@ export async function installDiscoveryRoutes(
   }
   function experience() {
     if (!runtime.experienceRequest)
-      throw httpError(409, "Search and usage require the current qualified Hermes integration.");
+      throw httpError(409, "Search and usage are unavailable on this runtime.");
     return runtime.experienceRequest.bind(runtime);
   }
   apiRoute(app, "GET /search", {}, async (req) => {

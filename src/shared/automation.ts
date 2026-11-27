@@ -61,7 +61,7 @@ export interface SkillDiff {
 }
 export interface AutomationOverview {
   botId: string;
-  owner: "Hermes";
+  owner: "WildBots" | "Hermes";
   canManageTriggers?: boolean;
   canManageLearningPolicy?: boolean;
   goals: AutomationSupport & {

@@ -345,7 +345,7 @@ export function RoutineManager({
             value={form.schedule}
             onChange={(e) => setForm({ ...form, schedule: e.target.value })}
             className="routine-schedule"
-            placeholder="Hermes schedule expression"
+            placeholder="Cron, interval (every 30m), or ISO time"
           />
         </label>
         <RoutineSchedulePreview

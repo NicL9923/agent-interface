@@ -598,7 +598,7 @@ export const Conversation = memo(function Conversation({
                           {retry.checking
                             ? retry.resendable
                               ? "Checking whether the retry arrived… Retry sends the same request again, so it can't run twice."
-                              : "Hermes hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box."
+                              : "WildBots hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box."
                             : "Retry sends your last message again. Your draft stays as it is."}
                         </p>
                       )}

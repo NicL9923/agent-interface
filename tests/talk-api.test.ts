@@ -406,7 +406,7 @@ describe("talk ask", () => {
   // Hermes saved nothing, so no read will ever show the request; the person hears why at once.
   it("answers a typed stop that ended Hermes's voice chat with its message at once, also when asked again", async () => {
     const requestId = randomUUID(),
-      message = "Hermes ended its voice chat. Nothing was sent to the assistant.";
+      message = "Voice chat ended. Nothing was sent to the assistant.";
     // Hermes's lookup of the settled request carries no turn.
     const s = await setup({
       receipt: (input) => ({
@@ -941,7 +941,7 @@ describe("talk answer states", () => {
     ).toEqual({ state: "refused", text: "Hermes ended its voice chat." });
     expect(talkAnswer({ ...accepted, turn: "none" }, run([]))).toEqual({
       state: "refused",
-      text: "Hermes ended its voice chat. Nothing was sent to the assistant.",
+      text: "Voice chat ended. Nothing was sent to the assistant.",
     });
   });
   it("keeps waiting while the run is unseen or running, and ignores other runs and unfinished text", () => {

@@ -95,8 +95,7 @@ export class SubmissionRepository {
     const receipt: SubmissionReceipt = {
       requestId: input.requestId,
       status: "uncertain",
-      message:
-        "Waiting for confirmed Hermes admission. This message will never be automatically resent.",
+      message: "Waiting for confirmed admission. This message will never be automatically resent.",
     };
     this.db
       .prepare("INSERT INTO submissions VALUES(?,?,?,?,?,?)")
