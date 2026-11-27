@@ -89,7 +89,26 @@ esac
     );
     makeExecutable(join(bin, "sw_vers"), "#!/usr/bin/env bash\necho '26A1'\n");
 
-    baseEnv = { ...gitEnv, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` };
+    const sanitizedEnv: NodeJS.ProcessEnv = { ...gitEnv };
+    for (const key of Object.keys(sanitizedEnv)) {
+      if (
+        ["AGENT_INTERFACE_", "TEST_RUNNER_", "SIMCTL_CHILD_", "SWIFT_", "XCODE_", "DYLD_"].some(
+          (prefix) => key.startsWith(prefix),
+        ) ||
+        [
+          "MAC_HEAVY_LOCK_OWNER",
+          "IOS_VALIDATION_FRESH",
+          "DEVELOPER_DIR",
+          "SDKROOT",
+          "CFLAGS",
+          "CXXFLAGS",
+          "LDFLAGS",
+        ].includes(key)
+      ) {
+        delete sanitizedEnv[key];
+      }
+    }
+    baseEnv = { ...sanitizedEnv, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` };
   });
 
   afterEach(() => {
