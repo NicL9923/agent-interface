@@ -26,13 +26,16 @@ import WidgetKit
   /// cold `actionClient()` actions (Shortcuts, Watch, Widgets) when no window is mounted.
   static func handleColdSessionExpiry(_ error: APIError, client: APIClient, token: String?) {
     guard error.isSessionExpired, let token else { return }
-    if let current = Self.client(), current.baseURL == client.baseURL {
-      guard current.token == token else { return }
+    // Require an authoritative match against the CURRENT active origin and credential (from an
+    // attached `AppStore` or `Self.client()`), never falling back to a detached client from an
+    // earlier server so a late 401 from server A can never wipe server B's shared state.
+    if let store = watchBridge.store, let activeAPI = store.api {
+      guard activeAPI.baseURL == client.baseURL, activeAPI.token == token else { return }
+    } else if let current = Self.client() {
+      guard current.baseURL == client.baseURL, current.token == token else { return }
       current.token = nil
-    } else if let store = watchBridge.store, store.api?.baseURL == client.baseURL {
-      guard store.api?.token == token else { return }
     } else {
-      guard client.token == token else { return }
+      return
     }
     try? SecureToken.save(nil, host: client.baseURL.absoluteString)
     client.token = nil

@@ -1009,12 +1009,15 @@ import os
     XCTAssertFalse(FileManager.default.fileExists(atPath: accountDir.path), "Cold expiry must remove NotificationSenders account folder")
     XCTAssertNil(NotificationPrefetchStore.readConfig(root: tempPrefetchRoot), "Cold expiry must clear NotificationPrefetchStore config")
 
-    // Cold action client (Shortcuts / Watch action with no window mounted) receiving 401 session_expired
-    // must also trigger `BackgroundRefresh.handleColdSessionExpiry` via `onSessionExpired`.
-    let coldActionClient = rejectServer.api(token: "cold-action-tok")
-    coldActionClient.onSessionExpired = { error, client, token in
-      BackgroundRefresh.handleColdSessionExpiry(error, client: client, token: token)
-    }
+    // Cold action client built via the production `NotificationController.makeActionClient` factory
+    // (NOT manually wiring `onSessionExpired`) receiving 401 session_expired must trigger full teardown.
+    FakeExchange.register(rejectServer)
+    let fakeSessionConfig = URLSessionConfiguration.ephemeral
+    fakeSessionConfig.protocolClasses = [FakeExchange.self]
+    let fakeSession = URLSession(configuration: fakeSessionConfig)
+    let coldActionClient = try XCTUnwrap(
+      NotificationController.makeActionClient(baseURL: rejectServer.origin, session: fakeSession, token: "cold-action-tok")
+    )
     BackgroundRefresh.client = { coldActionClient.token == nil ? nil : coldActionClient }
     XCTAssertTrue(WidgetSnapshotStore.write(cachedSnap, to: tempSnapshotURL))
     NotificationPrefetchStore.writeConfig(prefetchConfig, root: tempPrefetchRoot)
@@ -1023,12 +1026,35 @@ import os
       let _: EmptyResponse = try await coldActionClient.write("/routines/rt-1/run", [String: String]())
       XCTFail("Expected HTTP 401 session_expired from cold action")
     } catch {
-      // `onSessionExpired` fires automatically before throwing.
+      // Production `NotificationController.makeActionClient` wired `onSessionExpired`.
     }
     XCTAssertNil(coldActionClient.token)
     XCTAssertNil(WidgetSnapshotStore.read(from: tempSnapshotURL))
     XCTAssertEqual(coldTransport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
     XCTAssertNil(NotificationPrefetchStore.readConfig(root: tempPrefetchRoot))
+
+    // Late cold 401 from old server A after switching to server B must NOT wipe server B's shared state!
+    let serverBClient = APIClient(baseURL: URL(string: "https://server-b.invalid")!)
+    serverBClient.token = "server-b-tok"
+    let serverBScope = AppStore.scope(server: serverBClient.baseURL, userId: "u2")
+    let serverBSnap = WidgetSnapshot(scope: serverBScope, generatedAt: Date(), assistants: [])
+    XCTAssertTrue(WidgetSnapshotStore.write(serverBSnap, to: tempSnapshotURL))
+    let serverBPrefetch = NotificationPrefetchConfig(origin: serverBClient.baseURL.absoluteString, account: NotificationActions.accountMarker("u2"))
+    NotificationPrefetchStore.writeConfig(serverBPrefetch, root: tempPrefetchRoot)
+    coldTransport.contexts.removeAll()
+    BackgroundRefresh.client = { serverBClient }
+
+    let staleServerAClient = try XCTUnwrap(
+      NotificationController.makeActionClient(baseURL: rejectServer.origin, session: fakeSession, token: "stale-a-tok")
+    )
+    do {
+      let _: EmptyResponse = try await staleServerAClient.write("/routines/rt-1/run", [String: String]())
+      XCTFail("Expected HTTP 401 session_expired from stale server A")
+    } catch {}
+    XCTAssertEqual(serverBClient.token, "server-b-tok", "Late 401 from server A must not clear server B's token")
+    XCTAssertEqual(WidgetSnapshotStore.read(from: tempSnapshotURL)?.scope, serverBScope, "Late 401 from server A must not clear server B's widget snapshot")
+    XCTAssertTrue(coldTransport.contexts.isEmpty, "Late 401 from server A must not sign Watch out of server B")
+    XCTAssertEqual(NotificationPrefetchStore.readConfig(root: tempPrefetchRoot), serverBPrefetch, "Late 401 from server A must not clear server B's prefetch")
   }
 
   func testCriticalAlarmBatchStopsMidBatchOnSignOutAndReschedulesAfterToggleOffAndOn() async throws {
@@ -1287,6 +1313,14 @@ import os
       "Foreground session expiry must clear the persisted widget snapshot as well as Spotlight and Watch"
     )
     XCTAssertTrue(index.events.contains("deleteAll:true"))
+    // A delayed push-to-start Live Activity for the expired scope must be rejected and dismissed!
+    let liveController = LiveActivityController()
+    liveController.store = store
+    XCTAssertNil(liveController.signedInScope(), "Expired foreground store must not report a signed-in scope to LiveActivityController")
+    XCTAssertTrue(
+      LiveActivityController.shouldEnd(scope: startedScope, signedIn: liveController.signedInScope(), among: []),
+      "Delayed push-to-start Live Activity after session expiry must end immediately"
+    )
 
     // Deliver the late successful `/api/groups` response after session expiry.
     host.releaseGroups()

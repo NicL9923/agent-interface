@@ -134,17 +134,23 @@ struct LiveActivityStartRegistration: Encodable {
     signedIn != scope || running.contains { $0.scope == scope }
   }
   /// The loaded account, or before it loads, the account the saved sign-in belongs to. Nil when
-  /// nobody is signed in, as after an offline sign-out the server never heard about.
-  private func signedInScope() -> String? {
-    if let scope = store?.scope { return scope }
-    guard backgroundClient() != nil else { return nil }
-    return savedScope()
+  /// nobody is signed in, when signing in, or when the session has expired / lost its credential
+  /// so delayed push-to-start activities for an expired session are dismissed immediately.
+  func signedInScope() -> String? {
+    if let store {
+      if store.sessionExpired || store.signingIn { return nil }
+      if let scope = store.scope {
+        return store.api?.token != nil ? scope : nil
+      }
+    }
+    guard let bg = backgroundClient(), let scope = savedScope() else { return nil }
+    return WatchBridge.scopeMatchesCredential(scope, client: bg) ? scope : nil
   }
   var savedScope: () -> String? = { UserDefaults.standard.string(forKey: DeviceDefaults.signedInScope) }
 
   /// After a send the server accepted: show the assistant as starting right away.
   func sent(to botId: String) async {
-    guard let store, let api = store.api, let scope = store.scope, enabled, systemAllowed else { return }
+    guard let store, !store.sessionExpired, let api = store.api, api.token != nil, let scope = store.scope, enabled, systemAllowed else { return }
     unregisteredSends[botId] = Date()
     let token = api.token
     // A server that can start activities by push holds off while this app starts its own.

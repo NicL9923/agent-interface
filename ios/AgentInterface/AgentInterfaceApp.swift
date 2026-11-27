@@ -237,16 +237,26 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   var pendingURL: String? { didSet { if pendingURL != nil { navigationAt = Date(); navigationScope = store?.scope } } }
   /// Text typed into notifications' Reply, in arrival order, until a signed-in store can hold it for its draft.
   var pendingReplies: [NotificationReply] = []
-  /// The sign-in a notification action uses. After a launch in the background just for the action, the
-  /// store has not restored, so this falls back to the saved server address and the Keychain sign-in.
-  var actionClient: @MainActor () -> APIClient? = {
-    guard let host = UserDefaults.standard.string(forKey: DeviceDefaults.host), let url = try? ConnectionAddress.parse(host) else { return nil }
-    let api = APIClient(baseURL: url)
+  /// Builds a Keychain-backed `APIClient` for cold actions (Shortcuts, Watch, Widgets, notification
+  /// actions) and wires its `onSessionExpired` handler to cold session teardown.
+  static func makeActionClient(
+    baseURL: URL,
+    session: URLSession = .shared,
+    token: String? = nil
+  ) -> APIClient? {
+    let api = APIClient(baseURL: baseURL, session: session)
+    if let token { api.token = token }
     guard api.token != nil else { return nil }
     api.onSessionExpired = { error, client, token in
       BackgroundRefresh.handleColdSessionExpiry(error, client: client, token: token)
     }
     return api
+  }
+  /// The sign-in a notification action uses. After a launch in the background just for the action, the
+  /// store has not restored, so this falls back to the saved server address and the Keychain sign-in.
+  var actionClient: @MainActor () -> APIClient? = {
+    guard let host = UserDefaults.standard.string(forKey: DeviceDefaults.host), let url = try? ConnectionAddress.parse(host) else { return nil }
+    return NotificationController.makeActionClient(baseURL: url)
   }
   var deliverNotice: @MainActor (UNNotificationRequest) async -> Void = { try? await UNUserNotificationCenter.current().add($0) }
   /// The account the saved sign-in belongs to, before the store loads it.
