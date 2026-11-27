@@ -187,7 +187,9 @@ import os
     let bridge = WatchBridge(transport: transport, defaults: defaults)
     let store = AppStore()
     store.widgetSnapshotURL = nil
-    store.api = APIClient(baseURL: URL(string: "https://watch.invalid")!)
+    let api = APIClient(baseURL: URL(string: "https://watch.invalid")!)
+    api.token = "tok"
+    store.api = api
     store.bootstrap = try sampleBootstrap()
     let scope = try XCTUnwrap(store.scope)
     bridge.store = store
@@ -867,6 +869,29 @@ import os
     sameBefore.updateApplicationContext([WatchPayload.snapshotKey: snapData, WatchPayload.signedOutKey: false])
     let sameAfter = SystemWatchTransport(defaults: sameAccountDefaults, savedScope: { scope })
     XCTAssertEqual(sameAfter.authoritativeContextToFlush(), .snapshot(snapData))
+
+    // Expired session: `DeviceDefaults.signedInScope` is still set, but Keychain token is gone.
+    // Both pending snapshot replay AND cold refresh must reject and emit `.signedOut`.
+    let expiredScopeDefaults = isolatedDefaults()
+    expiredScopeDefaults.set(scope, forKey: DeviceDefaults.signedInScope)
+    let expiredScopeResolver: @MainActor () -> String? = {
+      WatchBridge.credentialBackedSavedScope(defaults: expiredScopeDefaults, hasCredential: { _ in false })
+    }
+    XCTAssertNil(expiredScopeResolver())
+    let expiredTransportDefaults = isolatedDefaults()
+    let beforeExpiry = SystemWatchTransport(defaults: expiredTransportDefaults, savedScope: { scope })
+    beforeExpiry.updateApplicationContext([WatchPayload.snapshotKey: snapData, WatchPayload.signedOutKey: false])
+    let afterExpiryRelaunch = SystemWatchTransport(defaults: expiredTransportDefaults, savedScope: expiredScopeResolver)
+    XCTAssertEqual(afterExpiryRelaunch.authoritativeContextToFlush(), .signedOut)
+
+    let expiredTransport = FakeWatchTransport()
+    let expiredBridge = WatchBridge(transport: expiredTransport, defaults: isolatedDefaults())
+    expiredBridge.savedScope = expiredScopeResolver
+    let expiredRefreshReply = await expiredBridge.handle(
+      rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(refreshAction)]
+    )
+    XCTAssertEqual(expiredRefreshReply["ok"] as? Bool, false)
+    XCTAssertEqual(expiredTransport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
   }
 
   func testCriticalAlarmBatchStopsMidBatchOnSignOutAndReschedulesAfterToggleOffAndOn() async throws {
@@ -946,13 +971,13 @@ import os
     var isHolding: Bool { lock.withLock { heldIndex != nil } }
   }
 
-  func testSpotlightSerializesSignOutBehindInFlightFirstIndex() {
+  func testSpotlightSerializesSignOutBehindInFlightFirstIndex() async {
     let defaults = isolatedDefaults()
     let index = DeferredSpotlight()
     let spotlight = AssistantSpotlight(index: index, defaults: defaults)
     let room = GroupRoom(room_id: "r1", name: "Private Room", members: [])
 
-    // 1. Sign-out with failed deleteAll records pendingClear so subsequent sign-out retries deletion.
+    // 1. Sign-out with failed deleteAll records pendingClear; signed-out launch `restore()` retries it!
     XCTAssertTrue(spotlight.syncGroups([room], scope: "scope-1"))
     XCTAssertTrue(index.isHolding)
     index.nextDeleteAllOk = false
@@ -962,15 +987,28 @@ import os
     XCTAssertEqual(index.events, ["index:group:r1", "deleteAll:false"])
     XCTAssertNil(defaults.data(forKey: "spotlight.groups"))
 
-    // Next sync(nil) must retry deleteAll because the previous clear failed!
+    // Signed-out relaunch via AppStore.restore() with a saved host and no Keychain token
+    // (the `else` branch that only fetches `/auth/config` and leaves `bootstrap == nil`) must
+    // retry the failed deleteAll.
     index.nextDeleteAllOk = true
-    XCTAssertTrue(spotlight.sync(nil))
+    let authServer = FakeServer { _ in .init(body: #"{"nativeAuthVersion":1,"providers":[]}"#) }
+    let noTokenAPI = authServer.api(token: "unused")
+    noTokenAPI.token = nil
+    let relaunchedStore = AppStore()
+    relaunchedStore.widgetSnapshotURL = nil
+    relaunchedStore.host = noTokenAPI.baseURL.absoluteString
+    relaunchedStore.api = noTokenAPI
+    relaunchedStore.spotlight = spotlight
+    await relaunchedStore.restore()
     XCTAssertEqual(index.events, ["index:group:r1", "deleteAll:false", "deleteAll:true"])
+    relaunchedStore.suspend()
 
-    // 2. Removing a room while its first index write is still in flight reads fresh state and deletes it.
+    // 2. Starting from a stored empty catalog, indexing a room and removing it while in flight
+    //    must delete the room cleanly (no TOCTOU fast-path skip).
     let defaults2 = isolatedDefaults()
     let index2 = DeferredSpotlight()
     let spotlight2 = AssistantSpotlight(index: index2, defaults: defaults2)
+    XCTAssertTrue(spotlight2.syncGroups([], scope: "scope-1"))
     XCTAssertTrue(spotlight2.syncGroups([room], scope: "scope-1"))
     XCTAssertTrue(index2.isHolding)
     XCTAssertTrue(spotlight2.syncGroups([], scope: "scope-1"))

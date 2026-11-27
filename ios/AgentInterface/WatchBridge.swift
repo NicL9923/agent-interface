@@ -38,7 +38,7 @@ enum WatchContext: Codable, Equatable, Sendable {
 
   init(
     defaults: UserDefaults = .standard,
-    savedScope: @escaping @MainActor () -> String? = { UserDefaults.standard.string(forKey: DeviceDefaults.signedInScope) }
+    savedScope: @escaping @MainActor () -> String? = { WatchBridge.credentialBackedSavedScope() }
   ) {
     self.defaults = defaults
     self.savedScope = savedScope
@@ -206,7 +206,31 @@ private final class SentReply: @unchecked Sendable {
     await BackgroundRefresh.refreshWidgets()
     return WidgetSnapshotStore.read()
   }
-  var savedScope: @MainActor () -> String? = { UserDefaults.standard.string(forKey: DeviceDefaults.signedInScope) }
+  /// Resolves `DeviceDefaults.signedInScope` ONLY when a live Keychain credential still exists for
+  /// that scope's server, preventing expired sessions (which delete the Keychain token while
+  /// retaining `signedInScope`) from replaying snapshots or serving cold Watch refreshes.
+  static func credentialBackedSavedScope(
+    defaults: UserDefaults = .standard,
+    hasCredential: @MainActor (String) -> Bool = { scope in
+      guard let client = NotificationController.shared.actionClient(), client.token != nil else { return false }
+      return scope.hasPrefix(client.baseURL.absoluteString + "|")
+    }
+  ) -> String? {
+    guard let scope = defaults.string(forKey: DeviceDefaults.signedInScope), !scope.isEmpty else { return nil }
+    return hasCredential(scope) ? scope : nil
+  }
+
+  var savedScope: @MainActor () -> String? = { WatchBridge.credentialBackedSavedScope() }
+
+  private func activeAuthenticatedScope() -> String? {
+    if let store {
+      if store.signingIn || store.sessionExpired { return nil }
+      if store.bootstrap != nil {
+        return store.api?.token != nil ? store.scope : nil
+      }
+    }
+    return savedScope()
+  }
 
   private static let dedupKey = "native.watch.handledActions"
   private static let dedupTTL: TimeInterval = 15 * 60
@@ -280,7 +304,7 @@ private final class SentReply: @unchecked Sendable {
     else {
       return ["ok": false, "error": "Unrecognized Watch request."]
     }
-    let activeScope = store?.scope ?? savedScope()
+    let activeScope = activeAuthenticatedScope()
     guard let activeScope, activeScope == action.scope else {
       sync(nil)
       return ["ok": false, "error": "Sign in to this account on iPhone first."]
@@ -295,7 +319,7 @@ private final class SentReply: @unchecked Sendable {
       let startEpoch = accountEpoch
       let latest = await refreshHandler()
       // Reject stale refresh replies if sign-out or account change occurred while awaiting.
-      let currentScope = store?.scope ?? savedScope()
+      let currentScope = activeAuthenticatedScope()
       guard accountEpoch == startEpoch, currentScope == activeScope else {
         return ["ok": false, "error": "Account changed while refreshing."]
       }

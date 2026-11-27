@@ -136,30 +136,35 @@ struct AssistantSpotlight {
   /// can never leave private titles indexed.
   @discardableResult func sync(_ snapshot: WidgetSnapshot?) -> Bool {
     guard let snapshot else {
-      let hadAny = defaults.bool(forKey: Self.pendingClearKey)
-        || Self.allKeys.contains { defaults.data(forKey: $0) != nil }
-        || queue.hasPendingWork
-      guard hadAny else { return false }
-      // Persist that a sign-out clear is owed so a failed `deleteAll` retries on the next
-      // sign-out or before the next account writes, even if an earlier first write had not yet
-      // written its bookkeeping.
-      defaults.set(true, forKey: Self.pendingClearKey)
-      let clearGeneration = queue.invalidate()
       let box = SentDefaults(defaults)
       let indexBox = SentIndex(index)
       let serialQueue = queue
-      queue.enqueue { done in
-        indexBox.index.deleteAll { ok in
-          if ok {
-            for key in Self.allKeys { box.defaults.removeObject(forKey: key) }
-            if serialQueue.isCurrent(clearGeneration) {
-              box.defaults.removeObject(forKey: Self.pendingClearKey)
+      return queue.enqueueIfNeeded(
+        invalidateBeforeEnqueue: true,
+        whenIdle: {
+          box.defaults.bool(forKey: Self.pendingClearKey)
+            || Self.allKeys.contains { box.defaults.data(forKey: $0) != nil }
+        },
+        onEnqueue: {
+          // Persist that a sign-out clear is owed so a failed `deleteAll` retries on the next
+          // signed-out launch or before the next account writes, even if an earlier first write
+          // had not yet written its bookkeeping.
+          box.defaults.set(true, forKey: Self.pendingClearKey)
+        },
+        makeWork: { clearGeneration in
+          { done in
+            indexBox.index.deleteAll { ok in
+              if ok {
+                for key in Self.allKeys { box.defaults.removeObject(forKey: key) }
+                if serialQueue.isCurrent(clearGeneration) {
+                  box.defaults.removeObject(forKey: Self.pendingClearKey)
+                }
+              }
+              done()
             }
           }
-          done()
         }
-      }
-      return true
+      )
     }
     let records = Dictionary(snapshot.assistants.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
     return syncCategory(key: Self.assistantsKey, kind: .assistant, scope: snapshot.scope, records: records)
@@ -205,75 +210,80 @@ struct AssistantSpotlight {
   }
 
   private func syncCategory(key: String, kind: SpotlightRecord.Kind, scope: String, records: [String: String]) -> Bool {
-    let currentStored = defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(Indexed.self, from: $0) }
     let next = Indexed(scope: scope, records: records)
-    if next == currentStored, !defaults.bool(forKey: Self.pendingClearKey), !queue.hasPendingWork { return false }
-    let writeGeneration = queue.currentGeneration
     let box = SentDefaults(defaults)
     let indexBox = SentIndex(index)
     let serialQueue = queue
     let encodedNext = try? JSONEncoder().encode(next)
 
-    queue.enqueue { done in
-      guard serialQueue.isCurrent(writeGeneration) else { done(); return }
-      // Read the last applied state inside the queued operation so earlier in-flight writes are
-      // always reflected when computing removals and deltas.
-      let stored = box.defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(Indexed.self, from: $0) }
-      let pendingClear = box.defaults.bool(forKey: Self.pendingClearKey)
-      let scopeChanged = stored != nil && stored?.scope != next.scope
-      let needsFullClear = pendingClear || scopeChanged
-      if !needsFullClear, next == stored {
-        done()
-        return
-      }
-      let changed = next.records.filter {
-        needsFullClear ? true : (stored?.records[$0.key] != $0.value)
-      }
-      let toIndex = changed.map { SpotlightRecord(id: $0.key, title: $0.value, kind: kind) }.sorted { $0.id < $1.id }
-      let shouldIndex = !toIndex.isEmpty || kind == .assistant
-
-      let finishIndex: @Sendable () -> Void = {
-        guard serialQueue.isCurrent(writeGeneration) else { done(); return }
-        if shouldIndex {
-          indexBox.index.index(toIndex) { ok in
-            if ok, serialQueue.isCurrent(writeGeneration), let encodedNext {
-              box.defaults.set(encodedNext, forKey: key)
-            }
+    return queue.enqueueIfNeeded(
+      whenIdle: {
+        if box.defaults.bool(forKey: Self.pendingClearKey) { return true }
+        let currentStored = box.defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(Indexed.self, from: $0) }
+        return next != currentStored
+      },
+      makeWork: { writeGeneration in
+        { done in
+          guard serialQueue.isCurrent(writeGeneration) else { done(); return }
+          // Read the last applied state inside the queued operation so earlier in-flight writes are
+          // always reflected when computing removals and deltas.
+          let stored = box.defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(Indexed.self, from: $0) }
+          let pendingClear = box.defaults.bool(forKey: Self.pendingClearKey)
+          let scopeChanged = stored != nil && stored?.scope != next.scope
+          let needsFullClear = pendingClear || scopeChanged
+          if !needsFullClear, next == stored {
             done()
+            return
           }
-        } else {
-          if serialQueue.isCurrent(writeGeneration), let encodedNext {
-            box.defaults.set(encodedNext, forKey: key)
+          let changed = next.records.filter {
+            needsFullClear ? true : (stored?.records[$0.key] != $0.value)
           }
-          done()
-        }
-      }
+          let toIndex = changed.map { SpotlightRecord(id: $0.key, title: $0.value, kind: kind) }.sorted { $0.id < $1.id }
+          let shouldIndex = !toIndex.isEmpty || kind == .assistant
 
-      // A pending sign-out clear or a different account clears the entire domain first.
-      if needsFullClear {
-        indexBox.index.deleteAll { ok in
-          guard ok else { done(); return }
-          for allKey in Self.allKeys { box.defaults.removeObject(forKey: allKey) }
-          if serialQueue.isCurrent(writeGeneration) {
-            box.defaults.removeObject(forKey: Self.pendingClearKey)
+          let finishIndex: @Sendable () -> Void = {
+            guard serialQueue.isCurrent(writeGeneration) else { done(); return }
+            if shouldIndex {
+              indexBox.index.index(toIndex) { ok in
+                if ok, serialQueue.isCurrent(writeGeneration), let encodedNext {
+                  box.defaults.set(encodedNext, forKey: key)
+                }
+                done()
+              }
+            } else {
+              if serialQueue.isCurrent(writeGeneration), let encodedNext {
+                box.defaults.set(encodedNext, forKey: key)
+              }
+              done()
+            }
           }
-          finishIndex()
-        }
-      } else if let stored {
-        let gone = stored.records.keys.filter { next.records[$0] == nil }.sorted()
-        if !gone.isEmpty {
-          indexBox.index.delete(ids: gone) { ok in
-            guard ok else { done(); return }
+
+          // A pending sign-out clear or a different account clears the entire domain first.
+          if needsFullClear {
+            indexBox.index.deleteAll { ok in
+              guard ok else { done(); return }
+              for allKey in Self.allKeys { box.defaults.removeObject(forKey: allKey) }
+              if serialQueue.isCurrent(writeGeneration) {
+                box.defaults.removeObject(forKey: Self.pendingClearKey)
+              }
+              finishIndex()
+            }
+          } else if let stored {
+            let gone = stored.records.keys.filter { next.records[$0] == nil }.sorted()
+            if !gone.isEmpty {
+              indexBox.index.delete(ids: gone) { ok in
+                guard ok else { done(); return }
+                finishIndex()
+              }
+            } else {
+              finishIndex()
+            }
+          } else {
             finishIndex()
           }
-        } else {
-          finishIndex()
         }
-      } else {
-        finishIndex()
       }
-    }
-    return true
+    )
   }
 }
 
@@ -286,25 +296,30 @@ private final class SpotlightSerialQueue: @unchecked Sendable {
   private var pending: [@Sendable (@escaping @Sendable () -> Void) -> Void] = []
   private var generation: UInt64 = 0
 
-  var hasPendingWork: Bool { lock.withLock { running || !pending.isEmpty } }
-  var currentGeneration: UInt64 { lock.withLock { generation } }
   func isCurrent(_ value: UInt64) -> Bool { lock.withLock { generation == value } }
 
-  @discardableResult func invalidate() -> UInt64 {
-    lock.withLock {
-      generation &+= 1
-      return generation
-    }
-  }
-
-  func enqueue(_ work: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void) {
-    let shouldStart = lock.withLock { () -> Bool in
-      pending.append(work)
+  /// Atomically checks idle state under `lock` and enqueues `work` so a finishing completion can
+  /// never write `UserDefaults` and drain `running` between the caller's state read and idle check.
+  func enqueueIfNeeded(
+    invalidateBeforeEnqueue: Bool = false,
+    whenIdle: () -> Bool,
+    onEnqueue: () -> Void = {},
+    makeWork: (UInt64) -> (@Sendable (@escaping @Sendable () -> Void) -> Void)
+  ) -> Bool {
+    let shouldStart = lock.withLock { () -> Bool? in
+      if !running && pending.isEmpty && !whenIdle() {
+        return nil
+      }
+      onEnqueue()
+      if invalidateBeforeEnqueue { generation &+= 1 }
+      pending.append(makeWork(generation))
       if running { return false }
       running = true
       return true
     }
+    guard let shouldStart else { return false }
     if shouldStart { drain() }
+    return true
   }
 
   private struct DrainState: Sendable {

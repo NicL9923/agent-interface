@@ -619,6 +619,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       api?.token = nil
       stopPolling()
       sessionExpired = true
+      WatchBridge.shared.sync(nil)
+      spotlight?.sync(nil)
     }
   }
 }

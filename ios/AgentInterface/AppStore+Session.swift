@@ -8,7 +8,11 @@ extension AppStore {
   /// Reopens the saved server. A stored sign-in goes straight to bootstrap, because
   /// `/auth/config` only matters for signing in and an outage there must not strand the person.
   func restore() async {
-    guard !host.isEmpty, !restoring else { return }
+    guard !restoring else { return }
+    if host.isEmpty {
+      spotlight?.sync(nil)
+      return
+    }
     restoring = true
     defer { restoring = false }
     do {
@@ -52,6 +56,8 @@ extension AppStore {
         // changed to. One with no poll yet starts here.
         if let api, api.token != nil, api === started || pollTask == nil { startPolling() }
       } else {
+        // Signed-out launch: retry any pending Spotlight clear (e.g., if `deleteAll` failed on sign-out).
+        spotlight?.sync(nil)
         try await ensureAuthConfig()
       }
     } catch { report(error) }
