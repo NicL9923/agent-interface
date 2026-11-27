@@ -1,9 +1,5 @@
-#!/usr/bin/env python3
-"""Run the full check battery in this worktree. The logic and the full description are in check_all.py."""
-import sys
-from pathlib import Path
+#!/usr/bin/env node
+/** Run the full check battery in this worktree. The logic is in check-all.mjs. */
+import { main } from "./check-all.mjs";
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_all import main  # noqa: E402
-
-sys.exit(main(sys.argv[1:]))
+void main().then((code) => process.exit(code));

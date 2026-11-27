@@ -46,7 +46,7 @@ export const defaultMinimumFreeBytes = 5 * GiB;
 export type StatFs = (path: string) => Promise<{ bavail: number; bsize: number }>;
 
 /**
- * The cloud metadata service. The host's nftables floor (.agents/tools/metadata-egress-floor.py)
+ * The cloud metadata service. The host's nftables floor (.agents/tools/metadata-egress-floor.mjs)
  * rejects the service user's connections to it, and these verdicts match that tool's.
  */
 export const metadataService = { v4: "169.254.169.254", v6: "fe80::a9fe:a9fe", port: 80 } as const;

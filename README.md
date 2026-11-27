@@ -15,7 +15,7 @@ This repository evolved through three distinct chapters:
    - **Vault-Safe Browser Sign-In:** Encrypted website logins (`bot_secrets` with AES-256-GCM) usable via `vault_list_logins`, `vault_login_fill`, and `vault_totp_fill` MCP tools — verifying exact origin match inside the browser page before filling, never exposing plaintext passwords or TOTP seeds to models or logs.
    - **Native Integrations & Custom MCP Manager:** Per-assistant API keys and custom HTTP MCP servers (`none` or encrypted `bearer` auth) managed through `/api/integrations*` and attached automatically to each assistant's harness sessions.
    - **Native Bot-to-Bot Delegation & Group Routine Delivery:** `delegationPolicy` enforcement, `message_bot` handoffs formatted as agent-exchange cards, Main Assistant activation & quiet `[SILENT]` check-ins, and scheduled routines delivering straight into group chats (with `@mention` wakeups).
-   - **Single-command Rollback-Safe Deploys:** [`scripts/deploy.py`](scripts/deploy.py) archives a clean git commit, builds client + Bun server bundle, writes `dist/previous-release.json` for zero-downtime asset continuity, atomically swaps `current`, verifies `/api/health/ready`, and rolls back automatically on failure.
+   - **Single-command Rollback-Safe Deploys:** [`scripts/deploy.ts`](scripts/deploy.ts) archives a clean git commit, builds client + Bun server bundle, writes `dist/previous-release.json` for zero-downtime asset continuity, atomically swaps `current`, verifies `/api/health/ready`, and rolls back automatically on failure.
 
 ## Household experience
 
@@ -113,7 +113,7 @@ pnpm run smoke:bun
 Deploy any git ref to a Linux host with atomic symlink swap, `dist/previous-release.json` asset continuity, health check, and automatic rollback:
 
 ```sh
-python3 scripts/deploy.py --host hermes-prod --ref main
+pnpm run deploy --host hermes-prod --ref main
 ```
 
 Use `--dry-run` to preview the exact commit and release name without touching the remote host. See [docs/Hosting.md](docs/Hosting.md) for systemd service setup, backups, environment variables, and operational notes.
@@ -139,11 +139,9 @@ The SwiftUI app lives in [`ios/`](ios/). It uses the same authenticated API, bot
 ## Validate
 
 ```sh
-pnpm run verify:ci          # lint, typecheck, build, and Vitest in parallel
+pnpm run verify:ci          # lint, format:check, typecheck, build, and Vitest in parallel
 pnpm run build:server:bun   # Bun server bundle
 pnpm run smoke:bun          # Bun runtime smoke test
-pnpm run test:py            # Python unit tests
-pnpm run lint:py            # Ruff check (Python 3.12 target)
 pnpm run test:e2e           # Playwright Chromium + WebKit smoke suite
 .agents/tools/check-all     # Full local validation gate (handles WebKit container on Fedora)
 ```

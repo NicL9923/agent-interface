@@ -145,7 +145,13 @@ it("requires explicit terminal opt-in and absolute private configuration", () =>
       COMPUTER_TERMINAL_ENABLED: "true",
       COMPUTER_STATE_DIR: "relative",
       COMPUTER_TERMINAL_CWD: "/workspace",
-      COMPUTER_PYTHON: "/usr/bin/python3",
+      COMPUTER_TERMINAL_RUNTIME: "/usr/local/bin/bun",
+    },
+    {
+      COMPUTER_TERMINAL_ENABLED: "true",
+      COMPUTER_STATE_DIR: "/private/terminal",
+      COMPUTER_TERMINAL_CWD: "/workspace",
+      COMPUTER_TERMINAL_RUNTIME: "relative/bun",
     },
   ])
     expect(() => loadConfig(env)).toThrow();
@@ -154,9 +160,13 @@ it("requires explicit terminal opt-in and absolute private configuration", () =>
       COMPUTER_TERMINAL_ENABLED: "true",
       COMPUTER_STATE_DIR: "/private/terminal",
       COMPUTER_TERMINAL_CWD: "/workspace",
-      COMPUTER_PYTHON: "/usr/bin/python3",
+      COMPUTER_TERMINAL_RUNTIME: "/usr/local/bin/bun",
     }).computerTerminal,
-  ).toEqual({ stateDirectory: "/private/terminal", cwd: "/workspace", python: "/usr/bin/python3" });
+  ).toEqual({
+    stateDirectory: "/private/terminal",
+    cwd: "/workspace",
+    runtime: "/usr/local/bin/bun",
+  });
 });
 
 it("defaults terminal administrators to integration administrators and keeps them inside the household", () => {

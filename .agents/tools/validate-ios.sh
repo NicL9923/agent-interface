@@ -77,13 +77,13 @@ for fixture in "$repo_dir"/.agents/fixtures/*.json; do
   variable="TEST_RUNNER_AGENT_INTERFACE_DESIGN_${name}_PATH"
   if [[ ! ${!variable+x} ]]; then export "$variable=$fixture"; fi
 done
-state_tool="$repo_dir/.agents/tools/ios-validation-state.py"
-source_before=$(python3 "$state_tool" source)
-inputs_before=$(python3 "$state_tool" key "$operation" "$simulator_id" ${request_options[@]+"${request_options[@]}"})
+state_tool="$repo_dir/.agents/tools/ios-validation-state.mjs"
+source_before=$(node "$state_tool" source)
+inputs_before=$(node "$state_tool" key "$operation" "$simulator_id" ${request_options[@]+"${request_options[@]}"})
 can_reuse=0
-if python3 "$state_tool" eligible "$operation" ${request_options[@]+"${request_options[@]}"}; then
+if node "$state_tool" eligible "$operation" ${request_options[@]+"${request_options[@]}"}; then
   can_reuse=1
-  if [[ ${IOS_VALIDATION_FRESH:-0} != 1 ]] && python3 "$state_tool" lookup "$inputs_before"; then exit 0; fi
+  if [[ ${IOS_VALIDATION_FRESH:-0} != 1 ]] && node "$state_tool" lookup "$inputs_before"; then exit 0; fi
 fi
 # The machine lock shares the Mac with a job that says what it uses. A test confined to this simulator names it, and
 # a build boots nothing. A live run binds a fixed port, and parallel testing or another destination boots devices
@@ -120,14 +120,14 @@ case "$held" in
 esac
 mkdir -p .private
 # A fresh attempt supersedes older evidence even when it fails.
-if [[ $operation == test ]]; then python3 "$state_tool" invalidate "$inputs_before"; fi
+if [[ $operation == test ]]; then node "$state_tool" invalidate "$inputs_before"; fi
 booted_here=0
 cleanup() {
   [[ $booted_here == 1 ]] || return 0
   booted_here=0
   local deadline=$((SECONDS + 30)) device_state
   while (( SECONDS < deadline )); do
-    device_state=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; groups=json.load(sys.stdin)["devices"]; print(next(d["state"] for ds in groups.values() for d in ds if d["udid"]==sys.argv[1]))' "$simulator_id")
+    device_state=$(xcrun simctl list devices available --json | node -e 'const fs=require("node:fs"); const groups=JSON.parse(fs.readFileSync(0,"utf8")).devices; for (const ds of Object.values(groups)) { const d=ds.find((x)=>x.udid===process.argv[1]); if (d) { console.log(d.state); process.exit(0); } } process.exit(1);' "$simulator_id")
     case "$device_state" in
       Shutdown) return 0 ;;
       Booted|Booting)
@@ -170,7 +170,7 @@ destination="platform=iOS Simulator,id=$simulator_id"
 if [[ "$operation" == build ]]; then
   xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface -destination "$destination" \
     -derivedDataPath "$derived_data" -resultBundlePath "$result_path" "${build_options[@]}" build "$@"
-  inputs_after=$(python3 "$state_tool" key "$operation" "$simulator_id" ${request_options[@]+"${request_options[@]}"})
+  inputs_after=$(node "$state_tool" key "$operation" "$simulator_id" ${request_options[@]+"${request_options[@]}"})
   [[ $inputs_before == "$inputs_after" ]] || { echo 'iOS inputs changed while building.' >&2; exit 75; }
   exit 0
 fi
@@ -219,10 +219,10 @@ if [[ ${#xctestruns[@]} -ne 1 || ! -f "${xctestruns[0]}" ]]; then
   exit 1
 fi
 patched="${xctestruns[0]%.xctestrun}-crash-wait.xctestrun"
-python3 .agents/tools/patch-xctestrun.py "${xctestruns[0]}" "$patched" 15
+node .agents/tools/patch-xctestrun.mjs "${xctestruns[0]}" "$patched" 15
 # Build-only and build-for-testing do not need a booted simulator. XCTest
 # boots the selected device when execution starts; leave pre-existing devices up.
-booted_here=$(xcrun simctl list devices booted --json | python3 -c 'import json,sys; groups=json.load(sys.stdin)["devices"]; print(0 if any(d["udid"]==sys.argv[1] for ds in groups.values() for d in ds) else 1)' "$simulator_id")
+booted_here=$(xcrun simctl list devices booted --json | node -e 'const fs=require("node:fs"); const groups=JSON.parse(fs.readFileSync(0,"utf8")).devices; const found=Object.values(groups).some((ds)=>ds.some((d)=>d.udid===process.argv[1])); console.log(found?0:1);' "$simulator_id")
 status=0
 test_args=(test-without-building -xctestrun "$patched" -destination "$destination"
   -resultBundlePath "$result_path" ${test_options[@]+"${test_options[@]}"})
@@ -230,11 +230,11 @@ xcodebuild "${test_args[@]}" || status=$?
 cleanup_status=0
 cleanup || cleanup_status=$?
 if [[ $status == 0 && $cleanup_status != 0 ]]; then status=$cleanup_status; fi
-inputs_after=$(python3 "$state_tool" key "$operation" "$simulator_id" ${request_options[@]+"${request_options[@]}"})
+inputs_after=$(node "$state_tool" key "$operation" "$simulator_id" ${request_options[@]+"${request_options[@]}"})
 if [[ $inputs_before != "$inputs_after" ]]; then
   echo "iOS inputs changed while validation ran; these results do not validate one source state." >&2
   status=75
-  python3 "$state_tool" invalidate "$inputs_after"
+  node "$state_tool" invalidate "$inputs_after"
 fi
 
 # A summary beside the result bundle lets a later run of the same iOS inputs reuse this result.
@@ -259,12 +259,12 @@ summary=".private/ios-${run_id}.txt"
 } > "$summary"
 echo "Summary: $summary"
 if [[ $status == 0 && $can_reuse == 1 ]]; then
-  if [[ $(python3 "$state_tool" source) != "$source_before" ]]; then
+  if [[ $(node "$state_tool" source) != "$source_before" ]]; then
     echo 'iOS inputs changed while validation ran.' >&2
     status=75
-  elif ! python3 "$state_tool" record "$inputs_before" "$source_before" "$result_path" "$summary" "${build_args[@]}" --test-invocation-- "${test_args[@]}"; then
+  elif ! node "$state_tool" record "$inputs_before" "$source_before" "$result_path" "$summary" "${build_args[@]}" --test-invocation-- "${test_args[@]}"; then
     echo 'Validation succeeded, but no reusable evidence was recorded.' >&2
-    if [[ $(python3 "$state_tool" source) != "$source_before" ]]; then status=75; fi
+    if [[ $(node "$state_tool" source) != "$source_before" ]]; then status=75; fi
   fi
 fi
 exit "$status"

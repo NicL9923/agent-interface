@@ -39,7 +39,7 @@ export interface Config {
   backupDirectory?: string;
   integrationAdmins?: string[];
   computerTerminalAdmins?: string[];
-  computerTerminal?: { stateDirectory: string; cwd: string; python: string };
+  computerTerminal?: { stateDirectory: string; cwd: string; runtime: string };
   computerDesktop?: ComputerDesktopConfig;
   /** Optional LAN and tailnet listeners the iOS app prefers when it can reach them. */
   directRoutes?: DirectRoutesConfig;
@@ -100,16 +100,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (env.COMPUTER_TERMINAL_ENABLED && !["true", "false"].includes(env.COMPUTER_TERMINAL_ENABLED))
     throw new Error("COMPUTER_TERMINAL_ENABLED must be true or false");
   if (env.COMPUTER_TERMINAL_ENABLED === "true") {
+    const runtime =
+      env.COMPUTER_TERMINAL_RUNTIME?.trim() || (process.versions.bun ? process.execPath : "bun");
     if (
-      ![env.COMPUTER_STATE_DIR, env.COMPUTER_TERMINAL_CWD, env.COMPUTER_PYTHON].every(
+      ![env.COMPUTER_STATE_DIR, env.COMPUTER_TERMINAL_CWD].every(
         (path) => path?.startsWith("/") && !path.includes("\0"),
-      )
+      ) ||
+      (env.COMPUTER_TERMINAL_RUNTIME && (!runtime.startsWith("/") || runtime.includes("\0")))
     )
-      throw new Error("The computer terminal requires absolute state, workspace and Python paths");
+      throw new Error("The computer terminal requires absolute state, workspace and runtime paths");
     config.computerTerminal = {
       stateDirectory: env.COMPUTER_STATE_DIR!,
       cwd: env.COMPUTER_TERMINAL_CWD!,
-      python: env.COMPUTER_PYTHON!,
+      runtime,
     };
   }
   if (env.COMPUTER_DESKTOP_ENABLED && !["true", "false"].includes(env.COMPUTER_DESKTOP_ENABLED))

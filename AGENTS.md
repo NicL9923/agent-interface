@@ -30,8 +30,8 @@
 
 # Staged checks
 
-- `pnpm install --frozen-lockfile` installs the pre-commit hook in Git checkouts. It runs Oxlint and Oxfmt on staged JavaScript/TypeScript, Prettier on staged data and prose, and the pinned Ruff on staged Python. Release archives skip hook installation.
-- `pnpm run verify:ci` runs lint, typecheck, build and Vitest concurrently and waits for every result. Browser tests run on main pushes and manual runs, never PR CI.
+- `pnpm install --frozen-lockfile` installs the pre-commit hook in Git checkouts. It runs Oxlint and Oxfmt on staged JavaScript/TypeScript and Prettier on staged data and prose. Release archives skip hook installation.
+- `pnpm run verify:ci` runs lint, format:check, typecheck, build and Vitest concurrently and waits for every result. Browser tests run on main pushes and manual runs, never PR CI.
 - Vitest runs all application tests with `isolate: false` in shared workers (zero file-isolation exceptions in `vitest.config.ts`). The migration records in `docs/ledger/2026-11-17-isolation.md` and `docs/ledger/2026-11-19-platform-improvements.md` document the shared-worker cleanup and verification. The first setup file clears app module caches for reused workers. Replay file order with `pnpm test --sequence.shuffle.files --sequence.seed=731 --maxWorkers=1`.
 
 # Tests
@@ -42,9 +42,9 @@ The global Testing rules apply in full. The ones this repo has tripped on, resta
   runtime that throws on any method the test did not configure. UI tests mock
   only the client API module. The kept exceptions are `preparePortrait`, which
   needs an image decoder and canvas that jsdom lacks, and the retired chunks in
-  `view-failure`, which cannot fail to load from disk. Python tests use temp
-  directories and fake executables on PATH, never patched private methods of
-  the code under test.
+  `view-failure`, which cannot fail to load from disk. CLI and tool tests use
+  temp directories and fake executables on PATH, never patched private methods
+  of the code under test.
 - Every validation guard and every decision table gets bad-input and
   cross-state cases, not just the path through. Upgrade restore-or-restart,
   delivery pruning, and live-activity filters are the past misses.
@@ -55,5 +55,3 @@ The global Testing rules apply in full. The ones this repo has tripped on, resta
   One smoke case plus specific assertions beats fifty "the SVG changed" cases.
 - A test written to protect a specific line is broken by hand once to prove it
   goes red before it is committed. Record the run in `docs/ledger/`.
-- Python red runs go through `python3 .agents/tools/mutate-py.py`. It clears the stale
-  bytecode that a hand edit and `git checkout` leave behind, and restores the file byte for byte.

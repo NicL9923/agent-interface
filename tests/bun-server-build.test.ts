@@ -10,7 +10,7 @@ import { expect, it } from "vitest";
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
 const build = "scripts/build-server.mjs";
-const check = "scripts/bun-service-check.py";
+const check = "scripts/bun-service-check.mjs";
 const bundle = "dist/server/index.js";
 const host = "127.0.0.1";
 
@@ -44,7 +44,7 @@ it(
         cp(join(root, "tsconfig.json"), join(release, "tsconfig.json")),
       ]);
       const preflight = (binary: string) =>
-        run("python3", [check, binary], { cwd: release, timeout: 7_000 });
+        run(process.execPath, [check, binary], { cwd: release, timeout: 7_000 });
 
       await expect(preflight("bun")).rejects.toMatchObject({
         stderr: expect.stringContaining("provide the absolute path to Bun"),
@@ -64,8 +64,8 @@ it(
       expect(await readFile(join(release, bundle), "utf8")).toMatch(
         /\/\/# sourceMappingURL=index\.js\.map/,
       );
-      expect(await readFile(join(release, "dist/server/terminal-host.py"), "utf8")).toBe(
-        await readFile(join(release, "src/server/terminal-host.py"), "utf8"),
+      expect(await readFile(join(release, "dist/server/terminal-host.js"), "utf8")).toContain(
+        "The system terminal could not be attached.",
       );
 
       const listener = createServer().listen(0, host);

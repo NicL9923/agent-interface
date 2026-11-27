@@ -21,34 +21,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: 3.14.7
       - name: Install pnpm
         run: |
           npm install --global --prefix "$RUNNER_TEMP/pnpm" "$(node -p "require('./package.json').packageManager")"
           echo "$RUNNER_TEMP/pnpm/bin" >> "$GITHUB_PATH"
       - name: Audit production pnpm dependencies
         run: pnpm audit --prod
-      - name: Audit pinned Python dependencies
-        run: |
-          pip install -r .github/requirements-ci.txt
-          # The lock pins every version, so skip resolving and building packages.
-          # Accepted on 2026-10-14: live Hermes pins PyJWT 2.13.0 upstream, and a fix
-          # would arrive with a Hermes update. These 14 PyJWT advisories are the only
-          # ones ignored, so any new advisory still fails the job.
-          pip-audit -r scripts/spike/requirements.lock.txt --no-deps --disable-pip \
-            --ignore-vuln PYSEC-2026-4140 \
-            --ignore-vuln PYSEC-2026-4141 \
-            --ignore-vuln PYSEC-2026-4142 \
-            --ignore-vuln PYSEC-2026-4143 \
-            --ignore-vuln PYSEC-2026-4144 \
-            --ignore-vuln PYSEC-2026-4145 \
-            --ignore-vuln PYSEC-2026-4146 \
-            --ignore-vuln PYSEC-2026-4147 \
-            --ignore-vuln PYSEC-2026-4148 \
-            --ignore-vuln PYSEC-2026-4149 \
-            --ignore-vuln PYSEC-2026-4150 \
-            --ignore-vuln PYSEC-2026-4151 \
-            --ignore-vuln PYSEC-2026-4152 \
-            --ignore-vuln PYSEC-2026-4183

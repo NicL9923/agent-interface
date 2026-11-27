@@ -242,7 +242,7 @@ describe("iOS archive gate: the repository decides the release", () => {
     });
     for (const typed of [28, 26]) {
       expect(() => requireRepositoryRelease(root, "1.0", typed, repoFiles())).toThrow(
-        `BUILD ${typed} does not match CURRENT_PROJECT_VERSION 27 in ios/tools/generate-project.py`,
+        `BUILD ${typed} does not match CURRENT_PROJECT_VERSION 27 in ios/tools/generate-project.mjs`,
       );
     }
   });
@@ -283,8 +283,8 @@ describe("iOS archive gate: a full passing run for these iOS inputs", () => {
     const run = exec({ stdout: JSON.stringify(evidence) });
     expect(requireFullIosValidation(root, run)).toEqual(evidence);
     expect(run).toHaveBeenCalledWith(
-      "python3",
-      [join(root, ".agents/tools/ios-validation-state.py"), "full-run"],
+      "node",
+      [join(root, ".agents/tools/ios-validation-state.mjs"), "full-run"],
       root,
     );
   });
@@ -310,7 +310,7 @@ describe("iOS archive gate: a full passing run for these iOS inputs", () => {
     for (const reply of [
       { status: 2, stderr: "iOS validation evidence: boom" },
       { status: null },
-      { status: 0, error: new Error("spawn python3 ENOENT") },
+      { status: 0, error: new Error("spawn node ENOENT") },
     ]) {
       expect(() => requireFullIosValidation(root, exec(reply))).toThrow(
         "Could not read the iOS validation evidence",
@@ -353,10 +353,10 @@ describe("publish-ios archive refuses before it touches the host, credentials or
         "publish-ios.mjs",
         "apple-api.mjs",
         "ios-release-gate.mjs",
-        "ios-validation-state.py",
+        "ios-validation-state.mjs",
       ])
         copyFileSync(join(root, ".agents/tools", name), join(directory, ".agents/tools", name));
-      writeFileSync(join(directory, "ios/tools/generate-project.py"), generator("1.0", held));
+      writeFileSync(join(directory, "ios/tools/generate-project.mjs"), generator("1.0", held));
       writeFileSync(join(directory, "ios/Input.swift"), "source");
       spawnSync("git", ["init", "-q", directory]);
       const result = spawnSync(
