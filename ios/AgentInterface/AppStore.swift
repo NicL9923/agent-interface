@@ -22,6 +22,19 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   private(set) var scope: String?
   /// The account on a server, as drafts, widgets and the Live Activity name it.
   nonisolated static func scope(server: URL, userId: String) -> String { Data((server.absoluteString + "|" + userId).utf8).base64URLEncoded }
+  /// Returns whether a base64url-encoded account `scope` belongs to `server`.
+  nonisolated static func scope(_ scope: String, matchesServer server: URL) -> Bool {
+    guard let data = Data(base64URLEncoded: scope),
+      let decoded = String(data: data, encoding: .utf8)
+    else { return false }
+    return decoded.hasPrefix(server.absoluteString + "|")
+  }
+  /// Active account scope eligible to publish to Spotlight and cross-process surfaces: `nil`
+  /// whenever the session is expired, signing in, or signed out.
+  var publishableScope: String? {
+    guard !sessionExpired, !signingIn else { return nil }
+    return scope
+  }
   private func updateScope() {
     let next = bootstrap.flatMap { boot in api.map { Self.scope(server: $0.baseURL, userId: boot.user.id) } }
     guard next != scope else { return }

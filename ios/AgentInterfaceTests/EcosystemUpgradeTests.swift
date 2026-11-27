@@ -814,8 +814,32 @@ import os
     let defaults = isolatedDefaults()
     let transport = FakeWatchTransport()
     let bridge = WatchBridge(transport: transport, defaults: defaults)
-    let scope = "https://watch.invalid|u1"
-    bridge.savedScope = { scope }
+    let origin = URL(string: "https://watch.invalid")!
+    // Use the real base64url-encoded scope produced by `AppStore.scope(server:userId:)`.
+    let scope = AppStore.scope(server: origin, userId: "u1")
+    let validClient = APIClient(baseURL: origin)
+    validClient.token = "tok"
+    let otherHostClient = APIClient(baseURL: URL(string: "https://other.invalid")!)
+    otherHostClient.token = "tok"
+    let expiredClient = APIClient(baseURL: origin)
+    expiredClient.token = nil
+
+    // Exercise the production base64url credential matcher directly!
+    XCTAssertTrue(WatchBridge.scopeMatchesCredential(scope, client: validClient))
+    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: otherHostClient))
+    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: expiredClient))
+    XCTAssertFalse(WatchBridge.scopeMatchesCredential(scope, client: nil))
+
+    let validScopeDefaults = isolatedDefaults()
+    validScopeDefaults.set(scope, forKey: DeviceDefaults.signedInScope)
+    let validScopeResolver: @MainActor () -> String? = {
+      WatchBridge.credentialBackedSavedScope(
+        defaults: validScopeDefaults,
+        hasCredential: { WatchBridge.scopeMatchesCredential($0, client: validClient) }
+      )
+    }
+    XCTAssertEqual(validScopeResolver(), scope)
+    bridge.savedScope = validScopeResolver
 
     let snap = WidgetSnapshot(scope: scope, generatedAt: Date(), assistants: [
       .init(id: "ranch", name: "Ranch", activity: "working", lastMessage: nil, lastMessageAt: nil, color: nil, pinned: true, runId: "run-7"),
@@ -850,36 +874,39 @@ import os
     XCTAssertTrue(secondOK)
     XCTAssertEqual(calls, 1, "Concurrent duplicate delivery must not execute twice")
 
-    // SystemWatchTransport never replays a signed-out or other-account persisted snapshot after relaunch.
+    // SystemWatchTransport never replays a signed-out or other-account persisted snapshot after relaunch,
+    // and replays a valid base64url-scoped snapshot when credentials match.
     let snapData = try JSONEncoder().encode(snap)
     let staleSnapDefaults = isolatedDefaults()
-    let inactiveTransport = SystemWatchTransport(defaults: staleSnapDefaults, savedScope: { scope })
+    let inactiveTransport = SystemWatchTransport(defaults: staleSnapDefaults, savedScope: validScopeResolver)
     inactiveTransport.updateApplicationContext([WatchPayload.snapshotKey: snapData, WatchPayload.signedOutKey: false])
     let afterSignOutCrash = SystemWatchTransport(defaults: staleSnapDefaults, savedScope: { nil })
     XCTAssertEqual(afterSignOutCrash.authoritativeContextToFlush(), .signedOut)
 
     let switchDefaults = isolatedDefaults()
-    let preSwitch = SystemWatchTransport(defaults: switchDefaults, savedScope: { scope })
+    let preSwitch = SystemWatchTransport(defaults: switchDefaults, savedScope: validScopeResolver)
     preSwitch.updateApplicationContext([WatchPayload.snapshotKey: snapData, WatchPayload.signedOutKey: false])
-    let afterAccountSwitch = SystemWatchTransport(defaults: switchDefaults, savedScope: { "https://watch.invalid|u2" })
+    let otherAccountScope = AppStore.scope(server: origin, userId: "u2")
+    let afterAccountSwitch = SystemWatchTransport(defaults: switchDefaults, savedScope: { otherAccountScope })
     XCTAssertEqual(afterAccountSwitch.authoritativeContextToFlush(), .signedOut)
 
     let sameAccountDefaults = isolatedDefaults()
-    let sameBefore = SystemWatchTransport(defaults: sameAccountDefaults, savedScope: { scope })
+    let sameBefore = SystemWatchTransport(defaults: sameAccountDefaults, savedScope: validScopeResolver)
     sameBefore.updateApplicationContext([WatchPayload.snapshotKey: snapData, WatchPayload.signedOutKey: false])
-    let sameAfter = SystemWatchTransport(defaults: sameAccountDefaults, savedScope: { scope })
+    let sameAfter = SystemWatchTransport(defaults: sameAccountDefaults, savedScope: validScopeResolver)
     XCTAssertEqual(sameAfter.authoritativeContextToFlush(), .snapshot(snapData))
 
     // Expired session: `DeviceDefaults.signedInScope` is still set, but Keychain token is gone.
     // Both pending snapshot replay AND cold refresh must reject and emit `.signedOut`.
-    let expiredScopeDefaults = isolatedDefaults()
-    expiredScopeDefaults.set(scope, forKey: DeviceDefaults.signedInScope)
     let expiredScopeResolver: @MainActor () -> String? = {
-      WatchBridge.credentialBackedSavedScope(defaults: expiredScopeDefaults, hasCredential: { _ in false })
+      WatchBridge.credentialBackedSavedScope(
+        defaults: validScopeDefaults,
+        hasCredential: { WatchBridge.scopeMatchesCredential($0, client: expiredClient) }
+      )
     }
     XCTAssertNil(expiredScopeResolver())
     let expiredTransportDefaults = isolatedDefaults()
-    let beforeExpiry = SystemWatchTransport(defaults: expiredTransportDefaults, savedScope: { scope })
+    let beforeExpiry = SystemWatchTransport(defaults: expiredTransportDefaults, savedScope: validScopeResolver)
     beforeExpiry.updateApplicationContext([WatchPayload.snapshotKey: snapData, WatchPayload.signedOutKey: false])
     let afterExpiryRelaunch = SystemWatchTransport(defaults: expiredTransportDefaults, savedScope: expiredScopeResolver)
     XCTAssertEqual(afterExpiryRelaunch.authoritativeContextToFlush(), .signedOut)
@@ -971,7 +998,27 @@ import os
     var isHolding: Bool { lock.withLock { heldIndex != nil } }
   }
 
-  func testSpotlightSerializesSignOutBehindInFlightFirstIndex() async {
+  /// Custom `UserDefaults` that lets tests run a callback right after reading a key to prove
+  /// Spotlight's idle check and state read happen atomically under the queue lock.
+  private final class RacingDefaults: UserDefaults, @unchecked Sendable {
+    private let hookLock = NSLock()
+    private var hook: (@Sendable () -> Void)?
+    func armOnNextRead(_ action: @escaping @Sendable () -> Void) {
+      hookLock.withLock { hook = action }
+    }
+    override func data(forKey defaultName: String) -> Data? {
+      let result = super.data(forKey: defaultName)
+      let fired = hookLock.withLock { () -> (@Sendable () -> Void)? in
+        guard defaultName == "spotlight.groups", let h = hook else { return nil }
+        hook = nil
+        return h
+      }
+      fired?()
+      return result
+    }
+  }
+
+  func testSpotlightSerializesSignOutBehindInFlightFirstIndex() async throws {
     let defaults = isolatedDefaults()
     let index = DeferredSpotlight()
     let spotlight = AssistantSpotlight(index: index, defaults: defaults)
@@ -1003,17 +1050,105 @@ import os
     XCTAssertEqual(index.events, ["index:group:r1", "deleteAll:false", "deleteAll:true"])
     relaunchedStore.suspend()
 
-    // 2. Starting from a stored empty catalog, indexing a room and removing it while in flight
-    //    must delete the room cleanly (no TOCTOU fast-path skip).
-    let defaults2 = isolatedDefaults()
-    let index2 = DeferredSpotlight()
-    let spotlight2 = AssistantSpotlight(index: index2, defaults: defaults2)
-    XCTAssertTrue(spotlight2.syncGroups([], scope: "scope-1"))
-    XCTAssertTrue(spotlight2.syncGroups([room], scope: "scope-1"))
-    XCTAssertTrue(index2.isHolding)
-    XCTAssertTrue(spotlight2.syncGroups([], scope: "scope-1"))
-    index2.finishHeldIndex(ok: true)
-    XCTAssertEqual(index2.events, ["index:group:r1", "delete:group:r1"])
+    // 2. Deterministic TOCTOU proof: starting from a stored empty catalog, arm `RacingDefaults` so
+    //    if `syncGroups([])` read `defaults` before acquiring the queue lock, the held index write
+    //    would finish and drain the queue mid-read. With `enqueueIfNeeded` holding `lock`, the
+    //    removal is never dropped and always deletes `group:r1`.
+    let raceSuite = "test.spotlight.race.\(UUID().uuidString)"
+    let raceDefaults = try XCTUnwrap(RacingDefaults(suiteName: raceSuite))
+    addTeardownBlock { raceDefaults.removePersistentDomain(forName: raceSuite) }
+    let raceIndex = DeferredSpotlight()
+    let raceSpotlight = AssistantSpotlight(index: raceIndex, defaults: raceDefaults)
+    XCTAssertTrue(raceSpotlight.syncGroups([], scope: "scope-1"))
+    XCTAssertTrue(raceSpotlight.syncGroups([room], scope: "scope-1"))
+    XCTAssertTrue(raceIndex.isHolding)
+    // Arm hook: in the old buggy code, `data(forKey:)` ran BEFORE `hasPendingWork`, triggering
+    // `finishHeldIndex` and causing the fast-path to return `false` and skip `delete:group:r1`!
+    raceDefaults.armOnNextRead { raceIndex.finishHeldIndex(ok: true) }
+    XCTAssertTrue(raceSpotlight.syncGroups([], scope: "scope-1"))
+    if raceIndex.isHolding { raceIndex.finishHeldIndex(ok: true) }
+    XCTAssertEqual(raceIndex.events, ["index:group:r1", "delete:group:r1"])
+
+    // 3. Real concurrent hammer: finish index on a background thread simultaneously with `syncGroups([])`
+    //    across 40 iterations to verify no thread interleaving ever leaves `group:r1` undeleted.
+    let concDefaults = isolatedDefaults()
+    let concIndex = DeferredSpotlight()
+    let concSpotlight = AssistantSpotlight(index: concIndex, defaults: concDefaults)
+    XCTAssertTrue(concSpotlight.syncGroups([], scope: "scope-1"))
+    for i in 0..<40 {
+      let r = GroupRoom(room_id: "r-\(i)", name: "Room \(i)", members: [])
+      XCTAssertTrue(concSpotlight.syncGroups([r], scope: "scope-1"))
+      let start = DispatchSemaphore(value: 0)
+      await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        DispatchQueue.global(qos: .userInteractive).async {
+          start.wait()
+          concIndex.finishHeldIndex(ok: true)
+          cont.resume()
+        }
+        start.signal()
+        _ = concSpotlight.syncGroups([], scope: "scope-1")
+      }
+      XCTAssertTrue(
+        concIndex.events.contains("delete:group:r-\(i)"),
+        "Concurrent completion must never drop deletion for r-\(i)"
+      )
+    }
+  }
+
+  func testLateResponsesAfterSessionExpiryNeverReindexSpotlight() async throws {
+    let requestArrived = DispatchSemaphore(value: 0)
+    let releaseResponse = DispatchSemaphore(value: 0)
+    let server = FakeServer { request in
+      if request.url?.path == "/api/groups" {
+        requestArrived.signal()
+        releaseResponse.wait()
+        return .init(body: #"{"rooms":[{"room_id":"secret-1","name":"Private Room","members":[]}]}"#)
+      }
+      return .init(body: "{}")
+    }
+    let defaults = isolatedDefaults()
+    let index = DeferredSpotlight()
+    let spotlight = AssistantSpotlight(index: index, defaults: defaults)
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.spotlight = spotlight
+    store.api = server.api(token: "tok")
+    store.bootstrap = try sampleBootstrap()
+    let startedScope = try XCTUnwrap(store.scope)
+    // Finish the initial bootstrap assistant index cleanly so Spotlight is idle.
+    if index.isHolding { index.finishHeldIndex(ok: true) }
+    index.events.removeAll()
+
+    // Start Home group refresh in flight; while it awaits the server, session expires.
+    let refreshTask = Task { await store.refreshGroups() }
+    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+      DispatchQueue.global().async {
+        requestArrived.wait()
+        cont.resume()
+      }
+    }
+    store.report(APIError(message: "Session expired", status: 401, code: APIError.sessionExpiredCode))
+    XCTAssertTrue(store.sessionExpired)
+    XCTAssertNil(store.api?.token)
+
+    // Deliver the late successful `/api/groups` response after session expiry.
+    releaseResponse.signal()
+    await refreshTask.value
+    XCTAssertNil(store.groupCatalog, "Late group catalog after session expiry must be ignored")
+    XCTAssertFalse(index.events.contains(where: { $0.contains("secret-1") }), "Late group response must never reindex Spotlight")
+
+    // Assistants, routines, and saved-item publishers must also refuse to reindex while expired.
+    let countAfterExpiry = index.events.count
+    store.publishWidgetSnapshot()
+    store.publishRoutinesSnapshot([Routine.empty(botId: "kitchen").with(id: "rt-exp", name: "Secret Routine")])
+    let saved = SavedItem(
+      id: "s-exp", botId: "kitchen", kind: "session", sessionId: "sess-1", routineId: nil,
+      resultId: nil, messageId: nil, offset: nil, title: "Secret Saved", createdAt: "2026-11-27T00:00:00Z"
+    )
+    store.publishSavedSpotlight([saved], expectedScope: startedScope, expectedToken: "tok")
+    let postExpiryEvents = index.events.dropFirst(countAfterExpiry)
+    XCTAssertFalse(postExpiryEvents.contains(where: { $0.hasPrefix("index:") }), "Expired session must never reindex Spotlight")
+    store.suspend()
   }
 
   // MARK: 10. Interactive Widget Refresh, Approval ID & Run ID Backwards Compatibility

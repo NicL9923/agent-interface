@@ -267,9 +267,11 @@ struct DiscoveryView: View {
   }
   private func removeSaved(_ item: SavedItem) {
     Task { guard !busy else { return }; await perform { api in
+      let startedScope = store.publishableScope
+      let startedToken = api.token
       let _: EmptyResponse = try await api.write("/saved/\(APIClient.component(item.id))", [String:String](), method: "DELETE")
       saved.removeAll { $0.id == item.id }
-      store.spotlight?.syncSaved(saved, scope: store.scope)
+      store.publishSavedSpotlight(saved, expectedScope: startedScope, expectedToken: startedToken)
       if item.kind == "session", let session = item.sessionId { pinned.remove(Bookmark(botId: item.botId, sessionId: session, messageId: item.messageId)) }
     } }
   }
@@ -367,15 +369,19 @@ struct DiscoveryView: View {
   }
   private func load() async {
     await perform { api in
+      let startedScope = store.publishableScope
+      let startedToken = api.token
       if tab == "saved" {
         saved = try await api.get("/saved")
-        store.spotlight?.syncSaved(saved, scope: store.scope)
+        store.publishSavedSpotlight(saved, expectedScope: startedScope, expectedToken: startedToken)
         pinned = Set(saved.compactMap { item in item.kind == "session" ? item.sessionId.map { Bookmark(botId: item.botId, sessionId: $0, messageId: item.messageId) } : nil })
       }
       if tab == "automations" {
         let fetched: AutomationOverview = try await api.get("/automations")
         overview = fetched
-        store.publishRoutinesSnapshot(fetched.routines)
+        if store.publishableScope == startedScope, store.api === api, api.token == startedToken {
+          store.publishRoutinesSnapshot(fetched.routines)
+        }
       }
     }
   }

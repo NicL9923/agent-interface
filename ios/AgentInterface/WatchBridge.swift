@@ -206,14 +206,20 @@ private final class SentReply: @unchecked Sendable {
     await BackgroundRefresh.refreshWidgets()
     return WidgetSnapshotStore.read()
   }
+  /// Production credential matcher: verifies `client` holds a live token and that the base64url
+  /// encoded `scope` decodes to `<client.baseURL>|...`.
+  static func scopeMatchesCredential(_ scope: String, client: APIClient?) -> Bool {
+    guard let client, client.token != nil else { return false }
+    return AppStore.scope(scope, matchesServer: client.baseURL)
+  }
+
   /// Resolves `DeviceDefaults.signedInScope` ONLY when a live Keychain credential still exists for
   /// that scope's server, preventing expired sessions (which delete the Keychain token while
   /// retaining `signedInScope`) from replaying snapshots or serving cold Watch refreshes.
   static func credentialBackedSavedScope(
     defaults: UserDefaults = .standard,
     hasCredential: @MainActor (String) -> Bool = { scope in
-      guard let client = NotificationController.shared.actionClient(), client.token != nil else { return false }
-      return scope.hasPrefix(client.baseURL.absoluteString + "|")
+      WatchBridge.scopeMatchesCredential(scope, client: NotificationController.shared.actionClient())
     }
   ) -> String? {
     guard let scope = defaults.string(forKey: DeviceDefaults.signedInScope), !scope.isEmpty else { return nil }

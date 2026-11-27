@@ -33,7 +33,7 @@ extension AppStore {
   /// sender pictures follow it.
   func publishWidgetSnapshot(at now: Date = Date()) {
     let next: WidgetSnapshot?
-    if let bootstrap {
+    if let bootstrap, !sessionExpired, !signingIn {
       guard let scope else { return }
       if !bootstrap.connection.connected || rosterFromCache {
         // Only this account's snapshot is kept. Signing in as somebody else must clear the previous
@@ -95,7 +95,7 @@ extension AppStore {
   /// Publishes non-secret routine metadata for Shortcuts (`TryOnceIntent`), Core Spotlight, and
   /// opt-in AlarmKit escalations.
   func publishRoutinesSnapshot(_ routines: [Routine]) {
-    guard let scope, let bootstrap else { return }
+    guard let scope = publishableScope, let bootstrap else { return }
     let names = Dictionary(bootstrap.bots.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
     let items = routines.map {
       RoutineSnapshot.Item(id: $0.id, botId: $0.botId, botName: names[$0.botId] ?? "Assistant", name: $0.name, enabled: $0.enabled)
@@ -107,7 +107,7 @@ extension AppStore {
     let targetScope = scope
     let startEpoch = CriticalAlarmManager.shared.currentEpoch
     Task {
-      guard self.scope == targetScope else { return }
+      guard self.publishableScope == targetScope else { return }
       await CriticalAlarmManager.shared.reconcile(
         routines: routines,
         scope: targetScope,
@@ -115,13 +115,23 @@ extension AppStore {
       )
     }
   }
+  /// Publishes saved-item titles to Core Spotlight only when the request's scope and credential
+  /// are still active (never after sign-out or session expiry).
+  func publishSavedSpotlight(_ items: [SavedItem], expectedScope: String?, expectedToken: String?) {
+    guard let activeScope = publishableScope,
+      activeScope == expectedScope,
+      api?.token == expectedToken
+    else { return }
+    spotlight?.syncSaved(items, scope: activeScope)
+  }
   /// Refreshes account routines on foreground/launch when opt-in AlarmKit escalation is enabled so
   /// recurring or paused/deleted routines reconcile without requiring the user to open Routine settings.
   func refreshRoutinesForAlarms() async {
-    guard let scope, let api, supports(.routines), CriticalAlarmManager.shared.isEnabled(for: scope) else { return }
+    guard let scope = publishableScope, let api, supports(.routines), CriticalAlarmManager.shared.isEnabled(for: scope) else { return }
     let startScope = scope
+    let startedToken = api.token
     guard let routines: [Routine] = try? await api.get("/routines"),
-      self.scope == startScope, self.api === api
+      self.publishableScope == startScope, self.api === api, api.token == startedToken
     else { return }
     publishRoutinesSnapshot(routines)
   }
