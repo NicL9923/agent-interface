@@ -24,6 +24,9 @@ log({
   hasApiKey: Boolean(process.env.GEMINI_API_KEY),
 });
 
+const logFileFlag = argv.indexOf("--log-file");
+const acpLogFile = logFileFlag >= 0 ? argv[logFileFlag + 1] : undefined;
+
 if (argv.includes("--version")) {
   if (scenario === "version-timeout") await delay(30_000);
   if (scenario === "version-error") {
@@ -217,6 +220,29 @@ async function serve() {
         } else if (input === "Fail") {
           send({ id, error: { code: -32603, message: "Antigravity quota exceeded" } });
           prompt = undefined;
+        } else if (input === "InlineQuotaError") {
+          send(
+            update(
+              "agent_message_chunk",
+              text("\n⚠ RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).\n"),
+            ),
+          );
+          complete("end_turn");
+        } else if (input === "NormalWarning") {
+          send(update("agent_message_chunk", text("⚠ ")));
+          send(update("agent_message_chunk", text("Remember to close the barn gate.")));
+          complete("end_turn");
+        } else if (input === "RetryQuotaLoop") {
+          if (acpLogFile) {
+            appendFileSync(
+              acpLogFile,
+              [
+                "I1127 23:05:37.977109 207 run.go:308] Run: attempt 1 failed (transport error (ResourceExhausted, HTTP 429): Resource has been exhausted (e.g. check quota).: RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).), retrying in 4s",
+                "I1127 23:05:42.162535 207 run.go:308] Run: attempt 2 failed (transport error (ResourceExhausted, HTTP 429): Resource has been exhausted (e.g. check quota).: RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).), retrying in 7.5s",
+                "",
+              ].join("\n"),
+            );
+          }
         } else {
           send(update("agent_thought_chunk", text("Neon reasoning")));
           send(update("agent_message_chunk", text(`Model=${currentModelId}`)));

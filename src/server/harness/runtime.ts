@@ -197,6 +197,8 @@ export interface HarnessRuntimeOptions {
   startScheduler?: boolean;
   /** Automatic fallback harness/model used when a primary harness fails before streaming a reply. */
   fallback?: HarnessFallbackConfig;
+  /** Cooldown (ms) after a primary quota/rate-limit failure during which turns route straight to fallback. Default 5 minutes (0 disables). */
+  fallbackCooldownMs?: number;
   /** Live Talk, transcription, and speech synthesis provider for native bots. */
   voice?: HarnessVoiceDelegate;
   /** Native shared desktop and browser service. */
@@ -256,6 +258,18 @@ const publicMessage = ({
 
 const DEFAULT_PROBE_TTL_MS = 30_000;
 const DEFAULT_GROUP_SESSION_IDLE_TTL_MS = 2 * 60_000;
+const DEFAULT_FALLBACK_COOLDOWN_MS = 5 * 60_000;
+const QUOTA_OR_RATE_LIMIT_ERROR =
+  /\b(?:RESOURCE_EXHAUSTED|429|quota(?:\s+exceeded|\s+exhausted|\s+limit)?|check quota|rate[_\s-]?limit(?:ed|s)?|too many requests)\b/i;
+
+function isQuotaOrRateLimitError(message: string | undefined): boolean {
+  return Boolean(message && QUOTA_OR_RATE_LIMIT_ERROR.test(message));
+}
+
+function errorText(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message;
+  return typeof error === "string" ? error : undefined;
+}
 
 type GroupTurn = {
   runId: string;
@@ -278,6 +292,7 @@ export function createHarnessRuntime({
   grantAcl = allowUser,
   startScheduler = false,
   fallback,
+  fallbackCooldownMs = DEFAULT_FALLBACK_COOLDOWN_MS,
   voice,
   computer,
 }: HarnessRuntimeOptions) {
@@ -307,6 +322,7 @@ export function createHarnessRuntime({
   const preparations = new Map<string, Set<Promise<void>>>();
   const grantedCwdAcls = new Map<string, string>();
   const botCwdAclKeys = new Map<string, Set<string>>();
+  const primaryCooldownUntil = new Map<string, number>();
   const bootId = randomUUID();
   let closed = false;
   let closing: Promise<void> | undefined;
@@ -431,6 +447,30 @@ export function createHarnessRuntime({
     if (reservedHarnessEnvironment(source))
       throw new InvalidInput("Choose a vendor API-key environment variable.");
     return { [vendorEnvironment[credential.vendor] ?? source]: key };
+  }
+
+  const primaryCooldownKey = (bot: ManagedBotRecord) =>
+    `${bot.harness}\0${bot.credentialId ?? ""}\0${bot.model}`;
+
+  function isPrimaryInCooldown(bot: ManagedBotRecord): boolean {
+    if (fallbackCooldownMs <= 0) return false;
+    const key = primaryCooldownKey(bot);
+    const until = primaryCooldownUntil.get(key);
+    if (until === undefined) return false;
+    if (clock() >= until) {
+      primaryCooldownUntil.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  function notePrimaryFailure(bot: ManagedBotRecord, message: string | undefined) {
+    if (fallbackCooldownMs <= 0 || !isQuotaOrRateLimitError(message)) return;
+    primaryCooldownUntil.set(primaryCooldownKey(bot), clock() + fallbackCooldownMs);
+  }
+
+  function clearPrimaryCooldown(bot: ManagedBotRecord) {
+    primaryCooldownUntil.delete(primaryCooldownKey(bot));
   }
 
   function resolveFallback(bot: ManagedBotRecord): ResolvedTarget | undefined {
@@ -754,10 +794,14 @@ export function createHarnessRuntime({
       return;
     }
     if (event.type === "turn.failed" || event.stopReason === "error") {
+      const failureMessage = event.type === "turn.failed" ? event.message : undefined;
+      if (!turn.fallbackAttempted) notePrimaryFailure(turn.bot, failureMessage);
       if (!turn.fallbackAttempted && !turn.reply.text && !turn.tools.size) {
         const target = resolveFallback(turn.bot);
         if (target) {
           turn.fallbackAttempted = true;
+          turn.reply.reasoning = undefined;
+          turn.activity.state = "thinking";
           void trackPreparation(
             turn.bot.id,
             coordinator
@@ -775,6 +819,7 @@ export function createHarnessRuntime({
     } else if (event.stopReason === "interrupted") {
       finish(turn, "interrupted", "The harness interrupted the reply.");
     } else {
+      if (!turn.fallbackAttempted) clearPrimaryCooldown(turn.bot);
       if (event.text !== undefined) turn.reply.text = event.text;
       finish(turn, "completed");
     }
@@ -1108,19 +1153,26 @@ export function createHarnessRuntime({
     signal: AbortSignal,
     modelOverride?: string | null,
   ): Promise<string> {
+    if (!modelOverride && isPrimaryInCooldown(bot)) {
+      const target = resolveFallback(bot);
+      if (target) return executeOneShotOn(bot, sessionKeyPrefix, promptText, signal, target);
+    }
     try {
       const driver = requireDriver(bot);
       const credential = credentialFor(bot);
       const env = credentialsEnv(credential);
-      return await executeOneShotOn(bot, sessionKeyPrefix, promptText, signal, {
+      const result = await executeOneShotOn(bot, sessionKeyPrefix, promptText, signal, {
         driver,
         model: modelOverride ?? bot.model,
         provider: bot.provider || undefined,
         env,
         osUser: bot.ownerOsUser || undefined,
       });
+      if (!modelOverride) clearPrimaryCooldown(bot);
+      return result;
     } catch (error) {
       if (signal.aborted) throw error;
+      if (!modelOverride) notePrimaryFailure(bot, errorText(error));
       const target = resolveFallback(bot);
       if (!target) throw error;
       return executeOneShotOn(bot, sessionKeyPrefix, promptText, signal, target);
@@ -1246,19 +1298,26 @@ export function createHarnessRuntime({
     if (groupCoordinator.active(slotKey)) {
       return runOneShotPrompt(bot, `group-${bot.id}`, promptText, signal);
     }
+    if (isPrimaryInCooldown(bot)) {
+      const target = resolveFallback(bot);
+      if (target) return executePooledGroupOn(bot, slotKey, cwd, promptText, signal, target);
+    }
     try {
       const driver = requireDriver(bot);
       const credential = credentialFor(bot);
       const env = credentialsEnv(credential);
-      return await executePooledGroupOn(bot, slotKey, cwd, promptText, signal, {
+      const result = await executePooledGroupOn(bot, slotKey, cwd, promptText, signal, {
         driver,
         model: bot.model,
         provider: bot.provider || undefined,
         env,
         osUser: bot.ownerOsUser || undefined,
       });
+      clearPrimaryCooldown(bot);
+      return result;
     } catch (error) {
       if (signal.aborted) throw error;
+      notePrimaryFailure(bot, errorText(error));
       const target = resolveFallback(bot);
       if (!target) throw error;
       return executeOneShotOn(bot, `group-${bot.id}`, promptText, signal, target);
@@ -1396,11 +1455,17 @@ export function createHarnessRuntime({
   async function prepareTurn(turn: ActiveTurn, override?: ResolvedTarget) {
     const { bot, runId } = turn;
     try {
-      const target: ResolvedTarget =
-        override ??
-        (() => {
+      let target: ResolvedTarget;
+      if (override) {
+        target = override;
+      } else {
+        const cooledFallback = isPrimaryInCooldown(bot) ? resolveFallback(bot) : undefined;
+        if (cooledFallback) {
+          turn.fallbackAttempted = true;
+          target = cooledFallback;
+        } else {
           const credential = credentialFor(bot);
-          return {
+          target = {
             driver: turn.driver,
             model: bot.model,
             provider: bot.provider || "",
@@ -1408,7 +1473,8 @@ export function createHarnessRuntime({
             osUser: bot.ownerOsUser || undefined,
             isFallback: false,
           };
-        })();
+        }
+      }
       turn.driver = target.driver;
       const cwd = await cwdFor(bot);
       const input = await driverInput(bot, turn.item, runId);
@@ -1439,14 +1505,17 @@ export function createHarnessRuntime({
       frame(turn, "start");
       reportRun(bot.id, session.id, runId);
       // Some drivers resolve startTurn on admission and others hold it for the turn.
-      void Promise.resolve(session.startTurn(input)).catch(() => failStart(turn));
-    } catch {
-      await failStart(turn);
+      void Promise.resolve(session.startTurn(input)).catch((error: unknown) =>
+        failStart(turn, error),
+      );
+    } catch (error: unknown) {
+      await failStart(turn, error);
     }
   }
 
-  async function failStart(turn: ActiveTurn) {
+  async function failStart(turn: ActiveTurn, error?: unknown) {
     if (active(turn.bot.id) !== turn || turn.stopping) return;
+    if (!turn.fallbackAttempted) notePrimaryFailure(turn.bot, errorText(error));
     if (!turn.fallbackAttempted && !closed) {
       const target = resolveFallback(turn.bot);
       if (target) {
@@ -2111,7 +2180,7 @@ export function createHarnessRuntime({
     async warmSession(botId: string) {
       if (closed || deleting.has(botId) || active(botId)) return;
       const bot = getBot(botId);
-      if (!bot) return;
+      if (!bot || isPrimaryInCooldown(bot)) return;
       await trackPreparation(
         botId,
         (async () => {

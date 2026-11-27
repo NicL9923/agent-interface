@@ -22,7 +22,7 @@
 
 import { execFile } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -46,6 +46,14 @@ const DEFAULT_MODEL_NAME = "Gemini 4 Neon";
 const CANCELLED = { outcome: "cancelled" };
 const PROMPT_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60_000;
+const DEFAULT_MAX_RATE_LIMIT_RETRIES = 2;
+const DEFAULT_LOG_POLL_INTERVAL_MS = 500;
+const MAX_LOG_CHUNK_BYTES = 64 * 1024;
+const INLINE_ERROR_BANNER = /^⚠\uFE0F?\s+(.+)$/s;
+const INLINE_ERROR_DETAIL =
+  /^(?:RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL|DEADLINE_EXCEEDED|PERMISSION_DENIED|UNAUTHENTICATED|FAILED_PRECONDITION|ABORTED|INVALID_ARGUMENT|DATA_LOSS|OVERLOADED|RATE_LIMIT(?:_EXCEEDED)?)\b|\(code\s+(?:4\d\d|5\d\d)\)|\bHTTP\s+(?:4\d\d|5\d\d)\b|\b(?:resource has been exhausted|check quota|quota exceeded|rate limit(?:ed)?|too many requests)\b/i;
+const RETRY_QUOTA_LINE =
+  /Run:\s+attempt\s+(\d+)\s+failed\s+\(.*(?:ResourceExhausted|RESOURCE_EXHAUSTED|HTTP\s+429|code\s+429).*?\),\s*retrying\s+in\b/i;
 const MINIMUM_VERSION = [1, 5, 0] as const;
 const OPEN_MODEL_ACCESS_VERSION = [1, 5, 1] as const;
 const REMOVED_ENV_KEYS = new Set([
@@ -78,6 +86,25 @@ export interface AntigravityDriverOptions {
   promptTimeoutMs?: number;
   /** How long a discovered model catalog stays cached. Default 5 minutes. */
   modelCacheTtlMs?: number;
+  /** Fail fast after this many HTTP 429 / RESOURCE_EXHAUSTED retry attempts logged by `agy acp` before any output. Default 2 (0 disables). */
+  maxRateLimitRetries?: number;
+  /** Poll interval (ms) for checking the per-session ACP log during silent turns. Default 500ms. */
+  logPollIntervalMs?: number;
+}
+
+/**
+ * Antigravity ACP surfaces exhausted upstream errors (such as HTTP 429 RESOURCE_EXHAUSTED)
+ * as a single `⚠ ...` assistant message chunk followed by `stopReason: "end_turn"` instead of
+ * rejecting `session/prompt`. Recognize those banners so the runtime fails the turn and falls back.
+ */
+export function extractAntigravityInlineError(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > 512 || trimmed.includes("\n\n")) return undefined;
+  const match = INLINE_ERROR_BANNER.exec(trimmed);
+  if (!match) return undefined;
+  const detail = match[1]!.trim();
+  if (!detail || !INLINE_ERROR_DETAIL.test(detail)) return undefined;
+  return detail;
 }
 
 function records(value: unknown): AcpObject[] {
@@ -285,8 +312,14 @@ interface ActiveTurn {
   abort: AbortController;
   tools: Map<string, AcpObject>;
   text: string[];
+  pendingText: string;
+  streamed: boolean;
   sent: boolean;
   cancelling: boolean;
+  logWatcher?: ReturnType<typeof setInterval>;
+  logOffset: number;
+  logRemainder: string;
+  rateLimitRetries: number;
 }
 
 type ReplyToQuestion = (answers?: Record<string, string>) => void;
@@ -377,6 +410,10 @@ class AntigravitySession implements HarnessSession {
     private readonly fullPermissions: boolean,
     systemPrompt: string | undefined,
     private readonly promptTimeoutMs: number,
+    private readonly tempDir?: string,
+    private readonly logFile?: string,
+    private readonly maxRateLimitRetries = DEFAULT_MAX_RATE_LIMIT_RETRIES,
+    private readonly logPollIntervalMs = DEFAULT_LOG_POLL_INTERVAL_MS,
   ) {
     this.systemPrompt = systemPrompt?.trim() ? systemPrompt.trim() : undefined;
     void client.closed.then(({ reason, unexpected }) => {
@@ -385,6 +422,9 @@ class AntigravitySession implements HarnessSession {
       if (unexpected && this.turn) this.failTurn(this.turn, reason, false);
       this.emit(this.closedEvent);
       this.listeners.clear();
+      if (this.tempDir) {
+        void rm(this.tempDir, { recursive: true, force: true }).catch(() => undefined);
+      }
     });
   }
 
@@ -404,24 +444,40 @@ class AntigravitySession implements HarnessSession {
       abort: new AbortController(),
       tools: new Map(),
       text: [],
+      pendingText: "",
+      streamed: false,
       sent: false,
       cancelling: false,
+      logOffset: 0,
+      logRemainder: "",
+      rateLimitRetries: 0,
     };
     this.turn = turn;
     this.emit({ type: "turn.started", turnId: turn.id });
     let attachments: AcpObject[];
+    let initialLogOffset = 0;
     try {
-      attachments = await Promise.all((input.attachments ?? []).map(attachmentBlock));
+      [attachments, initialLogOffset] = await Promise.all([
+        Promise.all((input.attachments ?? []).map(attachmentBlock)),
+        this.logFile
+          ? stat(this.logFile).then(
+              (info) => info.size,
+              () => 0,
+            )
+          : Promise.resolve(0),
+      ]);
     } catch (error) {
       this.failTurn(turn, error, true);
       return;
     }
     if (this.turn !== turn || this.closing || this.closedEvent) return;
+    turn.logOffset = initialLogOffset;
 
     const prompt = [{ type: "text", text: input.text }, ...attachments];
     if (this.systemPrompt) prompt.unshift({ type: "text", text: this.systemPrompt });
     this.systemPrompt = undefined;
     turn.sent = true;
+    this.startLogWatch(turn);
     const request = this.client.request(
       "session/prompt",
       { sessionId: this.providerSessionId, prompt },
@@ -443,6 +499,7 @@ class AntigravitySession implements HarnessSession {
     const turn = this.turn;
     if (!turn || turn.cancelling || (turnId !== undefined && turnId !== turn.id)) return;
     turn.cancelling = true;
+    this.stopLogWatch(turn);
     if (!turn.sent) {
       this.completeTurn(turn, { stopReason: "cancelled" });
       return;
@@ -456,6 +513,9 @@ class AntigravitySession implements HarnessSession {
     this.closing = true;
     if (this.turn) this.clearTurn(this.turn);
     await this.client.close();
+    if (this.tempDir) {
+      await rm(this.tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   onRequest(method: string, value: unknown): unknown {
@@ -510,20 +570,129 @@ class AntigravitySession implements HarnessSession {
     switch (update.sessionUpdate) {
       case "agent_message_chunk":
         if (!delta) return;
-        turn.text.push(delta);
-        this.emit({ type: "text.delta", turnId: turn.id, delta });
+        this.handleMessageChunk(turn, delta);
         break;
       case "agent_thought_chunk":
-        if (delta) this.emit({ type: "reasoning.delta", turnId: turn.id, delta });
+        if (delta) {
+          this.stopLogWatch(turn);
+          this.emit({ type: "reasoning.delta", turnId: turn.id, delta });
+        }
         break;
       case "tool_call":
       case "tool_call_update":
+        this.stopLogWatch(turn);
+        this.flushPendingText(turn);
         this.toolUpdate(turn, update);
         break;
       case "usage_update":
         this.emitUsage(turn.id, update);
         break;
     }
+  }
+
+  private handleMessageChunk(turn: ActiveTurn, delta: string) {
+    turn.text.push(delta);
+    if (turn.streamed) {
+      this.emit({ type: "text.delta", turnId: turn.id, delta });
+      return;
+    }
+    turn.pendingText += delta;
+    const trimmed = turn.pendingText.trimStart();
+    if (!trimmed) return;
+    if (
+      !trimmed.startsWith("⚠") ||
+      trimmed.length > 512 ||
+      trimmed.includes("\n\n") ||
+      trimmed.split("\n").length > 2
+    ) {
+      this.flushPendingText(turn);
+    }
+  }
+
+  private flushPendingText(turn: ActiveTurn) {
+    if (turn.streamed || !turn.pendingText) return;
+    const delta = turn.pendingText;
+    turn.pendingText = "";
+    turn.streamed = true;
+    this.stopLogWatch(turn);
+    this.emit({ type: "text.delta", turnId: turn.id, delta });
+  }
+
+  private startLogWatch(turn: ActiveTurn) {
+    if (!this.logFile || this.maxRateLimitRetries <= 0) return;
+    let polling = false;
+    const poll = async () => {
+      if (
+        polling ||
+        this.turn !== turn ||
+        turn.cancelling ||
+        turn.streamed ||
+        turn.tools.size > 0
+      ) {
+        if (this.turn !== turn || turn.streamed || turn.tools.size > 0) {
+          this.stopLogWatch(turn);
+        }
+        return;
+      }
+      polling = true;
+      try {
+        const info = await stat(this.logFile!).catch(() => undefined);
+        if (!info || info.size <= turn.logOffset) return;
+        const toRead = Math.min(info.size - turn.logOffset, MAX_LOG_CHUNK_BYTES);
+        const handle = await open(this.logFile!, "r");
+        let chunk: string;
+        try {
+          const buffer = Buffer.allocUnsafe(toRead);
+          const { bytesRead } = await handle.read(buffer, 0, toRead, turn.logOffset);
+          turn.logOffset += bytesRead;
+          chunk = buffer.toString("utf8", 0, bytesRead);
+        } finally {
+          await handle.close();
+        }
+        if (this.turn !== turn || turn.cancelling || turn.streamed || turn.tools.size > 0) {
+          this.stopLogWatch(turn);
+          return;
+        }
+        const combined = turn.logRemainder + chunk;
+        const lines = combined.split("\n");
+        turn.logRemainder = lines.pop() ?? "";
+        for (const line of lines) {
+          const match = RETRY_QUOTA_LINE.exec(line);
+          if (!match) continue;
+          const attempt = Number(match[1]);
+          turn.rateLimitRetries = Math.max(
+            turn.rateLimitRetries + 1,
+            Number.isFinite(attempt) ? attempt : 0,
+          );
+          if (turn.rateLimitRetries >= this.maxRateLimitRetries) {
+            this.stopLogWatch(turn);
+            void this.client
+              .notify("session/cancel", { sessionId: this.providerSessionId })
+              .catch(() => undefined);
+            this.failTurn(
+              turn,
+              "RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).",
+              true,
+            );
+            return;
+          }
+        }
+      } catch {
+        // Best-effort log tailing; inline error detection remains the fallback.
+      } finally {
+        polling = false;
+      }
+    };
+    turn.logWatcher = setInterval(() => {
+      void poll();
+    }, this.logPollIntervalMs);
+    turn.logWatcher.unref?.();
+  }
+
+  private stopLogWatch(turn: ActiveTurn) {
+    if (!turn.logWatcher) return;
+    clearInterval(turn.logWatcher);
+    turn.logWatcher = undefined;
   }
 
   private toolUpdate(turn: ActiveTurn, update: AcpObject) {
@@ -588,17 +757,41 @@ class AntigravitySession implements HarnessSession {
     this.emitUsage(turn.id, result?.usage ?? acpRecord(result?._meta)?.usage);
     switch (reason) {
       case "cancelled":
+        if (
+          !turn.streamed &&
+          turn.pendingText &&
+          !extractAntigravityInlineError(turn.pendingText)
+        ) {
+          this.flushPendingText(turn);
+        }
+        this.clearTurn(turn);
+        this.emit({
+          type: "turn.completed",
+          turnId: turn.id,
+          text: turn.streamed ? turn.text.join("") : "",
+          stopReason: "interrupted",
+        });
+        break;
       case "end_turn":
       case "max_tokens":
-      case "max_turn_requests":
+      case "max_turn_requests": {
+        if (!turn.streamed && turn.pendingText) {
+          const inlineError = extractAntigravityInlineError(turn.pendingText);
+          if (inlineError) {
+            this.failTurn(turn, inlineError, true);
+            return;
+          }
+          this.flushPendingText(turn);
+        }
         this.clearTurn(turn);
         this.emit({
           type: "turn.completed",
           turnId: turn.id,
           text: turn.text.join(""),
-          stopReason: reason === "cancelled" ? "interrupted" : "end_turn",
+          stopReason: "end_turn",
         });
         break;
+      }
       default:
         this.failTurn(
           turn,
@@ -616,6 +809,7 @@ class AntigravitySession implements HarnessSession {
   }
 
   private clearTurn(turn: ActiveTurn) {
+    this.stopLogWatch(turn);
     this.turn = undefined;
     turn.abort.abort();
     this.cancelQuestions();
@@ -671,13 +865,14 @@ export function createAntigravityDriver(options: AntigravityDriverOptions = {}):
     };
   };
 
-  const acpArgs = (fullPermissions: boolean) => [
+  const acpArgs = (fullPermissions: boolean, logFile?: string) => [
     ...prefixArgs,
     "acp",
     "--gemini-dir",
     geminiDir,
     "--app-data-dir",
     "antigravity-acp",
+    ...(logFile ? ["--log-file", logFile] : []),
     ...(fullPermissions ? ["--dangerously-skip-permissions"] : []),
   ];
 
@@ -793,10 +988,12 @@ export function createAntigravityDriver(options: AntigravityDriverOptions = {}):
       ensureProfileDir();
       const mcpServers = (spec.mcpServers ?? []).map(mcpServer);
       const { env, apiKey } = buildEnv(spec.env);
+      const sessionTempDir = await mkdtemp(join(tmpdir(), "wildbots-agy-session-"));
+      const logFile = join(sessionTempDir, "acp.log");
       let session: AntigravitySession | undefined;
       const client = new AcpStdio({
         command,
-        args: acpArgs(spec.fullPermissions),
+        args: acpArgs(spec.fullPermissions, logFile),
         cwd: spec.cwd,
         env,
         requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
@@ -827,10 +1024,15 @@ export function createAntigravityDriver(options: AntigravityDriverOptions = {}):
           spec.fullPermissions,
           systemPromptApplied ? undefined : spec.systemPrompt,
           options.promptTimeoutMs ?? PROMPT_TIMEOUT_MS,
+          sessionTempDir,
+          logFile,
+          options.maxRateLimitRetries ?? DEFAULT_MAX_RATE_LIMIT_RETRIES,
+          options.logPollIntervalMs ?? DEFAULT_LOG_POLL_INTERVAL_MS,
         );
         return session;
       } catch (error) {
         await client.close();
+        await rm(sessionTempDir, { recursive: true, force: true }).catch(() => undefined);
         throw error;
       }
     },

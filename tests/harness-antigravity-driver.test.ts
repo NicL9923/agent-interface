@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAntigravityDriver } from "../src/server/harness/antigravity-driver.js";
+import {
+  createAntigravityDriver,
+  extractAntigravityInlineError,
+} from "../src/server/harness/antigravity-driver.js";
 import type { HarnessEvent } from "../src/server/harness/driver.js";
 
 const fixture = fileURLToPath(
@@ -150,5 +153,117 @@ describe("antigravity ACP driver", () => {
     });
     const promptMsg = wire.find((entry) => entry.method === "session/prompt");
     expect(promptMsg.params.prompt).toEqual([{ type: "text", text: "Hello Neon" }]);
+  });
+
+  it("turns inline ⚠ RESOURCE_EXHAUSTED ACP replies into turn.failed without streaming error text, while preserving normal ⚠ replies", async () => {
+    const dir = makeTempDir();
+    const driver = createAntigravityDriver({
+      command: process.execPath,
+      args: [fixture],
+      geminiDir: join(dir, "gemini"),
+    });
+    const session = await driver.openSession({
+      botId: "kimberly",
+      sessionKey: "s-quota",
+      cwd: dir,
+      model: "gemini-4-neon",
+      fullPermissions: true,
+    });
+    try {
+      const collect = async (turnId: string, text: string) => {
+        const events: HarnessEvent[] = [];
+        const done = new Promise<void>((resolve) => {
+          const unsub = session.events((event) => {
+            events.push(event);
+            if (
+              (event.type === "turn.completed" || event.type === "turn.failed") &&
+              event.turnId === turnId
+            ) {
+              unsub();
+              resolve();
+            }
+          });
+        });
+        await session.startTurn({ turnId, text });
+        await done;
+        return events;
+      };
+
+      const quotaEvents = await collect("t-quota", "InlineQuotaError");
+      expect(quotaEvents.filter((event) => event.type === "text.delta")).toEqual([]);
+      expect(quotaEvents).toContainEqual({
+        type: "turn.failed",
+        turnId: "t-quota",
+        message: "RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).",
+        recoverable: true,
+      });
+
+      const warningEvents = await collect("t-warn", "NormalWarning");
+      expect(warningEvents).toContainEqual({
+        type: "text.delta",
+        turnId: "t-warn",
+        delta: "⚠ Remember to close the barn gate.",
+      });
+      expect(warningEvents).toContainEqual({
+        type: "turn.completed",
+        turnId: "t-warn",
+        text: "⚠ Remember to close the barn gate.",
+        stopReason: "end_turn",
+      });
+    } finally {
+      await session.close();
+    }
+
+    expect(
+      extractAntigravityInlineError(
+        "\n⚠ RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).\n",
+      ),
+    ).toBe("RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).");
+    expect(extractAntigravityInlineError("⚠ UNAVAILABLE (code 503): Service unavailable")).toBe(
+      "UNAVAILABLE (code 503): Service unavailable",
+    );
+    expect(extractAntigravityInlineError("⚠ Remember to lock the gate.")).toBeUndefined();
+    expect(
+      extractAntigravityInlineError("⚠ RESOURCE_EXHAUSTED (code 429)\n\nHere is what that means:"),
+    ).toBeUndefined();
+    expect(extractAntigravityInlineError("")).toBeUndefined();
+  });
+
+  it("fails fast when Antigravity ACP logs repeated HTTP 429 retries before streaming output", async () => {
+    const dir = makeTempDir();
+    const driver = createAntigravityDriver({
+      command: process.execPath,
+      args: [fixture],
+      geminiDir: join(dir, "gemini"),
+      maxRateLimitRetries: 2,
+      logPollIntervalMs: 25,
+    });
+    const session = await driver.openSession({
+      botId: "kimberly",
+      sessionKey: "s-retry",
+      cwd: dir,
+      model: "gemini-4-neon",
+      fullPermissions: true,
+    });
+    try {
+      const events: HarnessEvent[] = [];
+      const done = new Promise<void>((resolve) => {
+        session.events((event) => {
+          events.push(event);
+          if (event.type === "turn.completed" || event.type === "turn.failed") resolve();
+        });
+      });
+      await session.startTurn({ turnId: "t-retry", text: "RetryQuotaLoop" });
+      await done;
+      expect(events.filter((event) => event.type === "text.delta")).toEqual([]);
+      expect(events).toContainEqual({
+        type: "turn.failed",
+        turnId: "t-retry",
+        message: "RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).",
+        recoverable: true,
+      });
+    } finally {
+      await session.close();
+    }
   });
 });
