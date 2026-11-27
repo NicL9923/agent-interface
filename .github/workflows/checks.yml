@@ -105,7 +105,7 @@ jobs:
             test-results/
           retention-days: 7
   release-archive:
-    # The host builds from archive-release.py's tarball, not a checkout. A file the build reads and
+    # The host builds from archive-release.mjs's tarball, not a checkout. A file the build reads and
     # the archive leaves out fails here instead of in a production release.
     name: Release archive builds
     runs-on: ubuntu-latest
@@ -134,56 +134,9 @@ jobs:
             ${{ runner.os }}-pnpm-store-
       - name: Build from the release archive, as the host does
         run: |
-          python3 .agents/tools/archive-release.py "$RUNNER_TEMP/release.tar.gz"
+          node .agents/tools/archive-release.mjs "$RUNNER_TEMP/release.tar.gz"
           mkdir "$RUNNER_TEMP/release"
           tar -xzf "$RUNNER_TEMP/release.tar.gz" -C "$RUNNER_TEMP/release"
           cd "$RUNNER_TEMP/release"
           pnpm install --frozen-lockfile
           pnpm run build
-  python:
-    # Runs once, on the Python the Hermes host runs (scripts/spike/requirements.lock.txt).
-    name: Python 3.14.7
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          filter: blob:none
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: 3.14.7
-          cache: pip
-          cache-dependency-path: .github/requirements-ci.txt
-      # Some tests start node, as the Hermes host does.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .node-version
-      - run: pip install -r .github/requirements-ci.txt
-      - name: Install tmux for the terminal and computer tests
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y tmux
-      - name: Check Python syntax, lint and tests in parallel
-        shell: bash
-        run: |
-          # Syntax compilation has its own cache so imports in tests cannot share writes.
-          PYTHONPYCACHEPREFIX="$RUNNER_TEMP/python-syntax-cache" python -m compileall -q scripts .agents/tools &
-          syntax_pid=$!
-          ruff check --output-format=github . &
-          lint_pid=$!
-          python scripts/run-python-tests.py &
-          test_pid=$!
-          failed=0
-          for check_spec in "syntax:$syntax_pid" "lint:$lint_pid" "tests:$test_pid"; do
-            check_name=${check_spec%%:*}
-            check_pid=${check_spec#*:}
-            if wait "$check_pid"; then
-              printf '%s: passed\n' "$check_name"
-            else
-              check_status=$?
-              printf '%s: failed (%s)\n' "$check_name" "$check_status" >&2
-              failed=1
-            fi
-          done
-          exit "$failed"

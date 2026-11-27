@@ -123,7 +123,7 @@ release or Hermes recovery.
    ```sh
    cd "$APP_BASE/current" &&
      PATH="$APP_BASE/runtime/bun-v1.4.5:$PATH" pnpm run build:server:bun &&
-     python3 scripts/bun-service-check.py "$APP_BASE/runtime/bun-v1.4.5/bun"
+     node scripts/bun-service-check.mjs "$APP_BASE/runtime/bun-v1.4.5/bun"
    ```
 
 3. Put the native runtime settings in the service's private `shared/app.env`.
@@ -149,7 +149,7 @@ release or Hermes recovery.
    [Service]
    WorkingDirectory=APP_BASE/current
    EnvironmentFile=APP_BASE/shared/app.env
-   ExecStartPre=/usr/bin/python3 scripts/bun-service-check.py APP_BASE/runtime/bun-v1.4.5/bun
+   ExecStartPre=/usr/bin/env node scripts/bun-service-check.mjs APP_BASE/runtime/bun-v1.4.5/bun
    ExecStart=
    ExecStart=APP_BASE/runtime/bun-v1.4.5/bun run --no-env-file --no-install dist/server/index.js
    ```
@@ -282,7 +282,7 @@ gateway and dashboard, this app, the shared-computer browser and agent terminal
 tools. URL checks in the browser paths cannot see runtime-built URLs, `curl` or
 Python tools, so the host blocks that account at the network layer.
 
-`.agents/tools/metadata-egress-floor.py` installs a dedicated nftables table,
+`.agents/tools/metadata-egress-floor.mjs` installs a dedicated nftables table,
 `inet agent_interface_metadata`. Its output-hook chain rejects every packet the
 service account's sockets send to `169.254.169.254` or OpenStack's IPv6
 link-local `fe80::a9fe:a9fe`. TCP gets a reset, and everything else gets
@@ -333,7 +333,7 @@ fix it, then run
 `sudo systemctl start agent-interface-metadata-floor.service user@UID.service`.
 SSH sign-in and `sudo` for that account should still work without its manager,
 but that is untested here, so keep the provider's console as the fallback. In an
-emergency, `sudo metadata-egress-floor.py remove`, or deleting
+emergency, `sudo node ~/metadata-egress-floor.mjs remove`, or deleting
 `/etc/systemd/system/user@UID.service.d/agent-interface-metadata-floor.conf` and
 running `systemctl daemon-reload`, starts the services without the floor.
 
@@ -341,10 +341,10 @@ Install it before preparing a release, from any checkout that has the tool. Befo
 the first release that carries it, copy the tool from the merged commit:
 
 ```sh
-git show origin/main:.agents/tools/metadata-egress-floor.py | ssh <host> 'umask 077 && cat > ~/metadata-egress-floor.py'
+git show origin/main:.agents/tools/metadata-egress-floor.mjs | ssh <host> 'umask 077 && cat > ~/metadata-egress-floor.mjs'
 ssh -t <host> 'sudo systemctl is-enabled nftables.service ufw.service; sudo nft list ruleset > ~/nft-before.txt'
-ssh -t <host> 'sudo python3 ~/metadata-egress-floor.py install --user <service user>'
-ssh -t <host> 'sudo python3 ~/metadata-egress-floor.py check --user <service user>'
+ssh -t <host> 'sudo node ~/metadata-egress-floor.mjs install --user <service user>'
+ssh -t <host> 'sudo node ~/metadata-egress-floor.mjs check --user <service user>'
 ```
 
 Install is idempotent. A rerun rewrites nothing unless the uid changed, then

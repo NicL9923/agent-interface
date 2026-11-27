@@ -14,7 +14,12 @@ import type { Config } from "./config.js";
 import { httpError } from "./http-error.js";
 
 const execFileAsync = promisify(execFile);
-const host = fileURLToPath(new URL("./terminal-host.py", import.meta.url));
+const host = fileURLToPath(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./terminal-host.ts" : "./terminal-host.js",
+    import.meta.url,
+  ),
+);
 // Cache tmux liveness briefly so rapid status polls do not spawn a subprocess on every request.
 const AVAILABILITY_TTL_MS = 2_000;
 
@@ -68,8 +73,11 @@ export class SystemTerminal {
     this.target = `${userInfo().username}@${hostname()}${config ? ` · ${config.cwd}` : ""}`;
     this.dependencies = Boolean(
       config &&
-      existsSync(config.python) &&
+      existsSync(host) &&
       existsSync(config.cwd) &&
+      (config.runtime.startsWith("/")
+        ? existsSync(config.runtime)
+        : spawnSync(config.runtime, ["--version"], { timeout: 2000 }).status === 0) &&
       spawnSync("tmux", ["-V"], { timeout: 2000 }).status === 0,
     );
     if (this.dependencies && config) {
@@ -112,6 +120,9 @@ export class SystemTerminal {
     if (!this.dependencies || !this.config)
       throw httpError(409, "The installer has not enabled the system terminal on this host.");
     return [
+      "run",
+      "--no-env-file",
+      "--no-install",
       host,
       "--socket",
       join(this.config.stateDirectory, "tmux.sock"),
@@ -123,9 +134,9 @@ export class SystemTerminal {
   }
   attach(userId: string) {
     const args = this.arguments(this.sessionId(userId));
-    const child = spawn(this.config!.python, args, {
+    const child = spawn(this.config!.runtime, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { PATH: process.env.PATH, LANG: process.env.LANG, PYTHONUNBUFFERED: "1" },
+      env: { PATH: process.env.PATH, LANG: process.env.LANG },
     });
     this.children.add(child);
     child.once("close", () => this.children.delete(child));
@@ -141,7 +152,7 @@ export class SystemTerminal {
         (await this.getReason()) ?? "The system terminal service is not running on this host.",
       );
     const args = this.arguments(sessionId);
-    const child = spawn(this.config!.python, [...args, "--end"], {
+    const child = spawn(this.config!.runtime, [...args, "--end"], {
       stdio: "ignore",
       env: { PATH: process.env.PATH, LANG: process.env.LANG },
     });

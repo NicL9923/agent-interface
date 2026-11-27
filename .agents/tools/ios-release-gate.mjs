@@ -13,13 +13,14 @@ const fail = (condition, reason) => {
 
 // The generator owns the shipped version and build number. The checked-in project is generated from it.
 export function repositoryRelease(repo, read = readFileSync) {
-  const generator = read(join(repo, "ios/tools/generate-project.py"), "utf8");
-  const field = (name) => generator.match(new RegExp(`^${name} = "([^"]+)"$`, "m"))?.[1];
+  const generator = read(join(repo, "ios/tools/generate-project.mjs"), "utf8");
+  const field = (name) =>
+    generator.match(new RegExp(`^(?:const )?${name} = "([^"]+)";?$`, "m"))?.[1];
   const version = field("MARKETING_VERSION"),
     build = field("CURRENT_PROJECT_VERSION");
   fail(
     version && build && /^[1-9][0-9]{0,8}$/.test(build),
-    "ios/tools/generate-project.py has no readable MARKETING_VERSION and CURRENT_PROJECT_VERSION",
+    "ios/tools/generate-project.mjs has no readable MARKETING_VERSION and CURRENT_PROJECT_VERSION",
   );
   return { version, build: Number(build) };
 }
@@ -29,11 +30,11 @@ export function requireRepositoryRelease(repo, version, build, read) {
   const expected = repositoryRelease(repo, read);
   fail(
     build === expected.build,
-    `BUILD ${build} does not match CURRENT_PROJECT_VERSION ${expected.build} in ios/tools/generate-project.py. Change the number there, regenerate the project, commit, and run a full iOS validation before archiving. Never archive a build number the repository does not hold.`,
+    `BUILD ${build} does not match CURRENT_PROJECT_VERSION ${expected.build} in ios/tools/generate-project.mjs. Change the number there, regenerate the project, commit, and run a full iOS validation before archiving. Never archive a build number the repository does not hold.`,
   );
   fail(
     version === expected.version,
-    `VERSION ${version} does not match MARKETING_VERSION ${expected.version} in ios/tools/generate-project.py. Change it there, regenerate the project, commit, and run a full iOS validation before archiving.`,
+    `VERSION ${version} does not match MARKETING_VERSION ${expected.version} in ios/tools/generate-project.mjs. Change it there, regenerate the project, commit, and run a full iOS validation before archiving.`,
   );
   return expected;
 }
@@ -48,11 +49,11 @@ export const defaultExec = (command, args, cwd) => {
   };
 };
 
-// A passing run of the whole scheme for the current iOS inputs, from ios-validation-state.py.
+// A passing run of the whole scheme for the current iOS inputs, from ios-validation-state.mjs.
 export function requireFullIosValidation(repo, exec = defaultExec) {
   const result = exec(
-    "python3",
-    [join(repo, ".agents/tools/ios-validation-state.py"), "full-run"],
+    "node",
+    [join(repo, ".agents/tools/ios-validation-state.mjs"), "full-run"],
     repo,
   );
   const detail = result.error ? result.error.message : result.stderr.trim();

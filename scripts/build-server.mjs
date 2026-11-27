@@ -1,6 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 const root = new URL("../", import.meta.url);
 const build = spawnSync(
@@ -8,6 +6,7 @@ const build = spawnSync(
   [
     "build",
     "src/server/index.ts",
+    "src/server/terminal-host.ts",
     "--outdir",
     "dist/server",
     "--target",
@@ -23,9 +22,3 @@ if (build.error?.code === "ENOENT") {
 }
 if (build.error) throw build.error;
 if (build.status !== 0) process.exit(build.status ?? 1);
-
-// The terminal starts this helper relative to the server module's import.meta.url.
-copyFileSync(
-  fileURLToPath(new URL("src/server/terminal-host.py", root)),
-  fileURLToPath(new URL("dist/server/terminal-host.py", root)),
-);
