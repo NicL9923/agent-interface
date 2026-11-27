@@ -3,9 +3,9 @@ import UIKit
 import UserNotifications
 import WatchConnectivity
 
-/// Authoritative context queued for delivery to Apple Watch. Typed as `Sendable` so it can be
-/// retained across inactive `WCSession` states and replayed immediately on activation or install.
-enum WatchContext: Equatable, Sendable {
+/// Authoritative context queued for delivery to Apple Watch. Codable + `Sendable` so a pending
+/// sign-out clear survives app termination before `WCSession` activates.
+enum WatchContext: Codable, Equatable, Sendable {
   case signedOut
   case snapshot(Data)
 
@@ -28,8 +28,35 @@ enum WatchContext: Equatable, Sendable {
 }
 
 @MainActor final class SystemWatchTransport: NSObject, WatchTransport, WCSessionDelegate {
+  private static let pendingKey = "native.watch.pendingContext"
   private var onMessage: (@MainActor ([String: Any]) async -> [String: Any])?
-  private var pendingContext: WatchContext?
+  private let defaults: UserDefaults
+  private let savedScope: @MainActor () -> String?
+  private var pendingContext: WatchContext? {
+    didSet { persistPendingContext() }
+  }
+
+  init(
+    defaults: UserDefaults = .standard,
+    savedScope: @escaping @MainActor () -> String? = { UserDefaults.standard.string(forKey: DeviceDefaults.signedInScope) }
+  ) {
+    self.defaults = defaults
+    self.savedScope = savedScope
+    super.init()
+    if let data = defaults.data(forKey: Self.pendingKey),
+      let decoded = try? JSONDecoder().decode(WatchContext.self, from: data)
+    {
+      self.pendingContext = decoded
+    }
+  }
+
+  private func persistPendingContext() {
+    if let pendingContext, let encoded = try? JSONEncoder().encode(pendingContext) {
+      defaults.set(encoded, forKey: Self.pendingKey)
+    } else {
+      defaults.removeObject(forKey: Self.pendingKey)
+    }
+  }
 
   var isSupported: Bool { WCSession.isSupported() }
 
@@ -52,8 +79,16 @@ enum WatchContext: Equatable, Sendable {
     flushPendingContext(on: WCSession.default)
   }
 
+  /// Resolves the context that should be pushed when `WCSession` activates: any persisted pending
+  /// update first, or an authoritative `.signedOut` clear whenever no account is signed in.
+  func authoritativeContextToFlush() -> WatchContext? {
+    if let pendingContext { return pendingContext }
+    if savedScope() == nil { return .signedOut }
+    return nil
+  }
+
   private func flushPendingContext(on session: WCSession) {
-    guard let pending = pendingContext,
+    guard let pending = authoritativeContextToFlush(),
       session.activationState == .activated,
       session.isPaired,
       session.isWatchAppInstalled
@@ -62,7 +97,8 @@ enum WatchContext: Equatable, Sendable {
       try session.updateApplicationContext(pending.dictionary)
       pendingContext = nil
     } catch {
-      // Retain pendingContext so the next activation/watch-state change retries.
+      // Retain pendingContext on disk so the next activation/watch-state change retries.
+      pendingContext = pending
     }
   }
 
@@ -118,8 +154,22 @@ private final class SentReply: @unchecked Sendable {
   weak var store: AppStore?
   var transport: WatchTransport
   var defaults: UserDefaults
-  /// Monotonic counter bumped on every `sync(_:)` so an in-flight refresh can never overwrite a sign-out.
-  private var syncEpoch: UInt64 = 0
+  /// Monotonic counter bumped ONLY on account boundaries (sign-out or switching to a different scope),
+  /// NOT on same-scope refreshes, so `BackgroundRefresh.refreshWidgets()` calling `sync(latest)`
+  /// never makes a Watch `.refresh` fail with "Account changed".
+  private var accountEpoch: UInt64 = 0
+  private var lastSyncedScope: String?
+  /// In-flight non-refresh Watch actions keyed by `WatchAction.id`, so a `transferUserInfo` fallback
+  /// arriving while the original `sendMessage` is still suspended joins the same result without running twice.
+  private var inFlightActions: [UUID: Task<WatchActionReply, Never>] = [:]
+
+  private struct WatchActionReply: Sendable {
+    var ok: Bool
+    var message: String
+    var dictionary: [String: Any] {
+      ok ? ["ok": true, "message": message] : ["ok": false, "error": message]
+    }
+  }
 
   /// Injectable handlers for unit testing without hitting real system services.
   var actHandler: @MainActor (ActivityAction) async -> ActivityActionResult = {
@@ -168,7 +218,10 @@ private final class SentReply: @unchecked Sendable {
 
   /// Pushes the latest non-secret snapshot to Watch, or wipes Watch state when `snapshot` is nil.
   func sync(_ snapshot: WidgetSnapshot?) {
-    syncEpoch &+= 1
+    if snapshot == nil || snapshot?.scope != lastSyncedScope {
+      accountEpoch &+= 1
+      lastSyncedScope = snapshot?.scope
+    }
     guard transport.isSupported else { return }
     if let snapshot, let data = try? JSONEncoder().encode(snapshot) {
       transport.updateApplicationContext([WatchPayload.snapshotKey: data, WatchPayload.signedOutKey: false])
@@ -211,68 +264,12 @@ private final class SentReply: @unchecked Sendable {
       sync(nil)
       return ["ok": false, "error": "Sign in to this account on iPhone first."]
     }
-    if case .refresh = action.kind {} else if let prior = previousOutcome(for: action.id, now: now) {
-      return prior.ok
-        ? ["ok": true, "message": prior.message]
-        : ["ok": false, "error": prior.message]
-    }
-    switch action.kind {
-    case .stop(let botId, let name, let runId):
-      guard !runId.isEmpty else {
-        return ["ok": false, "error": "Run details are unavailable. Refresh on Watch first."]
-      }
-      let result = await actHandler(ActivityAction(kind: .stop, botId: botId, scope: activeScope, name: name, runId: runId))
-      recordOutcome(id: action.id, ok: result.ok, message: result.message, now: now)
-      return result.ok
-        ? ["ok": true, "message": result.message]
-        : ["ok": false, "error": result.message]
-
-    case .decline(let botId, let name, let approvalId):
-      let result = await actHandler(ActivityAction(kind: .decline(approvalId: approvalId), botId: botId, scope: activeScope, name: name))
-      recordOutcome(id: action.id, ok: result.ok, message: result.message, now: now)
-      return result.ok
-        ? ["ok": true, "message": result.message]
-        : ["ok": false, "error": result.message]
-
-    case .review(let botId):
-      await openHandler(DeepLink.bot(botId))
-      let msg: String
-      if isForegroundActive() {
-        msg = "Opened on iPhone."
-      } else {
-        await notifyReview(botId)
-        msg = "Open WildBots on iPhone to review."
-      }
-      recordOutcome(id: action.id, ok: true, message: msg, now: now)
-      return ["ok": true, "message": msg]
-
-    case .queueDraft(let botId, let text):
-      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmed.isEmpty else { return ["ok": false, "error": "Draft text is empty."] }
-      guard trimmed.utf16.count <= AppStore.maxMessageLength else {
-        return ["ok": false, "error": "Draft exceeds the 50,000 character limit."]
-      }
-      guard let store else {
-        // Store isn't mounted yet; hand off as an Ask request (never auto-sent).
-        NotificationController.shared.ask(AskRequest(botId: botId, text: trimmed, scope: activeScope, at: now))
-        let msg = "Draft queued for review on iPhone."
-        recordOutcome(id: action.id, ok: true, message: msg, now: now)
-        return ["ok": true, "message": msg]
-      }
-      guard store.knownBot(botId) != nil else {
-        return ["ok": false, "error": "That assistant is no longer available."]
-      }
-      let held = store.hold(DraftAddition(source: .watch, botId: botId, text: trimmed, scope: activeScope, opens: false))
-      let msg = held ? "Draft queued for review on iPhone." : "Account changed before the draft could be queued."
-      if held { recordOutcome(id: action.id, ok: true, message: msg, now: now) }
-      return held ? ["ok": true, "message": msg] : ["ok": false, "error": msg]
-
-    case .refresh:
-      let startEpoch = syncEpoch
+    if case .refresh = action.kind {
+      let startEpoch = accountEpoch
       let latest = await refreshHandler()
       // Reject stale refresh replies if sign-out or account change occurred while awaiting.
       let currentScope = store?.scope ?? savedScope()
-      guard syncEpoch == startEpoch, currentScope == activeScope else {
+      guard accountEpoch == startEpoch, currentScope == activeScope else {
         return ["ok": false, "error": "Account changed while refreshing."]
       }
       guard let latest, latest.scope == activeScope else {
@@ -284,6 +281,74 @@ private final class SentReply: @unchecked Sendable {
         return ["ok": true, WatchPayload.snapshotKey: encoded]
       }
       return ["ok": true]
+    }
+    if let prior = previousOutcome(for: action.id, now: now) {
+      return prior.ok
+        ? ["ok": true, "message": prior.message]
+        : ["ok": false, "error": prior.message]
+    }
+    if let running = inFlightActions[action.id] {
+      return (await running.value).dictionary
+    }
+    let task = Task<WatchActionReply, Never> { @MainActor in
+      await self.executeAction(action, activeScope: activeScope, now: now)
+    }
+    inFlightActions[action.id] = task
+    let reply = await task.value
+    inFlightActions.removeValue(forKey: action.id)
+    return reply.dictionary
+  }
+
+  private func executeAction(_ action: WatchAction, activeScope: String, now: Date) async -> WatchActionReply {
+    switch action.kind {
+    case .stop(let botId, let name, let runId):
+      guard !runId.isEmpty else {
+        return WatchActionReply(ok: false, message: "Run details are unavailable. Refresh on Watch first.")
+      }
+      let result = await actHandler(ActivityAction(kind: .stop, botId: botId, scope: activeScope, name: name, runId: runId))
+      recordOutcome(id: action.id, ok: result.ok, message: result.message, now: now)
+      return WatchActionReply(ok: result.ok, message: result.message)
+
+    case .decline(let botId, let name, let approvalId):
+      let result = await actHandler(ActivityAction(kind: .decline(approvalId: approvalId), botId: botId, scope: activeScope, name: name))
+      recordOutcome(id: action.id, ok: result.ok, message: result.message, now: now)
+      return WatchActionReply(ok: result.ok, message: result.message)
+
+    case .review(let botId):
+      await openHandler(DeepLink.bot(botId))
+      let msg: String
+      if isForegroundActive() {
+        msg = "Opened on iPhone."
+      } else {
+        await notifyReview(botId)
+        msg = "Open WildBots on iPhone to review."
+      }
+      recordOutcome(id: action.id, ok: true, message: msg, now: now)
+      return WatchActionReply(ok: true, message: msg)
+
+    case .queueDraft(let botId, let text):
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { return WatchActionReply(ok: false, message: "Draft text is empty.") }
+      guard trimmed.utf16.count <= AppStore.maxMessageLength else {
+        return WatchActionReply(ok: false, message: "Draft exceeds the 50,000 character limit.")
+      }
+      guard let store else {
+        // Store isn't mounted yet; hand off as an Ask request (never auto-sent).
+        NotificationController.shared.ask(AskRequest(botId: botId, text: trimmed, scope: activeScope, at: now))
+        let msg = "Draft queued for review on iPhone."
+        recordOutcome(id: action.id, ok: true, message: msg, now: now)
+        return WatchActionReply(ok: true, message: msg)
+      }
+      guard store.knownBot(botId) != nil else {
+        return WatchActionReply(ok: false, message: "That assistant is no longer available.")
+      }
+      let held = store.hold(DraftAddition(source: .watch, botId: botId, text: trimmed, scope: activeScope, opens: false))
+      let msg = held ? "Draft queued for review on iPhone." : "Account changed before the draft could be queued."
+      if held { recordOutcome(id: action.id, ok: true, message: msg, now: now) }
+      return WatchActionReply(ok: held, message: msg)
+
+    case .refresh:
+      return WatchActionReply(ok: false, message: "Refresh is handled directly.")
     }
   }
 }

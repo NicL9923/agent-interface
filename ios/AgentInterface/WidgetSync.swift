@@ -79,18 +79,11 @@ extension AppStore {
     syncSenderAvatars(next == nil ? nil : bootstrap)
     syncNotificationPrefetch(next == nil ? nil : bootstrap)
     if let next {
-      for assistant in next.assistants where assistant.needsAttention {
-        let dedup = assistant.approvalId ?? assistant.lastMessage ?? assistant.activity
-        let reason = assistant.activity == "waiting" ? "Needs your approval" : "Needs your input"
-        Task {
-          await CriticalAlarmManager.shared.escalateWaitingIfOptedIn(
-            botId: assistant.id,
-            botName: assistant.name,
-            reason: reason,
-            dedupKey: dedup,
-            scope: next.scope
-          )
-        }
+      let targetScope = next.scope
+      let assistants = next.assistants
+      Task {
+        guard self.scope == targetScope else { return }
+        await CriticalAlarmManager.shared.escalateWaitingBatch(assistants, scope: targetScope)
       }
     }
   }

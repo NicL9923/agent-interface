@@ -136,6 +136,27 @@ struct RoutineEntityQuery: EntityStringQuery {
   func suggestedEntities() async throws -> [RoutineEntity] { all }
 }
 
+/// Resolves the active account scope and authenticated `APIClient` from one credential-bound
+/// session so write intents never pair one member's saved scope with another member's token.
+@MainActor enum ShortcutSession {
+  static func current() -> (scope: String, client: APIClient)? {
+    let controller = NotificationController.shared
+    if let store = controller.store {
+      // Refuse writes while a sign-in exchange is in flight before bootstrap has settled.
+      if store.signingIn { return nil }
+      if let scope = store.scope, let api = store.api, (api.token != nil || api.localCookieAuth), !store.sessionExpired {
+        return (scope, api)
+      }
+      if store.bootstrap != nil { return nil }
+    }
+    guard let client = controller.actionClient(),
+      let scope = controller.savedScope(),
+      !scope.isEmpty
+    else { return nil }
+    return (scope, client)
+  }
+}
+
 /// Runs a saved routine once immediately from iOS Shortcuts without opening the app.
 struct TryOnceIntent: AppIntent {
   static var title: LocalizedStringResource { "Run routine once" }
@@ -150,13 +171,13 @@ struct TryOnceIntent: AppIntent {
   init(routine: RoutineEntity) { self.routine = routine }
 
   @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+    let session = ShortcutSession.current()
     let dialog = try await Self.execute(
       scopedRoutineId: routine.id,
       routineName: routine.name,
       snapshot: RoutineSnapshotStore.read(from: RoutineEntityQuery.snapshotURL),
-      signedInScope: NotificationController.shared.store?.scope ?? NotificationController.shared.savedScope(),
-      client: NotificationController.shared.store?.api.flatMap { $0.token != nil || $0.localCookieAuth ? $0 : nil }
-        ?? NotificationController.shared.actionClient()
+      signedInScope: session?.scope,
+      client: session?.client
     )
     return .result(dialog: IntentDialog(stringLiteral: dialog))
   }
@@ -319,14 +340,14 @@ struct SendAssistantMessageIntent: AppIntent {
   init(assistant: ScopedAssistantEntity, message: String) { self.assistant = assistant; self.message = message }
 
   @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+    let session = ShortcutSession.current()
     let dialog = try await Self.execute(
       scopedAssistantId: assistant.id,
       assistantName: assistant.name,
       message: message,
       snapshot: WidgetSnapshotStore.read(from: AssistantEntityQuery.snapshotURL),
-      signedInScope: NotificationController.shared.store?.scope ?? NotificationController.shared.savedScope(),
-      client: NotificationController.shared.store?.api.flatMap { $0.token != nil || $0.localCookieAuth ? $0 : nil }
-        ?? NotificationController.shared.actionClient()
+      signedInScope: session?.scope,
+      client: session?.client
     )
     return .result(dialog: IntentDialog(stringLiteral: dialog))
   }

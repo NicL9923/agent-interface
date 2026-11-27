@@ -249,7 +249,10 @@ for (const [name, kind] of [
     } else {
       values.TEST_TARGET_NAME = "AgentInterface";
     }
-    if (configuration === "Release" && (kind === "app" || kind === "extension")) {
+    if (
+      configuration === "Release" &&
+      (kind === "app" || kind === "extension" || kind === "watchApp" || kind === "watchExtension")
+    ) {
       values.PROVISIONING_PROFILE_SPECIFIER = `$(WILDBOTS_PROFILE_${name})`;
     }
     if (configuration === "Debug") {

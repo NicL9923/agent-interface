@@ -763,6 +763,175 @@ import os
     store.suspend()
   }
 
+  func testSecondaryChatPreservesPendingOnUncertain200ReceiptAndReconcilesViaSubmissions() async throws {
+    let server = FakeServer { request in
+      if request.httpMethod == "POST" {
+        return .init(body: #"{"requestId":"u1","status":"uncertain","message":"Still checking"}"#)
+      }
+      if request.url?.path.hasPrefix("/api/submissions/") == true {
+        return .init(body: #"{"requestId":"u1","status":"accepted","turn":"started"}"#)
+      }
+      return .init(body: #"{"botId":"kitchen","messages":[],"activity":{"state":"idle"},"approvals":[],"attention":[]}"#)
+    }
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = server.api(token: "tok")
+    store.bootstrap = try sampleBootstrap()
+    let model = SecondaryChatModel(botId: "kitchen")
+
+    model.draft = "Check water pump"
+    await model.send(using: store)
+    let pending = try XCTUnwrap(model.pending, "HTTP 200 status=uncertain must keep pending requestId")
+    let requestId = pending.requestId
+
+    // Explicit Retry sets reviewedUncertain = true while reusing the exact same requestId.
+    await model.send(using: store, retryPending: true)
+    XCTAssertEqual(model.pending?.requestId, requestId)
+    XCTAssertEqual(model.pending?.reviewedUncertain, true)
+
+    // Reconcile via GET /submissions/:requestId clears pending and draft without resending.
+    await model.reconcilePending(using: store)
+    XCTAssertNil(model.pending)
+    XCTAssertEqual(model.draft, "")
+    store.suspend()
+  }
+
+  func testWatchRefreshSucceedsWhenHandlerSyncsSameScopeAndDeduplicatesInFlightAction() async throws {
+    let defaults = isolatedDefaults()
+    let transport = FakeWatchTransport()
+    let bridge = WatchBridge(transport: transport, defaults: defaults)
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = APIClient(baseURL: URL(string: "https://watch.invalid")!)
+    store.bootstrap = try sampleBootstrap()
+    let scope = try XCTUnwrap(store.scope)
+    bridge.store = store
+
+    let snap = WidgetSnapshot(scope: scope, generatedAt: Date(), assistants: [
+      .init(id: "ranch", name: "Ranch", activity: "working", lastMessage: nil, lastMessageAt: nil, color: nil, pinned: true, runId: "run-7"),
+    ])
+    bridge.sync(snap)
+    // Production BackgroundRefresh calls bridge.sync(latest) internally before returning!
+    bridge.refreshHandler = {
+      bridge.sync(snap)
+      return snap
+    }
+    let refreshAction = WatchAction(scope: scope, kind: .refresh)
+    let refreshReply = await bridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(refreshAction)])
+    XCTAssertEqual(refreshReply["ok"] as? Bool, true)
+    XCTAssertNotNil(refreshReply[WatchPayload.snapshotKey])
+
+    // Duplicate delivery arriving while the first WatchAction is still suspended joins the in-flight task.
+    var calls = 0
+    var gate: CheckedContinuation<ActivityActionResult, Never>?
+    bridge.actHandler = { _ in
+      calls += 1
+      return await withCheckedContinuation { gate = $0 }
+    }
+    let stopAction = WatchAction(scope: scope, kind: .stop(botId: "ranch", name: "Ranch", runId: "run-7"))
+    let encodedStop = try JSONEncoder().encode(stopAction)
+    let first = Task { () -> Bool in (await bridge.handle(rawMessage: [WatchPayload.actionKey: encodedStop]))["ok"] as? Bool ?? false }
+    try await until { gate != nil }
+    let second = Task { () -> Bool in (await bridge.handle(rawMessage: [WatchPayload.actionKey: encodedStop]))["ok"] as? Bool ?? false }
+    gate?.resume(returning: ActivityActionResult(ok: true, message: "Stopped."))
+    let firstOK = await first.value
+    let secondOK = await second.value
+    XCTAssertTrue(firstOK)
+    XCTAssertTrue(secondOK)
+    XCTAssertEqual(calls, 1, "Concurrent duplicate delivery must not execute twice")
+
+    // SystemWatchTransport persists pending signedOut clear across relaunch and reconstructs it when signed out.
+    let persistedDefaults = isolatedDefaults()
+    let transport1 = SystemWatchTransport(defaults: persistedDefaults, savedScope: { nil })
+    transport1.updateApplicationContext([WatchPayload.signedOutKey: true])
+    let transport2 = SystemWatchTransport(defaults: persistedDefaults, savedScope: { "some-scope" })
+    XCTAssertEqual(transport2.authoritativeContextToFlush(), .signedOut)
+    let transportSignedOut = SystemWatchTransport(defaults: isolatedDefaults(), savedScope: { nil })
+    XCTAssertEqual(transportSignedOut.authoritativeContextToFlush(), .signedOut)
+    store.suspend()
+  }
+
+  func testCriticalAlarmBatchStopsMidBatchOnSignOutAndReschedulesAfterToggleOffAndOn() async throws {
+    let defaults = isolatedDefaults()
+    let backend = FakeAlarmBackend()
+    let manager = CriticalAlarmManager(backend: backend, defaults: defaults)
+    backend.nextAuthResult = .authorized
+    _ = await manager.setEnabled(true, for: "scope-1")
+
+    let future = Date().addingTimeInterval(600)
+    var r1 = Routine.empty(botId: "kitchen").with(id: "rt-1", name: "First")
+    r1.nextRunAt = ServerDate.string(future)
+    var r2 = Routine.empty(botId: "kitchen").with(id: "rt-2", name: "Second")
+    r2.nextRunAt = ServerDate.string(future)
+    manager.setRoutineEnabled(true, routineId: "rt-1", for: "scope-1")
+    manager.setRoutineEnabled(true, routineId: "rt-2", for: "scope-1")
+
+    // Cancel mid-batch while first routine is suspended -> second routine must NEVER be scheduled!
+    backend.holdNextSchedule = true
+    let batch = Task { await manager.reconcile(routines: [r1, r2], scope: "scope-1") }
+    try await until { backend.isHoldingSchedule }
+    manager.cancelAll()
+    backend.resumeSchedule()
+    await batch.value
+    XCTAssertTrue(backend.liveIds.isEmpty)
+    XCTAssertEqual(backend.scheduled.map(\.routineId), ["rt-1"], "Second routine must not schedule after cancelAll")
+
+    // Toggle a routine alarm off then back on before nextRunAt changes -> reschedules cleanly!
+    await manager.reconcile(routines: [r1], scope: "scope-1")
+    XCTAssertEqual(backend.liveIds.count, 1)
+    manager.setRoutineEnabled(false, routineId: "rt-1", for: "scope-1")
+    XCTAssertTrue(backend.liveIds.isEmpty)
+    manager.setRoutineEnabled(true, routineId: "rt-1", for: "scope-1")
+    await manager.reconcile(routines: [r1], scope: "scope-1")
+    XCTAssertEqual(backend.liveIds.count, 1, "Re-enabling routine must reschedule the same occurrence")
+  }
+
+  private final class DeferredSpotlight: SpotlightIndexing, @unchecked Sendable {
+    private let lock = NSLock()
+    var events: [String] = []
+    private var heldIndex: (@Sendable (Bool) -> Void)?
+    func index(_ records: [SpotlightRecord]) {}
+    func delete(ids: [String]) {}
+    func deleteAll() {}
+    func index(_ records: [SpotlightRecord], completion: @escaping @Sendable (Bool) -> Void) {
+      lock.withLock {
+        events.append("index:\(records.map(\.id).joined(separator: ","))")
+        heldIndex = completion
+      }
+    }
+    func deleteAll(completion: @escaping @Sendable (Bool) -> Void) {
+      lock.withLock { events.append("deleteAll") }
+      completion(true)
+    }
+    func finishHeldIndex(ok: Bool = true) {
+      let cb = lock.withLock { () -> (@Sendable (Bool) -> Void)? in
+        let c = heldIndex
+        heldIndex = nil
+        return c
+      }
+      cb?(ok)
+    }
+    var isHolding: Bool { lock.withLock { heldIndex != nil } }
+  }
+
+  func testSpotlightSerializesSignOutBehindInFlightFirstIndex() {
+    let defaults = isolatedDefaults()
+    let index = DeferredSpotlight()
+    let spotlight = AssistantSpotlight(index: index, defaults: defaults)
+    let room = GroupRoom(room_id: "r1", name: "Private Room", members: [])
+
+    XCTAssertTrue(spotlight.syncGroups([room], scope: "scope-1"))
+    XCTAssertTrue(index.isHolding)
+
+    // Sign out BEFORE first index completion arrives.
+    XCTAssertTrue(spotlight.sync(nil))
+    // deleteAll must wait for the in-flight index, then run right after it!
+    XCTAssertEqual(index.events, ["index:group:r1"])
+    index.finishHeldIndex(ok: true)
+    XCTAssertEqual(index.events, ["index:group:r1", "deleteAll"])
+    XCTAssertNil(defaults.data(forKey: "spotlight.groups"), "Stale completion must not persist bookkeeping after sign-out")
+  }
+
   // MARK: 10. Interactive Widget Refresh, Approval ID & Run ID Backwards Compatibility
 
   func testWidgetSnapshotDecodesWithAndWithoutApprovalAndRunIdsAndRefreshIntentCallsHandler() async throws {

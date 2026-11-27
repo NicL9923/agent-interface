@@ -82,9 +82,11 @@ struct ComputerWindowView: View {
     let scope = store.scope
     let submission: PendingSubmission
     let submittedText: String
-    if retryPending, let existing = pending {
+    if retryPending, var existing = pending {
+      existing.reviewedUncertain = true
       submission = existing
       submittedText = existing.text
+      pending = existing
     } else {
       guard pending == nil else { return }
       let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,19 +108,48 @@ struct ComputerWindowView: View {
     do {
       let receipt: Receipt = try await api.write("/bots/\(APIClient.component(botId))/messages", submission)
       guard store.scope == scope, store.api === api else { return }
-      pending = nil
-      if receipt.admitted {
-        // Only clear the draft if the user did not edit it further while sending.
-        if draft == submittedText { draft = "" }
-      } else {
-        if let msg = receipt.message { error = msg }
-        if draft.isEmpty { draft = submission.text }
-      }
+      applyReceipt(receipt, submittedText: submittedText)
       await load(using: store)
     } catch {
       guard store.scope == scope, store.api === api else { return }
-      // Keep `pending` with its original `requestId` so Retry never delivers a duplicate message.
-      self.error = "Could not confirm whether the message arrived. Retry the same message or discard it."
+      if let failure = error as? APIError, (400..<500).contains(failure.status) {
+        pending = nil
+        if draft.isEmpty { draft = submission.text }
+        self.error = failure.message
+      } else {
+        // Keep `pending` with its original `requestId` so Retry / status check never delivers twice.
+        self.error = "Checking whether the assistant accepted this message. The original request ID is preserved."
+      }
+    }
+  }
+
+  /// Checks the server receipt for an uncertain submission without resending.
+  func reconcilePending(using store: AppStore) async {
+    guard !sending, let existing = pending, let api = store.api, !store.sessionExpired else { return }
+    let scope = store.scope
+    do {
+      let receipt: Receipt = try await api.get("/submissions/\(APIClient.component(existing.requestId))")
+      guard store.scope == scope, store.api === api, pending?.requestId == existing.requestId else { return }
+      applyReceipt(receipt, submittedText: existing.text)
+      if pending == nil { await load(using: store) }
+    } catch {
+      // Leave `pending` intact so the next poll or explicit Retry keeps the original requestId.
+    }
+  }
+
+  private func applyReceipt(_ receipt: Receipt, submittedText: String) {
+    if receipt.status == "uncertain" {
+      // Non-terminal: keep `pending` with its original `requestId` until confirmed or explicitly retried.
+      error = receipt.message ?? "Checking whether the assistant accepted this message. The original request ID is preserved."
+      return
+    }
+    pending = nil
+    if receipt.admitted {
+      if draft == submittedText { draft = "" }
+      error = nil
+    } else {
+      if let msg = receipt.message { error = msg }
+      if draft.isEmpty { draft = submittedText }
     }
   }
 
@@ -158,6 +189,8 @@ struct SecondaryConversationWindow: View {
               Text("Last message not confirmed yet.")
                 .font(.caption).foregroundStyle(Palette.attention)
               Spacer()
+              Button("Check") { Task { await model.reconcilePending(using: store) } }
+                .font(.caption)
               Button("Retry") { Task { await model.send(using: store, retryPending: true) } }
                 .font(.caption.weight(.semibold))
               Button("Discard", role: .destructive) { model.discardPending() }
@@ -205,11 +238,15 @@ struct SecondaryConversationWindow: View {
         }
         .task(id: "\(store.scope ?? ""):\(botId):\(scenePhase == .active)") {
           guard scenePhase == .active else { return }
+          await model.reconcilePending(using: store)
           await model.load(using: store)
           while !Task.isCancelled {
             // Timer: secondary window refresh interval while active.
             try? await Task.sleep(for: .seconds(5))
-            if !Task.isCancelled { await model.load(using: store) }
+            if !Task.isCancelled {
+              await model.reconcilePending(using: store)
+              await model.load(using: store)
+            }
           }
         }
       } else {

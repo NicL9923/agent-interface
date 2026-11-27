@@ -306,6 +306,26 @@ extension CriticalAlarmBackend {
     preferenceVersion += 1
   }
 
+  /// Escalates a batch of waiting/blocked assistants for `scope`, capturing the cancellation epoch
+  /// once at batch start so sign-out or opt-out mid-batch stops remaining assistants immediately.
+  func escalateWaitingBatch(_ assistants: [WidgetSnapshot.Assistant], scope: String) async {
+    let startEpoch = epoch
+    guard isEnabled(for: scope) else { return }
+    for assistant in assistants where assistant.needsAttention {
+      guard epoch == startEpoch, isEnabled(for: scope) else { return }
+      let dedup = assistant.approvalId ?? assistant.lastMessage ?? assistant.activity
+      let reason = assistant.activity == "waiting" ? "Needs your approval" : "Needs your input"
+      _ = await escalateWaitingIfOptedIn(
+        botId: assistant.id,
+        botName: assistant.name,
+        reason: reason,
+        dedupKey: dedup,
+        scope: scope,
+        expectedEpoch: startEpoch
+      )
+    }
+  }
+
   /// Escalates a waiting/approval alert for an assistant if and only if both the master opt-in and
   /// that assistant's opt-in flag are enabled, deduplicated per `dedupKey`.
   @discardableResult func escalateWaitingIfOptedIn(
@@ -313,8 +333,10 @@ extension CriticalAlarmBackend {
     botName: String,
     reason: String,
     dedupKey: String,
-    scope: String?
+    scope: String?,
+    expectedEpoch: UInt64? = nil
   ) async -> Bool {
+    if let expectedEpoch, epoch != expectedEpoch { return false }
     guard let scope, isEnabled(for: scope), botWaitingEnabled(botId, for: scope) else { return false }
     let fullKey = "\(scope)|waiting|\(botId)|\(dedupKey)"
     guard !escalatedKeys.contains(fullKey) else { return false }
@@ -355,8 +377,10 @@ extension CriticalAlarmBackend {
   @discardableResult func scheduleRoutineAlarmIfOptedIn(
     routine: Routine,
     scope: String?,
-    now: Date = Date()
+    now: Date = Date(),
+    expectedEpoch: UInt64? = nil
   ) async -> Bool {
+    if let expectedEpoch, epoch != expectedEpoch { return false }
     let eventKey = "routine:\(routine.id)"
     guard let scope, isEnabled(for: scope), routineEnabled(routine.id, for: scope), routine.enabled else {
       cancel(eventKey: eventKey)
@@ -405,7 +429,9 @@ extension CriticalAlarmBackend {
 
   /// Reconciles routine alarms against the full account routine list: cancels alarms for routines
   /// that were deleted, paused, or opted out, and schedules alarms for enabled opted-in routines.
+  /// Captures the cancellation epoch once so a sign-out mid-batch stops scheduling immediately.
   func reconcile(routines: [Routine], scope: String?, now: Date = Date()) async {
+    let startEpoch = epoch
     guard let scope, isEnabled(for: scope) else {
       cancelAll()
       return
@@ -416,7 +442,8 @@ extension CriticalAlarmBackend {
       cancel(eventKey: staleKey)
     }
     for routine in routines {
-      _ = await scheduleRoutineAlarmIfOptedIn(routine: routine, scope: scope, now: now)
+      guard epoch == startEpoch, isEnabled(for: scope) else { return }
+      _ = await scheduleRoutineAlarmIfOptedIn(routine: routine, scope: scope, now: now, expectedEpoch: startEpoch)
     }
   }
 
@@ -443,6 +470,12 @@ extension CriticalAlarmBackend {
 
   func cancel(eventKey: String) {
     keyGeneration[eventKey] = (keyGeneration[eventKey] ?? 0) &+ 1
+    // Clear matching dedup keys so re-enabling the same routine/assistant occurrence reschedules cleanly.
+    let parts = eventKey.split(separator: ":", maxSplits: 1)
+    if parts.count == 2 {
+      let needle = "|\(parts[0])|\(parts[1])|"
+      escalatedKeys = escalatedKeys.filter { !$0.contains(needle) }
+    }
     var owned = loadPersistedOwned()
     if let id = scheduledIds.removeValue(forKey: eventKey) {
       backend.cancel(id: id)

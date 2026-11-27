@@ -11,11 +11,37 @@ export const targets = [
   "AgentInterfaceShare",
   "AgentInterfaceWidgets",
   "AgentInterfaceNotifications",
+  "AgentInterfaceWatch",
+  "AgentInterfaceWatchWidgets",
 ];
-export const identifiers = targets.map((name, i) => ({
-  name,
-  identifier: bundleId + (i ? `.${name}` : ""),
-}));
+export const identifiers = [
+  { name: "AgentInterface", identifier: bundleId, bundlePath: "" },
+  {
+    name: "AgentInterfaceShare",
+    identifier: `${bundleId}.AgentInterfaceShare`,
+    bundlePath: "PlugIns/AgentInterfaceShare.appex",
+  },
+  {
+    name: "AgentInterfaceWidgets",
+    identifier: `${bundleId}.AgentInterfaceWidgets`,
+    bundlePath: "PlugIns/AgentInterfaceWidgets.appex",
+  },
+  {
+    name: "AgentInterfaceNotifications",
+    identifier: `${bundleId}.AgentInterfaceNotifications`,
+    bundlePath: "PlugIns/AgentInterfaceNotifications.appex",
+  },
+  {
+    name: "AgentInterfaceWatch",
+    identifier: `${bundleId}.watchkitapp`,
+    bundlePath: "Watch/AgentInterfaceWatch.app",
+  },
+  {
+    name: "AgentInterfaceWatchWidgets",
+    identifier: `${bundleId}.watchkitapp.widgets`,
+    bundlePath: "Watch/AgentInterfaceWatch.app/PlugIns/AgentInterfaceWatchWidgets.appex",
+  },
+];
 export const configPath = `${homedir()}/.config/wildbots/apple/config.json`;
 export function configuration() {
   try {

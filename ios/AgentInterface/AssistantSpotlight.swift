@@ -1,6 +1,7 @@
 import CoreSpotlight
 import Foundation
 import UniformTypeIdentifiers
+import os
 
 /// One item as Spotlight lists it: title only, since Spotlight results can show on a locked
 /// device and message previews stay strictly inside the app.
@@ -85,11 +86,18 @@ struct SystemSpotlightIndex: SpotlightIndexing {
 
 /// Keeps Spotlight listing exactly the signed-in account's assistants, group chats, routines
 /// (by name), and saved references (title-only for privacy). Signing out or switching accounts
-/// clears the entire domain immediately.
+/// clears the entire domain immediately, serializing behind any in-flight writes so a late
+/// completion can never leave private titles indexed after sign-out.
 struct AssistantSpotlight {
   var index: SpotlightIndexing
   var defaults: UserDefaults = .standard
+  private let queue = SpotlightSerialQueue()
   @MainActor static let system = AssistantSpotlight(index: SystemSpotlightIndex())
+
+  init(index: SpotlightIndexing, defaults: UserDefaults = .standard) {
+    self.index = index
+    self.defaults = defaults
+  }
 
   private struct Indexed: Codable, Equatable { var scope: String; var records: [String: String] }
   private static let assistantsKey = "spotlight.assistants"
@@ -123,16 +131,23 @@ struct AssistantSpotlight {
 
   /// Syncs assistants from the widget snapshot. Returns whether anything changed, so callers can
   /// refresh Siri's list of assistant names. Signing out (`nil`) clears every Spotlight category,
-  /// removing local bookkeeping only after Core Spotlight confirms the deletion so a failed clear
-  /// retries on the next sync.
+  /// invalidating any in-flight writes and queuing `deleteAll` behind them so a late completion
+  /// can never leave private titles indexed.
   @discardableResult func sync(_ snapshot: WidgetSnapshot?) -> Bool {
     guard let snapshot else {
-      let hadAny = Self.allKeys.contains { defaults.data(forKey: $0) != nil }
+      let hadAny = Self.allKeys.contains { defaults.data(forKey: $0) != nil } || queue.hasPendingWork
       guard hadAny else { return false }
+      let clearGeneration = queue.invalidate()
       let box = SentDefaults(defaults)
-      index.deleteAll { ok in
-        guard ok else { return }
-        for key in Self.allKeys { box.defaults.removeObject(forKey: key) }
+      let indexBox = SentIndex(index)
+      queue.enqueue { done in
+        indexBox.index.deleteAll { ok in
+          if ok {
+            for key in Self.allKeys { box.defaults.removeObject(forKey: key) }
+          }
+          _ = clearGeneration
+          done()
+        }
       }
       return true
     }
@@ -182,46 +197,124 @@ struct AssistantSpotlight {
   private func syncCategory(key: String, kind: SpotlightRecord.Kind, scope: String, records: [String: String]) -> Bool {
     let stored = defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(Indexed.self, from: $0) }
     let next = Indexed(scope: scope, records: records)
-    if next == stored { return false }
+    if next == stored, !queue.hasPendingWork { return false }
+    let writeGeneration = queue.currentGeneration
     let box = SentDefaults(defaults)
     let indexBox = SentIndex(index)
+    let serialQueue = queue
     let encodedNext = try? JSONEncoder().encode(next)
     let changed = next.records.filter { stored?.scope == next.scope ? stored?.records[$0.key] != $0.value : true }
     let toIndex = changed.map { SpotlightRecord(id: $0.key, title: $0.value, kind: kind) }.sorted { $0.id < $1.id }
     let shouldIndex = !toIndex.isEmpty || kind == .assistant
 
-    let finishIndex: @Sendable () -> Void = {
-      if shouldIndex {
-        indexBox.index.index(toIndex) { ok in
-          guard ok, let encodedNext else { return }
-          box.defaults.set(encodedNext, forKey: key)
+    queue.enqueue { done in
+      guard serialQueue.isCurrent(writeGeneration) else { done(); return }
+      let finishIndex: @Sendable () -> Void = {
+        guard serialQueue.isCurrent(writeGeneration) else { done(); return }
+        if shouldIndex {
+          indexBox.index.index(toIndex) { ok in
+            if ok, serialQueue.isCurrent(writeGeneration), let encodedNext {
+              box.defaults.set(encodedNext, forKey: key)
+            }
+            done()
+          }
+        } else {
+          if serialQueue.isCurrent(writeGeneration), let encodedNext {
+            box.defaults.set(encodedNext, forKey: key)
+          }
+          done()
         }
-      } else if let encodedNext {
-        box.defaults.set(encodedNext, forKey: key)
       }
-    }
 
-    // A different account clears the entire domain and every category's stored state first.
-    if let stored, stored.scope != next.scope {
-      index.deleteAll { ok in
-        guard ok else { return }
-        for otherKey in Self.allKeys where otherKey != key { box.defaults.removeObject(forKey: otherKey) }
-        finishIndex()
-      }
-    } else if let stored {
-      let gone = stored.records.keys.filter { next.records[$0] == nil }.sorted()
-      if !gone.isEmpty {
-        index.delete(ids: gone) { ok in
-          guard ok else { return }
+      // A different account clears the entire domain and every category's stored state first.
+      if let stored, stored.scope != next.scope {
+        indexBox.index.deleteAll { ok in
+          guard ok else { done(); return }
+          for otherKey in Self.allKeys where otherKey != key { box.defaults.removeObject(forKey: otherKey) }
+          finishIndex()
+        }
+      } else if let stored {
+        let gone = stored.records.keys.filter { next.records[$0] == nil }.sorted()
+        if !gone.isEmpty {
+          indexBox.index.delete(ids: gone) { ok in
+            guard ok else { done(); return }
+            finishIndex()
+          }
+        } else {
           finishIndex()
         }
       } else {
         finishIndex()
       }
-    } else {
-      finishIndex()
     }
     return true
+  }
+}
+
+/// FIFO serial queue for Core Spotlight mutations. Synchronous test doubles complete inline;
+/// asynchronous Core Spotlight calls run one at a time so sign-out `deleteAll` always executes
+/// after any earlier write and invalidates stale completions.
+private final class SpotlightSerialQueue: @unchecked Sendable {
+  private let lock = NSLock()
+  private var running = false
+  private var pending: [@Sendable (@escaping @Sendable () -> Void) -> Void] = []
+  private var generation: UInt64 = 0
+
+  var hasPendingWork: Bool { lock.withLock { running || !pending.isEmpty } }
+  var currentGeneration: UInt64 { lock.withLock { generation } }
+  func isCurrent(_ value: UInt64) -> Bool { lock.withLock { generation == value } }
+
+  @discardableResult func invalidate() -> UInt64 {
+    lock.withLock {
+      generation &+= 1
+      return generation
+    }
+  }
+
+  func enqueue(_ work: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void) {
+    let shouldStart = lock.withLock { () -> Bool in
+      pending.append(work)
+      if running { return false }
+      running = true
+      return true
+    }
+    if shouldStart { drain() }
+  }
+
+  private struct DrainState: Sendable {
+    var finishedInline = false
+    var completed = false
+    var waitingAsync = false
+  }
+
+  private func drain() {
+    while true {
+      let next = lock.withLock { () -> (@Sendable (@escaping @Sendable () -> Void) -> Void)? in
+        if pending.isEmpty {
+          running = false
+          return nil
+        }
+        return pending.removeFirst()
+      }
+      guard let next else { return }
+      let state = OSAllocatedUnfairLock(initialState: DrainState())
+      next {
+        let shouldContinue = state.withLock { value -> Bool in
+          guard !value.completed else { return false }
+          value.completed = true
+          if value.waitingAsync { return true }
+          value.finishedInline = true
+          return false
+        }
+        if shouldContinue { self.drain() }
+      }
+      let goAsync = state.withLock { value -> Bool in
+        if value.finishedInline { return false }
+        value.waitingAsync = true
+        return true
+      }
+      if goAsync { return }
+    }
   }
 }
 
