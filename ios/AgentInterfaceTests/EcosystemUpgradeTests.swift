@@ -943,11 +943,20 @@ import os
 
     let prevBGClient = BackgroundRefresh.client
     let prevBGURL = BackgroundRefresh.snapshotURL
+    let prevBGSpotlight = BackgroundRefresh.spotlight
+    let coldSpotlightDefaults = isolatedDefaults()
+    let coldSpotlightIndex = DeferredSpotlight()
+    let coldSpotlight = AssistantSpotlight(index: coldSpotlightIndex, defaults: coldSpotlightDefaults)
+    XCTAssertTrue(coldSpotlight.syncGroups([GroupRoom(room_id: "r-cold", name: "Cold Secret", members: [])], scope: rejectedScope))
+    coldSpotlightIndex.finishHeldIndex(ok: true)
+    coldSpotlightIndex.events.removeAll()
     BackgroundRefresh.client = { rejectedClient.token == nil ? nil : rejectedClient }
     BackgroundRefresh.snapshotURL = tempSnapshotURL
+    BackgroundRefresh.spotlight = coldSpotlight
     defer {
       BackgroundRefresh.client = prevBGClient
       BackgroundRefresh.snapshotURL = prevBGURL
+      BackgroundRefresh.spotlight = prevBGSpotlight
     }
     let coldScopeDefaults = isolatedDefaults()
     coldScopeDefaults.set(rejectedScope, forKey: DeviceDefaults.signedInScope)
@@ -972,6 +981,11 @@ import os
     XCTAssertNil(rejectedClient.token)
     XCTAssertNil(WidgetSnapshotStore.read(from: tempSnapshotURL))
     XCTAssertEqual(coldTransport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
+    XCTAssertEqual(
+      coldSpotlightIndex.events,
+      ["deleteAll:true"],
+      "Cold /bootstrap 401 with no AppStore mounted must clear Spotlight directly"
+    )
   }
 
   func testCriticalAlarmBatchStopsMidBatchOnSignOutAndReschedulesAfterToggleOffAndOn() async throws {
@@ -1156,7 +1170,7 @@ import os
 
     func receive(_ exchange: FakeExchange) {
       let path = exchange.request.url?.path ?? ""
-      if path == "/api/saved" {
+      if path == "/api/saved" || path == "/api/search" {
         exchange.respond(status: 401, data: Data(#"{"error":"Session expired","code":"session_expired"}"#.utf8))
         return
       }
@@ -1197,31 +1211,39 @@ import os
     let defaults = isolatedDefaults()
     let index = DeferredSpotlight()
     let spotlight = AssistantSpotlight(index: index, defaults: defaults)
+    let widgetURL = FileManager.default.temporaryDirectory.appendingPathComponent("fg-expiry-\(UUID().uuidString).json")
+    addTeardownBlock { try? FileManager.default.removeItem(at: widgetURL) }
     let store = AppStore()
-    store.widgetSnapshotURL = nil
+    store.widgetSnapshotURL = widgetURL
     store.spotlight = spotlight
     let api = FakeExchange.client(for: host, token: "tok")
     store.api = api
     store.bootstrap = try sampleBootstrap()
     let startedScope = try XCTUnwrap(store.scope)
     if index.isHolding { index.finishHeldIndex(ok: true) }
+    XCTAssertNotNil(WidgetSnapshotStore.read(from: widgetURL), "Connected bootstrap writes a widget snapshot")
     // Seed an initial room catalog before expiry to also verify re-sign-in reindexing below.
     store.groupCatalog = GroupCatalog(supported: true, canSend: true, reason: nil, rooms: [GroupRoom(room_id: "same-1", name: "Family Room", members: [])])
     index.events.removeAll()
 
-    // Start Home group refresh in flight; while it awaits the server, a Discovery `/saved` request
-    // receives HTTP 401 `session_expired` and routes through `handleSessionExpiryIfCurrent`.
+    // Start Home group refresh in flight; while it awaits the server, a Discovery `/search` request
+    // receives HTTP 401 `session_expired`. Notice the test does NOT call `handleSessionExpiryIfCurrent`
+    // manually — `APIClient.onSessionExpired` wired by `AppStore` invalidates the session automatically!
     let refreshTask = Task { await store.refreshGroups() }
     try await until { host.isHoldingGroups }
-    let discoveryToken = api.token
     do {
-      let _: [SavedItem] = try await api.get("/saved")
-      XCTFail("Expected HTTP 401 session_expired from /api/saved")
+      let _: SearchResponse = try await api.get("/search?q=test")
+      XCTFail("Expected HTTP 401 session_expired from /api/search")
     } catch {
-      store.handleSessionExpiryIfCurrent(error, client: api, token: discoveryToken)
+      // Production `APIClient.onSessionExpired` already routed the 401 through `AppStore`.
     }
     XCTAssertTrue(store.sessionExpired)
     XCTAssertNil(store.api?.token)
+    XCTAssertNil(
+      WidgetSnapshotStore.read(from: widgetURL),
+      "Foreground session expiry must clear the persisted widget snapshot as well as Spotlight and Watch"
+    )
+    XCTAssertTrue(index.events.contains("deleteAll:true"))
 
     // Deliver the late successful `/api/groups` response after session expiry.
     host.releaseGroups()

@@ -10,7 +10,15 @@ import CryptoKit
 @MainActor @Observable
 final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding {
   var host = UserDefaults.standard.string(forKey: DeviceDefaults.host) ?? ""
-  var api: APIClient? { didSet { updateScope() } }
+  var api: APIClient? {
+    didSet {
+      oldValue?.onSessionExpired = nil
+      api?.onSessionExpired = { [weak self] error, client, token in
+        self?.handleSessionExpiryIfCurrent(error, client: client, token: token)
+      }
+      updateScope()
+    }
+  }
   var bootstrap: Bootstrap? {
     didSet {
       updateScope(); appliedBootstrapTag = nil; publishWidgetSnapshot(); updateEcho(); scheduleAdditions()
@@ -643,8 +651,11 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       api?.token = nil
       stopPolling()
       sessionExpired = true
-      WatchBridge.shared.sync(nil)
-      spotlight?.sync(nil)
+      // Clear every cross-process and system surface (widget snapshot + timeline reload, routines,
+      // Watch, Quick Actions, Spotlight, avatars, alarms, biometric unlock) identically to cold expiry.
+      publishWidgetSnapshot()
+      CriticalAlarmManager.shared.cancelAll()
+      BiometricGate.shared.lock()
     }
   }
 }

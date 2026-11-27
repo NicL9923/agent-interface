@@ -395,7 +395,7 @@ struct DiscoveryView: View {
   private func search() async {
     let text = Self.trimmed(query)
     guard !text.isEmpty, let api = store.api else { return }
-    let request = requests.start(), scope = store.scope
+    let request = requests.start(), scope = store.scope, startedToken = api.token
     searching = true; error = nil
     defer { if request == requests.token { searching = false } }
     do {
@@ -406,6 +406,7 @@ struct DiscoveryView: View {
       notice = result.unavailableBots.isEmpty ? (hits.isEmpty ? "No matching conversations." : nil) : "Could not search \(result.unavailableBots.count) assistant(s)."
       AccessibilityNotification.Announcement(Self.resultsAnnouncement(hits.count)).post()
     } catch {
+      store.handleSessionExpiryIfCurrent(error, client: api, token: startedToken)
       guard !Task.isCancelled, requests.applies(request, asked: text, query: query), scope == store.scope else { return }
       self.error = error.localizedDescription
     }

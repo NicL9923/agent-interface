@@ -105,6 +105,10 @@ extension Data {
   /// Paths kept for conditional GETs. Polling uses a handful; the bound covers browsing.
   static let conditionalCacheLimit = 64
   private struct Validated { var etag: String; var data: Data }
+  /// Called immediately when any authenticated request (other than `/api/auth/logout`) receives
+  /// HTTP `401` with `code == "session_expired"`, passing the error, client, and token that sent it
+  /// so `AppStore` invalidates the session regardless of which view or request wrapper called it.
+  var onSessionExpired: (@MainActor (APIError, APIClient, String?) -> Void)?
   /// One server per client: changing servers creates a new client and a new cache.
   let baseURL: URL
   var token: String? {
@@ -331,6 +335,9 @@ extension Data {
           path: path, method: method, body: body, contentType: contentType,
           authenticated: authenticated, conditional: false)
       }
+      if authenticated, failure.isSessionExpired, path != "/api/auth/logout" {
+        onSessionExpired?(failure, self, sentToken)
+      }
       throw failure
     }
     // Only JSON is kept; file downloads can be large and are never polled.
@@ -534,7 +541,11 @@ extension Data {
       guard token == sentToken else { throw Self.failure(response.statusCode, result) }
       return try await sendUpload(botId: botId, name: name, mime: mime, data: data, progress: progress)
     }
-    guard (200..<300).contains(response.statusCode) else { throw Self.failure(response.statusCode, result) }
+    guard (200..<300).contains(response.statusCode) else {
+      let failure = Self.failure(response.statusCode, result)
+      if failure.isSessionExpired { onSessionExpired?(failure, self, sentToken) }
+      throw failure
+    }
     return try await Self.decoded(result, from: path)
   }
 }

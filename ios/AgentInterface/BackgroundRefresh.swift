@@ -14,6 +14,9 @@ import WidgetKit
   /// The saved server and Keychain sign-in, as a notification action uses after a background launch.
   static var client: @MainActor () -> APIClient? = { NotificationController.shared.actionClient() }
   static var snapshotURL: URL? = WidgetSnapshotStore.defaultURL
+  /// System Spotlight index cleared directly when a cold background refresh receives `session_expired`
+  /// with no `AppStore` window mounted. Unit tests leave the real system index untouched unless injected.
+  static var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
   /// One read at a time: a push and the refresh task can arrive together.
   private static var running: Task<Bool, Never>?
 
@@ -94,7 +97,10 @@ import WidgetKit
         if WidgetSnapshotStore.write(nil, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
         RoutineSnapshotStore.write(nil)
         WatchBridge.shared.sync(nil)
+        QuickActions.sync(nil)
         CriticalAlarmManager.shared.cancelAll()
+        BiometricGate.shared.lock()
+        spotlight?.sync(nil)
         if let store = WatchBridge.shared.store, store.api?.baseURL == api.baseURL, store.api?.token == token {
           store.report(error)
         }
