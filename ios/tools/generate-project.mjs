@@ -43,7 +43,7 @@ function swiftFilesIn(dir) {
 // One version for the app and every extension: App Store validation rejects extensions whose
 // versions differ from the app's.
 const MARKETING_VERSION = "1.0";
-const CURRENT_PROJECT_VERSION = "32";
+const CURRENT_PROJECT_VERSION = "33";
 const LINK_DOMAIN = "agentui.wildflowersranch.com";
 const EXTENSIONS = ["AgentInterfaceShare", "AgentInterfaceWidgets", "AgentInterfaceNotifications"];
 
