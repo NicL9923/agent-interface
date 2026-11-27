@@ -244,3 +244,47 @@ it("names only known requesters of explicit-origin logins", () => {
   ).toEqual([{ id: "one", name: "One" }, { id: "ghost" }, undefined, undefined]);
   expect(nameRequesters(undefined, () => "x")).toBeUndefined();
 });
+it("validates and forwards named secret add/remove routes without echoing secret values", async () => {
+  const s = await setup();
+  s.vaultRequest.mockResolvedValueOnce({ name: "API_TOKEN" } as never);
+  const created = await s.app.inject({
+    method: "POST",
+    url: "/api/bots/shared/vault/secrets",
+    headers: s.headers,
+    payload: { name: "API_TOKEN", value: canary },
+  });
+  expect(created.statusCode).toBe(200);
+  expect(created.body).not.toContain(canary);
+  expect(s.vaultRequest).toHaveBeenLastCalledWith({
+    operation: "add_secret",
+    profile: "shared",
+    secret: { name: "API_TOKEN", value: canary },
+    actor: "one",
+  });
+
+  for (const badName of ["login:abc", "mcp:srv", "../escape", "has space", ""]) {
+    expect(
+      (
+        await s.app.inject({
+          method: "POST",
+          url: "/api/bots/shared/vault/secrets",
+          headers: s.headers,
+          payload: { name: badName, value: canary },
+        })
+      ).statusCode,
+    ).toBe(400);
+  }
+
+  s.vaultRequest.mockResolvedValueOnce({ removed: true } as never);
+  const removed = await s.app.inject({
+    method: "DELETE",
+    url: "/api/bots/shared/vault/secrets/API_TOKEN",
+    headers: s.headers,
+  });
+  expect(removed.statusCode).toBe(200);
+  expect(s.vaultRequest).toHaveBeenLastCalledWith({
+    operation: "remove_secret",
+    profile: "shared",
+    name: "API_TOKEN",
+  });
+});

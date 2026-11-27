@@ -72,7 +72,7 @@ it("loads actual profile models, uses provider disclosures, preserves aliases an
   expect(groups[0].open).toBe(true);
   expect(groups[1].open).toBe(false);
   expect(button("Saved model").getAttribute("aria-pressed")).toBe("true");
-  expect(button("Offline modelReconnect in Hermes to use this model").disabled).toBe(true);
+  expect(button("Offline modelCheck provider credentials to use this model").disabled).toBe(true);
   await act(async () => button("New model").click());
   expect(onChange).toHaveBeenCalledExactlyOnceWith({ provider: "house", model: "new-model" });
 });
@@ -90,7 +90,7 @@ it("refreshes a loaded catalog without changing the saved choice or reopening a 
   );
   await act(async () => button("Refresh models").click());
   expect(button("Refresh models").disabled).toBe(true);
-  expect(container.textContent).toContain("Loading models from Hermes");
+  expect(container.textContent).toContain("Loading models");
   await act(async () =>
     finish({
       ...catalog,

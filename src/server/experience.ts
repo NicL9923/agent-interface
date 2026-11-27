@@ -175,10 +175,7 @@ export async function installExperienceRoutes(
   ): Promise<ExperienceResult<R["operation"]>> => {
     await bot(input.profile);
     if (!runtime.experienceRequest)
-      throw httpError(
-        409,
-        "The installed Hermes add-on needs memory and routine preview support. Update and qualify the integration.",
-      );
+      throw httpError(409, "Memory and routine preview support are unavailable on this runtime.");
     return runtime.experienceRequest(input);
   };
   apiRoute(app, "GET /today", {}, async (req, _, reply) => {
@@ -330,7 +327,7 @@ export async function installExperienceRoutes(
             approvals: [],
             attention: [],
             files: [],
-            error: "Could not read this Hermes conversation. Open it to reconnect.",
+            error: "Could not read this conversation. Open it to reconnect.",
           };
         const { activity, approvals, attention, recap } = answer.value;
         for (const [eventId, files] of recap.eventFiles) eventFiles.set(eventId, files);
@@ -592,8 +589,7 @@ export async function installExperienceRoutes(
     const message = found && [redact.message(found)].find(isConversationReply);
     const card =
       message && replyCardsFromText(message.text).find((card) => card.id === params.cardId);
-    if (!card)
-      throw httpError(404, "This interactive reply is no longer in the Hermes conversation");
+    if (!card) throw httpError(404, "This interactive reply is no longer in the conversation");
     const userId = signedIn(req).id;
     if (state) {
       if (!validReplyCardState(card, state))

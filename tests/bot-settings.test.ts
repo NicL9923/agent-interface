@@ -403,9 +403,7 @@ describe("making an assistant personal", () => {
 
   it("asks before hiding a shared assistant from the household, and sends nothing until confirmed", async () => {
     await uncheckShared();
-    expect(container.textContent).toContain(
-      "Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins.",
-    );
+    expect(container.textContent).toContain("Only you see a personal assistant in WildBots.");
     await submit();
     expect(container.textContent).toContain("It will disappear for the rest of the household");
     expect(write).not.toHaveBeenCalled();
@@ -1004,7 +1002,7 @@ describe("MCP servers in Access", () => {
       ["notes", false],
       ["retired", true],
     ]);
-    expect(group.textContent).toContain("Saved, but Hermes no longer reports it");
+    expect(group.textContent).toContain("Saved, but no longer reported by this server");
     await act(async () => checkbox("notes").click());
     await click("Save changes");
     expect(write).toHaveBeenCalledExactlyOnceWith(

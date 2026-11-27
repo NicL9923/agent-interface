@@ -70,7 +70,7 @@ struct AppleDeviceConnectionsView: View {
         if let time = UserDefaults.standard.object(forKey: sharedKey) as? Date {
           Text("Last added to draft \(time.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
         }
-      } footer: { Text("Hermes cannot read this phone while the app is closed. Nothing is shared until you send the snapshot in your conversation.") }
+      } footer: { Text("WildBots cannot read this phone while the app is closed. Nothing is shared until you send the snapshot in your conversation.") }
       Section("Calendar access") {
         accessLabel(connection.calendarStatus)
         if connection.calendarStatus != .fullAccess {

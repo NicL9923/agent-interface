@@ -208,7 +208,7 @@ function MemoryEditor({
       )}
       {!document.enabled && (
         <p className="memory-note">
-          Editing is disabled in this Hermes profile. You can still read and copy these notes.
+          Editing is disabled for this assistant. You can still read and copy these notes.
         </p>
       )}
       {changed && !locked && (
@@ -344,7 +344,7 @@ function MemoryEditor({
         )}
       </div>
       <p role="status" className="memory-progress">
-        {saving ? "Saving memories in Hermes..." : ""}
+        {saving ? "Saving memories..." : ""}
       </p>
       {error && !conflict && (
         <FormMessage tone="error" ref={errorRef} tabIndex={-1}>
@@ -418,7 +418,7 @@ export function MemoryPanel({
     setSaveGenerations((previous) => ({ ...previous, [target]: (previous[target] || 0) + 1 }));
     setNotices((previous) => ({
       ...previous,
-      [target]: result.refresh?.message || "Saved in Hermes.",
+      [target]: result.refresh?.message || "Saved.",
     }));
     setMemory((previous) =>
       previous
@@ -446,15 +446,15 @@ export function MemoryPanel({
     <div className="memory-panel">
       <header className="memory-intro">
         <h2 ref={heading} tabIndex={-1}>
-          What Hermes remembers
+          What this assistant remembers
         </h2>
-        <p>Review and correct the facts saved in this Hermes profile.</p>
+        <p>Review and correct the facts saved for this assistant.</p>
       </header>
       {memory && (
         <div className="memory-scope">
-          <strong>Hermes profile: {memory.profile}</strong>
+          <strong>Assistant: {memory.profile}</strong>
           <p>Changes apply at the next safe turn boundary. Chat history stays unchanged.</p>
-          <p>Anyone with Hermes dashboard access can reach this memory.</p>
+          <p>Anyone with access to this assistant can reach its memory.</p>
         </div>
       )}
       {loading && <p role="status">Loading profile memory...</p>}

@@ -221,7 +221,7 @@ export function talkAnswer(
   if (receipt.turn === "none")
     return {
       state: "refused",
-      text: receipt.message || "Hermes ended its voice chat. Nothing was sent to the assistant.",
+      text: receipt.message || "Voice chat ended. Nothing was sent to the assistant.",
     };
   const { activity } = conversation;
   const active = ["waiting", "blocked", ...running].includes(activity.state);
@@ -310,7 +310,7 @@ export function installTalkRoutes(
     { before: (req) => requireCapability("liveVoice", req.params.id) },
     async (req, _body, reply) => {
       if (!runtime.realtimeSession)
-        throw httpError(409, "Live voice is unavailable on this Hermes connection.");
+        throw httpError(409, "Live voice is unavailable on this server.");
       limit.take(signedIn(req).id);
       const [bots, capabilities] = await Promise.all([
         runtime.listBots(),

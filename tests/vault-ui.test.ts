@@ -235,7 +235,7 @@ it("preserves exact native environment values and labels their distinct storage"
       prompt: "Enter key",
     }),
   );
-  expect(container.textContent).toContain("profile environment");
+  expect(container.textContent).toContain("separately from saved website logins");
   await type("Secret value", " exact key ");
   await submit();
   expect(write).toHaveBeenCalledWith("/bots/ranch/secure-requests/native-request", {
@@ -270,11 +270,11 @@ it("adds a login through the dedicated vault route and requires review after unc
   ).toContain("Secret fields have been cleared");
   await submit();
   expect(write).toHaveBeenCalledOnce();
-  expect(container.textContent).toContain("Hermes could not confirm this change");
+  expect(container.textContent).toContain("WildBots could not confirm this change");
   await click("Reload logins");
   expect(api).toHaveBeenCalledTimes(2);
   expect(localStorage.length).toBe(0);
-  expect(container.textContent).not.toContain("Hermes could not confirm this change");
+  expect(container.textContent).not.toContain("WildBots could not confirm this change");
   expect(button("Add login").disabled).toBe(false);
   expect(document.activeElement).toBe(button("Reload logins"));
 });
@@ -341,13 +341,13 @@ it("shows an address-only login's destination, reason, storage and boundary, and
   await render(explicitCard());
   for (const text of [
     "https://kvm.example.invalid",
-    "Hermes has not opened or checked it",
+    "WildBots has not opened or checked it",
     "Comet KVM",
-    "Patch (Hermes profile patch) for One",
+    "Patch (patch) for One",
     "Check the server console.",
-    "encrypted Hermes vault",
+    "encrypted WildBots vault",
     "never the password",
-    "not a household security boundary",
+    "tools running on the WildBots server",
   ])
     expect(container.textContent).toContain(text);
   expect(container.textContent).not.toContain("does not use HTTPS");
@@ -556,4 +556,83 @@ it("still locks the vault panel on ambiguous 409 conflicts until reloaded", asyn
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("Reload and review");
   await submit();
   expect(write).toHaveBeenCalledOnce();
+});
+
+it("trims website origins, submits optional authenticator secrets, and clears them on hide", async () => {
+  vi.mocked(api).mockResolvedValue(vault);
+  vi.mocked(write).mockResolvedValue({ id: "vault_new" });
+  await render(createElement(VaultPanel, { botId: "ranch" }));
+  await click("Add login");
+  await type("Label", "  Farm Portal  ");
+  await type("Website address", "  https://portal.example.invalid  ");
+  await type("Email", "  owner@example.invalid  ");
+  await type("Password", "portal-secret-pw");
+  await type("Authenticator secret (optional)", "  JBSWY3DPEHPK3PXP  ");
+  // Page hide clears both password and authenticator secret without submitting.
+  await act(async () => window.dispatchEvent(new Event("pagehide")));
+  const pwFields = Array.from(
+    container.querySelectorAll<HTMLInputElement>('input[type="password"]'),
+  );
+  expect(pwFields).toHaveLength(2);
+  expect(pwFields.every((field) => field.value === "")).toBe(true);
+  expect(write).not.toHaveBeenCalled();
+
+  await type("Password", "portal-secret-pw");
+  await type("Authenticator secret (optional)", "  JBSWY3DPEHPK3PXP  ");
+  await submit();
+  expect(write).toHaveBeenCalledWith("/bots/ranch/vault/logins", {
+    label: "Farm Portal",
+    origin: "https://portal.example.invalid",
+    identifierType: "email",
+    identifier: "owner@example.invalid",
+    password: "portal-secret-pw",
+    otpSecret: "JBSWY3DPEHPK3PXP",
+  });
+});
+
+it("manages named assistant secrets with inline validation and removal confirmation", async () => {
+  const withSecret: ProfileVault = {
+    ...vault,
+    secrets: [
+      {
+        name: "WEATHER_API_KEY",
+        createdAt: "2026-11-27T12:00:00Z",
+        updatedAt: "2026-11-27T12:00:00Z",
+        canRemove: true,
+      },
+    ],
+  };
+  vi.mocked(api).mockResolvedValueOnce(vault).mockResolvedValueOnce(withSecret);
+  vi.mocked(write).mockResolvedValue({ name: "WEATHER_API_KEY" });
+  await render(createElement(VaultPanel, { botId: "ranch" }));
+  expect(container.textContent).toContain(
+    "No saved API keys or custom secrets for this assistant.",
+  );
+
+  await click("Add secret");
+  await type("Secret name", "bad name!");
+  expect(container.textContent).toContain("letters, numbers, dots, dashes, and underscores");
+  expect(button("Save secret").disabled).toBe(true);
+
+  await type("Secret name", "  WEATHER_API_KEY  ");
+  await type("Secret value", "sk-secret-value-123");
+  expect(button("Save secret").disabled).toBe(false);
+  await submit();
+  expect(write).toHaveBeenCalledWith("/bots/ranch/vault/secrets", {
+    name: "WEATHER_API_KEY",
+    value: "sk-secret-value-123",
+  });
+  expect(container.textContent).toContain("WEATHER_API_KEY");
+
+  // Confirm removal of the saved secret.
+  vi.mocked(api).mockResolvedValueOnce(vault);
+  vi.mocked(write).mockResolvedValueOnce({ removed: true });
+  const removeButtons = Array.from(container.querySelectorAll("button")).filter(
+    (item) => item.textContent === "Remove...",
+  );
+  expect(removeButtons).toHaveLength(2);
+  await act(async () => removeButtons[1]!.click());
+  expect(container.textContent).toContain("Remove secret WEATHER_API_KEY from WildBots?");
+  await click("Remove secret");
+  expect(write).toHaveBeenLastCalledWith("/bots/ranch/vault/secrets/WEATHER_API_KEY", {}, "DELETE");
 });

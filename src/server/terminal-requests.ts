@@ -35,7 +35,7 @@ export async function installTerminalRequestRoutes(
         user = signedIn(req);
       if (!visibleTo(store, path.id, user.id)) throw httpError(404, "Assistant not found");
       if (!runtime.computerRequest)
-        throw httpError(409, "The Hermes terminal request integration is unavailable.");
+        throw httpError(409, "Terminal requests are unavailable on this runtime.");
       if (
         input.decision === "done" &&
         !(config.computerTerminalAdmins ?? []).includes(user.email.toLowerCase())
@@ -52,7 +52,7 @@ export async function installTerminalRequestRoutes(
         actorName: user.name,
       })) as unknown as Partial<TerminalRequestResult>;
       if (result?.status !== "ok" && result?.status !== "expired")
-        throw httpError(502, "Hermes returned an invalid answer for this terminal request");
+        throw httpError(502, "WildBots returned an invalid answer for this terminal request");
       return { status: result.status };
     },
   );

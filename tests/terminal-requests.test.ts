@@ -143,7 +143,7 @@ it("says so when the runtime cannot settle terminal requests, and rejects an unr
   const none = await setup({ admins: "one@example.invalid", runtime: false });
   const unavailable = await none.post(none.one, body);
   expect(unavailable.statusCode).toBe(409);
-  expect(reason(unavailable)).toBe("The Hermes terminal request integration is unavailable.");
+  expect(reason(unavailable)).toBe("Terminal requests are unavailable on this runtime.");
   const s = await setup({ admins: "one@example.invalid" });
   for (const answer of [{ status: "maybe" }, {}, null]) {
     s.computerRequest.mockResolvedValue(answer as never);

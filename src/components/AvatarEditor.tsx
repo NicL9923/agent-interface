@@ -141,13 +141,13 @@ export function AvatarEditor({
                 </button>
               ))}
             </div>
-            <p>Preview only. The real state always comes from Hermes.</p>
+            <p>Preview only. Real activity comes from the live assistant.</p>
           </>
         )}
       </div>
       {compactPreview && (
         <p className="avatar-preview-note" id={`${id}-preview-note`}>
-          Preview only. Real activity comes from Hermes.
+          Preview only. Real activity comes from the live assistant.
         </p>
       )}
       <fieldset className="segmented">

@@ -187,7 +187,7 @@ export function DiscoveryPanel({
       if (!current()) return;
       messageId = value.targetMessageId ?? messageId;
       if (messageId && !value.messages.some((message) => message.id === messageId))
-        throw new Error("This saved reply is unavailable. Its original history changed in Hermes.");
+        throw new Error("This saved reply is unavailable. Its original history changed.");
       setSavedMessage(messageId);
       setPageTitle(
         title ||
@@ -309,7 +309,7 @@ export function DiscoveryPanel({
               {error && <FormMessage tone="error">{error}</FormMessage>}
             </header>
             <p className="muted discovery-hint">
-              Read from Hermes. This view does not change the assistant's active conversation.
+              Read-only archive. This view does not change the assistant's active conversation.
             </p>
             {saveControl({
               kind: "session",

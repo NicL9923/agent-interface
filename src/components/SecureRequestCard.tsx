@@ -125,7 +125,7 @@ export function SecureRequestCard({
       if (result.status === "expired") {
         setSettled(true);
         setNotice(
-          "This request had already closed, so Hermes didn't use what you entered. It may have timed out, been stopped, or closed when someone sent a message.",
+          "This request had already closed, so WildBots didn't use what you entered. It may have timed out, been stopped, or closed when someone sent a message.",
         );
       } else {
         const text = cancel
@@ -145,7 +145,7 @@ export function SecureRequestCard({
       if (e instanceof ApiError && e.status === 409) setSettled(true);
       setError(
         ambiguous
-          ? "Hermes has not confirmed the result. Refresh to check before doing anything else. Your secret has been cleared."
+          ? "WildBots has not confirmed the result. Refresh to check before doing anything else. Your secret has been cleared."
           : "This secure request could not be completed. Refresh the conversation to check whether it is still waiting.",
       );
     } finally {
@@ -169,7 +169,7 @@ export function SecureRequestCard({
       if (!pending) {
         uncertainRequests.delete(started);
         setSettled(true);
-        setNotice("Hermes is no longer waiting for this request.");
+        setNotice("WildBots is no longer waiting for this request.");
         setError("");
       } else {
         const blocked = uncertainRequests.has(started);
@@ -177,12 +177,11 @@ export function SecureRequestCard({
         setNotice(
           blocked
             ? "The same request is still visible. Its result is uncertain; it will not be submitted again."
-            : "Hermes is still waiting for this request.",
+            : "WildBots is still waiting for this request.",
         );
       }
     } catch {
-      if (active(started))
-        setError("Could not refresh the secure request. Check the Hermes connection.");
+      if (active(started)) setError("Could not refresh the secure request. Check your connection.");
     } finally {
       if (active(started)) setBusy(false);
     }
@@ -202,7 +201,7 @@ export function SecureRequestCard({
       data-request-id={requestId}
       {...attentionAnchor("secure", requestId)}
     >
-      <p className="eyebrow">Secure input for Hermes</p>
+      <p className="eyebrow">Secure input for WildBots</p>
       <h2>{title}</h2>
       {accepted ? (
         <p className="secure-accepted" role="status">
@@ -225,8 +224,8 @@ export function SecureRequestCard({
           )}
           {request.method === "secret" && (
             <p>
-              Hermes setting: <code>{request.envVar}</code>. Hermes saves this in its profile
-              environment, separately from saved logins.
+              Secret name: <code>{request.envVar}</code>. WildBots encrypts and saves this in this
+              assistant's vault, separately from saved website logins.
             </p>
           )}
           {!settled && !answerable && (
@@ -256,6 +255,9 @@ export function SecureRequestCard({
                     required
                     maxLength={1000}
                     autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
                     value={sending ? sending.identifier : identifier}
                     readOnly={!!sending}
                     disabled={locked}
@@ -270,6 +272,7 @@ export function SecureRequestCard({
                   type="password"
                   autoComplete="off"
                   autoCorrect="off"
+                  autoCapitalize="off"
                   spellCheck={false}
                   maxLength={4096}
                   value={secret}
@@ -280,7 +283,7 @@ export function SecureRequestCard({
                 />
               </label>
               <p className="muted">
-                Sent directly to Hermes, outside your message and draft. Fields clear when you
+                Sent directly to WildBots, outside your message and draft. Fields clear when you
                 submit or leave this screen.
               </p>
               <div className="actions">
@@ -293,7 +296,7 @@ export function SecureRequestCard({
                     ? "Sending securely…"
                     : login
                       ? "Save login and continue"
-                      : "Send to Hermes"}
+                      : "Send securely"}
                 </button>
                 <button
                   type="button"
@@ -351,15 +354,15 @@ function ExplicitLoginDetails({
 }) {
   const assistant =
     assistantName && assistantName !== request.profile
-      ? `${assistantName} (Hermes profile ${request.profile})`
-      : `Hermes profile ${request.profile}`;
+      ? `${assistantName} (${request.profile})`
+      : request.profile;
   return (
     <dl className="credential-context">
       <dt>Address</dt>
       <dd>
         <span className="vault-origin">{origin}</span>
         <span className="muted">
-          Hermes has not opened or checked it.
+          WildBots has not opened or checked it.
           {origin.startsWith("http://") && " This address does not use HTTPS."}
         </span>
       </dd>
@@ -374,14 +377,14 @@ function ExplicitLoginDetails({
       <dd>{request.purpose}</dd>
       <dt>Storage</dt>
       <dd>
-        Saved in this profile's encrypted Hermes vault until someone removes it in Logins. The
-        assistant gets a handle and the username, never the password. Hermes fills the password only
-        on pages at exactly this address.
+        Saved in this assistant's encrypted WildBots vault until someone removes it in Logins. The
+        assistant gets a handle and the username, never the password. WildBots fills the password
+        only on pages at exactly this address.
       </dd>
       <dt>Who can reach it</dt>
       <dd>
-        Profiles organize access but are not a household security boundary. Household members with
-        Hermes access, and tools running on the Hermes server, can reach saved logins.
+        Household members with access to this assistant, and tools running on the WildBots server,
+        can use saved logins.
       </dd>
     </dl>
   );

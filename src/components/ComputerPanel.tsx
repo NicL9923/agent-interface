@@ -307,7 +307,7 @@ export function ComputerPanel({
             {value === "desktop" ? "Desktop" : "Terminal"}
           </Button>
         ))}
-        <span className="computer-host">{status?.label || "Hermes host"}</span>
+        <span className="computer-host">{status?.label || "WildBots host"}</span>
       </div>
       {statusError && (
         <p role="status" className="computer-notice">
@@ -329,8 +329,8 @@ export function ComputerPanel({
             detail={
               status?.reason ||
               (!status
-                ? "Checking the shared desktop on the Hermes host."
-                : "The shared desktop needs to be started on the Hermes host.")
+                ? "Checking the shared desktop on the server."
+                : "The shared desktop needs to be started on the server.")
             }
           />
         )}
@@ -360,7 +360,7 @@ export function ComputerPanel({
               terminal?.reason ||
               (terminal?.available
                 ? "Checking your access to the system terminal."
-                : "The system terminal is not available on this Hermes host yet.")
+                : "The system terminal is not available on this host yet.")
             }
           />
         )}
@@ -431,7 +431,7 @@ function ConfirmIdentity({ onConfirmed }: { onConfirmed: () => void }) {
       </span>
       <h3>Confirm it's you</h3>
       <p>
-        The terminal is a real shell on the Hermes host. Sign in again to open it. This lasts 2
+        The terminal is a real shell on the WildBots host. Sign in again to open it. This lasts 2
         hours.
       </p>
       <div ref={button} className="computer-google" aria-busy={googleLoading || busy} />

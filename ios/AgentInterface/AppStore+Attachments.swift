@@ -7,7 +7,7 @@ extension AppStore {
   func attachUnavailable(_ botId: String) -> String? {
     if !supports(.uploads) {
       let reason = bootstrap?[capability: .uploads]?.reason ?? ""
-      return reason.isEmpty ? "Hermes can't receive files right now." : reason
+      return reason.isEmpty ? "WildBots can't receive files right now." : reason
     }
     if !draftReady || selectedBotId != botId { return "Your draft is still loading." }
     if sending { return Self.attachWhileSending }

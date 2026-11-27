@@ -52,7 +52,7 @@ extension AppStore {
         receipts[id] = Receipt(
           requestId: submission.requestId, status: "uncertain",
           message:
-            "Checking whether Hermes accepted this message. The original request ID is preserved.")
+            "Checking whether WildBots accepted this message. The original request ID is preserved.")
       }
     }
     await refreshConversation()

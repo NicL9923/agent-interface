@@ -106,7 +106,7 @@ import CryptoKit
     XCTAssertTrue(lock.wait(until: "label == %@", "Unlock ranch/fences"), "The row shows the lock Hermes saved")
     XCTAssertTrue(app.descendants(matching: .any)["skill.locked.ranch/fences"].exists)
     XCTAssertTrue(text("Assistants can't change this skill while it's locked.", app: app).exists)
-    XCTAssertTrue(text("Saved in Hermes.", app: app).exists)
+    XCTAssertTrue(text("Saved in WildBots.", app: app).exists)
     XCTAssertFalse(app.buttons["saveChanges"].isEnabled, "A lock saves at once, not with Save changes")
     capture(app, "Native locked skill row")
     app.buttons["skill.read.ranch/fences"].tapWhenReady()

@@ -92,7 +92,7 @@ export function ComputerHandoffCard({
         setError(
           cause instanceof ApiError && cause.status < 500
             ? cause.message
-            : "Couldn't reach Hermes. Try Not now again.",
+            : "Couldn't reach WildBots. Try Not now again.",
         );
     } finally {
       if (live.current) setDeclining(false);

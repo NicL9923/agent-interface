@@ -62,9 +62,9 @@ struct HermesLearningView: View {
       HermesAutomationStatus(control: control, introduction: "Review skill changes the assistant wants to save. Installed skills are under Behavior.")
       if let state = control.value?.skills {
         if !state.supported {
-          Section { Text(state.reason ?? "Learning review is unavailable on this Hermes installation.").foregroundStyle(Palette.muted) }
+          Section { Text(state.reason ?? "Learning review is unavailable for this assistant.").foregroundStyle(Palette.muted) }
         } else {
-          // Simple presentation leaves the write policy as Hermes has it.
+          // Simple presentation leaves the write policy as saved.
           if store.bootstrap?.preferences.presentation == "advanced" { policy(state) }
           pendingChanges(state)
         }
@@ -75,7 +75,7 @@ struct HermesLearningView: View {
       .sheet(item: $pending) { item in HermesSkillReview(control: control, pending: item) }
       .confirmationDialog("Allow skill changes without review?", isPresented: $allowingWrites, titleVisibility: .visible) {
         Button("Allow changes without review", role: .destructive) { setPolicy(false) }
-      } message: { Text("Hermes can save new skills, edits and deletions without asking for approval.") }
+      } message: { Text("WildBots can save new skills, edits and deletions without asking for approval.") }
   }
   private func policy(_ state: HermesAutomationOverview.Skills) -> some View {
     Section {
@@ -89,7 +89,7 @@ struct HermesLearningView: View {
         Text("Only an integration administrator can change the skill write policy.").font(.footnote).foregroundStyle(Palette.muted)
       }
     } header: { Text("Skill write policy") }
-      footer: { Text("When enabled, Hermes stages new skills, edits and deletions for review.").font(.footnote).foregroundStyle(Palette.muted) }
+      footer: { Text("When enabled, WildBots stages new skills, edits and deletions for review.").font(.footnote).foregroundStyle(Palette.muted) }
   }
   private func pendingChanges(_ state: HermesAutomationOverview.Skills) -> some View {
     Section("Pending changes (\(state.pending.count))") {
@@ -135,7 +135,7 @@ struct HermesSkillReader: View {
         if let value = loader.value {
           Section("Skill content") {
             HermesAutomationDocument(text: value.content.isEmpty ? "This skill has no content." : value.content)
-            if value.truncated { Text("Preview truncated. Open Hermes for the full skill.").foregroundStyle(Palette.danger) }
+            if value.truncated { Text("Preview truncated.").foregroundStyle(Palette.danger) }
           }
         }
       }.householdListBackground().accessibilityIdentifier("automation.skillReader")
@@ -156,7 +156,7 @@ struct HermesSkillReader: View {
         .accessibilityIdentifier("automation.skillLock")
     } footer: {
       VStack(alignment: .leading, spacing: 4) {
-        Text(locked ? hermesSkillLockedNote : "Lock this skill to keep assistants from changing it. You can still edit it in Hermes.")
+        Text(locked ? hermesSkillLockedNote : "Lock this skill to keep assistants from changing it.")
         if control.value?.canManageLearningPolicy == false { Text("Only an integration administrator can lock or unlock skills.") }
       }.font(.footnote).foregroundStyle(Palette.muted)
     }
@@ -207,7 +207,7 @@ private struct HermesSkillReview: View {
     Section("Pending diff") {
       HermesAutomationDocument(text: value.diff.isEmpty ? "No textual diff." : value.diff)
       if value.truncated {
-        Text("The diff is truncated. Review the full change in Hermes before approving.").foregroundStyle(Palette.danger)
+        Text("The diff is truncated. Review the full change before approving.").foregroundStyle(Palette.danger)
       }
       Button("Approve change") { decide(.approve) }
         .disabled(disabled || value.truncated)

@@ -13,6 +13,10 @@ import { httpError } from "./http-error.js";
 const source = z.enum(["onepassword", "bitwarden"]);
 const method = z.enum(["vault.save_login", "vault.code", "vault.unlock_prompt", "secret"]);
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
+const secretName = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
 const text = z.string().min(1).max(20000);
 const owner = { epoch: id, sessionId: id };
 const answer = z.union([
@@ -39,6 +43,7 @@ const login = z
     label: z.string().trim().min(1).max(200),
     origin: z
       .string()
+      .trim()
       .url()
       .max(2048)
       .refine((value) => {
@@ -55,7 +60,13 @@ const login = z
     identifierType: z.enum(["email", "phone", "username"]),
     identifier: z.string().trim().min(1).max(1000),
     password: text,
-    otpSecret: z.string().max(4000).optional(),
+    otpSecret: z.string().trim().max(4000).optional(),
+  })
+  .strict();
+const secretInput = z
+  .object({
+    name: secretName,
+    value: text,
   })
   .strict();
 export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime) {
@@ -64,7 +75,7 @@ export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime)
     if (!(await runtime.listBots()).some((bot) => bot.id === input.profile))
       throw httpError(404, "Assistant not found");
     if (!runtime.vaultRequest)
-      throw httpError(409, "The installed Hermes integration does not support secure credentials.");
+      throw httpError(409, "This runtime does not support secure credentials.");
     const key = userId + ":" + input.profile;
     if (input.operation !== "overview" && busy.has(key))
       throw httpError(429, "A credential operation is already running. Wait for it to finish.");
@@ -74,13 +85,13 @@ export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime)
     } catch (error) {
       // Secret-bearing operations never forward exception text, even in development.
       const { statusCode: status, code } = error as { statusCode?: number; code?: string };
-      // This fixed explanation carries no secret; Hermes's own 401 and 403 never reach clients.
+      // This fixed explanation carries no secret; upstream 401 and 403 never reach clients.
       if (code === "hermes_unauthorized") throw error;
       throw httpError(
         status && [400, 404, 409, 429].includes(status) ? status : 502,
         status === 409
           ? "This credential request changed or is unavailable. Refresh and review it before continuing."
-          : "Hermes could not confirm this credential operation. Refresh its status before trying again.",
+          : "WildBots could not confirm this credential operation. Refresh its status before trying again.",
       );
     } finally {
       if (input.operation !== "overview") busy.delete(key);
@@ -111,6 +122,22 @@ export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime)
       operation: "remove_login",
       profile: params.id,
       itemId: params.itemId,
+    });
+  });
+  apiRoute(app, "POST /bots/:id/vault/secrets", { body: secretInput }, (req, body) =>
+    request(signedIn(req).id, {
+      operation: "add_secret",
+      profile: botId(req),
+      secret: body,
+      actor: signedIn(req).id,
+    }),
+  );
+  apiRoute(app, "DELETE /bots/:id/vault/secrets/:name", {}, (req) => {
+    const params = z.object({ id, name: secretName }).strict().parse(req.params);
+    return request(signedIn(req).id, {
+      operation: "remove_secret",
+      profile: params.id,
+      name: params.name,
     });
   });
   apiRoute(

@@ -255,7 +255,7 @@ export function ToolCalls({
                   )}
                 </summary>
                 <pre role="region" tabIndex={0} aria-label="Activity output">
-                  {message.text || "No result was exposed by Hermes."}
+                  {message.text || "No result was returned."}
                 </pre>
               </details>
             )}
@@ -335,8 +335,8 @@ export function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconn
       {call.status === "running" && call.result === undefined && (
         <p>
           {disconnected
-            ? "The current tool status will be checked when Hermes reconnects."
-            : "Waiting for the result from Hermes."}
+            ? "The current tool status will be checked when WildBots reconnects."
+            : "Waiting for the tool result."}
         </p>
       )}
     </details>

@@ -80,7 +80,7 @@ export async function registerVoiceRoutes(
     const botId = botParams.parse(req.params).id;
     await checkBot(req, botId);
     if (!runtime.transcribeVoice)
-      throw httpError(409, "Voice transcription is unavailable on this Hermes connection.");
+      throw httpError(409, "Voice transcription is unavailable on this server.");
     return operation(req, async () => {
       let input: { data: Buffer; mime: string } | undefined;
       // Consume the complete multipart body before paying for transcription, so
@@ -104,7 +104,7 @@ export async function registerVoiceRoutes(
       if (!input) throw httpError(400, "Choose an audio recording.");
       const result = await runtime.transcribeVoice!(botId, input);
       if (typeof result.text !== "string" || result.text.length > 50000)
-        throw httpError(502, "Hermes returned an invalid transcript.");
+        throw httpError(502, "The voice service returned an invalid transcript.");
       return reply.header("Cache-Control", "private, no-store").send({
         text: result.text.trim(),
         ...(typeof result.provider === "string" ? { provider: result.provider } : {}),
@@ -119,7 +119,7 @@ export async function registerVoiceRoutes(
       const botId = botParams.parse(req.params).id;
       await checkBot(req, botId);
       if (!runtime.synthesizeVoice)
-        throw httpError(409, "Spoken replies are unavailable on this Hermes connection.");
+        throw httpError(409, "Spoken replies are unavailable on this server.");
       return operation(req, async () => {
         const message = await readableReply(req, botId, messageId);
         if (message.id.endsWith("-inflight"))
@@ -134,7 +134,10 @@ export async function registerVoiceRoutes(
           !result.data.length ||
           result.data.length > MAX_VOICE_BYTES
         )
-          throw httpError(502, "Hermes did not return a supported audio reply under 8 MB.");
+          throw httpError(
+            502,
+            "The voice service did not return a supported audio reply under 8 MB.",
+          );
         prune();
         const userId = signedIn(req).id;
         for (const [key, entry] of audio) if (entry.userId === userId) audio.delete(key);

@@ -1171,7 +1171,7 @@ struct AttentionView: View {
   }
   private var card: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text(request.kind == "clarify" ? "A question for you" : secure ? "Secure input for Hermes" : handoff != nil ? "Household computer" : terminalRequest != nil ? "System terminal" : connection != nil ? "Connection" : "Continue in Hermes")
+      Text(request.kind == "clarify" ? "A question for you" : secure ? "Secure input for WildBots" : handoff != nil ? "Household computer" : terminalRequest != nil ? "System terminal" : connection != nil ? "Connection" : "Action required")
         .font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
       // A handoff or connection card names the assistant and its reason itself.
       if handoff == nil && connection == nil && terminalRequest == nil {
@@ -1196,7 +1196,7 @@ struct AttentionView: View {
       } else if let connection {
         ConnectionRequestView(request: request, connection: connection, botId: botId)
       } else {
-        Text("Open the official Hermes interface to handle this request. Return here when it is complete.").font(.footnote)
+        Text("Handle this request in the assistant's runtime interface, then return here when it is complete.").font(.footnote)
           .foregroundStyle(Palette.muted)
       }
     }.padding(16).frame(maxWidth: .infinity, alignment: .leading)

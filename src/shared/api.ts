@@ -48,7 +48,13 @@ import type {
   IntegrationFlow,
 } from "./integrations.js";
 import type { LegacyMascotAvatar } from "./avatar-legacy.js";
-import type { AddVaultLogin, ProfileVault, SecureRequestAnswer, VaultResponse } from "./vault.js";
+import type {
+  AddVaultLogin,
+  AddVaultSecret,
+  ProfileVault,
+  SecureRequestAnswer,
+  VaultResponse,
+} from "./vault.js";
 import type { RoutineRunPage } from "./routine-runs.js";
 import type { LinkedMacs } from "./mac.js";
 import type { ReplyCardState } from "./reply-cards.js";
@@ -621,6 +627,8 @@ export interface ApiRoutes {
   "GET /bots/:id/vault": { response: ProfileVault };
   "POST /bots/:id/vault/logins": { body: AddVaultLogin; response: VaultResponse };
   "DELETE /bots/:id/vault/logins/:itemId": { response: VaultResponse };
+  "POST /bots/:id/vault/secrets": { body: AddVaultSecret; response: VaultResponse };
+  "DELETE /bots/:id/vault/secrets/:name": { response: VaultResponse };
   "PUT /bots/:id/vault/sources/:source": { body: { enabled: boolean }; response: VaultResponse };
   "POST /bots/:id/vault/sources/:source/unlock": {
     body: { password: string };

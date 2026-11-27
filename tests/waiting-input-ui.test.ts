@@ -201,7 +201,7 @@ describe("secure request card", () => {
         .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
     );
     expect(container.textContent).toContain(
-      "had already closed, so Hermes didn't use what you entered",
+      "had already closed, so WildBots didn't use what you entered",
     );
     expect(container.querySelector(".secure-receipt")).toBeNull();
   });

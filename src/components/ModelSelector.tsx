@@ -49,7 +49,7 @@ export function ModelSelector({
       .then((result) => {
         if (controller.signal.aborted) return;
         if (!Array.isArray(result.providers))
-          throw new Error("Hermes returned an unreadable model catalog.");
+          throw new Error("The server returned an unreadable model catalog.");
         setCatalog(result);
       })
       .catch((e: Error) => {
@@ -94,10 +94,10 @@ export function ModelSelector({
     !loading && !error && providers.length === 0
       ? query
         ? "No models match your search."
-        : "No connected models were reported. Connect a provider in Hermes, then retry."
+        : "No connected models were reported. Configure a provider credential, then retry."
       : "";
   const statusMessage = loading
-    ? "Loading models from Hermes…"
+    ? "Loading models…"
     : error
       ? ""
       : emptyMessage ||
@@ -140,7 +140,7 @@ export function ModelSelector({
           <span>
             <span className="model-name">{name}</span>
             {providerName && <small>{providerName}</small>}
-            {!available && <small>Reconnect in Hermes to use this model</small>}
+            {!available && <small>Check provider credentials to use this model</small>}
           </span>
           {selected && <Icon name="check" size={18} />}
         </Button>
@@ -219,7 +219,7 @@ export function ModelSelector({
           )}
           {provider.models.length === 0 && (
             <p className="muted model-warning">
-              No models reported. Check this connection in Hermes.
+              No models reported. Check this provider's connection.
             </p>
           )}
         </details>
@@ -255,11 +255,11 @@ export function ModelSelector({
         !error &&
         !selectedProvider?.models.some((model) => model.id === value.model) && (
           <p className="muted model-saved-note">
-            Your saved model is kept. Hermes did not include it in the current catalog.
+            Your saved model is kept. It was not included in the current model catalog.
           </p>
         )}
       <p className="muted model-saved-note">
-        Model choices come from your connected Hermes providers. Star models to keep them handy.
+        Model choices come from your connected harness providers. Star models to keep them handy.
       </p>
     </section>
   );

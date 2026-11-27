@@ -22,6 +22,16 @@ export interface VaultSource {
   canUnlock: boolean;
   canLock: boolean;
 }
+export interface VaultSecret {
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  canRemove: boolean;
+}
+export interface AddVaultSecret {
+  name: string;
+  value: string;
+}
 export interface ProfileVault {
   botId: string;
   profile: string;
@@ -29,6 +39,7 @@ export interface ProfileVault {
   owner: string;
   notice: string;
   items: VaultLogin[];
+  secrets?: VaultSecret[];
   sources: VaultSource[];
 }
 export interface AddVaultLogin {
@@ -74,6 +85,8 @@ export type VaultRequest =
   | { operation: "overview"; profile: string }
   | { operation: "add_login"; profile: string; login: AddVaultLogin; actor?: string }
   | { operation: "remove_login"; profile: string; itemId: string }
+  | { operation: "add_secret"; profile: string; secret: AddVaultSecret; actor?: string }
+  | { operation: "remove_secret"; profile: string; name: string }
   | { operation: "source"; profile: string; source: "onepassword" | "bitwarden"; enabled: boolean }
   | { operation: "unlock"; profile: string; source: "onepassword" | "bitwarden"; password: string }
   | { operation: "lock"; profile: string; source: "onepassword" | "bitwarden" }
@@ -88,6 +101,7 @@ export type VaultRequest =
 export type VaultResponse =
   | ProfileVault
   | { id: string }
+  | { name: string }
   | { removed: boolean }
   | { ok: true }
   | { status: "ok" | "expired" };

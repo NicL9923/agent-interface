@@ -122,7 +122,7 @@ export function AttentionCard({
       {...attentionAnchor(request.kind, request.id)}
     >
       <p className="eyebrow">
-        {request.kind === "clarify" ? "A question for you" : "Continue in Hermes"}
+        {request.kind === "clarify" ? "A question for you" : "Action required"}
       </p>
       <h2>{request.title}</h2>
       <p>{request.detail}</p>
@@ -267,7 +267,7 @@ export function AttentionCard({
       )}
       {request.kind === "official" && (
         <p className="muted">
-          Open the official Hermes interface to handle this request. Return here when it is
+          Handle this request in the assistant's runtime interface, then return here when it is
           complete.
         </p>
       )}
