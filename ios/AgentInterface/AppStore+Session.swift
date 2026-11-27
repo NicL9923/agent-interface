@@ -315,6 +315,9 @@ extension AppStore {
     leftBotId = nil
     deletedBotId = nil
     openedFile = nil
+    searchRequest = nil
+    savedRequest = nil
+    openGroupRoomId = nil
     retryAttempt = nil
     focusedMessage = nil
     conversationRefreshedAt = nil
@@ -358,6 +361,14 @@ extension AppStore {
     resetPreferenceSaves()
     listenRequest = nil
     routineResult = nil
+    searchRequest = nil
+    savedRequest = nil
+    openGroupRoomId = nil
+    BiometricGate.shared.lock()
+    CriticalAlarmManager.shared.cancelAll()
+    RoutineSnapshotStore.write(nil)
+    WatchBridge.shared.sync(nil)
+    QuickActions.sync(nil)
     replyWatch = nil
     failures = 0
     forgetSentEchoes()

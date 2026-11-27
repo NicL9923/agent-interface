@@ -18,6 +18,7 @@ extension AppStore {
     let result = await attempt(current: { [weak self] in self?.groupLoadId == id }) { try await $0.api.get("/groups") as GroupCatalog }
     guard case .success(let value)? = result, value != groupCatalog else { return }
     groupCatalog = value
+    spotlight?.syncGroups(value.rooms, scope: scope)
   }
   /// A room just made shows at once; the next read of the catalog replaces this copy.
   func groupRoomCreated(_ room: GroupRoom) {

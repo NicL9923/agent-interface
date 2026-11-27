@@ -1,4 +1,6 @@
 import AppIntents
+import Foundation
+import os
 import SwiftUI
 
 /// A question from Siri or Shortcuts waiting to land in an assistant's draft. It is never sent:
@@ -14,13 +16,17 @@ struct AskRequest: Equatable {
 }
 
 enum AssistantIntentError: Error, CustomLocalizedStringResourceConvertible {
-  case signedOut, missing, empty, tooLong
+  case signedOut, missing, empty, tooLong, sendDisabled, sendTooLong, rateLimited, failed(String)
   var localizedStringResource: LocalizedStringResource {
     switch self {
     case .signedOut: "Open WildBots and sign in first."
-    case .missing: "That assistant is no longer available."
+    case .missing: "That item is no longer available."
     case .empty: "Say what you want to ask."
     case .tooLong: "That message is too long. WildBots accepts up to 50,000 characters."
+    case .sendDisabled: "Turn on Shortcut message sending in WildBots Settings first."
+    case .sendTooLong: "Automated Shortcut messages can contain up to 4,000 characters."
+    case .rateLimited: "Wait a few seconds before sending another automated message to this assistant."
+    case .failed(let reason): LocalizedStringResource(stringLiteral: reason)
     }
   }
 }
@@ -73,77 +79,216 @@ struct AskAssistantIntent: AppIntent {
   }
 }
 
-struct OpenTodayIntent: AppIntent {
-  static var title: LocalizedStringResource { "Open Today" }
-  static var description: IntentDescription { IntentDescription("Opens what is new, waiting and in progress across your assistants.") }
-  static var openAppWhenRun: Bool { true }
-  init() {}
-  var destination: URL { DeepLink.today }
-  @MainActor func perform() async throws -> some IntentResult {
-    await NotificationController.shared.open(destination)
-    return .result()
+// MARK: Automation-friendly intents (Routines & safety-bounded Send)
+
+/// A routine from the active account's non-secret `RoutineSnapshot` for Shortcuts automation.
+struct RoutineEntity: AppEntity, Identifiable, Hashable {
+  static var typeDisplayRepresentation: TypeDisplayRepresentation { "Routine" }
+  static var defaultQuery: RoutineEntityQuery { RoutineEntityQuery() }
+  var id: String
+  var name: String
+  var botName: String
+  var displayRepresentation: DisplayRepresentation {
+    DisplayRepresentation(title: "\(name)", subtitle: "\(botName)")
+  }
+  init(id: String, name: String, botName: String) {
+    self.id = id
+    self.name = name
+    self.botName = botName
+  }
+  init(_ item: RoutineSnapshot.Item) {
+    self.init(id: item.id, name: item.name, botName: item.botName)
   }
 }
 
-/// Who needs the person and who is working, said and shown without opening the app. It reads the
-/// widgets' snapshot, refreshed first with the app's own sign-in when it is more than a minute old.
-struct CheckAssistantsIntent: AppIntent {
-  static var title: LocalizedStringResource { "Check on assistants" }
+struct RoutineEntityQuery: EntityStringQuery {
+  private static let snapshotLocation = OSAllocatedUnfairLock<URL?>(initialState: RoutineSnapshotStore.defaultURL)
+  static var snapshotURL: URL? {
+    get { snapshotLocation.withLock { $0 } }
+    set { snapshotLocation.withLock { $0 = newValue } }
+  }
+  init() {}
+  private var all: [RoutineEntity] {
+    RoutineSnapshotStore.read(from: Self.snapshotURL)?.routines.map(RoutineEntity.init) ?? []
+  }
+  func entities(for identifiers: [String]) async throws -> [RoutineEntity] {
+    let known = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    return identifiers.compactMap { known[$0] }
+  }
+  func entities(matching string: String) async throws -> [RoutineEntity] {
+    let words = string.trimmingCharacters(in: .whitespacesAndNewlines)
+    return words.isEmpty ? all : all.filter { $0.name.localizedStandardContains(words) || $0.botName.localizedStandardContains(words) }
+  }
+  func suggestedEntities() async throws -> [RoutineEntity] { all }
+}
+
+/// Runs a saved routine once immediately from iOS Shortcuts without opening the app.
+struct TryOnceIntent: AppIntent {
+  static var title: LocalizedStringResource { "Run routine once" }
   static var description: IntentDescription {
-    IntentDescription("Tells you which assistants need you and which are working, without opening WildBots.")
+    IntentDescription("Starts a saved WildBots routine immediately using your signed-in account.")
   }
   static var openAppWhenRun: Bool { false }
+  static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
+  @Parameter(title: "Routine") var routine: RoutineEntity
+  static var parameterSummary: some ParameterSummary { Summary("Run \(\.$routine) once") }
   init() {}
-  /// Siri gives up after a few seconds; a slow server leaves the snapshot as it was.
-  static let refreshPatience: Duration = .seconds(4)
-  @MainActor func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
-    let url = AssistantEntityQuery.snapshotURL
-    if WidgetSnapshotStore.read(from: url).map({ Date().timeIntervalSince($0.generatedAt) > 60 }) ?? true {
-      await BackgroundRefresh.refreshWidgets(waitingAtMost: Self.refreshPatience)
+  init(routine: RoutineEntity) { self.routine = routine }
+
+  @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+    let dialog = try await Self.execute(
+      routineId: routine.id,
+      routineName: routine.name,
+      snapshot: RoutineSnapshotStore.read(from: RoutineEntityQuery.snapshotURL),
+      signedInScope: NotificationController.shared.store?.scope ?? NotificationController.shared.savedScope(),
+      client: NotificationController.shared.store?.api.flatMap { $0.token != nil || $0.localCookieAuth ? $0 : nil }
+        ?? NotificationController.shared.actionClient()
+    )
+    return .result(dialog: IntentDialog(stringLiteral: dialog))
+  }
+
+  @MainActor static func execute(
+    routineId: String,
+    routineName: String,
+    snapshot: RoutineSnapshot?,
+    signedInScope: String?,
+    client: APIClient?
+  ) async throws -> String {
+    guard let snapshot, let signedInScope, snapshot.scope == signedInScope, let client else {
+      throw AssistantIntentError.signedOut
     }
-    guard let snapshot = WidgetSnapshotStore.read(from: url) else { throw AssistantIntentError.signedOut }
-    let now = Date()
-    return .result(dialog: IntentDialog(stringLiteral: snapshot.spokenSummary(at: now)), view: AssistantStatusSnippet(snapshot: snapshot))
+    guard snapshot.routines.contains(where: { $0.id == routineId }) else {
+      throw AssistantIntentError.missing
+    }
+    let requestId = UUID().uuidString.lowercased()
+    do {
+      let receipt: RoutineRunReceipt = try await client.write(
+        "/routines/\(APIClient.component(routineId))/run",
+        ["requestId": requestId]
+      )
+      return receipt.status == "accepted" || receipt.status == "running"
+        ? "Started \(routineName)."
+        : receipt.summary
+    } catch {
+      throw AssistantIntentError.failed(error.localizedDescription)
+    }
   }
 }
 
-extension WidgetSnapshot {
-  /// What Siri says: each assistant that needs the person, then who is working, and how old the news is
-  /// when the snapshot is stale.
-  func spokenSummary(at now: Date) -> String {
-    func names(_ list: [Assistant]) -> String { ListFormatter.localizedString(byJoining: list.map(\.name)) }
-    let ordered = self.ordered
-    let attention = ordered.filter(\.needsAttention), working = ordered.filter(\.isWorking)
-    var parts = attention.map { "\($0.name) \($0.activity == "waiting" ? "needs your approval" : "needs your input")." }
-    if !working.isEmpty { parts.append("\(names(working)) \(working.count == 1 ? "is" : "are") working.") }
-    if parts.isEmpty { parts = ["All caught up. Nobody needs you and nothing is running."] }
-    if isStale(at: now) {
-      let age = RelativeDateTimeFormatter().localizedString(for: generatedAt, relativeTo: now)
-      parts.insert("WildBots last checked \(age), so this may be out of date.", at: 0)
+/// Opt-in policy and rate-limiter for unattended Shortcut message sending (`SendAssistantMessageIntent`).
+/// Disabled by default per account scope so Shortcuts can never send messages unexpectedly.
+@MainActor enum ShortcutSendPolicy {
+  static let maxMessageLength = 4_000
+  static let cooldownSeconds: TimeInterval = 5
+
+  static func key(scope: String) -> String { "native.\(scope).shortcutSendEnabled" }
+  static func isEnabled(for scope: String?, defaults: UserDefaults = .standard) -> Bool {
+    guard let scope, !scope.isEmpty else { return false }
+    return defaults.bool(forKey: key(scope: scope))
+  }
+  static func setEnabled(_ enabled: Bool, for scope: String?, defaults: UserDefaults = .standard) {
+    guard let scope, !scope.isEmpty else { return }
+    defaults.set(enabled, forKey: key(scope: scope))
+  }
+
+  private static var lastSentAt: [String: Date] = [:]
+  static func resetCooldowns() { lastSentAt.removeAll() }
+
+  static func validate(
+    botId: String,
+    text: String,
+    snapshot: WidgetSnapshot?,
+    signedInScope: String?,
+    defaults: UserDefaults = .standard,
+    now: Date = Date()
+  ) throws -> String {
+    guard let snapshot, let signedInScope, snapshot.scope == signedInScope else {
+      throw AssistantIntentError.signedOut
     }
-    return parts.joined(separator: " ")
+    guard isEnabled(for: signedInScope, defaults: defaults) else {
+      throw AssistantIntentError.sendDisabled
+    }
+    guard snapshot.assistants.contains(where: { $0.id == botId }) else {
+      throw AssistantIntentError.missing
+    }
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { throw AssistantIntentError.empty }
+    guard trimmed.utf16.count <= maxMessageLength else { throw AssistantIntentError.sendTooLong }
+    let rateKey = "\(signedInScope)|\(botId)"
+    if let last = lastSentAt[rateKey], now.timeIntervalSince(last) < cooldownSeconds {
+      throw AssistantIntentError.rateLimited
+    }
+    lastSentAt[rateKey] = now
+    return trimmed
   }
 }
 
-/// The card Siri and Shortcuts show under the answer: the same rows as the widget, at most five.
-struct AssistantStatusSnippet: View {
-  var snapshot: WidgetSnapshot
-  var body: some View {
-    let rows = snapshot.ordered.filter { $0.needsAttention || $0.isWorking }.prefix(5)
-    VStack(alignment: .leading, spacing: 8) {
-      if rows.isEmpty {
-        Label("All caught up", systemImage: "checkmark.circle.fill").foregroundStyle(WidgetPalette.color(.done))
+/// Safety-bounded Shortcuts intent that sends a message directly to an assistant when the user has
+/// explicitly opted in via Settings -> Shortcuts automation.
+struct SendAssistantMessageIntent: AppIntent {
+  static var title: LocalizedStringResource { "Send message to assistant" }
+  static var description: IntentDescription {
+    IntentDescription("Sends a message directly to an assistant from an automation. Requires turning on Shortcut message sending in WildBots Settings.")
+  }
+  static var openAppWhenRun: Bool { false }
+  static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
+  @Parameter(title: "Assistant") var assistant: AssistantEntity
+  @Parameter(title: "Message") var message: String
+  static var parameterSummary: some ParameterSummary { Summary("Send \(\.$message) to \(\.$assistant)") }
+  init() {}
+  init(assistant: AssistantEntity, message: String) { self.assistant = assistant; self.message = message }
+
+  @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+    let dialog = try await Self.execute(
+      botId: assistant.id,
+      assistantName: assistant.name,
+      message: message,
+      snapshot: WidgetSnapshotStore.read(from: AssistantEntityQuery.snapshotURL),
+      signedInScope: NotificationController.shared.store?.scope ?? NotificationController.shared.savedScope(),
+      client: NotificationController.shared.store?.api.flatMap { $0.token != nil || $0.localCookieAuth ? $0 : nil }
+        ?? NotificationController.shared.actionClient()
+    )
+    return .result(dialog: IntentDialog(stringLiteral: dialog))
+  }
+
+  @MainActor static func execute(
+    botId: String,
+    assistantName: String,
+    message: String,
+    snapshot: WidgetSnapshot?,
+    signedInScope: String?,
+    client: APIClient?,
+    defaults: UserDefaults = .standard,
+    now: Date = Date()
+  ) async throws -> String {
+    let trimmed = try ShortcutSendPolicy.validate(
+      botId: botId,
+      text: message,
+      snapshot: snapshot,
+      signedInScope: signedInScope,
+      defaults: defaults,
+      now: now
+    )
+    guard let client else { throw AssistantIntentError.signedOut }
+    let submission = PendingSubmission(
+      requestId: UUID().uuidString.lowercased(),
+      botId: botId,
+      text: trimmed,
+      attachments: [],
+      reviewedInterruption: false,
+      draftBaseRevision: 0
+    )
+    do {
+      let receipt: Receipt = try await client.write("/bots/\(APIClient.component(botId))/messages", submission)
+      if receipt.admitted {
+        return "Sent to \(assistantName)."
       }
-      ForEach(Array(rows)) { assistant in
-        HStack(spacing: 8) {
-          AssistantGlyphView(color: WidgetPalette.hex(assistant.color) ?? WidgetPalette.brand).frame(width: 18, height: 18)
-          Text(assistant.name).fontWeight(.semibold).lineLimit(1)
-          Spacer(minLength: 4)
-          Text(assistant.status ?? "").foregroundStyle(WidgetPalette.color(assistant.phase)).lineLimit(1)
-        }.font(.subheadline).accessibilityElement(children: .combine)
-      }
-      Text("Updated \(snapshot.generatedAt, style: .relative) ago").font(.caption2).foregroundStyle(.secondary)
-    }.padding()
+      throw AssistantIntentError.failed(receipt.message ?? "\(assistantName) did not accept the message.")
+    } catch let error as AssistantIntentError {
+      throw error
+    } catch {
+      throw AssistantIntentError.failed(error.localizedDescription)
+    }
   }
 }
 
@@ -173,11 +318,17 @@ struct WildBotsShortcuts: AppShortcutsProvider {
         "Check on my assistants in \(.applicationName)",
       ],
       shortTitle: "Check on assistants", systemImageName: "person.crop.circle.badge.exclamationmark")
+    AppShortcut(
+      intent: TryOnceIntent(),
+      phrases: [
+        "Run \(\.$routine) in \(.applicationName)", "Run \(\.$routine) once in \(.applicationName)",
+      ],
+      shortTitle: "Run routine once", systemImageName: "play.circle")
   }
 }
 
 extension NotificationController {
-  /// Opens a widget, notification or Shortcuts link, the one way every outside entry reaches a chat.
+  /// Opens a widget, notification, Quick Action, Spotlight or Shortcuts link, the one way every outside entry reaches a screen.
   /// `at` is when the link was asked for, which a link handed over from the widget extension keeps.
   func open(_ url: URL, at: Date = Date()) async {
     guard let path = DeepLink.relativePath(for: url) else { return }

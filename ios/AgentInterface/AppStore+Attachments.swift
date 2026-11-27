@@ -67,12 +67,12 @@ extension AppStore {
       try await saveDraft(target, botId: botId)
     }
   }
-  func open(_ file: FileRef) {
-    open(file, present: { self.openedFile = $0 })
+  func open(_ file: FileRef, sourceId: String? = nil) {
+    open(file, sourceId: sourceId, present: { self.openedFile = $0 })
   }
   /// A sheet owns its preview presentation and may cancel its own download when dismissed.
   @discardableResult
-  func open(_ file: FileRef, present: @escaping @MainActor (PreviewFile) -> Void,
+  func open(_ file: FileRef, sourceId: String? = nil, present: @escaping @MainActor (PreviewFile) -> Void,
     onError: (@MainActor (Error) -> Void)? = nil) -> Task<Void, Never> {
     fileTask?.cancel()
     let currentGeneration = generation
@@ -89,7 +89,7 @@ extension AppStore {
           try? FileManager.default.removeItem(at: directory)
           return
         }
-        present(PreviewFile(url: url))
+        present(PreviewFile(url: url, sourceId: sourceId))
       } catch {
         guard !Task.isCancelled, !(error is CancellationError), currentGeneration == generation else { return }
         if let onError {

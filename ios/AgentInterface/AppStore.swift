@@ -98,6 +98,12 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   var routineResult: RoutineResultDestination?
   var todayRequest: UUID?
+  /// Opens Search & Saved (from Quick Actions or Spotlight).
+  var searchRequest: UUID?
+  /// Opens Search & Saved directly on the Saved tab (from Spotlight).
+  var savedRequest: UUID?
+  /// Opens a specific group chat room (from Spotlight or deep link).
+  var openGroupRoomId: String?
   /// A voice message to start in this assistant's chat, from the Talk to assistant control.
   var listenRequest: ListenRequest?
   /// The assistants the current Focus lets through; see `FocusFilter.swift`.
@@ -628,6 +634,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
 struct PreviewFile: Identifiable {
   let id = UUID()
   var url: URL
+  /// Optional matchedTransitionSource identifier for native iOS 18+ zoom transitions.
+  var sourceId: String? = nil
 }
 /// A reply for VoiceOver to read, worded as the web's status region.
 struct ReplyAnnouncement: Equatable {

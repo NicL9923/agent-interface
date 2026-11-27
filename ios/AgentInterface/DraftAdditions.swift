@@ -14,7 +14,7 @@ import Foundation
 /// the operation that made them deliverable has finished, never from inside a property observer:
 /// a discarded send restores its draft first, and held text joins on top.
 struct DraftAddition: Codable, Equatable, Identifiable {
-  enum Source: String, Codable { case ask, reply, share }
+  enum Source: String, Codable { case ask, reply, share, watch }
   var id = UUID()
   var source: Source
   var botId: String

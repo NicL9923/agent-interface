@@ -64,6 +64,9 @@ enum VoiceState: Equatable {
   @ObservationIgnored var onTranscript: (String) -> Void = { _ in }
   /// On-device speech-to-text, tried before the app server. Nil sends every recording to the server.
   @ObservationIgnored var localTranscriber: LocalTranscriber? = .system
+  /// Optional post-transcription polish hook for tests. Production builds polish on-device
+  /// `SpeechAnalyzer` transcripts inside `LocalTranscriber.system` via `OnDeviceIntelligence.polishTranscript`.
+  @ObservationIgnored var polishLocalTranscript: @Sendable (String) async -> String = { $0 }
   @ObservationIgnored private var recorder: AVAudioRecorder?
   @ObservationIgnored private var file: URL?
   @ObservationIgnored private var timer: Task<Void, Never>?
@@ -264,7 +267,12 @@ enum VoiceState: Equatable {
         // language without an installed model, or an empty result, goes to the app server.
         var text = await local?.transcribe(audio) ?? ""
         guard generation == run else { return }
-        if text.isEmpty { text = try await api.transcribe(botId: botId, audio: audio).text }
+        if !text.isEmpty {
+          text = await polishLocalTranscript(text)
+          guard generation == run else { return }
+        } else {
+          text = try await api.transcribe(botId: botId, audio: audio).text
+        }
         guard generation == run else { return }
         recording = nil
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -321,6 +329,7 @@ struct VoiceButtons: View {
     } else {
       Button { beforeRecording(); Task { await voice.startRecording() } } label: {
         Image(systemName: "mic").font(.system(size: 20)).frame(width: 44, height: 44)
+          .glassSurface(Circle(), interactive: true)
       }.accessibilityLabel("Record voice")
         .accessibilityHint("Record up to two minutes. Review the transcript before sending.")
         .disabled(disabled || voice.state != .idle || voice.recording != nil)
@@ -388,7 +397,10 @@ struct LocalTranscriber: Sendable {
   var transcribe: @Sendable (Data) async -> String?
   static let system = LocalTranscriber { audio in
     guard #available(iOS 26.0, *) else { return nil }
-    return await SpeechAnalyzerTranscription.text(of: audio, locale: .current)
+    guard let raw = await SpeechAnalyzerTranscription.text(of: audio, locale: .current) else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return raw }
+    return await OnDeviceIntelligence.polishTranscript(trimmed)
   }
 }
 

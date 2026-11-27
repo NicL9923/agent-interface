@@ -62,6 +62,7 @@ struct ConversationView: View {
   /// The file a reply's chip opened the artifacts sheet on.
   @State private var fileFocus: String?
   @State private var profileOpen = false
+  @Namespace private var profileZoom
   @State private var modelOpen = false
   /// Reads replies aloud, one at a time, from each reply's own row.
   @State private var speech = SpeechController()
@@ -249,6 +250,7 @@ struct ConversationView: View {
       // The bar does not grow with text, so the name stops at a size the bar can hold.
       .dynamicTypeSize(...DynamicTypeSize.xLarge)
     }.buttonStyle(.plain)
+      .zoomSource(id: "profile-\(bot.id)", in: profileZoom)
       .accessibilityElement(children: .ignore).accessibilityLabel(bot.name).accessibilityAddTraits(.isButton)
       .accessibilityHint("Shows find, pin, artifacts and settings").accessibilityIdentifier("botProfile")
   }
@@ -261,6 +263,7 @@ struct ConversationView: View {
       profileAction = action
       profileOpen = false
     }.appStore(store).coveringChat(store)
+      .zoomTransition(sourceID: "profile-\(bot.id)", in: profileZoom)
   }
   /// Runs once the card has gone, so the next sheet or the find field can take over cleanly.
   private func profileClosed() {
@@ -894,6 +897,7 @@ struct MessageView: View {
         }
       }
       .modifier(ReplyActions(message: message))
+      .modifier(DraggableReplyText(message: message))
       .accessibilityElement(children: .contain)
       // Names the row, so a UI test can tell a streamed reply from its saved copy.
       .accessibilityIdentifier("message-" + message.id)
@@ -932,6 +936,29 @@ struct MessageView: View {
     }
   }
 }
+/// Allows dragging settled assistant replies out of WildBots into other iPad apps.
+private struct DraggableReplyText: ViewModifier {
+  var message: Message
+  private var draggable: Bool {
+    message.role == "assistant" && !message.isProgressLine && !message.isInternalActivity
+      && !message.isToolActivity && !message.id.hasSuffix("-inflight")
+      && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+  func body(content: Content) -> some View {
+    if draggable {
+      content.draggable(message.text) {
+        Text(String(message.text.prefix(120)))
+          .font(.footnote)
+          .lineLimit(3)
+          .padding(10)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+      }
+    } else {
+      content
+    }
+  }
+}
+
 /// A progress line reads as the assistant talking, in a quieter voice than its answer, as on the web.
 private struct ProgressLineStyle: ViewModifier {
   var on: Bool

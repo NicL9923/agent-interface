@@ -184,8 +184,15 @@ struct StatusDock: View {
 private struct DockCard: ViewModifier {
   @Environment(\.colorScheme) private var scheme
   func body(content: Content) -> some View {
-    content.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-      .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
-      .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.line, lineWidth: 1))
+    if #available(iOS 26, *) {
+      let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+      content.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.raised(scheme), in: shape)
+        .glassEffect(.regular, in: shape)
+    } else {
+      content.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.line, lineWidth: 1))
+    }
   }
 }

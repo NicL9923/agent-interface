@@ -78,8 +78,9 @@ struct ReplyActions: ViewModifier {
     Task {
       defer { saving = false }
       do {
+        let title = await OnDeviceIntelligence.suggestReferenceTitle(for: message.text) ?? DiscoveryView.replyTitle(message.text)
         let _: SavedItem = try await api.write("/saved", SavedPointer(botId: botId, kind: "session", sessionId: session,
-          messageId: message.id, title: DiscoveryView.replyTitle(message.text)))
+          messageId: message.id, title: title))
         guard store.scope == scope else { return }
         saved = true
         store.notice = "Saved. Find it in Search > Saved items."

@@ -60,7 +60,11 @@
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Choose reminder lists to preview and share a snapshot with your assistant. Nothing is shared automatically.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Take a photo to attach to your message. Nothing is sent until you choose Send.</string>
+	<string>Take a photo or scan a document to attach to your message. Nothing is sent until you choose Send.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Protect saved passwords, vault unlocks, and sensitive assistant approvals on this device.</string>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Sound an optional alarm for critical routine or waiting alerts you explicitly choose to escalate.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record voice messages you review before sending, and talk live with your assistants through OpenAI's voice service.</string>
 	<key>NSLocalNetworkUsageDescription</key>
@@ -73,7 +77,7 @@
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
+		<true/>
 	</dict>
 	<key>UIBackgroundModes</key>
 	<array>

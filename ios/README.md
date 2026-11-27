@@ -179,6 +179,16 @@ up to 90 days after the Google sign-in. Sign-in keeps an ephemeral browser sessi
 purpose, so a shared iPad never hands one member's Google sign-in to the next. Drafts, pending admission
 IDs, and read positions are scoped to the server and signed-in household member.
 
+## iOS 26/27, iPadOS, watchOS, and Apple ecosystem features
+
+- **Liquid Glass & Zoom Transitions**: On iOS 26 and later, functional chrome—the floating composer capsule, attach and voice controls, status dock, jump-to-latest pill, and Computer bottom bar—uses `GlassEffectContainer` and `.glassEffect(.regular.interactive(), in: ...)`, while transcript content stays crisp and opaque. Native toolbar chrome stays harmonized with Liquid Glass without fighting system backgrounds. On iOS 18 and later, opening pinned assistant chats, assistant profile cards, and attachment previews uses `navigationTransition(.zoom)` / `matchedTransitionSource`.
+- **iPadOS Multi-Window & Drag-Out**: Secondary `WindowGroup` scenes let iPad users open the household Computer (`Cmd+Shift+D`) or a second assistant conversation (`Cmd+Shift+N`, or **Open in new window** from an assistant menu) side-by-side in Stage Manager. Settled assistant replies, code blocks, and authenticated managed file attachments support `.draggable` drag-out to other iPad apps.
+- **Biometric Gating (`LocalAuthentication`)**: Vault access, inline `vault.unlock_prompt` requests, and sensitive/high-risk approvals (shell/terminal, sudo, file deletion, credential/vault, or network/payment actions) can be gated behind Face ID / Touch ID / device passcode (`Settings > Security & automation`). Vault locks on background, account switch, or view dismissal for shared-iPad protection, and turning protection off requires authentication.
+- **Apple Watch Companion (`AgentInterfaceWatch` & `AgentInterfaceWatchWidgets`)**: A companion watchOS app and Smart Stack complication reuse the non-secret `WidgetSnapshot` over `WatchConnectivity`. Users can review, decline waiting approvals, stop active work, or dictate a quick draft to a pinned assistant without ever storing sign-in tokens on Apple Watch. Signing out or switching accounts clears Watch state immediately.
+- **VisionKit Document Scanner**: The composer's paperclip menu includes **Scan Document** (`VNDocumentCameraViewController`) on devices with a camera, converting multi-page scans into a bounded PDF attachment.
+- **Interactive Widgets, Control Center, Shortcuts, Spotlight & Quick Actions**: Medium and Large **Assistants** widgets offer interactive **Stop**, **Decline**, and **Refresh** buttons. Control Center adds **Check on assistants** and **Open Today** alongside **Talk to assistant**. Shortcuts adds **Run routine once** (`TryOnceIntent`) and an opt-in, default-off **Send message to assistant** (`SendAssistantMessageIntent`, capped at 4,000 characters and controllable in Settings). Core Spotlight indexes assistants, group chats, routines (names only), and saved references (titles only), clearing everything on sign-out or account switch. Home Screen Quick Actions offer Today, Search, and Talk to your main or first pinned assistant.
+- **On-Device `FoundationModels` & Opt-In `AlarmKit` (iOS 26+)**: When Apple Intelligence's on-device `SystemLanguageModel` is available, the app offers local dictation punctuation cleanup, suggested titles for saved references and new group chats, and an optional on-device snippet summary in the Share extension—silently falling back to raw text when unavailable. Opt-in `AlarmKit` escalation (off by default in Settings, and separately opted in per assistant or routine) can trigger high-urgency system alarms for critical waiting approvals or routines.
+
 ## Build and test
 
 Run iOS builds on Nicolas's Mac mini as required by the machine-fleet skill.
@@ -238,6 +248,15 @@ an ad hoc identity without an Apple account:
 xcodebuild -project ios/AgentInterface.xcodeproj \
   -scheme AgentInterface -destination 'id=SIMULATOR_UUID' \
   -derivedDataPath .private/ios-build \
+  CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build
+```
+
+To build the watchOS companion app and its Smart Stack widget extension on a watchOS simulator:
+
+```sh
+xcodebuild -project ios/AgentInterface.xcodeproj \
+  -scheme AgentInterfaceWatch -destination 'platform=watchOS Simulator,id=WATCH_SIMULATOR_UUID' \
+  -derivedDataPath .private/watch-build \
   CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build
 ```
 

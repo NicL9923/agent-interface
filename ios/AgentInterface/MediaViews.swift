@@ -131,11 +131,13 @@ struct FileAttachmentView: View {
   var file: FileRef
   @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.openURL) private var openURL
+  @Environment(\.zoomNamespace) private var zoomNamespace
   var body: some View {
     let location = file.location(origin: store?.api?.baseURL)
-    Button {
+    let sourceId = "file-\(file.id)"
+    let base = Button {
       switch location {
-      case .managed: store?.open(file)
+      case .managed: store?.open(file, sourceId: sourceId)
       case .external(let url): openURL(url)
       case .unsupported: break
       }
@@ -149,8 +151,19 @@ struct FileAttachmentView: View {
         }
       }.frame(maxWidth: .infinity, alignment: .leading)
     }.buttonStyle(.plain).disabled(location == .unsupported)
+      .zoomSource(id: sourceId, in: zoomNamespace)
       .accessibilityHint(location == .managed ? "Download and preview this file. Share or save it from the preview."
         : "Opens the file's source in your browser.")
+    if location == .managed, let item = DraggableManagedFile.make(file: file, store: store) {
+      base.draggable(item) {
+        Label(file.name, systemImage: icon(location))
+          .font(.footnote.weight(.medium))
+          .padding(10)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+      }
+    } else {
+      base
+    }
   }
   @ViewBuilder private func thumbnail(_ location: FileLocation) -> some View {
     switch location {
@@ -415,6 +428,13 @@ struct MarkdownCodeBlock: View {
       }
     }.background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
       .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.line))
+      .draggable(code) {
+        Text(String(code.prefix(120)))
+          .font(Self.codeFont)
+          .lineLimit(3)
+          .padding(10)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+      }
   }
   private func copy() {
     UIPasteboard.general.string = code

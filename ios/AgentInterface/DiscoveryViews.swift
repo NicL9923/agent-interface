@@ -113,6 +113,13 @@ struct DiscoveryView: View {
       }
     }
     .onAppear(perform: focusSearchIfAsked).onChange(of: store.searchFocusPending) { _, _ in focusSearchIfAsked() }
+    .onAppear(perform: openSavedIfAsked).onChange(of: store.savedRequest) { _, _ in openSavedIfAsked() }
+  }
+  private func openSavedIfAsked() {
+    guard store.savedRequest != nil else { return }
+    store.savedRequest = nil
+    tab = "saved"
+    page = nil
   }
   /// Cmd+F from anywhere opens Search with the keyboard ready.
   private func focusSearchIfAsked() {
@@ -250,12 +257,16 @@ struct DiscoveryView: View {
     }
   }
   private func saveReply(_ message: Message, _ page: HistoryPage) {
-    savePointer(SavedPointer(botId: page.botId, kind: "session", sessionId: page.sessionId, messageId: message.id, offset: page.offset, title: Self.replyTitle(message.text)))
+    Task {
+      let suggested = await OnDeviceIntelligence.suggestReferenceTitle(for: message.text)
+      savePointer(SavedPointer(botId: page.botId, kind: "session", sessionId: page.sessionId, messageId: message.id, offset: page.offset, title: suggested ?? Self.replyTitle(message.text)))
+    }
   }
   private func removeSaved(_ item: SavedItem) {
     Task { guard !busy else { return }; await perform { api in
       let _: EmptyResponse = try await api.write("/saved/\(APIClient.component(item.id))", [String:String](), method: "DELETE")
       saved.removeAll { $0.id == item.id }
+      store.spotlight?.syncSaved(saved, scope: store.scope)
       if item.kind == "session", let session = item.sessionId { pinned.remove(Bookmark(botId: item.botId, sessionId: session, messageId: item.messageId)) }
     } }
   }
@@ -351,7 +362,20 @@ struct DiscoveryView: View {
     do { try await action(api) } catch { if scope==store.scope && request==loadId { self.error=error.localizedDescription } }
     if scope != store.scope { hits=[];saved=[];pinned=[];overview=nil;page=nil;notice=nil }
   }
-  private func load() async { await perform { api in if tab=="saved" { saved=try await api.get("/saved"); pinned = Set(saved.compactMap { item in item.kind == "session" ? item.sessionId.map { Bookmark(botId: item.botId, sessionId: $0, messageId: item.messageId) } : nil }) };if tab=="automations" { overview=try await api.get("/automations") } } }
+  private func load() async {
+    await perform { api in
+      if tab == "saved" {
+        saved = try await api.get("/saved")
+        store.spotlight?.syncSaved(saved, scope: store.scope)
+        pinned = Set(saved.compactMap { item in item.kind == "session" ? item.sessionId.map { Bookmark(botId: item.botId, sessionId: $0, messageId: item.messageId) } : nil })
+      }
+      if tab == "automations" {
+        let fetched: AutomationOverview = try await api.get("/automations")
+        overview = fetched
+        store.publishRoutinesSnapshot(fetched.routines)
+      }
+    }
+  }
   /// Typing waits this long before searching; at least two characters are needed.
   static let searchDelay: Duration = .milliseconds(300)
   static let minimumQuery = 2

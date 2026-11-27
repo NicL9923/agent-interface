@@ -296,14 +296,32 @@ struct ApprovalDecisionView: View {
   }
   private func decide(_ value: String, scope reach: String? = nil) {
     guard decision == nil else { return }
-    sendStarted()
-    store.dismissError()
-    decision = value
-    scope = value == "approved" ? reach : nil
     let session = store.scope
-    var body = ["decision": value]
-    if let reach = scope { body["scope"] = reach }
+    let needsBiometrics = BiometricGate.shared.isEnabled(for: session)
+      && BiometricGate.isSensitiveApproval(approval, decision: value, scope: reach)
     Task {
+      if needsBiometrics {
+        let outcome = await BiometricGate.shared.verify(
+          reason: "Confirm approving \"\(approval.title)\" for \(botName).",
+          scope: session,
+          requireFresh: true
+        )
+        guard session == store.scope else { return }
+        switch outcome {
+        case .authenticated: break
+        case .cancelled: return
+        case .failed(let msg), .unavailable(let msg):
+          store.report(APIError(message: msg, status: 0))
+          return
+        }
+      }
+      guard decision == nil else { return }
+      sendStarted()
+      store.dismissError()
+      decision = value
+      scope = value == "approved" ? reach : nil
+      var body = ["decision": value]
+      if let reach = scope { body["scope"] = reach }
       do {
         try await store.perform(ApprovalDecision.path(botId: botId, approvalId: approval.id), body, gate: .openChat)
         guard session == store.scope else { return }

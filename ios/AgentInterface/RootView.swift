@@ -52,6 +52,8 @@ struct RootView: View {
   #endif
   @State private var quickSettingsRequested = false
   @State private var quickUsageRequested = false
+  @Namespace private var homeZoom
+  @State private var zoomBotId: String?
   var body: some View {
     Group {
       if store.bootstrap == nil {
@@ -89,6 +91,26 @@ struct RootView: View {
     .onChange(of:store.scope) { _, scope in scopeChanged(scope) }
     // Initial too: a notification or Siri can ask before this view first appears.
     .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { store.todayRequest = nil; destination = .today; path = [.today]; compactColumn = .detail } }
+    .onChange(of: store.searchRequest, initial: true) { _, request in
+      if request != nil { store.searchRequest = nil; store.searchFocusPending = true; destination = .find; path = [.search]; compactColumn = .detail }
+    }
+    .onChange(of: store.savedRequest, initial: true) { _, request in
+      if request != nil { destination = .find; path = [.search]; compactColumn = .detail }
+    }
+    .onChange(of: store.openGroupRoomId, initial: true) { _, roomId in
+      guard let roomId else { return }
+      if let room = store.groupCatalog?.rooms.first(where: { $0.id == roomId }) {
+        store.openGroupRoomId = nil
+        open(room)
+      } else {
+        Task { await store.refreshGroups() }
+      }
+    }
+    .onChange(of: store.groupCatalog?.rooms) { _, rooms in
+      guard let roomId = store.openGroupRoomId, let room = rooms?.first(where: { $0.id == roomId }) else { return }
+      store.openGroupRoomId = nil
+      open(room)
+    }
     .onChange(of: store.leftBotId, initial: true) { _, id in if let id { left(id) } }
     .onChange(of: store.conversationRequest, initial: true) { _, request in
       if request != nil {
@@ -218,19 +240,24 @@ struct RootView: View {
     NavigationStack(path: $path) {
       BotListView(destination: destination, openedRoomId: openedRoom?.id, openPreferences: { preferencesOpen = true }, openUsage: { usageOpen = true },
         edit: { settingsBot = $0 }, create: { creatingBot = true },
-        openBot: { destination = .conversation; path = [.chat] },
+        openBot: { zoomBotId = nil; destination = .conversation; path = [.chat] },
+        openPinnedBot: { id in zoomBotId = id; destination = .conversation; path = [.chat] },
         openToday: { path = [.today] },
         openRoom: { open($0) }, newGroup: { creatingGroup = true }, creatingGroup: creatingGroup,
-        openDiscovery: { path = [.search] })
+        openDiscovery: { path = [.search] }, homeZoom: homeZoom)
         .navigationDestination(for: HomeRoute.self) { route in pushed(route) }
     }
   }
   @ViewBuilder private func pushed(_ route: HomeRoute) -> some View {
     switch route {
-    case .today: TodayView(openBot: { destination = .conversation; openChat() })
+    case .today: TodayView(openBot: { zoomBotId = nil; destination = .conversation; openChat() })
     case .room: if let room = openedRoom { GroupConversationView(room: room, canSend: store.groupCatalog?.canSend ?? false).id(room.id) }
     case .search: DiscoveryView()
-    case .chat: if let bot = store.bot { ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id) }
+    case .chat:
+      if let bot = store.bot {
+        ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
+          .zoomTransition(sourceID: zoomBotId == bot.id ? "pinned-\(bot.id)" : nil, in: homeZoom)
+      }
     }
   }
   /// A chat opens over the screen that asked for it, so Back returns to Today or the search
@@ -293,6 +320,7 @@ private struct RootSheets: ViewModifier {
   @Binding var usageOpen: Bool
   var groupCreated: (GroupRoom) -> Void
   var groupDismissed: () -> Void
+  @Environment(\.zoomNamespace) private var zoomNamespace
   func body(content: Content) -> some View {
     @Bindable var store = store
     content
@@ -302,7 +330,10 @@ private struct RootSheets: ViewModifier {
       .sheet(isPresented: $creatingGroup, onDismiss: groupDismissed) { NavigationStack { GroupCreateView(onCreated: groupCreated) }.appStore(store).coveringChat(store) }
       .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).appStore(store).coveringChat(store) }
       .sheet(isPresented: $usageOpen) { UsageView(close: { usageOpen = false }).appStore(store).coveringChat(store) }
-      .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
+      .sheet(item: $store.openedFile) { file in
+        FilePreview(file: file).ignoresSafeArea().coveringChat(store)
+          .zoomTransition(sourceID: file.sourceId, in: zoomNamespace)
+      }
       .sheet(item: $store.routineResult) { target in
         NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId: target.resultId) }.appStore(store).coveringChat(store)
       }
@@ -452,6 +483,7 @@ struct BotListView: View {
   @Environment(\.colorScheme) private var scheme
   @Environment(\.horizontalSizeClass) private var sizeClass
   @Environment(\.dynamicTypeSize) private var typeSize
+  @Environment(\.openWindow) private var openWindow
   @ScaledMetric(relativeTo: .subheadline) private var pinColumn: CGFloat = 100
   var destination: HomeDestination
   /// The group chat open now, which its row shows as selected beside home.
@@ -461,12 +493,14 @@ struct BotListView: View {
   var edit: (Bot) -> Void
   var create: () -> Void
   var openBot: () -> Void
+  var openPinnedBot: ((String) -> Void)? = nil
   var openToday: () -> Void
   var openRoom: (GroupRoom) -> Void
   var newGroup: () -> Void
   /// True while the new-group sheet is up, so a request it leaves saved shows here once it closes.
   var creatingGroup = false
   var openDiscovery: () -> Void
+  var homeZoom: Namespace.ID? = nil
   @State private var checkingConnection = false
   /// The assistant a new home section is being named for.
   @State private var sectionFor: Bot?
@@ -680,11 +714,14 @@ struct BotListView: View {
     // The open chat's own loss stays in that chat, so its row shows what Hermes last said.
     lost ? .disconnected : bot.id == store.followedBotId ? store.listedActivity : bot.activity
   }
-  private func open(_ bot: Bot) { openBot(); Task { await store.select(bot.id) } }
+  private func open(_ bot: Bot, fromPin: Bool = false) {
+    if fromPin, let openPinnedBot { openPinnedBot(bot.id) } else { openBot() }
+    Task { await store.select(bot.id) }
+  }
   private func pinnedTile(_ bot: Bot) -> some View {
     let activity = state(bot)
     let unread = store.unread(bot)
-    return Button { open(bot) } label: {
+    return Button { open(bot, fromPin: true) } label: {
       VStack(spacing: 8) {
         AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done || activity == .blocked ? .idle : activity,
           size: sizeClass == .compact ? 92 : 60, name: bot.name, botId: bot.id)
@@ -700,6 +737,7 @@ struct BotListView: View {
         .contentShape(RoundedRectangle(cornerRadius: 16))
     }.buttonStyle(.plain).accessibilityValue(unread ? "Unread" : "")
       .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
+      .zoomSource(id: "pinned-\(bot.id)", in: homeZoom)
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
       .contextMenu { botMenu(bot) }
@@ -782,6 +820,11 @@ struct BotListView: View {
   private var canPin: Bool { store.householdConnected }
   @ViewBuilder private func botMenu(_ bot: Bot) -> some View {
     Button(isPinned(bot) ? "Unpin" : "Pin to top", systemImage: "pin") { togglePin(bot) }.disabled(!canPin)
+    if UIDevice.current.userInterfaceIdiom == .pad {
+      Button("Open in new window", systemImage: "macwindow.badge.plus") {
+        openWindow(id: WindowID.conversation, value: bot.id)
+      }
+    }
     Menu("Move to section", systemImage: "rectangle.stack") {
       HomeSectionPicker(botId: bot.id, newSection: { sectionFor = bot }) { from, to in
         undo.show(.move(bot, from: from, to: store.homeSectionName(to)))
@@ -871,13 +914,19 @@ extension View {
   @ViewBuilder func homeTitleHidden() -> some View {
     if #available(iOS 26, *) { toolbar(removing: .title) } else { self }
   }
-  /// A toolbar item that draws its own shape, without the Liquid Glass capsule iOS 26 puts around
-  /// bar buttons. The check sits here, not in a toolbar builder, because a toolbar builder's
-  /// availability branch is only safe from iOS 17.5.
+  /// A toolbar item that draws its own custom silhouette (circular account avatar or centered
+  /// assistant avatar+name header) so iOS 26's Liquid Glass bar does not double-wrap it in an
+  /// extra shared capsule, while standard action buttons remain inside `ToolbarItemGroup` and
+  /// receive native Liquid Glass automatically. The availability check sits here rather than
+  /// inside a toolbar builder because toolbar availability branches require iOS 17.5+.
   @ViewBuilder func bareToolbarItem<Content: View>(_ placement: ToolbarItemPlacement, @ViewBuilder _ content: () -> Content) -> some View {
     let item = content()
     if #available(iOS 26, *) {
-      toolbar { ToolbarItem(placement: placement) { item }.sharedBackgroundVisibility(.hidden) }
+      toolbar {
+        ToolbarItem(placement: placement) {
+          item
+        }.sharedBackgroundVisibility(.hidden)
+      }
     } else {
       toolbar { ToolbarItem(placement: placement) { item } }
     }

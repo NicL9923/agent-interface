@@ -11,7 +11,7 @@ extension AppStore {
       "host": \.host, "api": \.api, "bootstrap": \.bootstrap, "scope": \.scope, "additions": \.additions,
       "haptic": \.haptic, "keyboardCommand": \.keyboardCommand, "searchFocusPending": \.searchFocusPending,
       "conversation": \.conversation, "transcript": \.transcript, "turns": \.turns, "replyFiles": \.replyFiles, "draftRevisions": \.draftRevisions, "echoes": \.echoes, "ownRows": \.ownRows,
-      "selectedBotId": \.selectedBotId, "routineResult": \.routineResult, "todayRequest": \.todayRequest, "listenRequest": \.listenRequest, "focus": \.focus,
+      "selectedBotId": \.selectedBotId, "routineResult": \.routineResult, "todayRequest": \.todayRequest, "searchRequest": \.searchRequest, "savedRequest": \.savedRequest, "openGroupRoomId": \.openGroupRoomId, "listenRequest": \.listenRequest, "focus": \.focus,
       "draft": \.draft, "draftReady": \.draftReady, "pendings": \.pendings, "receipts": \.receipts,
       "error": \.error, "notice": \.notice, "leftBotId": \.leftBotId, "signingIn": \.signingIn, "loading": \.loading,
       "sendingRequests": \.sendingRequests, "appUnavailable": \.appUnavailable, "interruptionReviewed": \.interruptionReviewed,
