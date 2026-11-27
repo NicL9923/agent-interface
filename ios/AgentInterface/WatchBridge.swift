@@ -246,8 +246,8 @@ private final class SentReply: @unchecked Sendable {
   private func activeAuthenticatedScope() -> String? {
     if let store {
       if store.signingIn || store.sessionExpired { return nil }
-      if store.bootstrap != nil {
-        return store.api?.token != nil ? store.scope : nil
+      if let scope = store.scope {
+        return WatchBridge.scopeMatchesCredential(scope, client: store.api) ? scope : nil
       }
     }
     return savedScope()

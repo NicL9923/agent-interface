@@ -134,17 +134,17 @@ struct LiveActivityStartRegistration: Encodable {
     signedIn != scope || running.contains { $0.scope == scope }
   }
   /// The loaded account, or before it loads, the account the saved sign-in belongs to. Nil when
-  /// nobody is signed in, when signing in, or when the session has expired / lost its credential
-  /// so delayed push-to-start activities for an expired session are dismissed immediately.
-  func signedInScope() -> String? {
+  /// nobody is signed in, when signing in, or when the session has expired (either reported or past
+  /// its saved expiry deadline while suspended) so delayed push-to-start activities dismiss immediately.
+  func signedInScope(defaults: UserDefaults = .standard, now: Date = Date()) -> String? {
     if let store {
       if store.sessionExpired || store.signingIn { return nil }
       if let scope = store.scope {
-        return store.api?.token != nil ? scope : nil
+        return WatchBridge.scopeMatchesCredential(scope, client: store.api, defaults: defaults, now: now) ? scope : nil
       }
     }
     guard let bg = backgroundClient(), let scope = savedScope() else { return nil }
-    return WatchBridge.scopeMatchesCredential(scope, client: bg) ? scope : nil
+    return WatchBridge.scopeMatchesCredential(scope, client: bg, defaults: defaults, now: now) ? scope : nil
   }
   var savedScope: () -> String? = { UserDefaults.standard.string(forKey: DeviceDefaults.signedInScope) }
 

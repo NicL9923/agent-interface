@@ -1050,7 +1050,9 @@ import os
     do {
       let _: EmptyResponse = try await staleServerAClient.write("/routines/rt-1/run", [String: String]())
       XCTFail("Expected HTTP 401 session_expired from stale server A")
-    } catch {}
+    } catch let apiError as APIError {
+      XCTAssertTrue(apiError.isSessionExpired, "Stale server A test must exercise HTTP 401 session_expired")
+    }
     XCTAssertEqual(serverBClient.token, "server-b-tok", "Late 401 from server A must not clear server B's token")
     XCTAssertEqual(WidgetSnapshotStore.read(from: tempSnapshotURL)?.scope, serverBScope, "Late 401 from server A must not clear server B's widget snapshot")
     XCTAssertTrue(coldTransport.contexts.isEmpty, "Late 401 from server A must not sign Watch out of server B")
@@ -1321,6 +1323,30 @@ import os
       LiveActivityController.shouldEnd(scope: startedScope, signedIn: liveController.signedInScope(), among: []),
       "Delayed push-to-start Live Activity after session expiry must end immediately"
     )
+    // Also verify suspended-app expiry: even when `store.sessionExpired == false` and `api.token`
+    // is still in memory, passing the saved `DeviceDefaults.expiry` deadline must reject adoption!
+    let suspendedStore = AppStore()
+    suspendedStore.widgetSnapshotURL = nil
+    suspendedStore.api = FakeExchange.client(for: host, token: "still-in-memory")
+    suspendedStore.bootstrap = try sampleBootstrap()
+    let suspendedScope = try XCTUnwrap(suspendedStore.scope)
+    let pastExpiryDefaults = isolatedDefaults()
+    let checkNow = Date()
+    pastExpiryDefaults.set(ServerDate.string(checkNow.addingTimeInterval(-60)), forKey: DeviceDefaults.expiry(host.origin))
+    let suspendedController = LiveActivityController()
+    suspendedController.store = suspendedStore
+    XCTAssertNil(
+      suspendedController.signedInScope(defaults: pastExpiryDefaults, now: checkNow),
+      "Mounted store past its saved expiry deadline must not adopt a pushed Live Activity"
+    )
+    XCTAssertTrue(
+      LiveActivityController.shouldEnd(
+        scope: suspendedScope,
+        signedIn: suspendedController.signedInScope(defaults: pastExpiryDefaults, now: checkNow),
+        among: []
+      )
+    )
+    suspendedStore.suspend()
 
     // Deliver the late successful `/api/groups` response after session expiry.
     host.releaseGroups()

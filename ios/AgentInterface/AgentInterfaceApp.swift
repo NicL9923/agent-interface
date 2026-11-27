@@ -238,13 +238,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   /// Text typed into notifications' Reply, in arrival order, until a signed-in store can hold it for its draft.
   var pendingReplies: [NotificationReply] = []
   /// Builds a Keychain-backed `APIClient` for cold actions (Shortcuts, Watch, Widgets, notification
-  /// actions) and wires its `onSessionExpired` handler to cold session teardown.
+  /// actions) and wires its `onSessionExpired` handler to cold session teardown. Leaving `session`
+  /// nil preserves `APIClient`'s guarded `APISessionDelegate` and isolated cookie store in production.
   static func makeActionClient(
     baseURL: URL,
-    session: URLSession = .shared,
+    session: URLSession? = nil,
     token: String? = nil
   ) -> APIClient? {
-    let api = APIClient(baseURL: baseURL, session: session)
+    let api = session.map { APIClient(baseURL: baseURL, session: $0) } ?? APIClient(baseURL: baseURL)
     if let token { api.token = token }
     guard api.token != nil else { return nil }
     api.onSessionExpired = { error, client, token in
