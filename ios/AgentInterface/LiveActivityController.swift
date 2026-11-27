@@ -206,17 +206,17 @@ struct LiveActivityStartRegistration: Encodable {
     for activity in activities { await activity.end(nil, dismissalPolicy: .immediate) }
   }
   private func startForegroundUpdates() {
-    guard store?.suspended == false else { return }
+    guard store?.suspended == false, store?.sessionExpired == false else { return }
     foregroundTask?.cancel()
     foregroundTask = Task { [weak self] in
       while !Task.isCancelled {
         try? await Task.sleep(for: Self.foregroundInterval)
-        guard let self, !Task.isCancelled, let store = self.store, let api = store.api, let scope = store.scope,
+        guard let self, !Task.isCancelled, let store = self.store, !store.sessionExpired,
+          let api = store.api, let token = api.token, let scope = store.scope,
           let activity = self.running.first(where: { $0.attributes.scope == scope })
         else { return }
-        let token = api.token
         guard let status: LiveActivityStatus = try? await api.get(self.statePath(scope: scope)),
-          token == api.token, scope == store.scope, !store.suspended, status.available, activity.activityState == .active || activity.activityState == .stale
+          !store.sessionExpired, token == api.token, scope == store.scope, !store.suspended, status.available, activity.activityState == .active || activity.activityState == .stale
         else { continue }
         let state = self.seeded(status.state)
         if state.activeCount > 0 {

@@ -392,6 +392,19 @@ extension Data {
       return try await openEvents(path)
     }
     guard http?.statusCode == 200, http?.mimeType == "text/event-stream" else {
+      if http?.statusCode == 401 {
+        var body = Data()
+        for try await byte in bytes {
+          body.append(byte)
+          if body.count >= 4096 { break }
+        }
+        bytes.task.cancel()
+        let failure = Self.failure(401, body)
+        if failure.isSessionExpired {
+          onSessionExpired?(failure, self, sentToken)
+        }
+        throw failure
+      }
       bytes.task.cancel()
       throw APIError(message: "The change stream is unavailable.", status: http?.statusCode ?? 0)
     }

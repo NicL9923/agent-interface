@@ -652,10 +652,12 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       stopPolling()
       sessionExpired = true
       // Clear every cross-process and system surface (widget snapshot + timeline reload, routines,
-      // Watch, Quick Actions, Spotlight, avatars, alarms, biometric unlock) identically to cold expiry.
+      // Watch, Quick Actions, Spotlight, avatars, prefetch, alarms, biometric unlock, Live Activity)
+      // identically to cold expiry.
       publishWidgetSnapshot()
       CriticalAlarmManager.shared.cancelAll()
       BiometricGate.shared.lock()
+      Task { await LiveActivityController.shared.endAll(unregister: false) }
     }
   }
 }

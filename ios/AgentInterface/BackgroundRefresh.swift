@@ -14,9 +14,42 @@ import WidgetKit
   /// The saved server and Keychain sign-in, as a notification action uses after a background launch.
   static var client: @MainActor () -> APIClient? = { NotificationController.shared.actionClient() }
   static var snapshotURL: URL? = WidgetSnapshotStore.defaultURL
-  /// System Spotlight index cleared directly when a cold background refresh receives `session_expired`
-  /// with no `AppStore` window mounted. Unit tests leave the real system index untouched unless injected.
+  /// System surfaces cleared directly when a cold background refresh or cold action receives
+  /// `401 session_expired` with no `AppStore` window mounted. Unit tests leave real system/App
+  /// Group stores untouched unless explicitly injected.
   static var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
+  static var senderAvatars: SenderAvatars? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? SenderAvatars(root: NotificationSenders.root) : nil
+  static var prefetchRoot: URL? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? NotificationPrefetchStore.root : nil
+  static var watchBridge: WatchBridge = .shared
+
+  /// Authoritative cold/background session-expiry teardown shared by `BackgroundRefresh` and
+  /// cold `actionClient()` actions (Shortcuts, Watch, Widgets) when no window is mounted.
+  static func handleColdSessionExpiry(_ error: APIError, client: APIClient, token: String?) {
+    guard error.isSessionExpired, let token else { return }
+    if let current = Self.client(), current.baseURL == client.baseURL {
+      guard current.token == token else { return }
+      current.token = nil
+    } else if let store = watchBridge.store, store.api?.baseURL == client.baseURL {
+      guard store.api?.token == token else { return }
+    } else {
+      guard client.token == token else { return }
+    }
+    try? SecureToken.save(nil, host: client.baseURL.absoluteString)
+    client.token = nil
+    if WidgetSnapshotStore.write(nil, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
+    RoutineSnapshotStore.write(nil)
+    watchBridge.sync(nil)
+    QuickActions.sync(nil)
+    CriticalAlarmManager.shared.cancelAll()
+    BiometricGate.shared.lock()
+    spotlight?.sync(nil)
+    senderAvatars?.sync(account: nil, bots: [])
+    if let prefetchRoot { NotificationPrefetchStore.clear(root: prefetchRoot) }
+    Task { await LiveActivityController.shared.endAll(unregister: false) }
+    if let store = watchBridge.store, store.api?.baseURL == client.baseURL, store.api?.token == token {
+      store.report(error)
+    }
+  }
   /// One read at a time: a push and the refresh task can arrive together.
   private static var running: Task<Bool, Never>?
 
@@ -78,7 +111,7 @@ import WidgetKit
         pendingApprovals: pendingApprovals
       )
       if WidgetSnapshotStore.write(snapshot, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
-      WatchBridge.shared.sync(snapshot)
+      watchBridge.sync(snapshot)
       await CriticalAlarmManager.shared.escalateWaitingBatch(
         snapshot.assistants,
         scope: snapshot.scope,
@@ -86,24 +119,8 @@ import WidgetKit
       )
       return true
     } catch {
-      // Explicit server session rejection must clear the rejected token and cross-process previews
-      // immediately so a cold Watch refresh or widget timeline never replays expired household data.
-      if (error as? APIError)?.isSessionExpired == true,
-        let current = client(), current.baseURL == api.baseURL, current.token == token
-      {
-        try? SecureToken.save(nil, host: api.baseURL.absoluteString)
-        api.token = nil
-        current.token = nil
-        if WidgetSnapshotStore.write(nil, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
-        RoutineSnapshotStore.write(nil)
-        WatchBridge.shared.sync(nil)
-        QuickActions.sync(nil)
-        CriticalAlarmManager.shared.cancelAll()
-        BiometricGate.shared.lock()
-        spotlight?.sync(nil)
-        if let store = WatchBridge.shared.store, store.api?.baseURL == api.baseURL, store.api?.token == token {
-          store.report(error)
-        }
+      if let apiError = error as? APIError, apiError.isSessionExpired {
+        handleColdSessionExpiry(apiError, client: api, token: token)
       }
       return false
     }

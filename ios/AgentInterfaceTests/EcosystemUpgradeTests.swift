@@ -944,20 +944,33 @@ import os
     let prevBGClient = BackgroundRefresh.client
     let prevBGURL = BackgroundRefresh.snapshotURL
     let prevBGSpotlight = BackgroundRefresh.spotlight
+    let prevBGAvatars = BackgroundRefresh.senderAvatars
+    let prevBGPrefetch = BackgroundRefresh.prefetchRoot
+    let prevBGWatch = BackgroundRefresh.watchBridge
+
     let coldSpotlightDefaults = isolatedDefaults()
     let coldSpotlightIndex = DeferredSpotlight()
     let coldSpotlight = AssistantSpotlight(index: coldSpotlightIndex, defaults: coldSpotlightDefaults)
     XCTAssertTrue(coldSpotlight.syncGroups([GroupRoom(room_id: "r-cold", name: "Cold Secret", members: [])], scope: rejectedScope))
     coldSpotlightIndex.finishHeldIndex(ok: true)
     coldSpotlightIndex.events.removeAll()
-    BackgroundRefresh.client = { rejectedClient.token == nil ? nil : rejectedClient }
-    BackgroundRefresh.snapshotURL = tempSnapshotURL
-    BackgroundRefresh.spotlight = coldSpotlight
-    defer {
-      BackgroundRefresh.client = prevBGClient
-      BackgroundRefresh.snapshotURL = prevBGURL
-      BackgroundRefresh.spotlight = prevBGSpotlight
+
+    let tempSendersRoot = FileManager.default.temporaryDirectory.appendingPathComponent("cold-senders-\(UUID().uuidString)", isDirectory: true)
+    let accountMarker = NotificationActions.accountMarker("u1")
+    let accountDir = try XCTUnwrap(NotificationSenders.directory(account: accountMarker, root: tempSendersRoot))
+    try FileManager.default.createDirectory(at: accountDir, withIntermediateDirectories: true)
+    let tempPrefetchRoot = FileManager.default.temporaryDirectory.appendingPathComponent("cold-prefetch-\(UUID().uuidString)", isDirectory: true)
+    let prefetchConfig = NotificationPrefetchConfig(
+      origin: rejectedClient.baseURL.absoluteString,
+      account: accountMarker
+    )
+    NotificationPrefetchStore.writeConfig(prefetchConfig, root: tempPrefetchRoot)
+    XCTAssertEqual(NotificationPrefetchStore.readConfig(root: tempPrefetchRoot), prefetchConfig)
+    addTeardownBlock {
+      try? FileManager.default.removeItem(at: tempSendersRoot)
+      try? FileManager.default.removeItem(at: tempPrefetchRoot)
     }
+
     let coldScopeDefaults = isolatedDefaults()
     coldScopeDefaults.set(rejectedScope, forKey: DeviceDefaults.signedInScope)
     let coldTransport = FakeWatchTransport()
@@ -969,23 +982,53 @@ import os
       )
     }
     coldBridge.savedScope = coldResolver
-    coldBridge.refreshHandler = {
-      _ = await BackgroundRefresh.refreshWidgets()
-      guard coldResolver() != nil else { return nil }
-      return WidgetSnapshotStore.read(from: tempSnapshotURL)
+
+    BackgroundRefresh.client = { rejectedClient.token == nil ? nil : rejectedClient }
+    BackgroundRefresh.snapshotURL = tempSnapshotURL
+    BackgroundRefresh.spotlight = coldSpotlight
+    BackgroundRefresh.senderAvatars = SenderAvatars(root: tempSendersRoot)
+    BackgroundRefresh.prefetchRoot = tempPrefetchRoot
+    BackgroundRefresh.watchBridge = coldBridge
+    defer {
+      BackgroundRefresh.client = prevBGClient
+      BackgroundRefresh.snapshotURL = prevBGURL
+      BackgroundRefresh.spotlight = prevBGSpotlight
+      BackgroundRefresh.senderAvatars = prevBGAvatars
+      BackgroundRefresh.prefetchRoot = prevBGPrefetch
+      BackgroundRefresh.watchBridge = prevBGWatch
     }
-    let coldAction = WatchAction(scope: rejectedScope, kind: .refresh)
-    let coldReply = await coldBridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(coldAction)])
-    XCTAssertEqual(coldReply["ok"] as? Bool, false, "401 session_expired during cold refresh must never replay cached data")
-    XCTAssertNil(coldReply[WatchPayload.snapshotKey])
+
+    // Call BackgroundRefresh directly FIRST to prove its production teardown clears Watch, Spotlight,
+    // Widget snapshot, NotificationSenders, and NotificationPrefetchStore without relying on WatchBridge.handle!
+    let refreshed = await BackgroundRefresh.refreshWidgets()
+    XCTAssertFalse(refreshed)
     XCTAssertNil(rejectedClient.token)
     XCTAssertNil(WidgetSnapshotStore.read(from: tempSnapshotURL))
+    XCTAssertEqual(coldTransport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true, "BackgroundRefresh itself must sync .signedOut to Watch")
+    XCTAssertEqual(coldSpotlightIndex.events, ["deleteAll:true"], "Cold /bootstrap 401 with no AppStore mounted must clear Spotlight directly")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: accountDir.path), "Cold expiry must remove NotificationSenders account folder")
+    XCTAssertNil(NotificationPrefetchStore.readConfig(root: tempPrefetchRoot), "Cold expiry must clear NotificationPrefetchStore config")
+
+    // Cold action client (Shortcuts / Watch action with no window mounted) receiving 401 session_expired
+    // must also trigger `BackgroundRefresh.handleColdSessionExpiry` via `onSessionExpired`.
+    let coldActionClient = rejectServer.api(token: "cold-action-tok")
+    coldActionClient.onSessionExpired = { error, client, token in
+      BackgroundRefresh.handleColdSessionExpiry(error, client: client, token: token)
+    }
+    BackgroundRefresh.client = { coldActionClient.token == nil ? nil : coldActionClient }
+    XCTAssertTrue(WidgetSnapshotStore.write(cachedSnap, to: tempSnapshotURL))
+    NotificationPrefetchStore.writeConfig(prefetchConfig, root: tempPrefetchRoot)
+    coldTransport.contexts.removeAll()
+    do {
+      let _: EmptyResponse = try await coldActionClient.write("/routines/rt-1/run", [String: String]())
+      XCTFail("Expected HTTP 401 session_expired from cold action")
+    } catch {
+      // `onSessionExpired` fires automatically before throwing.
+    }
+    XCTAssertNil(coldActionClient.token)
+    XCTAssertNil(WidgetSnapshotStore.read(from: tempSnapshotURL))
     XCTAssertEqual(coldTransport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
-    XCTAssertEqual(
-      coldSpotlightIndex.events,
-      ["deleteAll:true"],
-      "Cold /bootstrap 401 with no AppStore mounted must clear Spotlight directly"
-    )
+    XCTAssertNil(NotificationPrefetchStore.readConfig(root: tempPrefetchRoot))
   }
 
   func testCriticalAlarmBatchStopsMidBatchOnSignOutAndReschedulesAfterToggleOffAndOn() async throws {
@@ -1170,7 +1213,7 @@ import os
 
     func receive(_ exchange: FakeExchange) {
       let path = exchange.request.url?.path ?? ""
-      if path == "/api/saved" || path == "/api/search" {
+      if path == "/api/saved" || path == "/api/search" || path == "/api/events" {
         exchange.respond(status: 401, data: Data(#"{"error":"Session expired","code":"session_expired"}"#.utf8))
         return
       }
@@ -1274,6 +1317,19 @@ import os
       index.events.contains("index:group:same-1"),
       "Re-signing in as the same member must reindex unchanged rooms into Spotlight"
     )
+
+    // Event streams (`/api/events`) receiving HTTP 401 `session_expired` must ALSO decode the 401
+    // body and trigger `onSessionExpired` instead of discarding it and retrying.
+    index.events.removeAll()
+    do {
+      _ = try await api.events("/api/events")
+      XCTFail("Expected HTTP 401 session_expired from /api/events")
+    } catch let apiError as APIError {
+      XCTAssertTrue(apiError.isSessionExpired)
+    }
+    XCTAssertTrue(store.sessionExpired, "Event stream 401 session_expired must invalidate the session")
+    XCTAssertNil(store.api?.token)
+    XCTAssertTrue(index.events.contains("deleteAll:true"))
     store.suspend()
   }
 

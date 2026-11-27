@@ -242,7 +242,11 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   var actionClient: @MainActor () -> APIClient? = {
     guard let host = UserDefaults.standard.string(forKey: DeviceDefaults.host), let url = try? ConnectionAddress.parse(host) else { return nil }
     let api = APIClient(baseURL: url)
-    return api.token == nil ? nil : api
+    guard api.token != nil else { return nil }
+    api.onSessionExpired = { error, client, token in
+      BackgroundRefresh.handleColdSessionExpiry(error, client: client, token: token)
+    }
+    return api
   }
   var deliverNotice: @MainActor (UNNotificationRequest) async -> Void = { try? await UNUserNotificationCenter.current().add($0) }
   /// The account the saved sign-in belongs to, before the store loads it.
