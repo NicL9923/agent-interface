@@ -348,7 +348,13 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     func serveHistory(_ ids: [String]) { lock.withLock { history = ids; readAnchor = ids.last ?? readAnchor } }
     func appendHistory(_ id: String) { lock.withLock { history?.append(id) } }
     /// Holds only the next request to this path, so a later one can overtake it.
-    func holdNext(_ path: String) { _ = lock.withLock { heldOnce.insert(path) } }
+    /// Clears any stale cancelled exchange still in `held` so `waitForHeld` waits for the new request.
+    func holdNext(_ path: String) {
+        lock.withLock {
+            held.removeValue(forKey: path)
+            heldOnce.insert(path)
+        }
+    }
     /// The query of each conversation request, in order.
     var conversationQueries: [String] {
         var queries: [String] = []
