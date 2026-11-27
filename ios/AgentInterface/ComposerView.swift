@@ -330,11 +330,11 @@ private struct ComposerPickers: ViewModifier {
         CameraPicker(isPresented: $takePhoto) { data in attach([data], from: store.scope) }.ignoresSafeArea()
       }
       .fullScreenCover(isPresented: $scanDocument) {
-        DocumentScannerPicker(
-          isPresented: $scanDocument,
-          onScan: { pages in attachScanned(pages, from: store.scope) },
-          onError: { error in store.report(error) }
-        ).ignoresSafeArea()
+        let scanScope = store.scope
+        let scanBotId = bot.id
+        DocumentScannerPicker(isPresented: $scanDocument) { result in
+          attachScannedPDF(result, scope: scanScope, botId: scanBotId)
+        }.ignoresSafeArea()
       }
       .fileImporter(isPresented: $importFiles, allowedContentTypes: UploadRules.pickerTypes, allowsMultipleSelection: true) { result in
         switch result {
@@ -371,22 +371,26 @@ private struct ComposerPickers: ViewModifier {
       await store.uploads.attach(images: images, named: "Photo")
     }
   }
-  /// Converts multi-page scanned paper documents into one clean PDF attachment.
-  private func attachScanned(_ pages: [UIImage], from scope: String?) {
-    let botId = bot.id
+  /// Attaches a scanned multi-page PDF only if the initiating account and chat are still active.
+  private func attachScannedPDF(_ result: Result<Data, Error>, scope: String?, botId: String) {
     Task {
-      do {
-        let pdfData = try ScannedDocumentPDF.build(images: pages)
-        guard scope == store.scope, store.selectedBotId == botId else { return }
-        let directory = FileManager.default.temporaryDirectory
-          .appendingPathComponent("scan-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent(ScannedDocumentPDF.filename())
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try pdfData.write(to: url, options: [.atomic, .completeFileProtection])
-        await store.uploads.attach(urls: [url])
-      } catch {
-        if scope == store.scope { store.report(error) }
+      guard scope == store.scope, store.selectedBotId == botId else { return }
+      switch result {
+      case .failure(let error):
+        store.report(error)
+      case .success(let pdfData):
+        do {
+          let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scan-\(UUID().uuidString)", isDirectory: true)
+          try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+          let url = directory.appendingPathComponent(ScannedDocumentPDF.filename())
+          defer { try? FileManager.default.removeItem(at: directory) }
+          try pdfData.write(to: url, options: [.atomic, .completeFileProtection])
+          guard scope == store.scope, store.selectedBotId == botId else { return }
+          await store.uploads.attach(urls: [url])
+        } catch {
+          if scope == store.scope { store.report(error) }
+        }
       }
     }
   }

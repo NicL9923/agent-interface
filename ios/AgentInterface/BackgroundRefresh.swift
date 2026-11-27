@@ -52,9 +52,44 @@ import WidgetKit
       guard !Task.isCancelled, !bootstrap.servedFromCache else { return false }
       // Signed out or into another account while this read was out: it is not theirs to show.
       guard let current = client(), current.baseURL == api.baseURL, current.token == token else { return false }
-      if let stored = WidgetSnapshotStore.read(from: snapshotURL), stored.generatedAt > started { return false }
-      let snapshot = WidgetSnapshot(bootstrap: bootstrap, scope: AppStore.scope(server: api.baseURL, userId: bootstrap.user.id), at: started)
+      let scope = AppStore.scope(server: api.baseURL, userId: bootstrap.user.id)
+      let stored = WidgetSnapshotStore.read(from: snapshotURL)
+      if let stored, stored.generatedAt > started { return false }
+      // Carry forward known pending approval IDs and active run IDs for the same account scope from
+      // LiveActivityController and the prior snapshot so background refresh never strips Decline/Stop
+      // metadata without making an extra network round-trip.
+      var pendingApprovals = LiveActivityController.shared.latestApprovals(for: scope)
+      var activeRuns: [String: String] = [:]
+      if let stored, stored.scope == scope {
+        for prev in stored.assistants {
+          if prev.activity == "waiting", let ap = prev.approvalId, !ap.isEmpty, pendingApprovals[prev.id] == nil {
+            pendingApprovals[prev.id] = ap
+          }
+          if prev.isWorking, let run = prev.runId, !run.isEmpty {
+            activeRuns[prev.id] = run
+          }
+        }
+      }
+      let snapshot = WidgetSnapshot(
+        bootstrap: bootstrap,
+        scope: scope,
+        at: started,
+        pendingApprovals: pendingApprovals,
+        activeRuns: activeRuns
+      )
       if WidgetSnapshotStore.write(snapshot, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
+      WatchBridge.shared.sync(snapshot)
+      for assistant in snapshot.assistants where assistant.needsAttention {
+        let dedup = assistant.approvalId ?? assistant.lastMessage ?? assistant.activity
+        let reason = assistant.activity == "waiting" ? "Needs your approval" : "Needs your input"
+        _ = await CriticalAlarmManager.shared.escalateWaitingIfOptedIn(
+          botId: assistant.id,
+          botName: assistant.name,
+          reason: reason,
+          dedupKey: dedup,
+          scope: snapshot.scope
+        )
+      }
       return true
     } catch { return false }
   }

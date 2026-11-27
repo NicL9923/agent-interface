@@ -37,18 +37,38 @@ enum OnDeviceIntelligence {
     #endif
   }
 
-  /// Polishes punctuation, capitalization, and light filler cleanup on an offline voice transcript
-  /// while keeping the speaker's exact meaning. Falls back to `raw` whenever unavailable or suspect.
+  /// Polishes punctuation and capitalization on an offline voice transcript while strictly
+  /// preserving every spoken word (so a negation or key detail can never be silently altered).
+  /// Falls back to `raw` whenever unavailable or whenever the word sequence changes.
   static func polishTranscript(_ raw: String, using generate: Generator = systemGenerator) async -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, trimmed.count <= 4_000 else { return trimmed }
     let instructions =
-      "Fix punctuation and capitalization in this voice transcript without changing its meaning, adding new facts, or dropping details. Return only the cleaned text."
+      "Add punctuation and capitalization to this voice transcript without adding, removing, or changing any words. Return only the cleaned text."
     guard let result = await generate(instructions, trimmed) else { return trimmed }
     let cleaned = sanitizeSingleBlock(result)
-    // Reject empty or wildly divergent outputs so the user's dictated words are never replaced with chatter.
-    guard !cleaned.isEmpty, cleaned.count <= max(trimmed.count * 2, trimmed.count + 40) else { return trimmed }
+    guard !cleaned.isEmpty,
+      cleaned.count <= max(trimmed.count * 2, trimmed.count + 40),
+      normalizedWordTokens(cleaned) == normalizedWordTokens(trimmed)
+    else { return trimmed }
     return cleaned
+  }
+
+  /// Extracts lowercased alphanumeric word tokens so automatic dictation polish can only add
+  /// punctuation, casing, or spacing and can never silently drop or replace spoken words.
+  static func normalizedWordTokens(_ text: String) -> [String] {
+    var tokens: [String] = []
+    var current = ""
+    for scalar in text.lowercased().unicodeScalars {
+      if CharacterSet.alphanumerics.contains(scalar) {
+        current.unicodeScalars.append(scalar)
+      } else if !current.isEmpty {
+        tokens.append(current)
+        current = ""
+      }
+    }
+    if !current.isEmpty { tokens.append(current) }
+    return tokens
   }
 
   /// Suggests a concise title (at most 80 characters) when saving a reply or reference.

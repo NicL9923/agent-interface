@@ -297,6 +297,7 @@ struct ApprovalDecisionView: View {
   private func decide(_ value: String, scope reach: String? = nil) {
     guard decision == nil else { return }
     let session = store.scope
+    let api = store.api
     let needsBiometrics = BiometricGate.shared.isEnabled(for: session)
       && BiometricGate.isSensitiveApproval(approval, decision: value, scope: reach)
     Task {
@@ -306,7 +307,7 @@ struct ApprovalDecisionView: View {
           scope: session,
           requireFresh: true
         )
-        guard session == store.scope else { return }
+        guard session == store.scope, store.api === api else { return }
         switch outcome {
         case .authenticated: break
         case .cancelled: return

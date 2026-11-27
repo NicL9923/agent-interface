@@ -205,7 +205,7 @@ struct VaultView: View {
       }
     }
     .navigationTitle("Passwords & logins").navigationBarTitleDisplayMode(.inline)
-    .onChange(of: scenePhase) { _, phase in if phase != .active { gate.lock(); clear() } }
+    .onChange(of: scenePhase) { _, phase in if phase == .background { gate.lock(); clear() } }
     .onChange(of: store.scope) { _, _ in gate.lock(); biometricError = nil; clear() }
     .onDisappear { gate.lock(); clear() }
   }
@@ -567,7 +567,7 @@ struct SecureAttentionView: View {
           scope: currentScope,
           requireFresh: true
         )
-        guard store.api === api && api.token == token && key == binding && !store.sessionExpired else { input.clear(); return }
+        guard store.scope == currentScope && store.api === api && api.token == token && key == binding && !store.sessionExpired else { input.clear(); return }
         switch outcome {
         case .authenticated:
           sendAnswer()

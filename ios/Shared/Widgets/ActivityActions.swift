@@ -14,6 +14,8 @@ struct ActivityAction: Equatable, Sendable {
   /// The account the activity or snapshot belongs to. Another sign-in never acts on it.
   var scope: String
   var name: String
+  /// Optional run ID so widget/Watch Stop never aborts a newer run than the one displayed.
+  var runId: String? = nil
 }
 
 /// How interactive widget and Live Activity buttons reach the app. iOS runs a `LiveActivityIntent`
@@ -49,10 +51,13 @@ struct StopAssistantActivityIntent: LiveActivityIntent {
   @Parameter(title: "Assistant") var botId: String
   @Parameter(title: "Name") var name: String
   @Parameter(title: "Account") var scope: String
+  @Parameter(title: "Run") var runId: String?
   init() {}
-  init(botId: String, name: String, scope: String) { self.botId = botId; self.name = name; self.scope = scope }
+  init(botId: String, name: String, scope: String, runId: String? = nil) {
+    self.botId = botId; self.name = name; self.scope = scope; self.runId = runId
+  }
   @MainActor func perform() async throws -> some IntentResult {
-    await ActivityActions.perform(ActivityAction(kind: .stop, botId: botId, scope: scope, name: name))
+    await ActivityActions.perform(ActivityAction(kind: .stop, botId: botId, scope: scope, name: name, runId: runId))
     return .result()
   }
 }

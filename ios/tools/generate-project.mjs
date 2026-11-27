@@ -133,13 +133,14 @@ for (const [name, kind] of [
     }
   }
 
-  if (kind === "app") {
+  if (kind === "app" || kind === "watchApp") {
+    const assetKey = kind === "app" ? "Assets" : `${name}/Assets`;
     const assets = add(
-      "ref:Assets",
+      `ref:${assetKey}`,
       '{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>";}',
     );
     references.push(assets);
-    resourceBuilds.push(add("build:Assets", `{isa = PBXBuildFile; fileRef = ${assets};}`));
+    resourceBuilds.push(add(`build:${assetKey}`, `{isa = PBXBuildFile; fileRef = ${assets};}`));
   }
 
   groups.push(
@@ -229,6 +230,7 @@ for (const [name, kind] of [
       Object.assign(values, {
         INFOPLIST_FILE: `${name}/Info.plist`,
         CODE_SIGN_ENTITLEMENTS: `${name}/${name}.entitlements`,
+        ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon",
         SKIP_INSTALL: "YES",
       });
     } else if (kind === "watchExtension") {
@@ -334,6 +336,26 @@ for (const [name, kind] of [
       add(
         "phase:Share",
         `{isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = ${array(embedded)}; name = "Embed app extensions"; runOnlyForDeploymentPostprocessing = 0;}`,
+      ),
+    );
+    const watchEmbed = add(
+      "embed:AgentInterfaceWatch",
+      `{isa = PBXBuildFile; fileRef = ${ident("product:AgentInterfaceWatch")}; settings = {ATTRIBUTES = (RemoveHeadersOnCopy);};}`,
+    );
+    const watchProxy = add(
+      "proxy:AgentInterfaceWatch",
+      `{isa = PBXContainerItemProxy; containerPortal = ${ident("project")}; proxyType = 1; remoteGlobalIDString = ${ident("target:AgentInterfaceWatch")}; remoteInfo = AgentInterfaceWatch;}`,
+    );
+    dependencies.push(
+      add(
+        "dependency:AgentInterfaceWatch",
+        `{isa = PBXTargetDependency; target = ${ident("target:AgentInterfaceWatch")}; targetProxy = ${watchProxy};}`,
+      ),
+    );
+    phases.push(
+      add(
+        "phase:WatchContent",
+        `{isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = "$(CONTENTS_FOLDER_PATH)/Watch"; dstSubfolderSpec = 16; files = (${watchEmbed}); name = "Embed Watch Content"; runOnlyForDeploymentPostprocessing = 0;}`,
       ),
     );
   }

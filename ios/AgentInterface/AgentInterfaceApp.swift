@@ -33,6 +33,8 @@ import UserNotifications
           #endif
           await store.restore()
           await store.refreshFocus()
+          CriticalAlarmManager.shared.reconcileOnLaunch(activeScope: store.scope)
+          await store.refreshRoutinesForAlarms()
         }
         .onChange(of: scenePhase) { _, phase in
           if phase == .active {
@@ -45,13 +47,16 @@ import UserNotifications
               await store.refreshFocus()
               await NotificationController.shared.synchronize()
               await LiveActivityController.shared.foreground()
+              await store.refreshRoutinesForAlarms()
             }
           } else {
-            BiometricGate.shared.lock()
             DeviceActivity.shared.backgrounded()
             store.suspend()
             LiveActivityController.shared.background()
-            if phase == .background { BackgroundRefresh.schedule() }
+            if phase == .background {
+              BiometricGate.shared.lock()
+              BackgroundRefresh.schedule()
+            }
           }
         }
         // The store times a lost connection from this, so every screen shows it the same way.
@@ -67,6 +72,7 @@ import UserNotifications
         .onChange(of: store.scope) { old, new in
           BiometricGate.shared.lock()
           CriticalAlarmManager.shared.cancelAll()
+          DraggableManagedFile.cleanupTemporaryFiles(maxAge: 0)
           if new == nil {
             RoutineSnapshotStore.write(nil)
             WatchBridge.shared.sync(nil)
@@ -81,6 +87,7 @@ import UserNotifications
               await CrashReporter.shared.flush()
               await NotificationController.shared.synchronize()
               await LiveActivityController.shared.foreground()
+              await store.refreshRoutinesForAlarms()
             }
           }
         }
@@ -492,16 +499,18 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   }
   /// Approve or Deny from a notification, possibly with the app in the background. It is sent once; when it
   /// does not go through, a notification says so and opens the chat, where the approval card shows its state.
-  func decide(_ decision: ApprovalDecision) async {
-    guard deciding.insert(decision.approvalId).inserted else { return }
+  @discardableResult func decide(_ decision: ApprovalDecision) async -> Bool {
+    guard deciding.insert(decision.approvalId).inserted else { return false }
     defer { deciding.remove(decision.approvalId) }
     let api = store?.api.flatMap { $0.token != nil || $0.localCookieAuth ? $0 : nil } ?? actionClient()
     let outcome = await decision.send(with: api)
     if outcome == .decided {
       if let store, store.selectedBotId == decision.botId, store.api === api { await store.refreshConversation() }
+      return true
     } else if let notice = decision.failureNotice(outcome) {
       await deliverNotice(notice)
     }
+    return false
   }
   func clearPendingNavigation() {
     pendingURL = nil; pendingBotId = nil; pendingRoutineId = nil; pendingListen = false

@@ -22,7 +22,7 @@ enum WatchPayload {
 /// rejects stale commands after an account switch or sign-out.
 struct WatchAction: Codable, Equatable, Sendable {
   enum Kind: Codable, Equatable, Sendable {
-    case stop(botId: String, name: String)
+    case stop(botId: String, name: String, runId: String)
     case decline(botId: String, name: String, approvalId: String)
     case review(botId: String)
     case queueDraft(botId: String, text: String)

@@ -125,6 +125,19 @@ struct AuthenticatedImage: View {
     "\(store?.scope ?? ""):\(path)" as NSString
   }
 }
+private struct OpenManagedFileKey: EnvironmentKey {
+  static let defaultValue: (@MainActor (FileRef, String) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+  /// Optional scene-local file preview handler (used by secondary iPadOS windows so Quick Look
+  /// opens in the window the user tapped instead of the main window).
+  var openManagedFile: (@MainActor (FileRef, String) -> Void)? {
+    get { self[OpenManagedFileKey.self] }
+    set { self[OpenManagedFileKey.self] = newValue }
+  }
+}
+
 /// A file on a message, as the web's FileLink: an app file opens in Quick Look and a file hosted
 /// elsewhere opens at its own address.
 struct FileAttachmentView: View {
@@ -132,12 +145,18 @@ struct FileAttachmentView: View {
   @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.openURL) private var openURL
   @Environment(\.zoomNamespace) private var zoomNamespace
+  @Environment(\.openManagedFile) private var openManagedFile
   var body: some View {
     let location = file.location(origin: store?.api?.baseURL)
     let sourceId = "file-\(file.id)"
     let base = Button {
       switch location {
-      case .managed: store?.open(file, sourceId: sourceId)
+      case .managed:
+        if let openManagedFile {
+          openManagedFile(file, sourceId)
+        } else {
+          store?.open(file, sourceId: sourceId)
+        }
       case .external(let url): openURL(url)
       case .unsupported: break
       }

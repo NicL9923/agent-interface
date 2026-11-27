@@ -14,6 +14,8 @@ struct WidgetSnapshot: Codable, Equatable {
     var pinned: Bool
     /// Pending approval ID when the assistant is waiting on an approval that widgets/Watch can decline.
     var approvalId: String? = nil
+    /// Active run ID when the assistant is working so widgets/Watch only stop the exact run displayed.
+    var runId: String? = nil
     var needsAttention: Bool { activity == "waiting" || activity == "blocked" }
     var isWorking: Bool { activity == "thinking" || activity == "working" }
     /// Idle and disconnected have no phase of their own; the row shows the last message instead.

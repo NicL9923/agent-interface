@@ -257,8 +257,11 @@ struct DiscoveryView: View {
     }
   }
   private func saveReply(_ message: Message, _ page: HistoryPage) {
+    guard let api = store.api else { return }
+    let owner = store.scope
     Task {
       let suggested = await OnDeviceIntelligence.suggestReferenceTitle(for: message.text)
+      guard store.scope == owner, store.api === api else { return }
       savePointer(SavedPointer(botId: page.botId, kind: "session", sessionId: page.sessionId, messageId: message.id, offset: page.offset, title: suggested ?? Self.replyTitle(message.text)))
     }
   }

@@ -51,6 +51,27 @@ struct LiveActivityStartRegistration: Encodable {
   /// somewhere else, and the account it was last registered for.
   private var startToken: String?
   private var registeredStart: (scope: String, token: String)?
+  /// Latest authoritative pending approval IDs observed from `/native/live-activity`, scoped to one account.
+  private var cachedApprovals: (scope: String, approvals: [String: String])?
+
+  func latestApprovals(for scope: String) -> [String: String] {
+    guard let cachedApprovals, cachedApprovals.scope == scope else { return [:] }
+    return cachedApprovals.approvals
+  }
+
+  private func recordApprovals(from state: AssistantActivityState, scope: String) {
+    var map: [String: String] = [:]
+    for row in state.rows where row.phase == .waiting {
+      if let approvalId = row.approvalId, !approvalId.isEmpty {
+        map[row.botId] = approvalId
+      }
+    }
+    let changed = cachedApprovals?.scope != scope || cachedApprovals?.approvals != map
+    cachedApprovals = (scope: scope, approvals: map)
+    if changed, store?.scope == scope {
+      store?.publishWidgetSnapshot()
+    }
+  }
   /// How often a foreground app refreshes its own activity instead of waiting for a push.
   static let foregroundInterval: Duration = .seconds(15)
   static let staleAfter: TimeInterval = 15 * 60
@@ -151,6 +172,7 @@ struct LiveActivityStartRegistration: Encodable {
       token == api.token, scope == store.scope, !store.suspended
     else { return }
     guard status.available else { await endAll(unregister: false); return }
+    recordApprovals(from: status.state, scope: scope)
     let state = seeded(status.state)
     if state.activeCount > 0 {
       await show(state, scope: scope)
@@ -170,6 +192,7 @@ struct LiveActivityStartRegistration: Encodable {
   func endAll(unregister: Bool) async {
     background()
     unregisteredSends = [:]
+    cachedApprovals = nil
     // The server drops the old account's start token with its session, or when the next account registers it.
     registeredStart = nil
     let activities = Live.activities

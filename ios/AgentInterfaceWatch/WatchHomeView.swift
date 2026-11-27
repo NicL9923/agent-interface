@@ -95,8 +95,8 @@ struct WatchHomeView: View {
           }
         }
         .font(.caption2)
-      } else if assistant.isWorking {
-        Button("Stop", role: .destructive) { session.stop(assistant) }
+      } else if assistant.isWorking, let runId = assistant.runId, !runId.isEmpty {
+        Button("Stop", role: .destructive) { session.stop(assistant, runId: runId) }
           .buttonStyle(.bordered)
           .font(.caption2)
       }

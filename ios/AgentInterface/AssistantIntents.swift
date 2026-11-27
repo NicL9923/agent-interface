@@ -82,22 +82,35 @@ struct AskAssistantIntent: AppIntent {
 // MARK: Automation-friendly intents (Routines & safety-bounded Send)
 
 /// A routine from the active account's non-secret `RoutineSnapshot` for Shortcuts automation.
+/// Its persisted `id` embeds the account `scope` so a Shortcut saved under account A can never
+/// silently rebind to a routine with the same bare ID under account B.
 struct RoutineEntity: AppEntity, Identifiable, Hashable {
   static var typeDisplayRepresentation: TypeDisplayRepresentation { "Routine" }
   static var defaultQuery: RoutineEntityQuery { RoutineEntityQuery() }
+  /// Format: `"\(scope)|\(routineId)"`.
   var id: String
   var name: String
   var botName: String
   var displayRepresentation: DisplayRepresentation {
     DisplayRepresentation(title: "\(name)", subtitle: "\(botName)")
   }
+
+  static func scopedId(scope: String, routineId: String) -> String { "\(scope)|\(routineId)" }
+  static func parseScopedId(_ value: String) -> (scope: String, routineId: String)? {
+    guard let bar = value.firstIndex(of: "|") else { return nil }
+    let scope = String(value[..<bar])
+    let routineId = String(value[value.index(after: bar)...])
+    guard !scope.isEmpty, !routineId.isEmpty else { return nil }
+    return (scope, routineId)
+  }
+
   init(id: String, name: String, botName: String) {
     self.id = id
     self.name = name
     self.botName = botName
   }
-  init(_ item: RoutineSnapshot.Item) {
-    self.init(id: item.id, name: item.name, botName: item.botName)
+  init(_ item: RoutineSnapshot.Item, scope: String) {
+    self.init(id: Self.scopedId(scope: scope, routineId: item.id), name: item.name, botName: item.botName)
   }
 }
 
@@ -109,7 +122,8 @@ struct RoutineEntityQuery: EntityStringQuery {
   }
   init() {}
   private var all: [RoutineEntity] {
-    RoutineSnapshotStore.read(from: Self.snapshotURL)?.routines.map(RoutineEntity.init) ?? []
+    guard let snap = RoutineSnapshotStore.read(from: Self.snapshotURL) else { return [] }
+    return snap.routines.map { RoutineEntity($0, scope: snap.scope) }
   }
   func entities(for identifiers: [String]) async throws -> [RoutineEntity] {
     let known = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -137,7 +151,7 @@ struct TryOnceIntent: AppIntent {
 
   @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
     let dialog = try await Self.execute(
-      routineId: routine.id,
+      scopedRoutineId: routine.id,
       routineName: routine.name,
       snapshot: RoutineSnapshotStore.read(from: RoutineEntityQuery.snapshotURL),
       signedInScope: NotificationController.shared.store?.scope ?? NotificationController.shared.savedScope(),
@@ -148,15 +162,20 @@ struct TryOnceIntent: AppIntent {
   }
 
   @MainActor static func execute(
-    routineId: String,
+    scopedRoutineId: String,
     routineName: String,
     snapshot: RoutineSnapshot?,
     signedInScope: String?,
     client: APIClient?
   ) async throws -> String {
-    guard let snapshot, let signedInScope, snapshot.scope == signedInScope, let client else {
+    guard let parsed = RoutineEntity.parseScopedId(scopedRoutineId),
+      let snapshot, let signedInScope,
+      parsed.scope == signedInScope, snapshot.scope == signedInScope,
+      let client
+    else {
       throw AssistantIntentError.signedOut
     }
+    let routineId = parsed.routineId
     guard snapshot.routines.contains(where: { $0.id == routineId }) else {
       throw AssistantIntentError.missing
     }
@@ -175,13 +194,63 @@ struct TryOnceIntent: AppIntent {
   }
 }
 
-/// Opt-in policy and rate-limiter for unattended Shortcut message sending (`SendAssistantMessageIntent`).
-/// Disabled by default per account scope so Shortcuts can never send messages unexpectedly.
+/// Account-scoped assistant entity for write-capable Shortcut automations (`SendAssistantMessageIntent`).
+/// Embeds the owning account `scope` in `id` so a saved automation from account A can never rebind
+/// to an assistant with the same bare ID under account B.
+struct ScopedAssistantEntity: AppEntity, Identifiable, Hashable {
+  static var typeDisplayRepresentation: TypeDisplayRepresentation { "Assistant" }
+  static var defaultQuery: ScopedAssistantEntityQuery { ScopedAssistantEntityQuery() }
+  /// Format: `"\(scope)|\(botId)"`.
+  var id: String
+  var name: String
+  var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(name)") }
+
+  static func scopedId(scope: String, botId: String) -> String { "\(scope)|\(botId)" }
+  static func parseScopedId(_ value: String) -> (scope: String, botId: String)? {
+    guard let bar = value.firstIndex(of: "|") else { return nil }
+    let scope = String(value[..<bar])
+    let botId = String(value[value.index(after: bar)...])
+    guard !scope.isEmpty, !botId.isEmpty else { return nil }
+    return (scope, botId)
+  }
+
+  init(id: String, name: String) {
+    self.id = id
+    self.name = name
+  }
+  init(scope: String, botId: String, name: String) {
+    self.id = Self.scopedId(scope: scope, botId: botId)
+    self.name = name
+  }
+}
+
+struct ScopedAssistantEntityQuery: EntityStringQuery {
+  init() {}
+  private var all: [ScopedAssistantEntity] {
+    guard let snap = WidgetSnapshotStore.read(from: AssistantEntityQuery.snapshotURL) else { return [] }
+    return snap.ordered.map { ScopedAssistantEntity(scope: snap.scope, botId: $0.id, name: $0.name) }
+  }
+  func entities(for identifiers: [String]) async throws -> [ScopedAssistantEntity] {
+    let known = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    return identifiers.compactMap { known[$0] }
+  }
+  func entities(matching string: String) async throws -> [ScopedAssistantEntity] {
+    let words = string.trimmingCharacters(in: .whitespacesAndNewlines)
+    return words.isEmpty ? all : all.filter { $0.name.localizedStandardContains(words) }
+  }
+  func suggestedEntities() async throws -> [ScopedAssistantEntity] { all }
+}
+
+/// Opt-in policy and persistent rate-limiter for unattended Shortcut message sending
+/// (`SendAssistantMessageIntent`). Disabled by default per account scope and persisted in
+/// `UserDefaults` so process termination cannot bypass the cooldown window.
 @MainActor enum ShortcutSendPolicy {
   static let maxMessageLength = 4_000
   static let cooldownSeconds: TimeInterval = 5
 
   static func key(scope: String) -> String { "native.\(scope).shortcutSendEnabled" }
+  static func cooldownKey(scope: String, botId: String) -> String { "native.\(scope).shortcutSendLast.\(botId)" }
+
   static func isEnabled(for scope: String?, defaults: UserDefaults = .standard) -> Bool {
     guard let scope, !scope.isEmpty else { return false }
     return defaults.bool(forKey: key(scope: scope))
@@ -191,40 +260,51 @@ struct TryOnceIntent: AppIntent {
     defaults.set(enabled, forKey: key(scope: scope))
   }
 
-  private static var lastSentAt: [String: Date] = [:]
-  static func resetCooldowns() { lastSentAt.removeAll() }
+  static func resetCooldown(for scope: String, botId: String, defaults: UserDefaults = .standard) {
+    defaults.removeObject(forKey: cooldownKey(scope: scope, botId: botId))
+  }
 
-  static func validate(
-    botId: String,
+  /// Validates scope, opt-in flag, assistant membership, text bounds, and persistent cooldown,
+  /// returning `(botId, trimmedText)` only after checking `hasClient` so a signed-out run never
+  /// consumes a cooldown slot.
+  static func reserveSend(
+    scopedAssistantId: String,
     text: String,
     snapshot: WidgetSnapshot?,
     signedInScope: String?,
+    hasClient: Bool,
     defaults: UserDefaults = .standard,
     now: Date = Date()
-  ) throws -> String {
-    guard let snapshot, let signedInScope, snapshot.scope == signedInScope else {
+  ) throws -> (botId: String, text: String) {
+    guard let parsed = ScopedAssistantEntity.parseScopedId(scopedAssistantId),
+      let snapshot, let signedInScope,
+      parsed.scope == signedInScope, snapshot.scope == signedInScope,
+      hasClient
+    else {
       throw AssistantIntentError.signedOut
     }
     guard isEnabled(for: signedInScope, defaults: defaults) else {
       throw AssistantIntentError.sendDisabled
     }
+    let botId = parsed.botId
     guard snapshot.assistants.contains(where: { $0.id == botId }) else {
       throw AssistantIntentError.missing
     }
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { throw AssistantIntentError.empty }
     guard trimmed.utf16.count <= maxMessageLength else { throw AssistantIntentError.sendTooLong }
-    let rateKey = "\(signedInScope)|\(botId)"
-    if let last = lastSentAt[rateKey], now.timeIntervalSince(last) < cooldownSeconds {
+    let rateKey = cooldownKey(scope: signedInScope, botId: botId)
+    let lastTimestamp = defaults.double(forKey: rateKey)
+    if lastTimestamp > 0, now.timeIntervalSince1970 - lastTimestamp < cooldownSeconds {
       throw AssistantIntentError.rateLimited
     }
-    lastSentAt[rateKey] = now
-    return trimmed
+    defaults.set(now.timeIntervalSince1970, forKey: rateKey)
+    return (botId, trimmed)
   }
 }
 
 /// Safety-bounded Shortcuts intent that sends a message directly to an assistant when the user has
-/// explicitly opted in via Settings -> Shortcuts automation.
+/// explicitly opted in via Settings -> Security & automation.
 struct SendAssistantMessageIntent: AppIntent {
   static var title: LocalizedStringResource { "Send message to assistant" }
   static var description: IntentDescription {
@@ -232,15 +312,15 @@ struct SendAssistantMessageIntent: AppIntent {
   }
   static var openAppWhenRun: Bool { false }
   static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
-  @Parameter(title: "Assistant") var assistant: AssistantEntity
+  @Parameter(title: "Assistant") var assistant: ScopedAssistantEntity
   @Parameter(title: "Message") var message: String
   static var parameterSummary: some ParameterSummary { Summary("Send \(\.$message) to \(\.$assistant)") }
   init() {}
-  init(assistant: AssistantEntity, message: String) { self.assistant = assistant; self.message = message }
+  init(assistant: ScopedAssistantEntity, message: String) { self.assistant = assistant; self.message = message }
 
   @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
     let dialog = try await Self.execute(
-      botId: assistant.id,
+      scopedAssistantId: assistant.id,
       assistantName: assistant.name,
       message: message,
       snapshot: WidgetSnapshotStore.read(from: AssistantEntityQuery.snapshotURL),
@@ -252,7 +332,7 @@ struct SendAssistantMessageIntent: AppIntent {
   }
 
   @MainActor static func execute(
-    botId: String,
+    scopedAssistantId: String,
     assistantName: String,
     message: String,
     snapshot: WidgetSnapshot?,
@@ -261,11 +341,12 @@ struct SendAssistantMessageIntent: AppIntent {
     defaults: UserDefaults = .standard,
     now: Date = Date()
   ) async throws -> String {
-    let trimmed = try ShortcutSendPolicy.validate(
-      botId: botId,
+    let (botId, trimmed) = try ShortcutSendPolicy.reserveSend(
+      scopedAssistantId: scopedAssistantId,
       text: message,
       snapshot: snapshot,
       signedInScope: signedInScope,
+      hasClient: client != nil,
       defaults: defaults,
       now: now
     )

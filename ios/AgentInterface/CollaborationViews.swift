@@ -282,11 +282,15 @@ struct GroupCreateView: View {
   }
   private func suggestName() {
     guard !suggestingName, botIds.count >= 2 else { return }
-    let memberNames = (store.bootstrap?.bots ?? []).filter { botIds.contains($0.id) }.map(\.name)
+    let initialName = name
+    let initialSelection = botIds
+    let memberNames = (store.bootstrap?.bots ?? []).filter { initialSelection.contains($0.id) }.map(\.name)
     suggestingName = true
     Task {
       defer { suggestingName = false }
-      if let suggestion = await OnDeviceIntelligence.suggestGroupTitle(members: memberNames) {
+      if let suggestion = await OnDeviceIntelligence.suggestGroupTitle(members: memberNames),
+        name == initialName, botIds == initialSelection
+      {
         name = GroupLimits.clip(suggestion, to: GroupLimits.name)
       }
     }

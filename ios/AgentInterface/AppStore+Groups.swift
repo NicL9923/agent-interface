@@ -26,6 +26,7 @@ extension AppStore {
     catalog.rooms.removeAll { $0.id == room.id }
     catalog.rooms.append(room)
     groupCatalog = catalog
+    spotlight?.syncGroups(catalog.rooms, scope: scope)
     Task { await refreshGroups() }
   }
 }

@@ -15,6 +15,7 @@ import WidgetKit
   var statusMessage: String?
 
   @ObservationIgnored private var started = false
+  @ObservationIgnored private var contextEpoch: UInt64 = 0
   @ObservationIgnored var snapshotURL: URL? = WidgetSnapshotStore.defaultURL
 
   override init() {
@@ -42,6 +43,7 @@ import WidgetKit
   }
 
   func apply(signedOut: Bool, snapshotData: Data?) {
+    contextEpoch &+= 1
     if signedOut {
       replaceSnapshot(nil)
       return
@@ -60,9 +62,9 @@ import WidgetKit
     }
   }
 
-  func stop(_ assistant: WidgetSnapshot.Assistant) {
-    guard let scope = snapshot?.scope else { return }
-    send(WatchAction(scope: scope, kind: .stop(botId: assistant.id, name: assistant.name)), fallbackNotice: "Stop queued for iPhone.")
+  func stop(_ assistant: WidgetSnapshot.Assistant, runId: String) {
+    guard let scope = snapshot?.scope, !runId.isEmpty else { return }
+    send(WatchAction(scope: scope, kind: .stop(botId: assistant.id, name: assistant.name, runId: runId)), fallbackNotice: "Stop queued for iPhone.")
   }
 
   func decline(_ assistant: WidgetSnapshot.Assistant, approvalId: String) {
@@ -92,6 +94,7 @@ import WidgetKit
     let payload: [String: Any] = [WatchPayload.actionKey: data]
     busy = true
     statusMessage = nil
+    let startEpoch = contextEpoch
     if session.isReachable {
       session.sendMessage(payload, replyHandler: { reply in
         let ok = reply["ok"] as? Bool ?? false
@@ -100,7 +103,12 @@ import WidgetKit
         Task { @MainActor [weak self] in
           guard let self else { return }
           self.busy = false
-          if let snapData, let decoded = try? JSONDecoder().decode(WidgetSnapshot.self, from: snapData) {
+          // Never let a late refresh reply repopulate Watch after an account switch or sign-out.
+          if self.contextEpoch == startEpoch,
+            let snapData,
+            let decoded = try? JSONDecoder().decode(WidgetSnapshot.self, from: snapData),
+            decoded.scope == action.scope
+          {
             self.replaceSnapshot(decoded)
           }
           self.statusMessage = message ?? (ok ? "Sent to iPhone." : "Could not reach WildBots on iPhone.")

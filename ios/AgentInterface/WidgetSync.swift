@@ -2,17 +2,25 @@ import Foundation
 import WidgetKit
 
 extension WidgetSnapshot {
-  /// What widgets and Apple Watch may show for this account: names, states, message previews, and
-  /// pending approval IDs, never a sign-in token.
-  init(bootstrap: Bootstrap, scope: String, at now: Date, pendingApprovals: [String: String] = [:]) {
+  /// What widgets and Apple Watch may show for this account: names, states, message previews,
+  /// pending approval IDs, and active run IDs — never a sign-in token.
+  init(
+    bootstrap: Bootstrap,
+    scope: String,
+    at now: Date,
+    pendingApprovals: [String: String] = [:],
+    activeRuns: [String: String] = [:]
+  ) {
     let favorites = Set(bootstrap.preferences.favorites)
     self.init(scope: scope, generatedAt: now, assistants: bootstrap.bots.map { bot in
-      Assistant(
+      let working = bot.activity == .thinking || bot.activity == .working
+      return Assistant(
         id: bot.id, name: bot.name, activity: bot.activity.rawValue,
         lastMessage: bot.lastMessage.map { String($0.text.prefix(200)) },
         lastMessageAt: bot.lastMessage?.at.flatMap(ServerDate.parse),
         color: bot.avatar?.mode == .portrait ? nil : bot.avatar?.color, pinned: favorites.contains(bot.id),
-        approvalId: bot.activity == .waiting ? pendingApprovals[bot.id] : nil)
+        approvalId: bot.activity == .waiting ? pendingApprovals[bot.id] : nil,
+        runId: working ? activeRuns[bot.id] : nil)
     })
   }
 }
@@ -41,11 +49,25 @@ extension AppStore {
         clearOtherAccountPrefetch(bootstrap)
         return
       }
-      var approvals: [String: String] = [:]
-      if let open = conversation, let pending = open.approvals.first(where: { $0.status == "pending" }) {
-        approvals[open.botId] = pending.id
+      var approvals = LiveActivityController.shared.latestApprovals(for: scope)
+      var runs: [String: String] = [:]
+      for (cachedBotId, cached) in conversationCache {
+        if let pending = cached.approvals.first(where: { $0.status == "pending" }) {
+          approvals[cachedBotId] = pending.id
+        }
+        if let runId = cached.activity.runId, !runId.isEmpty {
+          runs[cachedBotId] = runId
+        }
       }
-      next = WidgetSnapshot(bootstrap: bootstrap, scope: scope, at: now, pendingApprovals: approvals)
+      if let open = conversation {
+        if let pending = open.approvals.first(where: { $0.status == "pending" }) {
+          approvals[open.botId] = pending.id
+        }
+        if let runId = open.activity.runId, !runId.isEmpty {
+          runs[open.botId] = runId
+        }
+      }
+      next = WidgetSnapshot(bootstrap: bootstrap, scope: scope, at: now, pendingApprovals: approvals, activeRuns: runs)
     } else {
       next = nil
     }
@@ -84,9 +106,17 @@ extension AppStore {
     if spotlight?.syncRoutines(routines, scope: scope) == true {
       WildBotsShortcuts.updateAppShortcutParameters()
     }
-    for routine in routines {
-      Task { await CriticalAlarmManager.shared.scheduleRoutineAlarmIfOptedIn(routine: routine, scope: scope) }
-    }
+    Task { await CriticalAlarmManager.shared.reconcile(routines: routines, scope: scope) }
+  }
+  /// Refreshes account routines on foreground/launch when opt-in AlarmKit escalation is enabled so
+  /// recurring or paused/deleted routines reconcile without requiring the user to open Routine settings.
+  func refreshRoutinesForAlarms() async {
+    guard let scope, let api, supports(.routines), CriticalAlarmManager.shared.isEnabled(for: scope) else { return }
+    let startScope = scope
+    guard let routines: [Routine] = try? await api.get("/routines"),
+      self.scope == startScope, self.api === api
+    else { return }
+    publishRoutinesSnapshot(routines)
   }
   private func syncSystemSearch(_ snapshot: WidgetSnapshot?) {
     if spotlight?.sync(snapshot) == true { WildBotsShortcuts.updateAppShortcutParameters() }

@@ -6,9 +6,11 @@ import os
 
 @testable import AgentInterface
 
-/// Unit tests for the iOS 26/27 UI & ecosystem upgrades: biometric gating, Apple Watch bridge,
-/// VisionKit PDF scanning, automation App Intents, deeper Core Spotlight indexing, Home Screen
-/// Quick Actions, on-device FoundationModels helpers, and opt-in AlarmKit escalations.
+/// Unit tests for the iOS 26/27 UI & ecosystem upgrades: biometric gating (including suspended
+/// auth races), Apple Watch bridge (dedup, late-refresh rejection, honest outcomes, runId Stop),
+/// VisionKit PDF scanning, scoped automation App Intents, completion-driven Core Spotlight,
+/// Home Screen Quick Actions, word-preserving FoundationModels helpers, secondary chat idempotency,
+/// and durable opt-in AlarmKit escalations.
 @MainActor final class EcosystemUpgradeTests: XCTestCase {
 
   // MARK: Helpers
@@ -40,21 +42,42 @@ import os
       """.utf8))
   }
 
-  // MARK: 1. Biometric gating & shared-iPad protection
+  // MARK: 1. Biometric gating, suspended relock race & fail-closed approvals
 
   private final class FakeBiometrics: BiometricAuthenticating, @unchecked Sendable {
     let lock = NSLock()
     var nextOutcome: BiometricOutcome = .authenticated
     var prompts: [String] = []
+    var holdNext = false
+    private var continuation: CheckedContinuation<BiometricOutcome, Never>?
     var biometryLabel: String { "Face ID" }
     var biometrySymbol: String { "faceid" }
     var isAvailable: Bool { true }
     func authenticate(reason: String) async -> BiometricOutcome {
-      lock.withLock {
+      let shouldHold = lock.withLock { () -> Bool in
         prompts.append(reason)
-        return nextOutcome
+        if holdNext {
+          holdNext = false
+          return true
+        }
+        return false
       }
+      if shouldHold {
+        return await withCheckedContinuation { cont in
+          lock.withLock { continuation = cont }
+        }
+      }
+      return lock.withLock { nextOutcome }
     }
+    func resumeHeld(with outcome: BiometricOutcome) {
+      let cont = lock.withLock { () -> CheckedContinuation<BiometricOutcome, Never>? in
+        let c = continuation
+        continuation = nil
+        return c
+      }
+      cont?.resume(returning: outcome)
+    }
+    var isHolding: Bool { lock.withLock { continuation != nil } }
   }
 
   func testBiometricGateDefaultsOffRequiresAuthToToggleAndRelocksOnBackgroundOrAccountSwitch() async {
@@ -92,7 +115,7 @@ import os
     XCTAssertEqual(reused, .authenticated)
     XCTAssertEqual(auth.lock.withLock { auth.prompts.count }, promptsBefore + 1)
 
-    // Sensitive prompts (`vault.unlock_prompt`, high-risk approvals) require fresh verification even while unlocked.
+    // Sensitive prompts (`vault.unlock_prompt`, approvals) require fresh verification even while unlocked.
     let fresh = await gate.verify(reason: "Unlock 1Password", scope: "scope-a", requireFresh: true)
     XCTAssertEqual(fresh, .authenticated)
     XCTAssertEqual(auth.lock.withLock { auth.prompts.count }, promptsBefore + 2)
@@ -113,22 +136,39 @@ import os
     XCTAssertFalse(gate.isEnabled(for: "scope-a"))
   }
 
-  func testSensitiveApprovalClassifierGatesHighRiskApprovalsAndNeverGatesDeclines() {
-    let benign = Approval(id: "a1", title: "List files", detail: "Read project directory", status: "pending", command: "ls -la")
-    XCTAssertFalse(BiometricGate.isSensitiveApproval(benign, decision: "approved", scope: nil))
-    XCTAssertTrue(BiometricGate.isSensitiveApproval(benign, decision: "approved", scope: "always"))
-    XCTAssertTrue(BiometricGate.isSensitiveApproval(benign, decision: "approved", scope: "session"))
-    XCTAssertFalse(BiometricGate.isSensitiveApproval(benign, decision: "denied", scope: "always"))
+  func testPendingBiometricResultCannotUndoRelockForVaultOrFreshVerification() async throws {
+    let defaults = isolatedDefaults()
+    let auth = FakeBiometrics()
+    let gate = BiometricGate(authenticator: auth, defaults: defaults)
+    _ = await gate.setEnabled(true, for: "scope-a")
 
-    let dangerousCmd = Approval(id: "a2", title: "Run shell", detail: "Clean directory", status: "pending", command: "rm -rf /tmp/build")
-    XCTAssertTrue(BiometricGate.isSensitiveApproval(dangerousCmd, decision: "approved", scope: nil))
-    XCTAssertFalse(BiometricGate.isSensitiveApproval(dangerousCmd, decision: "denied", scope: nil))
+    // Start Vault unlock, then lock() while Face ID is still pending.
+    auth.holdNext = true
+    let pendingVault = Task { await gate.verify(reason: "Unlock vault", scope: "scope-a", requireFresh: false) }
+    try await until { auth.isHolding }
+    gate.lock()
+    auth.resumeHeld(with: .authenticated)
+    let vaultOutcome = await pendingVault.value
+    XCTAssertEqual(vaultOutcome, .cancelled)
+    XCTAssertFalse(gate.isVaultUnlocked(for: "scope-a"), "A late auth success must never undo relock")
 
-    let flaggedPattern = Approval(id: "a3", title: "Run script", detail: "Deploy", status: "pending", patterns: ["network write"])
-    XCTAssertTrue(BiometricGate.isSensitiveApproval(flaggedPattern, decision: "approved", scope: nil))
+    // Same for fresh verification (approval / vault.unlock_prompt).
+    auth.holdNext = true
+    let pendingFresh = Task { await gate.verify(reason: "Approve", scope: "scope-a", requireFresh: true) }
+    try await until { auth.isHolding }
+    gate.lock()
+    auth.resumeHeld(with: .authenticated)
+    let freshOutcome = await pendingFresh.value
+    XCTAssertEqual(freshOutcome, .cancelled)
+  }
 
-    let sensitiveKeyword = Approval(id: "a4", title: "Rotate production credential", detail: "Updates secret", status: "pending")
-    XCTAssertTrue(BiometricGate.isSensitiveApproval(sensitiveKeyword, decision: "approved", scope: nil))
+  func testSensitiveApprovalClassifierFailsClosedForAllApprovalsAndNeverGatesDeclines() {
+    let redirection = Approval(id: "a1", title: "Run shell", detail: "Write config", status: "pending", command: "echo key > ~/.ssh/authorized_keys")
+    XCTAssertTrue(BiometricGate.isSensitiveApproval(redirection, decision: "approved", scope: nil))
+    XCTAssertTrue(BiometricGate.isSensitiveApproval(redirection, decision: "approved", scope: "always"))
+    XCTAssertTrue(BiometricGate.isSensitiveApproval(redirection, decision: "approved", scope: "session"))
+    XCTAssertFalse(BiometricGate.isSensitiveApproval(redirection, decision: "denied", scope: "always"))
+    XCTAssertFalse(BiometricGate.isSensitiveApproval(redirection, decision: "denied", scope: nil))
   }
 
   // MARK: 2. Apple Watch Companion Bridge
@@ -141,9 +181,10 @@ import os
     func updateApplicationContext(_ context: [String: Any]) { contexts.append(context) }
   }
 
-  func testWatchBridgeSyncsNonSecretSnapshotEnforcesScopeQueuesDraftsAndClearsOnSignOut() async throws {
+  func testWatchBridgeSyncsNonSecretSnapshotDeduplicatesActionsReportsHonestOutcomesAndRejectsLateRefresh() async throws {
+    let defaults = isolatedDefaults()
     let transport = FakeWatchTransport()
-    let bridge = WatchBridge(transport: transport)
+    let bridge = WatchBridge(transport: transport, defaults: defaults)
     let store = AppStore()
     store.widgetSnapshotURL = nil
     store.api = APIClient(baseURL: URL(string: "https://watch.invalid")!)
@@ -153,13 +194,21 @@ import os
 
     var performedActions: [ActivityAction] = []
     var openedURLs: [URL] = []
-    bridge.actHandler = { performedActions.append($0) }
+    var reviewNotified: [String] = []
+    var nextActionResult = ActivityActionResult(ok: true, message: "Done.")
+    bridge.actHandler = { action in
+      performedActions.append(action)
+      return nextActionResult
+    }
     bridge.openHandler = { openedURLs.append($0) }
+    bridge.notifyReview = { reviewNotified.append($0) }
+    bridge.isForegroundActive = { false }
     bridge.start()
 
     // Snapshot sync carries only WidgetSnapshot data (never tokens).
     let snap = WidgetSnapshot(scope: scope, generatedAt: Date(), assistants: [
       .init(id: "kitchen", name: "Kitchen", activity: "waiting", lastMessage: nil, lastMessageAt: nil, color: nil, pinned: true, approvalId: "ap-1"),
+      .init(id: "ranch", name: "Ranch", activity: "working", lastMessage: nil, lastMessageAt: nil, color: nil, pinned: false, runId: "run-42"),
     ])
     bridge.sync(snap)
     XCTAssertEqual(transport.contexts.last?[WatchPayload.signedOutKey] as? Bool, false)
@@ -167,40 +216,52 @@ import os
     XCTAssertEqual(try JSONDecoder().decode(WidgetSnapshot.self, from: encodedSnap), snap)
 
     // Action for wrong account scope is rejected and clears Watch state.
-    let wrongAction = WatchAction(scope: "other-account", kind: .stop(botId: "ranch", name: "Ranch"))
+    let wrongAction = WatchAction(scope: "other-account", kind: .stop(botId: "ranch", name: "Ranch", runId: "run-42"))
     let rejected = await bridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(wrongAction)])
     XCTAssertEqual(rejected["ok"] as? Bool, false)
     XCTAssertEqual(transport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
     XCTAssertTrue(performedActions.isEmpty)
 
-    // Decline, Stop, and Review route to the app's handlers.
+    // Stop without a runId is refused so Watch can never abort a newer run.
+    let emptyRunStop = WatchAction(scope: scope, kind: .stop(botId: "ranch", name: "Ranch", runId: ""))
+    let emptyRunReply = await bridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(emptyRunStop)])
+    XCTAssertEqual(emptyRunReply["ok"] as? Bool, false)
+    XCTAssertTrue(performedActions.isEmpty)
+
+    // Decline refusal reports actual failure honestly to Watch.
+    nextActionResult = ActivityActionResult(ok: false, message: "Approval already settled.")
     let declineAction = WatchAction(scope: scope, kind: .decline(botId: "kitchen", name: "Kitchen", approvalId: "ap-1"))
     let declined = await bridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(declineAction)])
-    XCTAssertEqual(declined["ok"] as? Bool, true)
+    XCTAssertEqual(declined["ok"] as? Bool, false)
+    XCTAssertEqual(declined["error"] as? String, "Approval already settled.")
 
-    let stopAction = WatchAction(scope: scope, kind: .stop(botId: "ranch", name: "Ranch"))
+    // Stop forwards runId and reports success.
+    nextActionResult = ActivityActionResult(ok: true, message: "Stop requested for Ranch.")
+    let stopAction = WatchAction(scope: scope, kind: .stop(botId: "ranch", name: "Ranch", runId: "run-42"))
     let stopped = await bridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(stopAction)])
     XCTAssertEqual(stopped["ok"] as? Bool, true)
+    XCTAssertEqual(performedActions.last, ActivityAction(kind: .stop, botId: "ranch", scope: scope, name: "Ranch", runId: "run-42"))
 
+    // Background Review does not claim iPhone opened on screen; it posts a local notification instead.
     let reviewAction = WatchAction(scope: scope, kind: .review(botId: "kitchen"))
     let reviewed = await bridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(reviewAction)])
     XCTAssertEqual(reviewed["ok"] as? Bool, true)
-
-    XCTAssertEqual(performedActions, [
-      ActivityAction(kind: .decline(approvalId: "ap-1"), botId: "kitchen", scope: scope, name: "Kitchen"),
-      ActivityAction(kind: .stop, botId: "ranch", scope: scope, name: "Ranch"),
-    ])
+    XCTAssertEqual(reviewed["message"] as? String, "Open WildBots on iPhone to review.")
     XCTAssertEqual(openedURLs, [DeepLink.bot("kitchen")])
+    XCTAssertEqual(reviewNotified, ["kitchen"])
 
-    // Wrist dictation queues a draft addition for review on iPhone, never sending automatically.
+    // Wrist dictation queues a draft once; a retried transferUserInfo with the SAME WatchAction.id deduplicates!
     store.selectedBotId = "kitchen"
     store.draft = Draft(text: "Milk", attachments: [], dirty: true)
     store.draftReady = true
     let dictate = WatchAction(scope: scope, kind: .queueDraft(botId: "kitchen", text: "Pick up eggs too"))
-    let queued = await bridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(dictate)])
-    XCTAssertEqual(queued["ok"] as? Bool, true)
+    let encodedDictate = try JSONEncoder().encode(dictate)
+    let firstQueue = await bridge.handle(rawMessage: [WatchPayload.actionKey: encodedDictate])
+    let retryQueue = await bridge.handle(rawMessage: [WatchPayload.actionKey: encodedDictate])
+    XCTAssertEqual(firstQueue["ok"] as? Bool, true)
+    XCTAssertEqual(retryQueue["ok"] as? Bool, true)
     await store.deliverAdditions()
-    XCTAssertEqual(store.draft.text, "Milk\n\nPick up eggs too")
+    XCTAssertEqual(store.draft.text, "Milk\n\nPick up eggs too", "Duplicate WatchAction.id must not append twice")
     XCTAssertFalse(store.sending)
 
     // Empty draft and unknown bot are rejected.
@@ -211,9 +272,42 @@ import os
     let unknownReply = await bridge.handle(rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(unknownBot)])
     XCTAssertEqual(unknownReply["ok"] as? Bool, false)
 
-    // Sign-out wipes Watch state.
+    // Late refresh reply after sign-out is rejected and never repopulates Watch.
+    var refreshContinuation: CheckedContinuation<WidgetSnapshot?, Never>?
+    bridge.refreshHandler = {
+      await withCheckedContinuation { refreshContinuation = $0 }
+    }
+    let refreshAction = WatchAction(scope: scope, kind: .refresh)
+    let encodedRefresh = try JSONEncoder().encode(refreshAction)
+    let refreshTask = Task { () -> (Bool, Bool) in
+      let reply = await bridge.handle(rawMessage: [WatchPayload.actionKey: encodedRefresh])
+      return (reply["ok"] as? Bool ?? false, reply[WatchPayload.snapshotKey] != nil)
+    }
+    try await until { refreshContinuation != nil }
     bridge.sync(nil)
     XCTAssertEqual(transport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
+    refreshContinuation?.resume(returning: snap)
+    let (refreshOK, refreshHasSnap) = await refreshTask.value
+    XCTAssertFalse(refreshOK)
+    XCTAssertFalse(refreshHasSnap)
+    XCTAssertEqual(transport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
+    store.suspend()
+  }
+
+  func testStopActionForwardsRunIdToServer() async throws {
+    let server = FakeServer { _ in .init(body: #"{"ok":true}"#) }
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = server.api(token: "tok")
+    store.bootstrap = try sampleBootstrap()
+    let scope = try XCTUnwrap(store.scope)
+    let controller = NotificationController()
+    controller.store = store
+    let result = await controller.performAction(ActivityAction(kind: .stop, botId: "ranch", scope: scope, name: "Ranch", runId: "run-99"))
+    XCTAssertTrue(result.ok)
+    let decoded = try server.lastJSON()
+    XCTAssertEqual(decoded["runId"] as? String, "run-99")
+    XCTAssertNotNil(decoded["account"] as? String)
     store.suspend()
   }
 
@@ -234,7 +328,10 @@ import os
     let document = try XCTUnwrap(PDFDocument(data: pdfData))
     XCTAssertEqual(document.pageCount, 2)
 
-    // Rejects scans that cannot fit inside an artificially tiny byte limit.
+    // Rejects scans that exceed max page count or byte limit.
+    XCTAssertThrowsError(try ScannedDocumentPDF.build(pageCount: ScannedDocumentPDF.maxPages + 1) { _ in solidImage(.white) }) { error in
+      XCTAssertEqual(error as? ScannedDocumentPDF.BuildError, .tooLarge)
+    }
     XCTAssertThrowsError(try ScannedDocumentPDF.build(images: [solidImage(.white)], maxBytes: 10)) { error in
       XCTAssertEqual(error as? ScannedDocumentPDF.BuildError, .tooLarge)
     }
@@ -244,9 +341,9 @@ import os
     XCTAssertTrue(filename.hasSuffix(".pdf"))
   }
 
-  // MARK: 4. Automation App Intents (TryOnceIntent & SendAssistantMessageIntent)
+  // MARK: 4. Scoped Automation App Intents (TryOnceIntent & SendAssistantMessageIntent)
 
-  func testTryOnceIntentRunsRoutineWithIdempotentRequestIdAndRejectsInvalidStates() async throws {
+  func testTryOnceIntentUsesScopedEntityIdAndRejectsCrossAccountOrUnscopedParameters() async throws {
     let dir = temporaryDirectory()
     let routinesURL = dir.appendingPathComponent("routines.json")
     RoutineEntityQuery.snapshotURL = routinesURL
@@ -257,29 +354,32 @@ import os
     ])
     RoutineSnapshotStore.write(routineSnap, to: routinesURL)
     let queried = try await RoutineEntityQuery().suggestedEntities()
-    XCTAssertEqual(queried.map(\.id), ["r-morning"])
+    XCTAssertEqual(queried.map(\.id), ["scope-1|r-morning"])
 
     let server = FakeServer { _ in
       .init(body: #"{"requestId":"req-1","routineId":"r-morning","botId":"kitchen","status":"accepted","message":"Started","startedAt":"2026-11-27T08:00:00Z"}"#)
     }
     let client = server.api(token: "tok")
 
-    // Rejects mismatched scope or missing routine.
-    do {
-      _ = try await TryOnceIntent.execute(routineId: "r-morning", routineName: "Morning brief", snapshot: routineSnap, signedInScope: "scope-2", client: client)
-      XCTFail("Expected signedOut")
-    } catch let error as AssistantIntentError {
-      XCTAssertEqual(String(describing: error), String(describing: AssistantIntentError.signedOut))
+    // Rejects unscoped legacy bare ID, cross-account persisted ID, and missing routine.
+    for badId in ["r-morning", "scope-2|r-morning"] {
+      do {
+        _ = try await TryOnceIntent.execute(scopedRoutineId: badId, routineName: "Morning brief", snapshot: routineSnap, signedInScope: "scope-1", client: client)
+        XCTFail("Expected signedOut for \(badId)")
+      } catch let error as AssistantIntentError {
+        XCTAssertEqual(String(describing: error), String(describing: AssistantIntentError.signedOut))
+      }
     }
     do {
-      _ = try await TryOnceIntent.execute(routineId: "missing", routineName: "Missing", snapshot: routineSnap, signedInScope: "scope-1", client: client)
+      _ = try await TryOnceIntent.execute(scopedRoutineId: "scope-1|missing", routineName: "Missing", snapshot: routineSnap, signedInScope: "scope-1", client: client)
       XCTFail("Expected missing")
     } catch let error as AssistantIntentError {
       XCTAssertEqual(String(describing: error), String(describing: AssistantIntentError.missing))
     }
+    XCTAssertNil(server.lastRequest)
 
-    // Valid run posts to /api/routines/r-morning/run with a requestId.
-    let dialog = try await TryOnceIntent.execute(routineId: "r-morning", routineName: "Morning brief", snapshot: routineSnap, signedInScope: "scope-1", client: client)
+    // Valid scoped run posts to /api/routines/r-morning/run with a requestId.
+    let dialog = try await TryOnceIntent.execute(scopedRoutineId: "scope-1|r-morning", routineName: "Morning brief", snapshot: routineSnap, signedInScope: "scope-1", client: client)
     XCTAssertEqual(dialog, "Started Morning brief.")
     XCTAssertEqual(server.lastRequest?.url?.path, "/api/routines/r-morning/run")
 
@@ -289,11 +389,8 @@ import os
     XCTAssertEqual(afterSignOut, [])
   }
 
-  func testSendAssistantMessageIntentEnforcesOptInLengthAndRateLimit() async throws {
+  func testSendAssistantMessageIntentEnforcesOptInScopeLengthAndPersistentRateLimit() async throws {
     let defaults = isolatedDefaults()
-    ShortcutSendPolicy.resetCooldowns()
-    addTeardownBlock { @MainActor in ShortcutSendPolicy.resetCooldowns() }
-
     let snap = WidgetSnapshot(scope: "scope-1", generatedAt: Date(), assistants: [
       .init(id: "kitchen", name: "Kitchen", activity: "idle", lastMessage: nil, lastMessageAt: nil, color: nil, pinned: true),
     ])
@@ -301,11 +398,12 @@ import os
       .init(body: #"{"requestId":"r1","status":"accepted","turn":"started"}"#)
     }
     let client = server.api(token: "tok")
+    let scopedKitchen = ScopedAssistantEntity.scopedId(scope: "scope-1", botId: "kitchen")
 
     // Disabled by default.
     do {
       _ = try await SendAssistantMessageIntent.execute(
-        botId: "kitchen", assistantName: "Kitchen", message: "Start coffee",
+        scopedAssistantId: scopedKitchen, assistantName: "Kitchen", message: "Start coffee",
         snapshot: snap, signedInScope: "scope-1", client: client, defaults: defaults
       )
       XCTFail("Expected sendDisabled by default")
@@ -317,31 +415,56 @@ import os
     // Enable opt-in for scope-1.
     ShortcutSendPolicy.setEnabled(true, for: "scope-1", defaults: defaults)
 
+    // Cross-account persisted entity (account A saved "scope-A|kitchen") and unscoped "kitchen" are rejected!
+    for badId in ["kitchen", "scope-A|kitchen"] {
+      do {
+        _ = try await SendAssistantMessageIntent.execute(
+          scopedAssistantId: badId, assistantName: "Kitchen", message: "Hijack",
+          snapshot: snap, signedInScope: "scope-1", client: client, defaults: defaults
+        )
+        XCTFail("Expected signedOut for \(badId)")
+      } catch let error as AssistantIntentError {
+        XCTAssertEqual(String(describing: error), String(describing: AssistantIntentError.signedOut))
+      }
+    }
+
+    // Missing client fails BEFORE consuming a cooldown slot.
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    do {
+      _ = try await SendAssistantMessageIntent.execute(
+        scopedAssistantId: scopedKitchen, assistantName: "Kitchen", message: "No client",
+        snapshot: snap, signedInScope: "scope-1", client: nil, defaults: defaults, now: t0
+      )
+      XCTFail("Expected signedOut when client is nil")
+    } catch let error as AssistantIntentError {
+      XCTAssertEqual(String(describing: error), String(describing: AssistantIntentError.signedOut))
+    }
+
     // Rejects overly long messages (> 4,000 chars).
     let longText = String(repeating: "a", count: ShortcutSendPolicy.maxMessageLength + 1)
     do {
       _ = try await SendAssistantMessageIntent.execute(
-        botId: "kitchen", assistantName: "Kitchen", message: longText,
-        snapshot: snap, signedInScope: "scope-1", client: client, defaults: defaults
+        scopedAssistantId: scopedKitchen, assistantName: "Kitchen", message: longText,
+        snapshot: snap, signedInScope: "scope-1", client: client, defaults: defaults, now: t0
       )
       XCTFail("Expected sendTooLong")
     } catch let error as AssistantIntentError {
       XCTAssertEqual(String(describing: error), String(describing: AssistantIntentError.sendTooLong))
     }
 
-    // Valid send succeeds.
-    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    // Valid send succeeds at t0 (proving nil-client attempt did not consume the slot).
     let ok = try await SendAssistantMessageIntent.execute(
-      botId: "kitchen", assistantName: "Kitchen", message: "Check grocery list",
+      scopedAssistantId: scopedKitchen, assistantName: "Kitchen", message: "Check grocery list",
       snapshot: snap, signedInScope: "scope-1", client: client, defaults: defaults, now: t0
     )
     XCTAssertEqual(ok, "Sent to Kitchen.")
     XCTAssertEqual(server.lastRequest?.url?.path, "/api/bots/kitchen/messages")
 
-    // Immediate second send hits cooldown rate limit.
+    // Immediate second send hits persisted cooldown in UserDefaults (survives process restart).
+    XCTAssertGreaterThan(defaults.double(forKey: ShortcutSendPolicy.cooldownKey(scope: "scope-1", botId: "kitchen")), 0)
     do {
       _ = try await SendAssistantMessageIntent.execute(
-        botId: "kitchen", assistantName: "Kitchen", message: "Again",
+        scopedAssistantId: scopedKitchen, assistantName: "Kitchen", message: "Again",
         snapshot: snap, signedInScope: "scope-1", client: client, defaults: defaults, now: t0.addingTimeInterval(2)
       )
       XCTFail("Expected rateLimited")
@@ -351,24 +474,33 @@ import os
 
     // After cooldown passes, send works again.
     let okAfter = try await SendAssistantMessageIntent.execute(
-      botId: "kitchen", assistantName: "Kitchen", message: "After cooldown",
+      scopedAssistantId: scopedKitchen, assistantName: "Kitchen", message: "After cooldown",
       snapshot: snap, signedInScope: "scope-1", client: client, defaults: defaults, now: t0.addingTimeInterval(6)
     )
     XCTAssertEqual(okAfter, "Sent to Kitchen.")
   }
 
-  // MARK: 5. Deeper Spotlight Indexing
+  // MARK: 5. Deeper Spotlight Indexing (including failed-delete retry bookkeeping)
 
   private final class RecordingSpotlight: SpotlightIndexing {
     var indexed: [[SpotlightRecord]] = []
     var deleted: [[String]] = []
     var deleteAllCount = 0
+    var failDeletes = false
     func index(_ records: [SpotlightRecord]) { indexed.append(records) }
     func delete(ids: [String]) { deleted.append(ids) }
     func deleteAll() { deleteAllCount += 1 }
+    func delete(ids: [String], completion: @escaping @Sendable (Bool) -> Void) {
+      deleted.append(ids)
+      completion(!failDeletes)
+    }
+    func deleteAll(completion: @escaping @Sendable (Bool) -> Void) {
+      deleteAllCount += 1
+      completion(!failDeletes)
+    }
   }
 
-  func testSpotlightIndexesGroupsRoutinesAndSavedTitlesOnlyAndClearsAllOnSignOutOrSwitch() {
+  func testSpotlightIndexesGroupsRoutinesAndSavedTitlesOnlyAndRetriesFailedDeletes() {
     let defaults = isolatedDefaults()
     let index = RecordingSpotlight()
     let spotlight = AssistantSpotlight(index: index, defaults: defaults)
@@ -392,13 +524,20 @@ import os
     XCTAssertEqual(AssistantSpotlight.deepLink(for: "routine:kitchen:rt-1"), DeepLink.routine(botId: "kitchen", routineId: "rt-1"))
     XCTAssertEqual(AssistantSpotlight.deepLink(for: "saved:sv-1"), DeepLink.saved)
 
-    // Removing a saved item deletes only that item.
+    // A failed deletion keeps local bookkeeping intact so the next sync retries!
+    index.failDeletes = true
     XCTAssertTrue(spotlight.syncSaved([], scope: "scope-1"))
     XCTAssertEqual(index.deleted.last, ["saved:sv-1"])
+    index.failDeletes = false
+    XCTAssertTrue(spotlight.syncSaved([], scope: "scope-1"), "Must retry deletion after prior failure")
+    XCTAssertEqual(index.deleted.count, 2)
 
-    // Sign-out clears the entire domain.
+    // Sign-out clears the entire domain; failed deleteAll also retains bookkeeping for retry.
+    index.failDeletes = true
     XCTAssertTrue(spotlight.sync(nil))
-    XCTAssertEqual(index.deleteAllCount, 1)
+    index.failDeletes = false
+    XCTAssertTrue(spotlight.sync(nil))
+    XCTAssertEqual(index.deleteAllCount, 2)
     XCTAssertFalse(spotlight.sync(nil))
   }
 
@@ -425,14 +564,20 @@ import os
     XCTAssertNil(QuickActions.url(for: unknown))
   }
 
-  // MARK: 7. On-Device FoundationModels Helpers
+  // MARK: 7. On-Device FoundationModels Helpers (word-preserving dictation cleanup)
 
-  func testOnDeviceIntelligenceHelpersPolishSuggestSummarizeAndFallbackGracefully() async {
-    // Voice transcript polish succeeds and rejects runaway hallucinations.
+  func testOnDeviceIntelligenceHelpersPolishSuggestSummarizeAndPreserveWords() async {
+    // Pure punctuation/capitalization cleanup succeeds.
     let polished = await OnDeviceIntelligence.polishTranscript("check the north gate tomorrow") { _, _ in
       "Check the north gate tomorrow."
     }
     XCTAssertEqual(polished, "Check the north gate tomorrow.")
+
+    // Dropping a negation or altering any word falls back to the exact raw transcript!
+    let droppedNegation = await OnDeviceIntelligence.polishTranscript("do not delete the invoice") { _, _ in
+      "Delete the invoice."
+    }
+    XCTAssertEqual(droppedNegation, "do not delete the invoice")
 
     let runaway = await OnDeviceIntelligence.polishTranscript("hi") { _, _ in
       String(repeating: "very long hallucination ", count: 20)
@@ -470,7 +615,7 @@ import os
     XCTAssertNil(expanded)
   }
 
-  // MARK: 8. Opt-In AlarmKit Escalation
+  // MARK: 8. Opt-In AlarmKit Escalation (suspended schedule race & durable relaunch cleanup)
 
   @MainActor private final class FakeAlarmBackend: CriticalAlarmBackend {
     var isSupported = true
@@ -478,16 +623,37 @@ import os
     var nextAuthResult: CriticalAlarmAuthorization = .authorized
     var scheduled: [CriticalAlarmRequest] = []
     var cancelled: [UUID] = []
+    var liveIds: Set<UUID> = []
+    var holdNextSchedule = false
+    private var scheduleContinuation: CheckedContinuation<Void, Never>?
+
     func authorizationState() -> CriticalAlarmAuthorization { authState }
     func requestAuthorization() async -> CriticalAlarmAuthorization {
       authState = nextAuthResult
       return authState
     }
-    func schedule(_ request: CriticalAlarmRequest) async throws { scheduled.append(request) }
-    func cancel(id: UUID) { cancelled.append(id) }
+    func schedule(_ request: CriticalAlarmRequest) async throws {
+      scheduled.append(request)
+      liveIds.insert(request.id)
+      if holdNextSchedule {
+        holdNextSchedule = false
+        await withCheckedContinuation { scheduleContinuation = $0 }
+      }
+    }
+    func cancel(id: UUID) {
+      cancelled.append(id)
+      liveIds.remove(id)
+    }
+    func currentAlarmIds() -> Set<UUID> { liveIds }
+    var isHoldingSchedule: Bool { scheduleContinuation != nil }
+    func resumeSchedule() {
+      let c = scheduleContinuation
+      scheduleContinuation = nil
+      c?.resume()
+    }
   }
 
-  func testCriticalAlarmsAreStrictlyOptInDeduplicatedAndCancelledOnSignOut() async {
+  func testCriticalAlarmsAreOptInCancelLateSuspendedSchedulesAndPersistOwnershipAcrossRelaunch() async throws {
     let defaults = isolatedDefaults()
     let backend = FakeAlarmBackend()
     let manager = CriticalAlarmManager(backend: backend, defaults: defaults)
@@ -514,49 +680,103 @@ import os
     )
     XCTAssertFalse(notOptedBot)
 
-    // Opt in Kitchen -> escalates once, then deduplicates.
+    // Suspended schedule cancelled when sign-out / opt-out runs mid-flight!
     manager.setBotWaitingEnabled(true, botId: "kitchen", for: "scope-1")
-    let escalated = await manager.escalateWaitingIfOptedIn(
-      botId: "kitchen", botName: "Kitchen", reason: "Needs approval", dedupKey: "ap-1", scope: "scope-1"
-    )
-    XCTAssertTrue(escalated)
-    XCTAssertEqual(backend.scheduled.count, 1)
-    let duplicate = await manager.escalateWaitingIfOptedIn(
-      botId: "kitchen", botName: "Kitchen", reason: "Needs approval", dedupKey: "ap-1", scope: "scope-1"
-    )
-    XCTAssertFalse(duplicate)
-    XCTAssertEqual(backend.scheduled.count, 1)
+    backend.holdNextSchedule = true
+    let inflight = Task {
+      await manager.escalateWaitingIfOptedIn(
+        botId: "kitchen", botName: "Kitchen", reason: "Needs approval", dedupKey: "ap-race", scope: "scope-1"
+      )
+    }
+    try await until { backend.isHoldingSchedule }
+    manager.cancelAll()
+    backend.resumeSchedule()
+    let raceResult = await inflight.value
+    XCTAssertFalse(raceResult, "Late schedule after cancelAll must cancel itself")
+    XCTAssertTrue(backend.liveIds.isEmpty)
 
-    // Routine alarm schedules only when opted in and enabled.
+    // Routine reconciliation schedules active routines and cancels paused/deleted routines across relaunch.
     let future = Date().addingTimeInterval(600)
     var routine = Routine.empty(botId: "kitchen").with(id: "rt-1", name: "Water check")
     routine.nextRunAt = ServerDate.string(future)
-    let routineNotOpted = await manager.scheduleRoutineAlarmIfOptedIn(routine: routine, scope: "scope-1")
-    XCTAssertFalse(routineNotOpted)
-
     manager.setRoutineEnabled(true, routineId: "rt-1", for: "scope-1")
-    let routineScheduled = await manager.scheduleRoutineAlarmIfOptedIn(routine: routine, scope: "scope-1")
-    XCTAssertTrue(routineScheduled)
-    XCTAssertEqual(backend.scheduled.count, 2)
+    await manager.reconcile(routines: [routine], scope: "scope-1")
+    XCTAssertEqual(backend.liveIds.count, 1)
 
-    // Sign-out cancels every scheduled alarm.
-    let ids = Set(backend.scheduled.map(\.id))
-    manager.cancelAll()
-    XCTAssertEqual(Set(backend.cancelled), ids)
+    // Simulate app relaunch with a brand-new manager sharing the same defaults and backend.
+    let relaunched = CriticalAlarmManager(backend: backend, defaults: defaults)
+    // Pausing or removing the routine cancels the persisted alarm!
+    await relaunched.reconcile(routines: [], scope: "scope-1")
+    XCTAssertTrue(backend.liveIds.isEmpty)
+
+    // Account switch on relaunch cancels prior account's persisted alarms.
+    await relaunched.reconcile(routines: [routine], scope: "scope-1")
+    XCTAssertEqual(backend.liveIds.count, 1)
+    let afterSwitch = CriticalAlarmManager(backend: backend, defaults: defaults)
+    afterSwitch.reconcileOnLaunch(activeScope: "scope-2")
+    XCTAssertTrue(backend.liveIds.isEmpty)
   }
 
-  // MARK: 9. Interactive Widget Refresh & Approval ID Backwards Compatibility
+  // MARK: 9. Secondary iPad Window (bounded turns=20 & idempotent retry)
 
-  func testWidgetSnapshotDecodesWithAndWithoutApprovalIdAndRefreshIntentCallsHandler() async throws {
+  func testSecondaryChatUsesBoundedTurnsAndReusesRequestIdOnRetry() async throws {
+    let failNextPost = OSAllocatedUnfairLock(initialState: true)
+    let server = FakeServer { request in
+      if request.httpMethod == "POST" {
+        let shouldFail = failNextPost.withLock { value -> Bool in
+          let current = value
+          value = false
+          return current
+        }
+        if shouldFail {
+          return .init(status: 503, body: #"{"error":"temporarily unavailable"}"#)
+        }
+        return .init(body: #"{"requestId":"ok","status":"accepted","turn":"started"}"#)
+      }
+      return .init(body: #"{"botId":"kitchen","messages":[],"activity":{"state":"idle"},"approvals":[],"attention":[]}"#)
+    }
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = server.api(token: "tok")
+    store.bootstrap = try sampleBootstrap()
+    let model = SecondaryChatModel(botId: "kitchen")
+
+    await model.load(using: store)
+    XCTAssertEqual(server.lastRequest?.url?.path, "/api/bots/kitchen/conversation")
+    XCTAssertEqual(server.lastRequest?.url?.query, "turns=20")
+
+    // First send fails -> pending is retained with its original requestId.
+    model.draft = "Check oven timer"
+    await model.send(using: store)
+    let firstId = try XCTUnwrap(model.pending?.requestId)
+    let firstBody = try server.lastJSON()
+    XCTAssertEqual(firstBody["requestId"] as? String, firstId)
+
+    // Retry reuses the exact same requestId and clears pending + draft on admission.
+    await model.send(using: store, retryPending: true)
+    let postRequestIds = server.bodies.compactMap { data -> String? in
+      (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["requestId"] as? String
+    }
+    XCTAssertEqual(postRequestIds, [firstId, firstId])
+    XCTAssertNil(model.pending)
+    XCTAssertEqual(model.draft, "")
+    store.suspend()
+  }
+
+  // MARK: 10. Interactive Widget Refresh, Approval ID & Run ID Backwards Compatibility
+
+  func testWidgetSnapshotDecodesWithAndWithoutApprovalAndRunIdsAndRefreshIntentCallsHandler() async throws {
     let legacyJSON = #"{"scope":"a","generatedAt":0,"assistants":[{"id":"k","name":"Kitchen","activity":"waiting","pinned":true}]}"#
     let legacy = try JSONDecoder().decode(WidgetSnapshot.self, from: Data(legacyJSON.utf8))
     XCTAssertNil(legacy.assistants[0].approvalId)
+    XCTAssertNil(legacy.assistants[0].runId)
 
-    let withApproval = WidgetSnapshot(scope: "a", generatedAt: Date(), assistants: [
-      .init(id: "k", name: "Kitchen", activity: "waiting", lastMessage: nil, lastMessageAt: nil, color: nil, pinned: true, approvalId: "ap-9"),
+    let withIds = WidgetSnapshot(scope: "a", generatedAt: Date(), assistants: [
+      .init(id: "k", name: "Kitchen", activity: "waiting", lastMessage: nil, lastMessageAt: nil, color: nil, pinned: true, approvalId: "ap-9", runId: "run-7"),
     ])
-    let roundTrip = try JSONDecoder().decode(WidgetSnapshot.self, from: JSONEncoder().encode(withApproval))
+    let roundTrip = try JSONDecoder().decode(WidgetSnapshot.self, from: JSONEncoder().encode(withIds))
     XCTAssertEqual(roundTrip.assistants[0].approvalId, "ap-9")
+    XCTAssertEqual(roundTrip.assistants[0].runId, "run-7")
 
     let previous = ActivityActions.refreshHandler
     defer { ActivityActions.refreshHandler = previous }

@@ -92,6 +92,9 @@ struct SystemBiometricAuthenticator: BiometricAuthenticating {
   private(set) var unlockedScope: String?
   /// Bumped whenever the per-scope preference changes so Settings and views re-read cleanly.
   private(set) var preferenceVersion = 0
+  /// Monotonic invalidation counter bumped on every `lock()` (real backgrounding, view dismissal,
+  /// sign-out, or account switch) so an in-flight biometric prompt can never grant access late.
+  @ObservationIgnored private(set) var lockEpoch: UInt64 = 0
 
   @ObservationIgnored var authenticator: BiometricAuthenticating
   @ObservationIgnored var defaults: UserDefaults
@@ -121,8 +124,10 @@ struct SystemBiometricAuthenticator: BiometricAuthenticating {
     return unlockedScope == scope
   }
 
-  /// Immediately clears any in-memory unlock grant. Called on backgrounding, sign-out, or account switch.
+  /// Immediately clears any in-memory unlock grant and invalidates every pending authentication
+  /// attempt. Called on real backgrounding, view dismissal, sign-out, or account switch.
   func lock() {
+    lockEpoch &+= 1
     if unlockedScope != nil { unlockedScope = nil }
   }
 
@@ -130,10 +135,12 @@ struct SystemBiometricAuthenticator: BiometricAuthenticating {
   /// disabling requires authentication so another person on a shared iPad cannot turn it off.
   func setEnabled(_ enabled: Bool, for scope: String?) async -> BiometricOutcome {
     guard let scope, !scope.isEmpty else { return .failed("Sign in first.") }
+    let startEpoch = lockEpoch
     let reason = enabled
-      ? "Verify your identity to require \(biometryLabel) for Vault and sensitive approvals."
+      ? "Verify your identity to require \(biometryLabel) for Vault and approvals."
       : "Verify your identity to turn off \(biometryLabel) protection."
     let outcome = await authenticator.authenticate(reason: reason)
+    guard lockEpoch == startEpoch else { return .cancelled }
     guard outcome == .authenticated else { return outcome }
     defaults.set(enabled, forKey: Self.preferenceKey(scope: scope))
     if !enabled { unlockedScope = nil }
@@ -142,40 +149,29 @@ struct SystemBiometricAuthenticator: BiometricAuthenticating {
   }
 
   /// Authenticates for a gated surface. When `requireFresh` is true (used for `vault.unlock_prompt`
-  /// and sensitive approvals), always prompts instead of reusing an earlier Vault unlock.
+  /// and approvals), always prompts instead of reusing an earlier Vault unlock.
+  /// If `lock()` ran while authentication was pending (background, dismissal, or account change),
+  /// the stale result is discarded and `.cancelled` is returned without writing `unlockedScope`.
   func verify(reason: String, scope: String?, requireFresh: Bool = false) async -> BiometricOutcome {
     guard let scope, !scope.isEmpty else { return .failed("Sign in first.") }
     guard isEnabled(for: scope) else { return .authenticated }
     if !requireFresh && unlockedScope == scope { return .authenticated }
+    let startEpoch = lockEpoch
     let outcome = await authenticator.authenticate(reason: reason)
+    guard lockEpoch == startEpoch, isEnabled(for: scope) else { return .cancelled }
     if outcome == .authenticated, !requireFresh {
       unlockedScope = scope
     }
     return outcome
   }
 
-  /// Classifies whether approving an approval request is sensitive / high-risk and should require
-  /// fresh biometric verification when biometric gating is enabled.
-  /// Declining never requires biometrics.
+  /// Fail-closed approval gating: whenever biometric protection is enabled for the signed-in account,
+  /// approving any tool execution requires fresh authentication so no shell redirection or custom
+  /// command can slip past a substring list. Declining never requires biometrics.
   static func isSensitiveApproval(_ approval: Approval, decision: String, scope: String?) -> Bool {
-    guard decision == "approved" else { return false }
-    if scope == "always" || scope == "session" { return true }
-    if let patterns = approval.patterns, !patterns.isEmpty { return true }
-    let command = (approval.command ?? "").lowercased()
-    let sensitiveCommandTokens = [
-      "sudo ", "rm ", "rm -", "chmod ", "chown ", "dd ", "mkfs", "kill ", "killall ",
-      "launchctl ", "systemctl ", "git push", "git reset --hard", "ssh ", "scp ",
-      "curl ", "wget ", "security ", "keychain", "passwd", "vault",
-    ]
-    if sensitiveCommandTokens.contains(where: { command.contains($0) }) || command == "sudo" {
-      return true
-    }
-    let summary = (approval.title + " " + approval.detail).lowercased()
-    let sensitiveKeywords = [
-      "destructive", "delete", "remove", "credential", "password", "vault", "secret",
-      "token", "admin", "root", "sudo", "payment", "purchase", "transfer", "production",
-    ]
-    return sensitiveKeywords.contains(where: { summary.contains($0) })
+    _ = approval
+    _ = scope
+    return decision == "approved"
   }
 }
 

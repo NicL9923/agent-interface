@@ -322,8 +322,8 @@ struct AssistantsWidgetView: View {
           .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.mini)
           .tint(WidgetPalette.color(.waiting))
           .accessibilityLabel("Decline \(assistant.name)'s request")
-        } else if assistant.isWorking {
-          Button(intent: StopAssistantActivityIntent(botId: assistant.id, name: assistant.name, scope: scope)) {
+        } else if assistant.isWorking, let runId = assistant.runId, !runId.isEmpty {
+          Button(intent: StopAssistantActivityIntent(botId: assistant.id, name: assistant.name, scope: scope, runId: runId)) {
             Image(systemName: "stop.fill")
           }
           .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.mini)

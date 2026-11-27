@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 
 /// One item as Spotlight lists it: title only, since Spotlight results can show on a locked
 /// device and message previews stay strictly inside the app.
-struct SpotlightRecord: Equatable {
-  enum Kind: String, Codable, Equatable {
+struct SpotlightRecord: Equatable, Sendable {
+  enum Kind: String, Codable, Equatable, Sendable {
     case assistant
     case group
     case routine
@@ -26,29 +26,61 @@ struct SpotlightRecord: Equatable {
 }
 
 /// The part of Core Spotlight this app uses, so tests can watch what is indexed and removed.
+/// Implementations that perform async I/O override the completion variants so local bookkeeping
+/// advances only when Core Spotlight confirms success.
 protocol SpotlightIndexing {
   func index(_ records: [SpotlightRecord])
   func delete(ids: [String])
   func deleteAll()
+  func index(_ records: [SpotlightRecord], completion: @escaping @Sendable (Bool) -> Void)
+  func delete(ids: [String], completion: @escaping @Sendable (Bool) -> Void)
+  func deleteAll(completion: @escaping @Sendable (Bool) -> Void)
+}
+
+extension SpotlightIndexing {
+  func index(_ records: [SpotlightRecord], completion: @escaping @Sendable (Bool) -> Void) {
+    index(records)
+    completion(true)
+  }
+  func delete(ids: [String], completion: @escaping @Sendable (Bool) -> Void) {
+    delete(ids: ids)
+    completion(true)
+  }
+  func deleteAll(completion: @escaping @Sendable (Bool) -> Void) {
+    deleteAll()
+    completion(true)
+  }
 }
 
 struct SystemSpotlightIndex: SpotlightIndexing {
   static let domain = "dev.agentinterface.assistants"
-  func index(_ records: [SpotlightRecord]) {
-    guard !records.isEmpty else { return }
+  func index(_ records: [SpotlightRecord]) { index(records) { _ in } }
+  func delete(ids: [String]) { delete(ids: ids) { _ in } }
+  func deleteAll() { deleteAll { _ in } }
+
+  func index(_ records: [SpotlightRecord], completion: @escaping @Sendable (Bool) -> Void) {
+    guard !records.isEmpty else { completion(true); return }
     let items = records.map { record -> CSSearchableItem in
       let attributes = CSSearchableItemAttributeSet(contentType: .content)
       attributes.title = record.title
       attributes.contentDescription = record.description
       return CSSearchableItem(uniqueIdentifier: record.id, domainIdentifier: Self.domain, attributeSet: attributes)
     }
-    CSSearchableIndex.default().indexSearchableItems(items)
+    CSSearchableIndex.default().indexSearchableItems(items) { error in
+      completion(error == nil)
+    }
   }
-  func delete(ids: [String]) {
-    guard !ids.isEmpty else { return }
-    CSSearchableIndex.default().deleteSearchableItems(withIdentifiers: ids)
+  func delete(ids: [String], completion: @escaping @Sendable (Bool) -> Void) {
+    guard !ids.isEmpty else { completion(true); return }
+    CSSearchableIndex.default().deleteSearchableItems(withIdentifiers: ids) { error in
+      completion(error == nil)
+    }
   }
-  func deleteAll() { CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [Self.domain]) }
+  func deleteAll(completion: @escaping @Sendable (Bool) -> Void) {
+    CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [Self.domain]) { error in
+      completion(error == nil)
+    }
+  }
 }
 
 /// Keeps Spotlight listing exactly the signed-in account's assistants, group chats, routines
@@ -90,13 +122,18 @@ struct AssistantSpotlight {
   }
 
   /// Syncs assistants from the widget snapshot. Returns whether anything changed, so callers can
-  /// refresh Siri's list of assistant names. Signing out (`nil`) clears every Spotlight category.
+  /// refresh Siri's list of assistant names. Signing out (`nil`) clears every Spotlight category,
+  /// removing local bookkeeping only after Core Spotlight confirms the deletion so a failed clear
+  /// retries on the next sync.
   @discardableResult func sync(_ snapshot: WidgetSnapshot?) -> Bool {
     guard let snapshot else {
       let hadAny = Self.allKeys.contains { defaults.data(forKey: $0) != nil }
       guard hadAny else { return false }
-      index.deleteAll()
-      for key in Self.allKeys { defaults.removeObject(forKey: key) }
+      let box = SentDefaults(defaults)
+      index.deleteAll { ok in
+        guard ok else { return }
+        for key in Self.allKeys { box.defaults.removeObject(forKey: key) }
+      }
       return true
     }
     let records = Dictionary(snapshot.assistants.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
@@ -146,21 +183,54 @@ struct AssistantSpotlight {
     let stored = defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(Indexed.self, from: $0) }
     let next = Indexed(scope: scope, records: records)
     if next == stored { return false }
-    // A different account clears the entire domain and every category's stored state.
-    if let stored, stored.scope != next.scope {
-      index.deleteAll()
-      for otherKey in Self.allKeys where otherKey != key { defaults.removeObject(forKey: otherKey) }
-    } else if let stored {
-      let gone = stored.records.keys.filter { next.records[$0] == nil }
-      if !gone.isEmpty { index.delete(ids: gone.sorted()) }
-    }
+    let box = SentDefaults(defaults)
+    let indexBox = SentIndex(index)
+    let encodedNext = try? JSONEncoder().encode(next)
     let changed = next.records.filter { stored?.scope == next.scope ? stored?.records[$0.key] != $0.value : true }
     let toIndex = changed.map { SpotlightRecord(id: $0.key, title: $0.value, kind: kind) }.sorted { $0.id < $1.id }
-    // Keep existing behavior: assistants index call runs even when empty for backwards compatibility with callers/tests.
-    if !toIndex.isEmpty || kind == .assistant {
-      index.index(toIndex)
+    let shouldIndex = !toIndex.isEmpty || kind == .assistant
+
+    let finishIndex: @Sendable () -> Void = {
+      if shouldIndex {
+        indexBox.index.index(toIndex) { ok in
+          guard ok, let encodedNext else { return }
+          box.defaults.set(encodedNext, forKey: key)
+        }
+      } else if let encodedNext {
+        box.defaults.set(encodedNext, forKey: key)
+      }
     }
-    if let data = try? JSONEncoder().encode(next) { defaults.set(data, forKey: key) }
+
+    // A different account clears the entire domain and every category's stored state first.
+    if let stored, stored.scope != next.scope {
+      index.deleteAll { ok in
+        guard ok else { return }
+        for otherKey in Self.allKeys where otherKey != key { box.defaults.removeObject(forKey: otherKey) }
+        finishIndex()
+      }
+    } else if let stored {
+      let gone = stored.records.keys.filter { next.records[$0] == nil }.sorted()
+      if !gone.isEmpty {
+        index.delete(ids: gone) { ok in
+          guard ok else { return }
+          finishIndex()
+        }
+      } else {
+        finishIndex()
+      }
+    } else {
+      finishIndex()
+    }
     return true
   }
+}
+
+private final class SentDefaults: @unchecked Sendable {
+  let defaults: UserDefaults
+  init(_ defaults: UserDefaults) { self.defaults = defaults }
+}
+
+private final class SentIndex: @unchecked Sendable {
+  let index: SpotlightIndexing
+  init(_ index: SpotlightIndexing) { self.index = index }
 }

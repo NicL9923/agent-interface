@@ -101,14 +101,14 @@ struct StatusDock: View {
     // 4.5:1, rather than on whatever message passes beneath it.
     case .rejected(let message):
       Text(message).font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(DockCard())
+        .modifier(DockCard(opaqueFill: true))
     case .notAdmitted(let message):
       Text(message).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("sendNotAdmitted")
     case .interruptedSubmission:
       Text("This submission was interrupted. Review its last actions before trying again.")
         .font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(DockCard())
+        .modifier(DockCard(opaqueFill: true))
     case .interruptionReview:
       Toggle("I've reviewed the task's last actions.", isOn: Bindable(store).interruptionReviewed)
         .toggleStyle(CheckboxStyle()).font(.subheadline).fixedSize(horizontal: false, vertical: true)
@@ -182,13 +182,12 @@ struct StatusDock: View {
 }
 
 private struct DockCard: ViewModifier {
+  var opaqueFill = false
   @Environment(\.colorScheme) private var scheme
   func body(content: Content) -> some View {
-    if #available(iOS 26, *) {
-      let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    if !opaqueFill, #available(iOS 26, *) {
       content.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.raised(scheme), in: shape)
-        .glassEffect(.regular, in: shape)
+        .glassSurface(RoundedRectangle(cornerRadius: 14, style: .continuous))
     } else {
       content.padding(10).frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
