@@ -81,7 +81,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx,mjs}": [
-      "oxlint --deny-warnings",
+      "oxlint --deny-warnings --no-error-on-unmatched-pattern",
       "oxfmt --write --no-error-on-unmatched-pattern"
     ],
     "*.{css,json,md,yml,yaml}": [
