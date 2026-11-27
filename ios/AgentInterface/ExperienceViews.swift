@@ -651,8 +651,16 @@ struct RoutineEnhancements: View {
         get: { CriticalAlarmManager.shared.routineEnabled(routine.id, for: store.scope) },
         set: { enabled in
           CriticalAlarmManager.shared.setRoutineEnabled(enabled, routineId: routine.id, for: store.scope)
-          if enabled {
-            Task { await CriticalAlarmManager.shared.scheduleRoutineAlarmIfOptedIn(routine: routine, scope: store.scope) }
+          if enabled, let targetScope = store.scope {
+            let startEpoch = CriticalAlarmManager.shared.currentEpoch
+            Task {
+              guard store.scope == targetScope else { return }
+              await CriticalAlarmManager.shared.scheduleRoutineAlarmIfOptedIn(
+                routine: routine,
+                scope: targetScope,
+                expectedEpoch: startEpoch
+              )
+            }
           }
         }
       )) {

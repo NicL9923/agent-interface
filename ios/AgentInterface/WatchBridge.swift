@@ -79,11 +79,27 @@ enum WatchContext: Codable, Equatable, Sendable {
     flushPendingContext(on: WCSession.default)
   }
 
-  /// Resolves the context that should be pushed when `WCSession` activates: any persisted pending
-  /// update first, or an authoritative `.signedOut` clear whenever no account is signed in.
+  /// Resolves the context that should be pushed when `WCSession` activates: a persisted snapshot
+  /// is replayed ONLY when its account scope still matches the current signed-in scope; otherwise
+  /// any stale snapshot is replaced by an authoritative `.signedOut` clear.
   func authoritativeContextToFlush() -> WatchContext? {
-    if let pendingContext { return pendingContext }
-    if savedScope() == nil { return .signedOut }
+    let currentScope = savedScope()
+    if let pendingContext {
+      switch pendingContext {
+      case .signedOut:
+        return .signedOut
+      case .snapshot(let data):
+        guard let currentScope,
+          let snapshot = try? JSONDecoder().decode(WidgetSnapshot.self, from: data),
+          snapshot.scope == currentScope
+        else {
+          self.pendingContext = .signedOut
+          return .signedOut
+        }
+        return .snapshot(data)
+      }
+    }
+    if currentScope == nil { return .signedOut }
     return nil
   }
 
@@ -218,9 +234,14 @@ private final class SentReply: @unchecked Sendable {
 
   /// Pushes the latest non-secret snapshot to Watch, or wipes Watch state when `snapshot` is nil.
   func sync(_ snapshot: WidgetSnapshot?) {
-    if snapshot == nil || snapshot?.scope != lastSyncedScope {
+    if let snapshot {
+      if let previous = lastSyncedScope, previous != snapshot.scope {
+        accountEpoch &+= 1
+      }
+      lastSyncedScope = snapshot.scope
+    } else {
       accountEpoch &+= 1
-      lastSyncedScope = snapshot?.scope
+      lastSyncedScope = nil
     }
     guard transport.isSupported else { return }
     if let snapshot, let data = try? JSONEncoder().encode(snapshot) {
@@ -265,6 +286,12 @@ private final class SentReply: @unchecked Sendable {
       return ["ok": false, "error": "Sign in to this account on iPhone first."]
     }
     if case .refresh = action.kind {
+      // Seed `lastSyncedScope` on cold background launch so the refresh handler's own same-scope
+      // `sync(latest)` does not bump `accountEpoch`, while any sign-out or switch to another scope
+      // still bumps `accountEpoch` and invalidates this reply.
+      if lastSyncedScope != activeScope {
+        lastSyncedScope = activeScope
+      }
       let startEpoch = accountEpoch
       let latest = await refreshHandler()
       // Reject stale refresh replies if sign-out or account change occurred while awaiting.

@@ -753,7 +753,7 @@ import os
     XCTAssertEqual(firstBody["requestId"] as? String, firstId)
 
     // Retry reuses the exact same requestId and clears pending + draft on admission.
-    await model.send(using: store, retryPending: true)
+    await model.retryPending(requestId: firstId, using: store)
     let postRequestIds = server.bodies.compactMap { data -> String? in
       (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["requestId"] as? String
     }
@@ -764,14 +764,16 @@ import os
   }
 
   func testSecondaryChatPreservesPendingOnUncertain200ReceiptAndReconcilesViaSubmissions() async throws {
+    let postCount = OSAllocatedUnfairLock(initialState: 0)
     let server = FakeServer { request in
       if request.httpMethod == "POST" {
+        postCount.withLock { $0 += 1 }
         return .init(body: #"{"requestId":"u1","status":"uncertain","message":"Still checking"}"#)
       }
       if request.url?.path.hasPrefix("/api/submissions/") == true {
         return .init(body: #"{"requestId":"u1","status":"accepted","turn":"started"}"#)
       }
-      return .init(body: #"{"botId":"kitchen","messages":[],"activity":{"state":"idle"},"approvals":[],"attention":[]}"#)
+      return .init(body: #"{"botId":"kitchen","messages":[],"activity":{"state":"idle"},"approvals":[],"attention":[],"files":[]}"#)
     }
     let store = AppStore()
     store.widgetSnapshotURL = nil
@@ -779,20 +781,30 @@ import os
     store.bootstrap = try sampleBootstrap()
     let model = SecondaryChatModel(botId: "kitchen")
 
-    model.draft = "Check water pump"
+    // Include trailing whitespace to verify reconciliation compares against the original draft.
+    model.draft = "Check water pump   "
     await model.send(using: store)
     let pending = try XCTUnwrap(model.pending, "HTTP 200 status=uncertain must keep pending requestId")
     let requestId = pending.requestId
 
     // Explicit Retry sets reviewedUncertain = true while reusing the exact same requestId.
-    await model.send(using: store, retryPending: true)
+    await model.retryPending(requestId: requestId, using: store)
     XCTAssertEqual(model.pending?.requestId, requestId)
     XCTAssertEqual(model.pending?.reviewedUncertain, true)
+    XCTAssertEqual(postCount.withLock { $0 }, 2)
 
-    // Reconcile via GET /submissions/:requestId clears pending and draft without resending.
+    // Reconcile via GET /submissions/:requestId clears pending and the untrimmed draft without resending.
     await model.reconcilePending(using: store)
     XCTAssertNil(model.pending)
     XCTAssertEqual(model.draft, "")
+    let requestsAfterReconcile = server.bodies.count
+
+    // A stale Retry tap queued before reconciliation cleared `pending` must NEVER fall through to a new send.
+    model.draft = "New unsent follow-up"
+    await model.retryPending(requestId: requestId, using: store)
+    XCTAssertEqual(postCount.withLock { $0 }, 2, "Stale retryPending must not send a new message")
+    XCTAssertEqual(server.bodies.count, requestsAfterReconcile)
+    XCTAssertEqual(model.draft, "New unsent follow-up")
     store.suspend()
   }
 
@@ -800,17 +812,13 @@ import os
     let defaults = isolatedDefaults()
     let transport = FakeWatchTransport()
     let bridge = WatchBridge(transport: transport, defaults: defaults)
-    let store = AppStore()
-    store.widgetSnapshotURL = nil
-    store.api = APIClient(baseURL: URL(string: "https://watch.invalid")!)
-    store.bootstrap = try sampleBootstrap()
-    let scope = try XCTUnwrap(store.scope)
-    bridge.store = store
+    let scope = "https://watch.invalid|u1"
+    bridge.savedScope = { scope }
 
     let snap = WidgetSnapshot(scope: scope, generatedAt: Date(), assistants: [
       .init(id: "ranch", name: "Ranch", activity: "working", lastMessage: nil, lastMessageAt: nil, color: nil, pinned: true, runId: "run-7"),
     ])
-    bridge.sync(snap)
+    // Cold background launch (bridge.sync has never been called yet; store is nil):
     // Production BackgroundRefresh calls bridge.sync(latest) internally before returning!
     bridge.refreshHandler = {
       bridge.sync(snap)
@@ -840,15 +848,25 @@ import os
     XCTAssertTrue(secondOK)
     XCTAssertEqual(calls, 1, "Concurrent duplicate delivery must not execute twice")
 
-    // SystemWatchTransport persists pending signedOut clear across relaunch and reconstructs it when signed out.
-    let persistedDefaults = isolatedDefaults()
-    let transport1 = SystemWatchTransport(defaults: persistedDefaults, savedScope: { nil })
-    transport1.updateApplicationContext([WatchPayload.signedOutKey: true])
-    let transport2 = SystemWatchTransport(defaults: persistedDefaults, savedScope: { "some-scope" })
-    XCTAssertEqual(transport2.authoritativeContextToFlush(), .signedOut)
-    let transportSignedOut = SystemWatchTransport(defaults: isolatedDefaults(), savedScope: { nil })
-    XCTAssertEqual(transportSignedOut.authoritativeContextToFlush(), .signedOut)
-    store.suspend()
+    // SystemWatchTransport never replays a signed-out or other-account persisted snapshot after relaunch.
+    let snapData = try JSONEncoder().encode(snap)
+    let staleSnapDefaults = isolatedDefaults()
+    let inactiveTransport = SystemWatchTransport(defaults: staleSnapDefaults, savedScope: { scope })
+    inactiveTransport.updateApplicationContext([WatchPayload.snapshotKey: snapData, WatchPayload.signedOutKey: false])
+    let afterSignOutCrash = SystemWatchTransport(defaults: staleSnapDefaults, savedScope: { nil })
+    XCTAssertEqual(afterSignOutCrash.authoritativeContextToFlush(), .signedOut)
+
+    let switchDefaults = isolatedDefaults()
+    let preSwitch = SystemWatchTransport(defaults: switchDefaults, savedScope: { scope })
+    preSwitch.updateApplicationContext([WatchPayload.snapshotKey: snapData, WatchPayload.signedOutKey: false])
+    let afterAccountSwitch = SystemWatchTransport(defaults: switchDefaults, savedScope: { "https://watch.invalid|u2" })
+    XCTAssertEqual(afterAccountSwitch.authoritativeContextToFlush(), .signedOut)
+
+    let sameAccountDefaults = isolatedDefaults()
+    let sameBefore = SystemWatchTransport(defaults: sameAccountDefaults, savedScope: { scope })
+    sameBefore.updateApplicationContext([WatchPayload.snapshotKey: snapData, WatchPayload.signedOutKey: false])
+    let sameAfter = SystemWatchTransport(defaults: sameAccountDefaults, savedScope: { scope })
+    XCTAssertEqual(sameAfter.authoritativeContextToFlush(), .snapshot(snapData))
   }
 
   func testCriticalAlarmBatchStopsMidBatchOnSignOutAndReschedulesAfterToggleOffAndOn() async throws {
@@ -865,6 +883,12 @@ import os
     r2.nextRunAt = ServerDate.string(future)
     manager.setRoutineEnabled(true, routineId: "rt-1", for: "scope-1")
     manager.setRoutineEnabled(true, routineId: "rt-2", for: "scope-1")
+
+    // Queued reconcile captured before sign-out (`cancelAll`) must drop before scheduling anything.
+    let staleEpoch = manager.currentEpoch
+    manager.cancelAll()
+    await manager.reconcile(routines: [r1], scope: "scope-1", expectedEpoch: staleEpoch)
+    XCTAssertTrue(backend.scheduled.isEmpty, "Queued reconcile from before cancelAll must not schedule")
 
     // Cancel mid-batch while first routine is suspended -> second routine must NEVER be scheduled!
     backend.holdNextSchedule = true
@@ -889,6 +913,7 @@ import os
   private final class DeferredSpotlight: SpotlightIndexing, @unchecked Sendable {
     private let lock = NSLock()
     var events: [String] = []
+    var nextDeleteAllOk = true
     private var heldIndex: (@Sendable (Bool) -> Void)?
     func index(_ records: [SpotlightRecord]) {}
     func delete(ids: [String]) {}
@@ -899,9 +924,16 @@ import os
         heldIndex = completion
       }
     }
-    func deleteAll(completion: @escaping @Sendable (Bool) -> Void) {
-      lock.withLock { events.append("deleteAll") }
+    func delete(ids: [String], completion: @escaping @Sendable (Bool) -> Void) {
+      lock.withLock { events.append("delete:\(ids.joined(separator: ","))") }
       completion(true)
+    }
+    func deleteAll(completion: @escaping @Sendable (Bool) -> Void) {
+      let ok = lock.withLock { () -> Bool in
+        events.append("deleteAll:\(nextDeleteAllOk)")
+        return nextDeleteAllOk
+      }
+      completion(ok)
     }
     func finishHeldIndex(ok: Bool = true) {
       let cb = lock.withLock { () -> (@Sendable (Bool) -> Void)? in
@@ -920,16 +952,30 @@ import os
     let spotlight = AssistantSpotlight(index: index, defaults: defaults)
     let room = GroupRoom(room_id: "r1", name: "Private Room", members: [])
 
+    // 1. Sign-out with failed deleteAll records pendingClear so subsequent sign-out retries deletion.
     XCTAssertTrue(spotlight.syncGroups([room], scope: "scope-1"))
     XCTAssertTrue(index.isHolding)
-
-    // Sign out BEFORE first index completion arrives.
+    index.nextDeleteAllOk = false
     XCTAssertTrue(spotlight.sync(nil))
-    // deleteAll must wait for the in-flight index, then run right after it!
     XCTAssertEqual(index.events, ["index:group:r1"])
     index.finishHeldIndex(ok: true)
-    XCTAssertEqual(index.events, ["index:group:r1", "deleteAll"])
-    XCTAssertNil(defaults.data(forKey: "spotlight.groups"), "Stale completion must not persist bookkeeping after sign-out")
+    XCTAssertEqual(index.events, ["index:group:r1", "deleteAll:false"])
+    XCTAssertNil(defaults.data(forKey: "spotlight.groups"))
+
+    // Next sync(nil) must retry deleteAll because the previous clear failed!
+    index.nextDeleteAllOk = true
+    XCTAssertTrue(spotlight.sync(nil))
+    XCTAssertEqual(index.events, ["index:group:r1", "deleteAll:false", "deleteAll:true"])
+
+    // 2. Removing a room while its first index write is still in flight reads fresh state and deletes it.
+    let defaults2 = isolatedDefaults()
+    let index2 = DeferredSpotlight()
+    let spotlight2 = AssistantSpotlight(index: index2, defaults: defaults2)
+    XCTAssertTrue(spotlight2.syncGroups([room], scope: "scope-1"))
+    XCTAssertTrue(index2.isHolding)
+    XCTAssertTrue(spotlight2.syncGroups([], scope: "scope-1"))
+    index2.finishHeldIndex(ok: true)
+    XCTAssertEqual(index2.events, ["index:group:r1", "delete:group:r1"])
   }
 
   // MARK: 10. Interactive Widget Refresh, Approval ID & Run ID Backwards Compatibility

@@ -81,9 +81,14 @@ extension AppStore {
     if let next {
       let targetScope = next.scope
       let assistants = next.assistants
+      let startEpoch = CriticalAlarmManager.shared.currentEpoch
       Task {
         guard self.scope == targetScope else { return }
-        await CriticalAlarmManager.shared.escalateWaitingBatch(assistants, scope: targetScope)
+        await CriticalAlarmManager.shared.escalateWaitingBatch(
+          assistants,
+          scope: targetScope,
+          expectedEpoch: startEpoch
+        )
       }
     }
   }
@@ -99,7 +104,16 @@ extension AppStore {
     if spotlight?.syncRoutines(routines, scope: scope) == true {
       WildBotsShortcuts.updateAppShortcutParameters()
     }
-    Task { await CriticalAlarmManager.shared.reconcile(routines: routines, scope: scope) }
+    let targetScope = scope
+    let startEpoch = CriticalAlarmManager.shared.currentEpoch
+    Task {
+      guard self.scope == targetScope else { return }
+      await CriticalAlarmManager.shared.reconcile(
+        routines: routines,
+        scope: targetScope,
+        expectedEpoch: startEpoch
+      )
+    }
   }
   /// Refreshes account routines on foreground/launch when opt-in AlarmKit escalation is enabled so
   /// recurring or paused/deleted routines reconcile without requiring the user to open Routine settings.

@@ -306,11 +306,19 @@ extension CriticalAlarmBackend {
     preferenceVersion += 1
   }
 
+  /// Current cancellation epoch, captured by callers before queuing async alarm tasks so a
+  /// sign-out (`cancelAll`) occurring before the task starts drops the stale batch immediately.
+  var currentEpoch: UInt64 { epoch }
+
   /// Escalates a batch of waiting/blocked assistants for `scope`, capturing the cancellation epoch
   /// once at batch start so sign-out or opt-out mid-batch stops remaining assistants immediately.
-  func escalateWaitingBatch(_ assistants: [WidgetSnapshot.Assistant], scope: String) async {
-    let startEpoch = epoch
-    guard isEnabled(for: scope) else { return }
+  func escalateWaitingBatch(
+    _ assistants: [WidgetSnapshot.Assistant],
+    scope: String,
+    expectedEpoch: UInt64? = nil
+  ) async {
+    let startEpoch = expectedEpoch ?? epoch
+    guard epoch == startEpoch, isEnabled(for: scope) else { return }
     for assistant in assistants where assistant.needsAttention {
       guard epoch == startEpoch, isEnabled(for: scope) else { return }
       let dedup = assistant.approvalId ?? assistant.lastMessage ?? assistant.activity
@@ -430,8 +438,14 @@ extension CriticalAlarmBackend {
   /// Reconciles routine alarms against the full account routine list: cancels alarms for routines
   /// that were deleted, paused, or opted out, and schedules alarms for enabled opted-in routines.
   /// Captures the cancellation epoch once so a sign-out mid-batch stops scheduling immediately.
-  func reconcile(routines: [Routine], scope: String?, now: Date = Date()) async {
-    let startEpoch = epoch
+  func reconcile(
+    routines: [Routine],
+    scope: String?,
+    now: Date = Date(),
+    expectedEpoch: UInt64? = nil
+  ) async {
+    let startEpoch = expectedEpoch ?? epoch
+    guard epoch == startEpoch else { return }
     guard let scope, isEnabled(for: scope) else {
       cancelAll()
       return

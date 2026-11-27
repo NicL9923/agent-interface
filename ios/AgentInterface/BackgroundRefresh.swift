@@ -45,6 +45,7 @@ import WidgetKit
     // The roster is at least this old. A snapshot written since, such as by the app opening meanwhile,
     // is newer and stays.
     let started = now()
+    let startEpoch = CriticalAlarmManager.shared.currentEpoch
     do {
       let bootstrap: Bootstrap = try await api.get("/bootstrap?roster=lean")
       // An outage, or a roster from the server's cache, keeps the last good snapshot, as the open app does:
@@ -75,7 +76,11 @@ import WidgetKit
       )
       if WidgetSnapshotStore.write(snapshot, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
       WatchBridge.shared.sync(snapshot)
-      await CriticalAlarmManager.shared.escalateWaitingBatch(snapshot.assistants, scope: snapshot.scope)
+      await CriticalAlarmManager.shared.escalateWaitingBatch(
+        snapshot.assistants,
+        scope: snapshot.scope,
+        expectedEpoch: startEpoch
+      )
       return true
     } catch { return false }
   }

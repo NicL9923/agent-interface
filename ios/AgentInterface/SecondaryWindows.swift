@@ -43,6 +43,9 @@ struct ComputerWindowView: View {
   var conversation: Conversation?
   var draft = ""
   var pending: PendingSubmission?
+  /// Original untrimmed draft text captured at send time so reconciliation clears the draft cleanly
+  /// even when it had leading/trailing whitespace, while preserving any later user edit.
+  private(set) var pendingDraftText: String?
   var loading = false
   var sending = false
   var error: String?
@@ -53,6 +56,7 @@ struct ComputerWindowView: View {
     conversation = nil
     draft = ""
     pending = nil
+    pendingDraftText = nil
     error = nil
     sending = false
     loading = false
@@ -77,21 +81,29 @@ struct ComputerWindowView: View {
     }
   }
 
-  func send(using store: AppStore, retryPending: Bool = false) async {
+  /// Retries one specific uncertain submission by its original `requestId`. Never falls through
+  /// to the new-send path if reconciliation already confirmed and cleared `pending`.
+  func retryPending(requestId: String, using store: AppStore) async {
+    await send(using: store, retryRequestId: requestId)
+  }
+
+  func send(using store: AppStore, retryRequestId: String? = nil) async {
     guard !sending, let api = store.api, store.householdReachable, !store.sessionExpired else { return }
     let scope = store.scope
     let submission: PendingSubmission
     let submittedText: String
-    if retryPending, var existing = pending {
+    if let retryRequestId {
+      guard var existing = pending, existing.requestId == retryRequestId else { return }
       existing.reviewedUncertain = true
       submission = existing
-      submittedText = existing.text
+      submittedText = pendingDraftText ?? existing.text
       pending = existing
     } else {
       guard pending == nil else { return }
       let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty else { return }
       submittedText = draft
+      pendingDraftText = draft
       submission = PendingSubmission(
         requestId: UUID().uuidString.lowercased(),
         botId: botId,
@@ -113,8 +125,10 @@ struct ComputerWindowView: View {
     } catch {
       guard store.scope == scope, store.api === api else { return }
       if let failure = error as? APIError, (400..<500).contains(failure.status) {
+        let originalDraft = pendingDraftText ?? submission.text
         pending = nil
-        if draft.isEmpty { draft = submission.text }
+        pendingDraftText = nil
+        if draft.isEmpty { draft = originalDraft }
         self.error = failure.message
       } else {
         // Keep `pending` with its original `requestId` so Retry / status check never delivers twice.
@@ -127,10 +141,11 @@ struct ComputerWindowView: View {
   func reconcilePending(using store: AppStore) async {
     guard !sending, let existing = pending, let api = store.api, !store.sessionExpired else { return }
     let scope = store.scope
+    let originalDraft = pendingDraftText ?? existing.text
     do {
       let receipt: Receipt = try await api.get("/submissions/\(APIClient.component(existing.requestId))")
       guard store.scope == scope, store.api === api, pending?.requestId == existing.requestId else { return }
-      applyReceipt(receipt, submittedText: existing.text)
+      applyReceipt(receipt, submittedText: originalDraft)
       if pending == nil { await load(using: store) }
     } catch {
       // Leave `pending` intact so the next poll or explicit Retry keeps the original requestId.
@@ -143,19 +158,22 @@ struct ComputerWindowView: View {
       error = receipt.message ?? "Checking whether the assistant accepted this message. The original request ID is preserved."
       return
     }
+    let originalDraft = pendingDraftText ?? submittedText
     pending = nil
+    pendingDraftText = nil
     if receipt.admitted {
-      if draft == submittedText { draft = "" }
+      if draft == originalDraft { draft = "" }
       error = nil
     } else {
       if let msg = receipt.message { error = msg }
-      if draft.isEmpty { draft = submittedText }
+      if draft.isEmpty { draft = originalDraft }
     }
   }
 
   func discardPending() {
-    if let text = pending?.text, draft.isEmpty { draft = text }
+    if let text = pendingDraftText ?? pending?.text, draft.isEmpty { draft = text }
     pending = nil
+    pendingDraftText = nil
     error = nil
   }
 }
@@ -184,15 +202,18 @@ struct SecondaryConversationWindow: View {
             ErrorBanner(message: error, dismiss: { model.error = nil })
               .padding(.horizontal).padding(.top, 8)
           }
-          if model.pending != nil && !model.sending {
+          if let pending = model.pending, !model.sending {
             HStack(spacing: 10) {
               Text("Last message not confirmed yet.")
                 .font(.caption).foregroundStyle(Palette.attention)
               Spacer()
               Button("Check") { Task { await model.reconcilePending(using: store) } }
                 .font(.caption)
-              Button("Retry") { Task { await model.send(using: store, retryPending: true) } }
-                .font(.caption.weight(.semibold))
+              Button("Retry") {
+                let requestId = pending.requestId
+                Task { await model.retryPending(requestId: requestId, using: store) }
+              }
+              .font(.caption.weight(.semibold))
               Button("Discard", role: .destructive) { model.discardPending() }
                 .font(.caption)
             }
