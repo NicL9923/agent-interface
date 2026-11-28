@@ -1009,6 +1009,43 @@ import os
     XCTAssertFalse(FileManager.default.fileExists(atPath: accountDir.path), "Cold expiry must remove NotificationSenders account folder")
     XCTAssertNil(NotificationPrefetchStore.readConfig(root: tempPrefetchRoot), "Cold expiry must clear NotificationPrefetchStore config")
 
+    // Default `NotificationController.makeActionClient(baseURL:token:)` (with `session == nil`)
+    // must keep `APIClient`'s guarded ephemeral session and never fall back to `URLSession.shared`.
+    let defaultColdClient = try XCTUnwrap(
+      NotificationController.makeActionClient(baseURL: origin, token: "default-session-tok")
+    )
+    XCTAssertTrue(defaultColdClient.watchesNetwork, "Production cold client must use APIClient's default guarded session")
+    XCTAssertTrue(defaultColdClient.session !== URLSession.shared, "Production cold client must not use URLSession.shared")
+    XCTAssertTrue(
+      defaultColdClient.session.configuration.httpCookieStorage !== HTTPCookieStorage.shared,
+      "Production cold client must isolate cookies from shared storage"
+    )
+    XCTAssertNotNil(defaultColdClient.session.delegate, "Production cold client must keep APISessionDelegate")
+
+    // Mounted store past its saved expiry deadline (while still holding a token in memory and
+    // `sessionExpired == false`) must be rejected by `WatchBridge.handle(.refresh)`.
+    let suspendedWatchOrigin = URL(string: "https://suspended-watch-\(UUID().uuidString.lowercased()).invalid")!
+    let suspendedWatchStore = AppStore()
+    suspendedWatchStore.widgetSnapshotURL = nil
+    let suspendedWatchAPI = APIClient(baseURL: suspendedWatchOrigin)
+    suspendedWatchAPI.token = "in-memory-expired-tok"
+    suspendedWatchStore.api = suspendedWatchAPI
+    suspendedWatchStore.bootstrap = try sampleBootstrap()
+    let suspendedWatchScope = try XCTUnwrap(suspendedWatchStore.scope)
+    let expiryKey = DeviceDefaults.expiry(suspendedWatchOrigin)
+    UserDefaults.standard.set(ServerDate.string(Date().addingTimeInterval(-60)), forKey: expiryKey)
+    defer { UserDefaults.standard.removeObject(forKey: expiryKey) }
+    let suspendedWatchTransport = FakeWatchTransport()
+    let suspendedWatchBridge = WatchBridge(transport: suspendedWatchTransport, defaults: isolatedDefaults())
+    suspendedWatchBridge.store = suspendedWatchStore
+    let suspendedWatchRefresh = WatchAction(scope: suspendedWatchScope, kind: .refresh)
+    let suspendedWatchReply = await suspendedWatchBridge.handle(
+      rawMessage: [WatchPayload.actionKey: try JSONEncoder().encode(suspendedWatchRefresh)]
+    )
+    XCTAssertEqual(suspendedWatchReply["ok"] as? Bool, false, "WatchBridge must reject mounted store past saved expiry")
+    XCTAssertEqual(suspendedWatchTransport.contexts.last?[WatchPayload.signedOutKey] as? Bool, true)
+    suspendedWatchStore.suspend()
+
     // Cold action client built via the production `NotificationController.makeActionClient` factory
     // (NOT manually wiring `onSessionExpired`) receiving 401 session_expired must trigger full teardown.
     FakeExchange.register(rejectServer)
