@@ -51,7 +51,7 @@ export function SharingField({
       <p className="muted">
         {form.shared
           ? "This assistant has one shared model. Provider and model changes are visible to both people."
-          : "Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins."}
+          : "Only you see a personal assistant in WildBots."}
       </p>
     </>
   );
@@ -213,7 +213,7 @@ export function DeleteBot({
       {confirm && (
         <SettingsConfirmation
           title={`Delete ${bot.name}?`}
-          detail="This deletes the assistant in Hermes and removes its settings from WildBots."
+          detail="This deletes the assistant and removes its settings and memory from WildBots."
           confirmLabel="Yes, delete"
           cancelLabel="Keep assistant"
           danger

@@ -160,8 +160,7 @@ export function installBotRoutes(
     throw httpError(404, "Bot not found");
   };
   apiRoute(app, "GET /bots/:id/inference", {}, async (req) => {
-    if (!runtime.inferenceSettings)
-      throw httpError(409, "Hermes inference controls are unavailable.");
+    if (!runtime.inferenceSettings) throw httpError(409, "Inference controls are unavailable.");
     return runtime.inferenceSettings(req.params.id);
   });
   const inference = z
@@ -180,8 +179,7 @@ export function installBotRoutes(
     "PATCH /bots/:id/inference",
     { ...configurable, body: inference },
     async (req, update) => {
-      if (!runtime.inferenceSettings)
-        throw httpError(409, "Hermes inference controls are unavailable.");
+      if (!runtime.inferenceSettings) throw httpError(409, "Inference controls are unavailable.");
       return runtime.inferenceSettings(req.params.id, update);
     },
   );
@@ -242,7 +240,7 @@ export function installBotRoutes(
             roster.forget();
             throw httpError(
               502,
-              `Hermes created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`,
+              `WildBots created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`,
               { expose: true, code: "created_incomplete" },
             );
           }

@@ -1036,6 +1036,10 @@ const runtime = {
         return { id: "login-new" };
       case "remove_login":
         return { removed: true };
+      case "add_secret":
+        return { name: input.secret.name };
+      case "remove_secret":
+        return { removed: true };
       case "answer":
         return { status: "ok" };
       case "source":

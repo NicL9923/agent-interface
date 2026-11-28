@@ -137,7 +137,7 @@ it("keeps skill approval enabled until disabling it is explicitly confirmed", as
   expect(policy.checked).toBe(true);
   expect(write).not.toHaveBeenCalled();
   expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain(
-    "Hermes can save new skills, edits and deletions without asking for approval.",
+    "WildBots can save new skills, edits and deletions without asking for approval.",
   );
   expect(document.activeElement?.textContent).toBe("Keep approval required");
   await click("Keep approval required");

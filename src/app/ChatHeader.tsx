@@ -159,7 +159,7 @@ export const ChatHeader = memo(function ChatHeader({
       ) : (
         <div className="chat-title">
           <h1>Welcome home</h1>
-          <p>Your assistants will appear here when Hermes is connected.</p>
+          <p>Your assistants will appear here once connected.</p>
         </div>
       )}
     </header>

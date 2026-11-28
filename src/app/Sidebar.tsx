@@ -326,7 +326,7 @@ export const Sidebar = memo(function Sidebar({
           </span>
           <small>
             {groups.pending.name} · {groups.pending.botIds.length} assistants. The saved request
-            will be checked with Hermes.
+            will be checked with WildBots.
           </small>
         </span>
       </Button>

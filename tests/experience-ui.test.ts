@@ -469,7 +469,7 @@ it("renders schedules from a native system timezone abbreviation without crashin
   });
   await render(createElement(RoutineSchedulePreview, { botId: "ranch", schedule: "0 7 * * *" }));
   await click("Preview schedule");
-  expect(container.textContent).toContain("Hermes timezone: CDT");
+  expect(container.textContent).toContain("Server timezone: CDT");
   expect(container.querySelector("ol")!.textContent).toContain("UTC");
 });
 it("persists a trial admission before dispatch and checks an uncertain run without starting another", async () => {
@@ -642,7 +642,7 @@ it("blocks reload during a document write and restores it when the write settles
     (button) => button.textContent === "Reload profile memory",
   )!;
   expect(reload.disabled).toBe(true);
-  expect(container.textContent).toContain("Saving memories in Hermes...");
+  expect(container.textContent).toContain("Saving memories...");
   await act(async () =>
     finish({
       ...memory,

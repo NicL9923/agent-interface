@@ -135,7 +135,7 @@ export function GroupSettings({
           reach the assistants named.
         </p>
         {!writable && (
-          <p className="capability-note">Reconnect to Hermes to change these settings.</p>
+          <p className="capability-note">Reconnect to WildBots to change these settings.</p>
         )}
         <div className="actions">
           <button type="button" onClick={onClose}>

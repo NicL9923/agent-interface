@@ -148,18 +148,18 @@ import SwiftUI
         let receipt = currentReceipt?.requestId == overview.goals.resume?.requestId ? currentReceipt : overview.goals.resume
         switch receipt?.status {
         case "accepted":
-          self.notice = receipt?.message ?? "Hermes accepted the goal continuation."
+          self.notice = receipt?.message ?? "WildBots accepted the goal continuation."
           if !refreshed { self.notice = (self.notice ?? "") + " Refresh status before making another change." }
         case "rejected":
           self.notice = nil
-          self.error = receipt?.message ?? "Hermes refused this goal continuation. Review the conversation before trying again."
+          self.error = receipt?.message ?? "WildBots refused this goal continuation. Review the conversation before trying again."
         default:
           self.notice = nil; self.needsRefresh = true
-          self.error = (receipt?.message ?? "Hermes could not confirm this goal continuation.")
+          self.error = (receipt?.message ?? "WildBots could not confirm this goal continuation.")
             + " Refresh status and review the conversation before trying again. Nothing will be sent again automatically."
         }
       } else {
-        self.notice = refreshed ? "Saved in Hermes." : "The change was saved. Refresh status before making another change."
+        self.notice = refreshed ? "Saved in WildBots." : "The change was saved. Refresh status before making another change."
       }
       return result
     }
@@ -210,7 +210,7 @@ import SwiftUI
         return nil
       }
       let status = self.value?.tasks.items.first { $0.id == taskId }?.status
-      let message = status.map { moved ? "Moved to \(hermesTaskStatusLabel($0))." : "Saved in Hermes." } ?? "Saved in Hermes."
+      let message = status.map { moved ? "Moved to \(hermesTaskStatusLabel($0))." : "Saved in WildBots." } ?? "Saved in WildBots."
       self.publishTaskFeedback(taskId, edit: edit, message: message, isError: false)
       return result
     }
@@ -258,7 +258,7 @@ import SwiftUI
       let lostSecret = action == "create" && (result as? HermesTriggerResult)?.secret != nil && (!self.acceptsSecrets || self.secretGeneration != secretStarted)
       if refreshed {
         let message = lostSecret ? "\(triggerId) was created, but its signing secret was cleared when you left the app. To get a secret, delete \(triggerId) and create it again."
-          : action == "delete" ? "Deleted \(triggerId)." : action == "enable" ? "Enabled." : action == "disable" ? "Disabled." : "Saved in Hermes."
+          : action == "delete" ? "Deleted \(triggerId)." : action == "enable" ? "Enabled." : action == "disable" ? "Disabled." : "Saved in WildBots."
         self.publishTriggerFeedback(triggerId, message, false, action)
       } else {
         let confirmed = action == "delete" ? "Deleted \(triggerId)." : action == "enable" ? "Enabled." : action == "disable" ? "Disabled." : "Saved."
@@ -273,7 +273,7 @@ import SwiftUI
     case .failure(let failure)?:
       needsRefresh = true
       error = "We couldn't confirm this change. Refresh status and review it before trying again. Nothing will be sent again automatically."
-      let message = action == "create" ? "Not confirmed. Hermes may have created this trigger. Use Refresh status above before trying again." : "Not confirmed. Use Refresh status above."
+      let message = action == "create" ? "Not confirmed. WildBots may have created this trigger. Use Refresh status above before trying again." : "Not confirmed. Use Refresh status above."
       publishTriggerFeedback(triggerId, message, true, action)
       _ = failure
       return nil
@@ -347,8 +347,8 @@ struct HermesAutomationStatus: View {
   var body: some View {
     if !work && !compact {
       Section {
-        Text("Managed by Hermes").font(.caption).foregroundStyle(Palette.muted)
-        if !store.connected { Text("Connect to Hermes to make changes.").foregroundStyle(Palette.muted) }
+        Text("Managed by WildBots").font(.caption).foregroundStyle(Palette.muted)
+        if !store.connected { Text("Connect to WildBots to make changes.").foregroundStyle(Palette.muted) }
         if let error = control.error { ErrorBanner(message: error) }
         if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
         if control.loading { ProgressView("Refreshing assistant controls") }
@@ -360,8 +360,8 @@ struct HermesAutomationStatus: View {
       }
     } else if !compact || displayedError != nil || control.notice != nil || control.needsRefresh || control.loading || !store.connected {
       Section {
-        if !compact { Text("Managed by Hermes").font(.caption).foregroundStyle(Palette.muted) }
-        if !store.connected { Text("Connect to Hermes to make changes.").foregroundStyle(Palette.muted) }
+        if !compact { Text("Managed by WildBots").font(.caption).foregroundStyle(Palette.muted) }
+        if !store.connected { Text("Connect to WildBots to make changes.").foregroundStyle(Palette.muted) }
         if let error = displayedError { ErrorBanner(message: error) }
         if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
         if control.loading {

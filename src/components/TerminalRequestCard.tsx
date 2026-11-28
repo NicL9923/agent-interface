@@ -100,7 +100,7 @@ export function TerminalRequestCard({
         setError(
           cause instanceof ApiError && cause.status < 500
             ? cause.message
-            : `Couldn't reach Hermes. Try ${decision === "done" ? "Done" : "Not now"} again.`,
+            : `Couldn't reach WildBots. Try ${decision === "done" ? "Done" : "Not now"} again.`,
         );
     } finally {
       if (live.current) setSending(null);

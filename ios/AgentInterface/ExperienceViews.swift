@@ -343,16 +343,16 @@ struct MemoryDrawer: View {
     ScrollViewReader { proxy in
       Form {
         Section {
-          Text("What Hermes remembers").font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
-          Text("Review and correct the facts saved in this Hermes profile.").font(.subheadline).foregroundStyle(Palette.muted)
+          Text("What this assistant remembers").font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
+          Text("Review and correct the facts saved for this assistant.").font(.subheadline).foregroundStyle(Palette.muted)
           if let value {
             VStack(alignment: .leading, spacing: 6) {
-              Text("Shared profile: \(value.profile)").font(.subheadline.weight(.semibold))
+              Text("Assistant: \(value.profile)").font(.subheadline.weight(.semibold))
               Text("Changes apply at the next safe turn boundary. Chat history stays unchanged.")
-              Text("Anyone with Hermes dashboard access can reach this memory.")
+              Text("Anyone with access to this assistant can reach its memory.")
             }.font(.footnote).foregroundStyle(Palette.muted)
           }
-          if !store.connected { Text(value == nil ? "Reconnect to Hermes to load and edit profile memory." : "You are offline. Reconnect to edit these notes.").font(.footnote).foregroundStyle(Palette.muted) }
+          if !store.connected { Text(value == nil ? "Reconnect to load and edit profile memory." : "You are offline. Reconnect to edit these notes.").font(.footnote).foregroundStyle(Palette.muted) }
           if let refresh = value?.refresh, !refresh.revision.isEmpty, refresh.busy, notices.isEmpty {
             Text(refresh.message).font(.footnote).accessibilityIdentifier("memoryRefreshStatus")
           }
@@ -404,7 +404,7 @@ struct MemoryDrawer: View {
         }) { request in
           let entry = request.document.entries.first { $0.id == request.entryId }?.text ?? ""
           AssistantConfirmationSheet(title: "Forget this entry?",
-            message: "This removes the following entry from the shared Hermes profile:\n\n\"\(entry)\"",
+            message: "This removes the following entry from this assistant's memory:\n\n\"\(entry)\"",
             acceptLabel: "Forget entry", keepLabel: "Keep entry", destructive: true,
             accept: { pendingForget = request; forget = nil }, keep: { forget = nil })
         }
@@ -433,7 +433,7 @@ struct MemoryDrawer: View {
       Text(size.map { "\($0.formatted()) / \(document.charLimit.formatted()) characters" } ?? "Saved size: \(document.charCount.formatted()) / \(document.charLimit.formatted()) characters")
         .font(.footnote).foregroundStyle(over ? Palette.danger : Palette.muted)
       if !document.enabled {
-        Text("Editing is disabled in this Hermes profile. You can still read and copy these notes.").font(.footnote).foregroundStyle(Palette.muted)
+        Text("Editing is disabled for this assistant. You can still read and copy these notes.").font(.footnote).foregroundStyle(Palette.muted)
       }
       if items.isEmpty {
         Text("Nothing saved here yet. Add a fact you want this profile to remember.").font(.subheadline).foregroundStyle(Palette.muted)
@@ -478,7 +478,7 @@ struct MemoryDrawer: View {
       }.buttonStyle(.accentProminent)
         .disabled(locked || !changed || over || items.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         .accessibilityIdentifier("memorySave.\(target)")
-      if savingTarget == target { ProgressView("Saving memories in Hermes…").font(.footnote).foregroundStyle(Palette.muted) }
+      if savingTarget == target { ProgressView("Saving memories…").font(.footnote).foregroundStyle(Palette.muted) }
       if changed {
         Button("Discard edits") {
           drafts[target] = document.drafts(); notices[target] = nil
@@ -523,7 +523,7 @@ struct MemoryDrawer: View {
       case .success(let result)?:
         guard let updated = result.documents.first(where: { $0.target == target }) else { return }
         value?.acceptSavedDocument(target, from: result); drafts[target] = updated.drafts()
-        notices[target] = result.refresh?.message ?? "Saved in Hermes."
+        notices[target] = result.refresh?.message ?? "Saved."
       case .failure(let failure)?:
         failures[target] = failure.localizedDescription
         if (failure as? APIError)?.status == 409 { conflicts.insert(target) }
@@ -554,7 +554,7 @@ struct RoutineRunReceipt: Codable {
   var summary: String {
     let head: String
     switch status {
-    case "accepted": head = "Trial run started. Hermes will finish it even if you close this screen."
+    case "accepted": head = "Trial run started. WildBots will finish it even if you close this screen."
     case "completed": head = "Trial run completed."
     case "failed": head = "Trial run failed."
     default: head = "The run's outcome is unknown. Review its result before starting another."
@@ -578,9 +578,9 @@ struct RoutineSchedulePreview: View {
     if let preview, requested == schedule, preview.botId == botId {
       VStack(alignment: .leading, spacing: 4) {
         Text(preview.kind == "once" ? "Scheduled run" : "Next runs").font(.subheadline.bold())
-        Text("Hermes timezone: \(preview.timezone)").font(.footnote)
+        Text("Server timezone: \(preview.timezone)").font(.footnote)
         ForEach(preview.nextRuns, id: \.self) { Text(preview.label($0)).font(.footnote) }
-        Text("The assistant's Hermes profile controls this timezone.").font(.caption).foregroundStyle(.secondary)
+        Text("The WildBots server controls this timezone.").font(.caption).foregroundStyle(.secondary)
       }
     }
     if let error, requested == schedule { ErrorBanner(message: error) }
@@ -623,7 +623,7 @@ struct RoutineEnhancements: View {
     }
     Text(receipt.map { !$0.finished } == true
       ? "Check the saved run's status before starting another. Checking does not run it again."
-      : "Try once runs this routine now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.").font(.caption).foregroundStyle(Palette.muted)
+      : "Try once runs this routine now. WildBots may move the next run or finish a one-time routine. Paused recurring routines stay paused.").font(.caption).foregroundStyle(Palette.muted)
       .task(id: "\(store.scope ?? ""):\(routine.id)") {
         receipt = UserDefaults.standard.data(forKey: receiptKey).flatMap { try? JSONDecoder().decode(RoutineRunReceipt.self, from: $0) }
       }

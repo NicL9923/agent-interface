@@ -486,8 +486,7 @@ function LoadedBotSettings({
   ) =>
     !bootstrap.capabilities[key].supported ? (
       <p className="capability-note">
-        {bootstrap.capabilities[key].reason ||
-          "This capability is unavailable from the connected Hermes installation."}
+        {bootstrap.capabilities[key].reason || "This capability is unavailable on this server."}
       </p>
     ) : null;
   const focusTitle = () =>
@@ -1091,7 +1090,7 @@ function LoadedBotSettings({
                               <strong>{name}</strong>
                               {!existing.availableMcpServers?.includes(name) &&
                                 existing.availableMcpServers && (
-                                  <small>Saved, but Hermes no longer reports it</small>
+                                  <small>Saved, but no longer reported by this server</small>
                                 )}
                             </span>
                           </label>

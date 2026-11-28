@@ -192,19 +192,17 @@ export function VoicePicker({
                   </span>
                 )}
               </label>
-              {!isGrok && (
-                <button
-                  type="button"
-                  className="voice-preview"
-                  aria-pressed={playing}
-                  aria-label={
-                    playing ? `Stop ${title(option)} sample` : `Play ${title(option)} sample`
-                  }
-                  onClick={() => preview.toggle(option)}
-                >
-                  <Icon name={playing ? "stop" : "play"} size={14} />
-                </button>
-              )}
+              <button
+                type="button"
+                className="voice-preview"
+                aria-pressed={playing}
+                aria-label={
+                  playing ? `Stop ${title(option)} sample` : `Play ${title(option)} sample`
+                }
+                onClick={() => preview.toggle(option)}
+              >
+                <Icon name={playing ? "stop" : "play"} size={14} />
+              </button>
               {preview.failed === option && (
                 <p className="voice-failed" role="alert">
                   This sample could not play.

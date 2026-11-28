@@ -15,7 +15,7 @@ type Attempt = {
   /** The receipt that settled it. */
   receipt?: SubmissionReceipt;
 };
-const refused = "Hermes didn't take the retry.";
+const refused = "WildBots didn't take the retry.";
 
 /**
  * Retry for a failed turn: resends the person's latest message as a request naming it. Every
@@ -122,15 +122,15 @@ export function useTurnRetry({
           reportRef.current(
             cause instanceof Error
               ? cause.message
-              : "Hermes didn't take the retry. Try again in a moment.",
+              : "WildBots didn't take the retry. Try again in a moment.",
           );
       } else {
         record(forTurn, { state: "checking", requestId });
         if (shown)
           reportRef.current(
             resendable
-              ? "Hermes hasn't confirmed the retry yet. It's being checked; Retry sends the same request again, so it can't run twice."
-              : "Hermes hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box.",
+              ? "WildBots hasn't confirmed the retry yet. It's being checked; Retry sends the same request again, so it can't run twice."
+              : "WildBots hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box.",
           );
       }
     } finally {

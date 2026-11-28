@@ -226,7 +226,7 @@ export function AgentExchange({ message, recipient }: { message: Message; recipi
               {message.toolCall?.error ||
                 message.toolCall?.result ||
                 message.text ||
-                "Waiting for Hermes to report delivery."}
+                "Waiting for delivery confirmation."}
             </pre>
           </details>
         </>

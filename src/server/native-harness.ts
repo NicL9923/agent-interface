@@ -137,6 +137,24 @@ export async function composeServerRuntime({
   let deliverMessage:
     | ((input: { sourceBotId: string; targetBotId: string; message: string }) => Promise<void>)
     | undefined;
+  let requestSecret:
+    | ((
+        input: { botId: string; name: string; prompt: string },
+        signal: AbortSignal,
+      ) => Promise<import("./mcp/wildbots-mcp.js").SecretInputOutcome>)
+    | undefined;
+  let requestLogin:
+    | ((
+        input: { botId: string; origin: string; label: string; purpose: string },
+        signal: AbortSignal,
+      ) => Promise<import("./harness/native-vault.js").LoginInputOutcome>)
+    | undefined;
+  let requestCode:
+    | ((
+        input: { botId: string; site?: string; hint?: string },
+        signal: AbortSignal,
+      ) => Promise<import("./harness/native-vault.js").CodeInputOutcome>)
+    | undefined;
   const ownerPersonalBots = (ownerId: string) =>
     store.managedBots
       .listManagedBots()
@@ -150,12 +168,24 @@ export async function composeServerRuntime({
     createVaultMcpTools({
       secrets: store.secrets,
       browserBridge: computer.enabled ? computer.browserBridge : undefined,
+      onRequestLogin: async ({ origin, label, purpose, context }, signal) => {
+        if (!requestLogin) throw new Error("Interactive login requests are not ready yet.");
+        return requestLogin({ botId: context.botId, origin, label, purpose }, signal);
+      },
+      onRequestCode: async ({ site, hint, context }, signal) => {
+        if (!requestCode) throw new Error("Interactive code requests are not ready yet.");
+        return requestCode({ botId: context.botId, site, hint }, signal);
+      },
     }),
     ...(computer.enabled ? [createComputerMcpTools({ backend: computer.backend })] : []),
   ];
   const mcp = await createWildbotsMcpServer({
     store,
     secrets: store.secrets,
+    onSecretRequest: async ({ name, prompt, context }, signal) => {
+      if (!requestSecret) throw new Error("Secure input requests are not ready yet.");
+      return requestSecret({ botId: context.botId, name, prompt }, signal);
+    },
     onMessageBot: async ({ source, targetBotId, message }) => {
       if (!deliverMessage) throw new Error("Assistant messaging is not ready yet.");
       await deliverMessage({ sourceBotId: source.botId, targetBotId, message });
@@ -197,6 +227,9 @@ export async function composeServerRuntime({
       computer,
     });
     deliverMessage = server.harnessRuntime.deliverBotMessage;
+    requestSecret = server.harnessRuntime.requestSecret;
+    requestLogin = server.harnessRuntime.requestLogin;
+    requestCode = server.harnessRuntime.requestCode;
     return {
       runtime: server.runtime,
       probeHarnesses: server.probeHarnesses,

@@ -438,7 +438,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   func supports(_ key: CapabilityKey) -> Bool { bootstrap?[capability: key]?.supported == true }
   func reason(_ key: CapabilityKey) -> String {
     bootstrap?[capability: key]?.reason
-      ?? "This capability is unavailable from the connected Hermes installation."
+      ?? "This capability is unavailable on this WildBots server."
   }
   /// What the app keeps in UserDefaults per scope, optionally per assistant. `DeviceDefaults` holds
   /// the keys that outlive a scope.

@@ -55,13 +55,13 @@ export function RoutineSchedulePreview({
       {visible && (
         <div className="routine-preview">
           <strong>{preview.kind === "once" ? "Scheduled run" : "Next runs"}</strong>
-          <p>Hermes timezone: {preview.timezone}</p>
+          <p>Server timezone: {preview.timezone}</p>
           <ol>
             {preview.nextRuns.map((instant) => (
               <li key={instant}>{runTime(instant, preview.timezone)}</li>
             ))}
           </ol>
-          <small>The assistant's Hermes profile controls this timezone.</small>
+          <small>The WildBots server controls this timezone.</small>
         </div>
       )}
       {error && requested === schedule && <FormMessage tone="error">{error}</FormMessage>}
@@ -203,7 +203,7 @@ export function RoutineEnhancements({
       </div>
       <p id={trialHintId} className="routine-trial-note">
         {canStart
-          ? "Try once runs this routine now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused."
+          ? "Try once runs this routine now. WildBots may move the next run or finish a one-time routine. Paused recurring routines stay paused."
           : "Check the saved run's status before starting another. Checking does not run it again."}
       </p>
       {missing && (
@@ -214,7 +214,7 @@ export function RoutineEnhancements({
       {receipt && (
         <p className="routine-run-status" role="status">
           {receipt.status === "accepted"
-            ? "Trial run started. Hermes will finish it even if you close this screen."
+            ? "Trial run started. WildBots will finish it even if you close this screen."
             : receipt.status === "completed"
               ? "Trial run completed."
               : receipt.status === "failed"

@@ -180,8 +180,7 @@ export function installBootstrapRoutes(
   );
   apiRoute(app, "GET /models", {}, async (req) => {
     const { botId } = z.object({ botId: id.optional() }).parse(req.query);
-    if (!runtime.modelOptions)
-      throw httpError(409, "The connected Hermes installation does not expose model options.");
+    if (!runtime.modelOptions) throw httpError(409, "This runtime does not expose model options.");
     return runtime.modelOptions(botId);
   });
 }

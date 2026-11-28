@@ -249,7 +249,7 @@ it("refuses notes over Hermes's byte limit and settings while disconnected", asy
   await render("simple", false);
   await click("Group settings");
   expect(container.querySelector("dialog")!.textContent).toContain(
-    "Reconnect to Hermes to change these settings.",
+    "Reconnect to WildBots to change these settings.",
   );
   expect(container.querySelector<HTMLInputElement>("dialog input")!.disabled).toBe(true);
   expect(write).not.toHaveBeenCalled();

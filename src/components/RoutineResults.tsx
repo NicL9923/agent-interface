@@ -78,7 +78,7 @@ export function RoutineResults({
           Close
         </Button>
       </div>
-      <p className="muted">Recent runs saved by Hermes, including scheduled runs and trials.</p>
+      <p className="muted">Recent runs saved by WildBots, including scheduled runs and trials.</p>
       {error && <FormMessage tone="error">{error}</FormMessage>}
       {save.notice && <FormMessage tone="notice">{save.notice}</FormMessage>}
       {loading && <p role="status">Loading routine history…</p>}
@@ -131,8 +131,8 @@ export function RoutineResults({
           </div>
           {output.data.previewOnly && (
             <p className="capability-note">
-              Hermes exposes a preview for this script run. Its full output is available in the
-              native cron output files.
+              Only a preview was captured for this script run. Its full output is available in the
+              server cron output files.
             </p>
           )}
           {!output.data.messages.length && <p>No assistant output was saved for this run.</p>}

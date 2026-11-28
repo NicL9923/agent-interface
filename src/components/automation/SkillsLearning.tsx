@@ -85,7 +85,7 @@ export function LearningPanel({ botId, advanced = true }: { botId: string; advan
       {state &&
         (!state.supported ? (
           <p className="capability-note">
-            {state.reason || "Learning review is unavailable on this Hermes installation."}
+            {state.reason || "Learning review is unavailable for this assistant."}
           </p>
         ) : (
           <>
@@ -106,7 +106,7 @@ export function LearningPanel({ botId, advanced = true }: { botId: string; advan
                   Require approval before skill changes are saved
                 </label>
                 <p className="muted">
-                  When enabled, Hermes stages new skills, edits and deletions for review.
+                  When enabled, WildBots stages new skills, edits and deletions for review.
                 </p>
                 {control.value?.canManageLearningPolicy === false && (
                   <p className="capability-note">
@@ -151,9 +151,7 @@ export function LearningPanel({ botId, advanced = true }: { botId: string; advan
                     <>
                       <SkillDiffPreview text={diff.diff} id={`${id}-diff-${item.id}`} />
                       {diff.truncated && (
-                        <p>
-                          The diff is truncated. Read the full change in Hermes before approving.
-                        </p>
+                        <p>The diff is truncated. Review the full change before approving.</p>
                       )}
                       <div className="actions">
                         <Button
@@ -208,7 +206,7 @@ export function LearningPanel({ botId, advanced = true }: { botId: string; advan
         <SettingsConfirmation
           className="learning-policy-confirmation"
           title="Allow skill changes without review?"
-          detail="Hermes can save new skills, edits and deletions without asking for approval."
+          detail="WildBots can save new skills, edits and deletions without asking for approval."
           confirmLabel="Allow changes without review"
           cancelLabel="Keep approval required"
           danger
@@ -300,7 +298,7 @@ export function SkillLocks({
         {content?.name === installed.name && (
           <>
             <pre className="automation-code">{content.content}</pre>
-            {content.truncated && <p>Preview truncated. Open Hermes for the full skill.</p>}
+            {content.truncated && <p>Preview truncated.</p>}
           </>
         )}
       </div>
@@ -311,7 +309,7 @@ export function SkillLocks({
       {usable && state!.lockSupported && (
         <p className="muted">
           {canLock
-            ? "Lock a skill to keep assistants from changing it. You can still edit it in Hermes."
+            ? "Lock a skill to keep assistants from changing it."
             : "Only an integration administrator can lock or unlock skills."}
         </p>
       )}

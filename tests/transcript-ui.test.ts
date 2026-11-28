@@ -266,7 +266,7 @@ describe("retry a failed turn", () => {
     const ids = messagesWritten().map(([, body]) => (body as { requestId: string }).requestId);
     expect(ids).toEqual([await turnId(), await turnId()]);
     expect(container.querySelector(".retry-refused")?.textContent).toContain(
-      "Hermes didn't take the retry. The attachment is gone.",
+      "WildBots didn't take the retry. The attachment is gone.",
     );
     // Hermes keeps refusing that ID, so the message box sends it anew.
     expect(buttonText("Retry")).toBeUndefined();
@@ -290,7 +290,7 @@ describe("retry a failed turn", () => {
     await posted(1);
     await advance(0);
     expect(container.querySelector(".retry-refused")?.textContent).toContain(
-      "Hermes didn't take the retry. Hermes ended its voice chat. Nothing was sent to the assistant.",
+      "WildBots didn't take the retry. Hermes ended its voice chat. Nothing was sent to the assistant.",
     );
     expect(buttonText("Retry")).toBeUndefined();
     expect(textarea().value).toBe("My saved draft");
@@ -312,7 +312,7 @@ describe("retry a failed turn", () => {
     await render();
     expect(buttonText("Retry")).toBeUndefined();
     expect(container.querySelector(".retry-refused")?.textContent).toContain(
-      "Hermes didn't take the retry. The attachment is gone.",
+      "WildBots didn't take the retry. The attachment is gone.",
     );
     await act(async () => buttonText("Put my message in the message box")!.click());
     expect(textarea().value).toBe("My saved draft\n\nCheck the gate");

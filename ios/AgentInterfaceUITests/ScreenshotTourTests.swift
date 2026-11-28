@@ -198,7 +198,7 @@ import XCTest
         }
         save().tapWhenReady()
         if after {
-          let progress = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving memories in Hermes…")).firstMatch
+          let progress = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving memories…")).firstMatch
           XCTAssertTrue(progress.waitForExistence(timeout: 3)); try capture("memory-saving"); XCTAssertTrue(progress.exists)
           XCTAssertFalse(app.buttons["Close"].isEnabled); XCTAssertFalse(app.buttons["memoryBack"].isEnabled)
         }
@@ -262,7 +262,7 @@ import XCTest
           if variant.contains("conflict") { reveal(field("memory", 4)); XCTAssertTrue(field("memory", 4).wait(until: "value == %@", config["externalEntry"]!)) }
         }
       } else if variant == "disabled" {
-        let note = app.staticTexts[after ? "Editing is disabled in this Hermes profile. You can still read and copy these notes." : "This memory is disabled in the Hermes profile."]
+        let note = app.staticTexts[after ? "Editing is disabled for this assistant. You can still read and copy these notes." : "This memory is disabled in the Hermes profile."]
         reveal(note); XCTAssertTrue(note.exists)
         if after {
           reveal(field("user")); XCTAssertFalse(app.textFields["memoryEntry.user.1"].exists)
@@ -1157,7 +1157,7 @@ import XCTest
         let search = app.textFields["modelSearch"]
         XCTAssertTrue(form.waitForExistence(timeout: 5)); XCTAssertTrue(search.waitForExistence(timeout: 5))
         revealFormControl(search, in: form, app: app); search.typeWhenFocused("field")
-        let reason = app.staticTexts["Reconnect in Hermes to use this model"]
+        let reason = app.staticTexts["Check provider credentials to use this model"]
         revealFormControl(reason, in: form, app: app)
         let unavailable = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "field-planner")).firstMatch
         XCTAssertTrue(unavailable.exists); XCTAssertFalse(unavailable.isEnabled)
@@ -1295,10 +1295,10 @@ import XCTest
         XCTAssertTrue(loadedModel.waitForExistence(timeout: 5))
         XCTAssertFalse(error.exists); try capture(name + "-retried")
       } else if name == "models-empty" {
-        let empty = app.staticTexts["No connected models were reported. Connect a provider in Hermes, then retry."]
+        let empty = app.staticTexts["No connected models were reported. Configure a provider credential, then retry."]
         reveal(empty, in: form); XCTAssertTrue(empty.exists); try capture(name + "-catalog")
       } else if name == "models-missing" {
-        let kept = app.staticTexts["Your saved model is kept. Hermes did not include it in the current catalog."]
+        let kept = app.staticTexts["Your saved model is kept. It was not included in the current model catalog."]
         reveal(kept, in: form); XCTAssertTrue(kept.exists); try capture(name + "-catalog")
       } else {
         XCTAssertTrue(loadedModel.waitForExistence(timeout: 5))

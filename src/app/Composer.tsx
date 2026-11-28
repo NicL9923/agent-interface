@@ -329,7 +329,7 @@ export const Composer = memo(function Composer({
   const fileInput = useRef<HTMLInputElement>(null);
   const slots = MAX_ATTACHMENTS - draft.attachments.length - uploads.length;
   const attachUnavailable = !boot.capabilities.uploads.supported
-    ? boot.capabilities.uploads.reason || "Hermes can't receive files right now."
+    ? boot.capabilities.uploads.reason || "Uploads are unavailable right now."
     : !draftReady || draft.botId !== botId
       ? "Your draft is still loading."
       : sending
@@ -493,18 +493,18 @@ export const Composer = memo(function Composer({
       kind: "send",
       node: (
         <div className="notice attention" role="alert">
-          {receipt.message || "Hermes did not accept this message. Your draft is saved."}
+          {receipt.message || "WildBots did not accept this message. Your draft is saved."}
         </div>
       ),
     });
-  // A typed stop phrase ended Hermes's voice chat. Hermes saved nothing, so the sent message leaves the chat and this says why.
+  // A typed stop phrase ended voice chat. Nothing was saved, so the sent message leaves the chat and this says why.
   if (receipt?.status === "accepted" && receipt.turn === "none")
     notices.push({
       id: "send-not-admitted",
       kind: "send",
       node: (
         <div className="notice" role="status">
-          {receipt.message || "Hermes ended its voice chat. Nothing was sent to the assistant."}
+          {receipt.message || "Voice chat ended. Nothing was sent to the assistant."}
         </div>
       ),
     });
@@ -760,7 +760,7 @@ export const Composer = memo(function Composer({
                     ? talk.end()
                     : liveVoice.supported
                       ? talk.start()
-                      : talk.explain(liveVoice.reason ?? "Live talk is unavailable on this Hermes.")
+                      : talk.explain(liveVoice.reason ?? "Live talk is unavailable on this server.")
                 }
               >
                 <Icon name="talk" size={18} />

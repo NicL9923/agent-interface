@@ -514,7 +514,7 @@ struct BotSettingsView: View {
         error = nil
       }
     } header: { settingsHeader("Model") } footer: {
-      Text("Model choices come from your connected Hermes providers. Star models to keep them handy.").foregroundStyle(Palette.muted)
+      Text("Model choices come from your connected harness providers. Star models to keep them handy.").foregroundStyle(Palette.muted)
     }
   }
   private var sharingSection: some View {
@@ -524,7 +524,7 @@ struct BotSettingsView: View {
       Text(
         form.shared
           ? "This assistant has one shared model. Provider and model changes are visible to both people."
-          : "Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins.").foregroundStyle(Palette.muted)
+          : "Only you see a personal assistant in WildBots.").foregroundStyle(Palette.muted)
     }
   }
   private var nameReady: Bool { !form.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -1319,7 +1319,7 @@ struct RoutineEditor: View {
         Section("Routine") {
           TextField("Name", text: $routine.name)
           TextField("Instructions", text: $routine.prompt, axis: .vertical).lineLimit(4...12)
-          TextField("Hermes schedule expression", text: $routine.schedule)
+          TextField("Cron, interval (every 30m), or ISO time", text: $routine.schedule)
             .textInputAutocapitalization(.never).autocorrectionDisabled()
           Toggle("Enabled", isOn: $routine.enabled)
           if routine.enabled && !schedulePreviewValid { Text("Preview this schedule before saving an enabled routine.").font(.caption).foregroundStyle(.secondary) }

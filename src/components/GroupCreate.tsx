@@ -135,13 +135,13 @@ export function GroupCreate({
         )}
         {!canSend && (
           <p className="capability-note">
-            Hermes group chats are unavailable right now. Try again once Hermes is connected.
+            Group chats are unavailable right now. Try again once WildBots is connected.
           </p>
         )}
         {saved ? (
           <p>
             {saved.name} · {saved.botIds.length} assistants. The saved request will be checked with
-            Hermes.
+            WildBots.
           </p>
         ) : (
           <>

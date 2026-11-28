@@ -34,6 +34,13 @@ struct VaultSource: Codable, Identifiable {
     return unlocked ? "Unlocked for this profile" : "Locked"
   }
 }
+struct VaultSecret: Codable, Identifiable {
+  var name: String
+  var createdAt: String
+  var updatedAt: String
+  var canRemove: Bool
+  var id: String { name }
+}
 struct ProfileVault: Codable {
   var botId: String
   var profile: String
@@ -41,6 +48,7 @@ struct ProfileVault: Codable {
   var owner: String
   var notice: String
   var items: [VaultLogin]
+  var secrets: [VaultSecret]?
   var sources: [VaultSource]
 }
 struct AddVaultLogin: Encodable {
@@ -51,6 +59,11 @@ struct AddVaultLogin: Encodable {
   var identifierType: String
   var identifier: String
   var password: String
+  var otpSecret: String? = nil
+}
+struct AddVaultSecret: Encodable {
+  var name: String
+  var value: String
 }
 struct SecureRequest: Codable, Equatable {
   var epoch: String
@@ -109,6 +122,7 @@ struct SecureRequestAnswer: Encodable {
 }
 struct SecureRequestResult: Decodable { var status: String }
 struct AddedVaultLogin: Decodable { var id: String }
+struct AddedVaultSecret: Decodable { var name: String }
 struct RemovedVaultLogin: Decodable { var removed: Bool }
 
 /// Errors from credential operations never expose arbitrary upstream response text.
@@ -119,10 +133,10 @@ enum VaultSafety {
     let message: String
     switch status {
     case 401, 403: message = "Sign in again or ask the household administrator for access."
-    case 404, 409: message = "This request changed or expired. Refresh its status in Hermes."
-    case 400, 422: message = "Hermes could not accept these fields. Review them and try again."
+    case 404, 409: message = "This request changed or expired. Refresh its status in WildBots."
+    case 400, 422: message = "WildBots could not accept these fields. Review them and try again."
     case 429: message = "Another credential operation is running. Wait for it to finish, then refresh its status."
-    default: message = "Could not confirm the result from Hermes. Refresh its status before trying again."
+    default: message = "Could not confirm the result from WildBots. Refresh its status before trying again."
     }
     return APIError(message: message, status: status)
   }
@@ -131,12 +145,18 @@ enum VaultSafety {
     return status == 0 || status >= 500
   }
   static let invalidOriginMessage = "Enter the website address through the hostname, such as https://example.com."
+  static let invalidSecretNameMessage = "Secret names use letters, numbers, dots, dashes, and underscores, up to 128 characters."
   /// Shown after a change whose outcome is unknown. Everything stays locked until a reload succeeds.
-  static let unconfirmedChange = "Hermes could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared."
+  static let unconfirmedChange = "WildBots could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared."
   static func validOrigin(_ text: String) -> Bool {
-    guard let url = URL(string: text), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host?.isEmpty == false,
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let url = URL(string: trimmed), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host?.isEmpty == false,
       url.user == nil, url.password == nil, url.query == nil, url.fragment == nil, ["", "/"].contains(url.path) else { return false }
     return true
+  }
+  static func validSecretName(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"#, options: .regularExpression) != nil
   }
 }
 extension APIClient {
@@ -150,6 +170,14 @@ extension APIClient {
   }
   func removeVaultLogin(botId: String, itemId: String) async throws {
     do { let _: RemovedVaultLogin = try decodeVault(await data(path: "/api/bots/\(Self.component(botId))/vault/logins/\(Self.component(itemId))", method: "DELETE")) }
+    catch { throw VaultSafety.error(error) }
+  }
+  func addVaultSecret(botId: String, secret: AddVaultSecret) async throws {
+    do { let _: AddedVaultSecret = try await write("/bots/\(Self.component(botId))/vault/secrets", secret) }
+    catch { throw VaultSafety.error(error) }
+  }
+  func removeVaultSecret(botId: String, name: String) async throws {
+    do { let _: RemovedVaultLogin = try decodeVault(await data(path: "/api/bots/\(Self.component(botId))/vault/secrets/\(Self.component(name))", method: "DELETE")) }
     catch { throw VaultSafety.error(error) }
   }
   func setVaultSource(botId: String, source: String, enabled: Bool) async throws {
@@ -181,11 +209,14 @@ struct VaultView: View {
   @State private var error: String?
   @State private var notice: String?
   @State private var adding = false
+  @State private var addingSecret = false
   @State private var removing: VaultLogin?
   @State private var showRemove = false
+  @State private var removingSecret: VaultSecret?
+  @State private var showRemoveSecret = false
   @State private var unlocking: VaultSource?
   @State private var unlockPassword = ""
-  /// A failed change may or may not have reached Hermes, so actions stay locked until a reload succeeds.
+  /// A failed change may or may not have reached the server, so actions stay locked until a reload succeeds.
   @State private var uncertain = false
   @State private var generation = UUID()
   @State private var biometricBusy = false
@@ -222,9 +253,9 @@ struct VaultView: View {
       if let notice { Section { Text(notice).foregroundStyle(Palette.accent) } }
       if let catalog {
         Section {
-          Text("Hermes profile: \(catalog.profile)").font(.subheadline.bold())
+          Text("Assistant: \(catalog.profile)").font(.subheadline.bold())
           Text(catalog.notice).font(.footnote).foregroundStyle(.secondary)
-          Text("Usernames and site details are visible metadata. Passwords are handled by Hermes outside the model's context.").font(.footnote).foregroundStyle(.secondary)
+          Text("Usernames, site details, and secret names are visible metadata. Passwords and secret values are encrypted in WildBots outside chat.").font(.footnote).foregroundStyle(.secondary)
         }
         Section("Saved logins") {
           if catalog.items.isEmpty { Text("No saved logins in the enabled sources.").foregroundStyle(.secondary) }
@@ -243,6 +274,21 @@ struct VaultView: View {
           }
           Button("Add login", systemImage: "plus") { adding = true }.accessibilityIdentifier("vault.add")
         }.disabled(uncertain)
+        Section("Saved secrets") {
+          let secrets = catalog.secrets ?? []
+          if secrets.isEmpty { Text("No saved API keys or custom secrets for this assistant.").foregroundStyle(.secondary) }
+          ForEach(secrets) { secret in
+            VStack(alignment: .leading, spacing: 6) {
+              Text(secret.name).font(.headline.monospaced()).textSelection(.enabled)
+              Text("WildBots vault").font(.caption).foregroundStyle(.secondary)
+              if secret.canRemove {
+                Button("Remove secret", role: .destructive) { removingSecret = secret; showRemoveSecret = true }
+                  .accessibilityIdentifier("vault.removeSecret.\(secret.name)")
+              }
+            }.padding(.vertical, 5).buttonStyle(.borderless)
+          }
+          Button("Add secret", systemImage: "plus") { addingSecret = true }.accessibilityIdentifier("vault.addSecret")
+        }.disabled(uncertain)
         Section {
           ForEach(catalog.sources) { source in
             VStack(alignment: .leading, spacing: 8) {
@@ -258,7 +304,7 @@ struct VaultView: View {
               }
             }.buttonStyle(.borderless).padding(.vertical, 5)
           }
-        } header: { Text("Password sources") } footer: { Text("Hermes owns encryption and password-source sessions. Local saved logins do not have a separate master unlock. External source unlocks expire with Hermes's session policy.") }
+        } header: { Text("Password sources") } footer: { Text("WildBots encrypts saved logins and secrets at rest. Local saved credentials do not have a separate master unlock.") }
           .disabled(uncertain)
       } else if busy { ProgressView("Loading logins…") }
       else if profileBot.isEmpty { Text("Create an assistant before managing its logins.") }
@@ -273,12 +319,21 @@ struct VaultView: View {
         if profileBot.isEmpty { selectedBot = store.selectedBotId ?? store.bootstrap?.bots.first?.id ?? ""; return }
         await refresh()
       }
-      .confirmationDialog("Remove \(removing?.label ?? "this login") from this Hermes profile? Assistants using this profile will lose access to it.", isPresented: $showRemove, titleVisibility: .visible) {
-        Button("Remove login", role: .destructive) { if let item = removing { run(success: "Login removed from Hermes.") { api, id in try await api.removeVaultLogin(botId: id, itemId: item.id) } } }
+      .confirmationDialog("Remove \(removing?.label ?? "this login") from WildBots? This assistant will lose access to it.", isPresented: $showRemove, titleVisibility: .visible) {
+        Button("Remove login", role: .destructive) { if let item = removing { run(success: "Login removed from WildBots.") { api, id in try await api.removeVaultLogin(botId: id, itemId: item.id) } } }
+      }
+      .confirmationDialog("Remove secret \(removingSecret?.name ?? "this secret") from WildBots? This assistant will lose access to it.", isPresented: $showRemoveSecret, titleVisibility: .visible) {
+        Button("Remove secret", role: .destructive) { if let secret = removingSecret { run(success: "Secret removed from WildBots.") { api, id in try await api.removeVaultSecret(botId: id, name: secret.name) } } }
       }
       .sheet(isPresented: $adding, onDismiss: { Task { await refresh() } }) {
         if let api = store.api {
-          AddVaultLoginView(api: api, botId: profileBot, identity: identity, onSaved: { notice = "Login saved in Hermes." },
+          AddVaultLoginView(api: api, botId: profileBot, identity: identity, onSaved: { notice = "Login saved in WildBots." },
+            onUncertain: { uncertain = true; error = VaultSafety.unconfirmedChange }).appStore(store)
+        }
+      }
+      .sheet(isPresented: $addingSecret, onDismiss: { Task { await refresh() } }) {
+        if let api = store.api {
+          AddVaultSecretView(api: api, botId: profileBot, identity: identity, onSaved: { notice = "Secret saved in WildBots." },
             onUncertain: { uncertain = true; error = VaultSafety.unconfirmedChange }).appStore(store)
         }
       }
@@ -287,7 +342,7 @@ struct VaultView: View {
           Form {
             Section {
               SecureField("Master password", text: $unlockPassword).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("vault.unlockPassword")
-            } footer: { Text("Sent directly to Hermes to unlock \(source.displayName) for this profile. It is not sent as a chat message.") }
+            } footer: { Text("Sent directly to WildBots to unlock \(source.displayName) for this assistant. It is not sent as a chat message.") }
             if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("vault.unlockError") }
           }.navigationTitle("Unlock \(source.displayName)").navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -299,7 +354,7 @@ struct VaultView: View {
         }
       }
   }
-  private func clear() { generation = UUID(); unlockPassword = ""; unlocking = nil; adding = false; busy = false }
+  private func clear() { generation = UUID(); unlockPassword = ""; unlocking = nil; adding = false; addingSecret = false; busy = false }
   private func authenticateVault() async {
     guard !biometricBusy else { return }
     biometricBusy = true
@@ -376,6 +431,7 @@ private struct AddVaultLoginView: View {
   @State private var identifierType = AddVaultLogin.defaultIdentifierType
   @State private var identifier = ""
   @State private var password = ""
+  @State private var otpSecret = ""
   @State private var busy = false
   @State private var error: String?
   @State private var uncertain = false
@@ -386,17 +442,18 @@ private struct AddVaultLoginView: View {
         Section {
           TextField("Login name", text: $label).accessibilityIdentifier("vault.loginLabel")
           TextField("https://site.example", text: $origin).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("vault.loginOrigin")
-          if !origin.isEmpty && !VaultSafety.validOrigin(origin) {
+          if !origin.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !VaultSafety.validOrigin(origin) {
             Text(VaultSafety.invalidOriginMessage).font(.caption).foregroundStyle(.red).accessibilityIdentifier("vault.originError")
           }
-          Text("Use the exact website, such as https://example.com, without a page path. Hermes checks the website before filling credentials.").font(.caption).foregroundStyle(.secondary)
+          Text("Use the exact website, such as https://example.com, without a page path. WildBots checks the website before filling credentials.").font(.caption).foregroundStyle(.secondary)
           Picker("Identifier type", selection: $identifierType) { Text("Email").tag("email"); Text("Username").tag("username"); Text("Phone").tag("phone") }
           TextField("Username, email or phone", text: $identifier).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("vault.loginIdentifier")
           SecureField("Password", text: $password).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("vault.loginPassword")
-        } footer: { Text("Saved in the assistant's Hermes profile. The identifier is visible metadata; the password stays outside the model's context. Household access follows this Hermes profile.") }
+          SecureField("Authenticator secret (optional)", text: $otpSecret).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("vault.loginOtpSecret")
+        } footer: { Text("Saved in this assistant's encrypted WildBots vault. The identifier is visible metadata; passwords and authenticator secrets stay outside chat.") }
         if let error { Section { Text(error).foregroundStyle(.red) } }
         if uncertain { Section { Text("Close this form and refresh saved logins to review the result before adding again.").font(.footnote) } }
-        Button("Save login") { save() }.disabled(busy || uncertain || !store.connected || label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !VaultSafety.validOrigin(origin) || identifier.isEmpty || password.isEmpty).accessibilityIdentifier("vault.saveLogin")
+        Button("Save login") { save() }.disabled(busy || uncertain || !store.connected || label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !VaultSafety.validOrigin(origin) || identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty).accessibilityIdentifier("vault.saveLogin")
       }.accessibilityIdentifier("vaultAddForm").navigationTitle("Add login").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { clear(); dismiss() } } }
         .onChange(of: scenePhase) { _, phase in if phase != .active { clear(); dismiss() } }
@@ -404,11 +461,19 @@ private struct AddVaultLoginView: View {
         .onDisappear { clear() }
     }
   }
-  private func clear() { password = ""; identifier = ""; generation = UUID() }
+  private func clear() { password = ""; otpSecret = ""; identifier = ""; generation = UUID() }
   private func save() {
     guard !busy, !uncertain, store.api === api else { return }
-    let login = AddVaultLogin(label: label.trimmingCharacters(in: .whitespacesAndNewlines), origin: origin.trimmingCharacters(in: .whitespacesAndNewlines), identifierType: identifierType, identifier: identifier, password: password)
-    password = ""; identifier = ""; busy = true; error = nil
+    let trimmedOtp = otpSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+    let login = AddVaultLogin(
+      label: label.trimmingCharacters(in: .whitespacesAndNewlines),
+      origin: origin.trimmingCharacters(in: .whitespacesAndNewlines),
+      identifierType: identifierType,
+      identifier: identifier.trimmingCharacters(in: .whitespacesAndNewlines),
+      password: password,
+      otpSecret: trimmedOtp.isEmpty ? nil : trimmedOtp
+    )
+    password = ""; otpSecret = ""; identifier = ""; busy = true; error = nil
     let current = generation
     Task {
       defer { if current == generation { busy = false } }
@@ -420,7 +485,64 @@ private struct AddVaultLoginView: View {
         guard current == generation, store.api === api, identity == (store.scope ?? "") + "|" + botId else { return }
         uncertain = VaultSafety.uncertain(error)
         if uncertain { onUncertain() }
-        self.error = error is CancellationError ? "Could not confirm the result from Hermes. Review saved logins before adding again." : VaultSafety.error(error).localizedDescription
+        self.error = error is CancellationError ? "Could not confirm the result from WildBots. Review saved logins before adding again." : VaultSafety.error(error).localizedDescription
+      }
+    }
+  }
+}
+
+private struct AddVaultSecretView: View {
+  let api: APIClient
+  let botId: String
+  let identity: String
+  var onSaved: () -> Void
+  var onUncertain: () -> Void
+  @Environment(AppStore.self) private var store
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var name = ""
+  @State private var value = ""
+  @State private var busy = false
+  @State private var error: String?
+  @State private var uncertain = false
+  @State private var generation = UUID()
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          TextField("Secret name (e.g. API_TOKEN)", text: $name).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("vault.secretName")
+          if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !VaultSafety.validSecretName(name) {
+            Text(VaultSafety.invalidSecretNameMessage).font(.caption).foregroundStyle(.red).accessibilityIdentifier("vault.secretNameError")
+          }
+          SecureField("Secret value", text: $value).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("vault.secretValue")
+        } footer: { Text("Encrypted in this assistant's WildBots vault and available to its tools by name. Saving an existing name replaces its value.") }
+        if let error { Section { Text(error).foregroundStyle(.red) } }
+        if uncertain { Section { Text("Close this form and refresh saved secrets to review the result before adding again.").font(.footnote) } }
+        Button("Save secret") { save() }.disabled(busy || uncertain || !store.connected || !VaultSafety.validSecretName(name) || value.isEmpty).accessibilityIdentifier("vault.saveSecret")
+      }.accessibilityIdentifier("vaultAddSecretForm").navigationTitle("Add secret").navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { clear(); dismiss() } } }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { clear(); dismiss() } }
+        .onChange(of: store.scope) { _, _ in clear(); dismiss() }
+        .onDisappear { clear() }
+    }
+  }
+  private func clear() { value = ""; generation = UUID() }
+  private func save() {
+    guard !busy, !uncertain, store.api === api else { return }
+    let secret = AddVaultSecret(name: name.trimmingCharacters(in: .whitespacesAndNewlines), value: value)
+    value = ""; busy = true; error = nil
+    let current = generation
+    Task {
+      defer { if current == generation { busy = false } }
+      do {
+        try await api.addVaultSecret(botId: botId, secret: secret)
+        guard current == generation, store.api === api, identity == (store.scope ?? "") + "|" + botId else { return }
+        onSaved(); dismiss()
+      } catch {
+        guard current == generation, store.api === api, identity == (store.scope ?? "") + "|" + botId else { return }
+        uncertain = VaultSafety.uncertain(error)
+        if uncertain { onUncertain() }
+        self.error = error is CancellationError ? "Could not confirm the result from WildBots. Review saved secrets before adding again." : VaultSafety.error(error).localizedDescription
       }
     }
   }
@@ -446,7 +568,7 @@ private struct AddVaultLoginView: View {
   func bind(_ key: String) {
     clear(); generation = UUID(); busy = false; sendingIdentifier = nil; sendingCancel = false; accepted = nil
     blocked = SecureRequestOutcomes.uncertain.contains(key)
-    message = blocked ? "Could not confirm the result from Hermes. Refresh this request before taking another action." : nil
+    message = blocked ? "Could not confirm the result from WildBots. Refresh this request before taking another action." : nil
   }
   func submit(api: APIClient, botId: String, requestId: String, request: SecureRequest, key: String, cancel: Bool, assistant: String = "The assistant",
     current: @escaping () -> Bool, refresh: @escaping () async -> Void) {
@@ -464,7 +586,7 @@ private struct AddVaultLoginView: View {
         guard nonce == generation, current() else { return }
         busy = false; blocked = true
         if result.status == "expired" {
-          message = "This request had already closed, so Hermes didn't use what you entered. It may have timed out, been stopped, or closed when someone sent a message."
+          message = "This request had already closed, so WildBots didn't use what you entered. It may have timed out, been stopped, or closed when someone sent a message."
         } else {
           let text = cancel ? "Request cancelled. \(assistant) will continue without it."
             : request.method == "vault.save_login" ? "Login saved. \(assistant) is continuing." : "Sent securely. \(assistant) is continuing."
@@ -479,7 +601,7 @@ private struct AddVaultLoginView: View {
         guard nonce == generation, current() else { return }
         busy = false
         blocked = uncertain || [404, 409].contains((error as? APIError)?.status ?? 0)
-        message = error is CancellationError ? "Could not confirm the result from Hermes. Refresh this request before taking another action." : VaultSafety.error(error).localizedDescription
+        message = error is CancellationError ? "Could not confirm the result from WildBots. Refresh this request before taking another action." : VaultSafety.error(error).localizedDescription
         if [404, 409].contains((error as? APIError)?.status ?? 0) { await refresh() }
       }
     }
@@ -509,7 +631,7 @@ struct SecureAttentionView: View {
           }
           TextField("Username or email", text: input.sendingIdentifier.map { .constant($0) } ?? $input.identifier).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("secure.identifier").disabled(input.busy || input.blocked)
         } else if secure.method == "vault.unlock_prompt" {
-          Text("Unlock \(secure.displayName ?? "password source") in Hermes").font(.subheadline.bold())
+          Text("Unlock \(secure.displayName ?? "password source") in WildBots").font(.subheadline.bold())
         } else if secure.method == "vault.code" {
           if let site = secure.site { Text(site).font(.subheadline.bold()) }
           if let hint = secure.hint { Text(hint).font(.footnote) }
@@ -518,7 +640,7 @@ struct SecureAttentionView: View {
           Text(secure.prompt ?? "").font(.footnote)
         }
         SecureField(input.sendingIdentifier != nil && !input.sendingCancel ? "••••••••••" : fieldLabel(secure), text: $input.value).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("secure.value").disabled(input.busy || input.blocked)
-        Text("Sent directly to Hermes, outside chat and the model's context. Login identifiers remain visible metadata. Access follows the assistant's Hermes profile.").font(.caption).foregroundStyle(.secondary)
+        Text("Sent directly to WildBots, outside chat and the model's context. Login identifiers remain visible metadata.").font(.caption).foregroundStyle(.secondary)
         if let accepted = input.accepted {
           Label(accepted, systemImage: "checkmark").font(.subheadline.weight(.semibold)).foregroundStyle(Palette.accent).accessibilityIdentifier("secure.accepted")
         } else if let message = input.message { Text(message).font(.footnote).accessibilityIdentifier("secure.status") }
@@ -589,8 +711,7 @@ struct ExplicitLoginDetails: View {
   var request: ExplicitLoginRequest
   var assistantName: String?
   private var asker: String {
-    let profile = "Hermes profile \(request.profile)"
-    let assistant = assistantName.flatMap { $0 == request.profile ? nil : "\($0) (\(profile))" } ?? profile
+    let assistant = assistantName.flatMap { $0 == request.profile ? nil : "\($0) (\(request.profile))" } ?? request.profile
     return request.requestedBy?.name.map { "\(assistant) for \($0)" } ?? assistant
   }
   var body: some View {
@@ -599,13 +720,13 @@ struct ExplicitLoginDetails: View {
       LabeledContent("Address") {
         Text(origin).font(.footnote.monospaced()).textSelection(.enabled).accessibilityIdentifier("secure.origin")
       }
-      Text("Hermes has not opened or checked this address." + (origin.hasPrefix("http://") ? " It does not use HTTPS." : ""))
+      Text("WildBots has not opened or checked this address." + (origin.hasPrefix("http://") ? " It does not use HTTPS." : ""))
         .font(.caption).foregroundStyle(.secondary)
       LabeledContent("Asked by", value: asker)
       LabeledContent("Reason, in the assistant's words") { Text(request.purpose).font(.footnote) }
-      Text("Saved in this profile's encrypted Hermes vault until someone removes it in Logins. The assistant gets a handle and the username, never the password. Hermes fills the password only on pages at exactly this address.")
+      Text("Saved in this assistant's encrypted WildBots vault until someone removes it in Logins. The assistant gets a handle and the username, never the password. WildBots fills the password only on pages at exactly this address.")
         .font(.caption).foregroundStyle(.secondary)
-      Text("Profiles organize access but are not a household security boundary. Household members with Hermes access, and tools running on the Hermes server, can reach saved logins.")
+      Text("Household members with access to this assistant, and tools running on the WildBots server, can use saved logins.")
         .font(.caption).foregroundStyle(.secondary)
     }.accessibilityElement(children: .contain).accessibilityIdentifier("secure.explicit")
   }
