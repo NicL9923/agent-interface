@@ -22,11 +22,22 @@ and preventing `HarnessRuntime` from falling back to OpenRouter DeepSeek V4.1 Fl
     during silent turns so sustained HTTP 429 / `RESOURCE_EXHAUSTED` retry loops fail fast
     after 2 failed attempts (~5s) instead of hanging ~2m30s.
 - `src/server/harness/runtime.ts`:
-  - Adds a 5-minute quota/rate-limit cooldown (`fallbackCooldownMs`, keyed by harness +
-    credential + model) so subsequent direct, routine, and group turns route straight to
-    the warm fallback during an outage and retry the primary automatically once it expires.
+  - Adds a 5-minute per-bot quota/rate-limit cooldown (`fallbackCooldownMs`, keyed by
+    bot ID + harness + credential + model) so a prompt-specific or bot-specific 429 never
+    knocks other healthy bots off Antigravity, while the affected bot's subsequent direct,
+    routine, and group turns route straight to the warm fallback during the window and
+    automatically retry the primary once it expires.
   - Clears partial primary reasoning and resets activity state to `thinking` when falling
     back on `turn.failed`, and skips speculative `warmSession` on cooled-down primaries.
+
+## Additional root cause discovered on `hermes-prod`
+
+Testing all 11 managed bots on `hermes-prod` showed 10/11 returned `OK` on `gemini-4-neon`
+while `kimberly` deterministically returned HTTP 429 `RESOURCE_EXHAUSTED` because Google's
+Antigravity backend rejected the exact phrase
+`"Be direct: match the length of your reply to the weight of the ask"` in `kimberly`'s
+`instructions`. Rewording that single phrase in `managed_bots` restored 3/3 `OK` responses
+on `gemini-4-neon` with `kimberly`'s full system prompt, memory, 121 skills, and handoff.
 
 ## Red proof
 

@@ -991,12 +991,30 @@ describe("native harness runtime", () => {
       expect(last?.reasoning).toBeUndefined();
     });
 
-    // 3. During cooldown, the next turn routes directly to the warm fallback without retrying Antigravity.
+    // 3. During cooldown, the next turn routes directly to the warm fallback without retrying Antigravity,
+    //    while another bot sharing the same credential still tries Antigravity normally.
+    const otherBot = await runtime.saveBot({
+      ...botInput,
+      name: "Other Neon",
+      harness: "antigravity",
+      model: "gemini-4-neon",
+      shared: true,
+    });
     const openedBeforeCooldown = antigravity.opened.length;
     clock += 10_000;
+    const otherTurn = await runtime.submit(submission(otherBot.id, "fb-other", "Other check"));
+    const otherPrimary = await nextSession(antigravity, otherTurn.runId);
+    expect(antigravity.opened.length).toBe(openedBeforeCooldown + 1);
+    otherPrimary.emit({
+      type: "turn.completed",
+      turnId: otherTurn.runId!,
+      text: "Other bot stayed on Antigravity",
+      stopReason: "end_turn",
+    });
+
     const third = await runtime.submit(submission(bot.id, "fb-cooldown", "Third check"));
     const fallbackSession3 = await nextSession(pi, third.runId);
-    expect(antigravity.opened.length).toBe(openedBeforeCooldown);
+    expect(antigravity.opened.length).toBe(openedBeforeCooldown + 1);
     expect(fallbackSession3).toBe(fallbackSession2);
     fallbackSession3.emit({
       type: "turn.completed",
@@ -1013,7 +1031,7 @@ describe("native harness runtime", () => {
     clock += 60_000;
     const fourth = await runtime.submit(submission(bot.id, "fb-recover", "Fourth check"));
     const recoveredPrimary = await nextSession(antigravity, fourth.runId);
-    expect(antigravity.opened.length).toBe(openedBeforeCooldown + 1);
+    expect(antigravity.opened.length).toBe(openedBeforeCooldown + 2);
     recoveredPrimary.emit({
       type: "turn.completed",
       turnId: fourth.runId!,

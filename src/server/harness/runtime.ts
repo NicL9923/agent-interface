@@ -450,7 +450,7 @@ export function createHarnessRuntime({
   }
 
   const primaryCooldownKey = (bot: ManagedBotRecord) =>
-    `${bot.harness}\0${bot.credentialId ?? ""}\0${bot.model}`;
+    `${bot.id}\0${bot.harness}\0${bot.credentialId ?? ""}\0${bot.model}`;
 
   function isPrimaryInCooldown(bot: ManagedBotRecord): boolean {
     if (fallbackCooldownMs <= 0) return false;
