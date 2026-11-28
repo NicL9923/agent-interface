@@ -2,7 +2,9 @@ import { once } from "node:events";
 import { mkdtemp, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAntigravityDriver } from "../src/server/harness/antigravity-driver.js";
 import type {
   HarnessDriver,
   HarnessDriverId,
@@ -874,7 +876,7 @@ describe("native harness runtime", () => {
     });
   });
 
-  it("falls back to OpenRouter DeepSeek V4.1 Flash when the primary harness fails before streaming", async () => {
+  it("falls back to OpenRouter DeepSeek V4.1 Flash when the primary harness fails before streaming and cools down after quota errors", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "synthetic-openrouter-key");
     const directory = await mkdtemp(join(tmpdir(), "harness-fallback-"));
     const store = new Store(":memory:");
@@ -897,6 +899,7 @@ describe("native harness runtime", () => {
       envVar: "OPENROUTER_API_KEY",
       allowedHarnesses: ["pi"],
     });
+    let clock = 10_000;
     const antigravity = new FakeDriver("antigravity", false);
     const pi = new FakeDriver("pi", false);
     const runtime = createHarnessRuntime({
@@ -904,6 +907,8 @@ describe("native harness runtime", () => {
       files,
       workspaceRoot: join(directory, "sandbox"),
       drivers: { antigravity, pi },
+      now: () => clock,
+      fallbackCooldownMs: 60_000,
       fallback: {
         harness: "pi",
         model: "deepseek/deepseek-v4.1-flash",
@@ -925,9 +930,9 @@ describe("native harness runtime", () => {
       shared: true,
     });
 
-    // 1. Primary openSession throws → falls back seamlessly to Pi DeepSeek V4.1 Flash.
+    // 1. Non-quota openSession error → falls back seamlessly without triggering quota cooldown.
     antigravity.beforeOpen = async () => {
-      throw new Error("quota exhausted");
+      throw new Error("socket closed unexpectedly");
     };
     const first = await runtime.submit(submission(bot.id, "fb-open", "Check weather"));
     const fallbackSession1 = await nextSession(pi, first.runId);
@@ -952,14 +957,19 @@ describe("native harness runtime", () => {
       expect(convo.messages.at(-1)?.text).toBe("Sunny via fallback");
     });
 
-    // 2. Primary opens cleanly but emits turn.failed before streaming → falls back seamlessly.
+    // 2. Primary opens cleanly but emits a 429 quota turn.failed before streaming → falls back & enters cooldown.
     antigravity.beforeOpen = undefined;
     const second = await runtime.submit(submission(bot.id, "fb-fail", "Second check"));
     const primarySession = await nextSession(antigravity, second.runId);
     primarySession.emit({
+      type: "reasoning.delta",
+      turnId: second.runId!,
+      delta: "aborted primary thought",
+    });
+    primarySession.emit({
       type: "turn.failed",
       turnId: second.runId!,
-      message: "rate limited",
+      message: "RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).",
       recoverable: true,
     });
     const fallbackSession2 = await nextSession(pi, second.runId);
@@ -976,7 +986,142 @@ describe("native harness runtime", () => {
     });
     await vi.waitFor(async () => {
       const convo = await runtime.conversation(bot.id);
-      expect(convo.messages.at(-1)?.text).toBe("Recovered via DeepSeek");
+      const last = convo.messages.at(-1);
+      expect(last?.text).toBe("Recovered via DeepSeek");
+      expect(last?.reasoning).toBeUndefined();
+    });
+
+    // 3. During cooldown, the next turn routes directly to the warm fallback without retrying Antigravity,
+    //    while another bot sharing the same credential still tries Antigravity normally.
+    const otherBot = await runtime.saveBot({
+      ...botInput,
+      name: "Other Neon",
+      harness: "antigravity",
+      model: "gemini-4-neon",
+      shared: true,
+    });
+    const openedBeforeCooldown = antigravity.opened.length;
+    clock += 10_000;
+    const otherTurn = await runtime.submit(submission(otherBot.id, "fb-other", "Other check"));
+    const otherPrimary = await nextSession(antigravity, otherTurn.runId);
+    expect(antigravity.opened.length).toBe(openedBeforeCooldown + 1);
+    otherPrimary.emit({
+      type: "turn.completed",
+      turnId: otherTurn.runId!,
+      text: "Other bot stayed on Antigravity",
+      stopReason: "end_turn",
+    });
+
+    const third = await runtime.submit(submission(bot.id, "fb-cooldown", "Third check"));
+    const fallbackSession3 = await nextSession(pi, third.runId);
+    expect(antigravity.opened.length).toBe(openedBeforeCooldown + 1);
+    expect(fallbackSession3).toBe(fallbackSession2);
+    fallbackSession3.emit({
+      type: "turn.completed",
+      turnId: third.runId!,
+      text: "Direct via warm fallback",
+      stopReason: "end_turn",
+    });
+    await vi.waitFor(async () => {
+      const convo = await runtime.conversation(bot.id);
+      expect(convo.messages.at(-1)?.text).toBe("Direct via warm fallback");
+    });
+
+    // 4. Once cooldown expires, the runtime tries Antigravity again automatically.
+    clock += 60_000;
+    const fourth = await runtime.submit(submission(bot.id, "fb-recover", "Fourth check"));
+    const recoveredPrimary = await nextSession(antigravity, fourth.runId);
+    expect(antigravity.opened.length).toBe(openedBeforeCooldown + 2);
+    recoveredPrimary.emit({
+      type: "turn.completed",
+      turnId: fourth.runId!,
+      text: "Back on Antigravity",
+      stopReason: "end_turn",
+    });
+    await vi.waitFor(async () => {
+      const convo = await runtime.conversation(bot.id);
+      expect(convo.messages.at(-1)?.text).toBe("Back on Antigravity");
+    });
+  });
+
+  it("falls back automatically when real Antigravity ACP returns an inline ⚠ RESOURCE_EXHAUSTED banner", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "synthetic-openrouter-key");
+    const directory = await mkdtemp(join(tmpdir(), "harness-agy-inline-fb-"));
+    const store = new Store(":memory:");
+    const files = fileSigner(store.fileKeys(), undefined);
+    store.user({ id: "kim", name: "Kim", email: "kim@example.net" });
+    store.user({ id: "nic", name: "Nic", email: "nic@example.net" });
+    store.managedBots.upsertCredential({
+      id: "nic-agy-sub",
+      label: "Antigravity sub",
+      kind: "subscription",
+      vendor: "google",
+      ownerId: "nic",
+      osUser: owner,
+      allowedHarnesses: ["antigravity"],
+    });
+    store.managedBots.upsertCredential({
+      id: "household-openrouter-key",
+      label: "OpenRouter key",
+      kind: "api_key",
+      vendor: "openrouter",
+      envVar: "OPENROUTER_API_KEY",
+      allowedHarnesses: ["pi"],
+    });
+    const antigravity = createAntigravityDriver({
+      command: process.execPath,
+      args: [
+        fileURLToPath(new URL("./fixtures/harness/antigravity-mock-acp.mjs", import.meta.url)),
+      ],
+      geminiDir: join(directory, "gemini"),
+    });
+    const pi = new FakeDriver("pi", false);
+    const runtime = createHarnessRuntime({
+      store,
+      files,
+      workspaceRoot: join(directory, "sandbox"),
+      drivers: { antigravity, pi },
+      fallback: {
+        harness: "pi",
+        model: "deepseek/deepseek-v4.1-flash",
+        provider: "openrouter",
+        credentialId: "household-openrouter-key",
+      },
+    });
+    cleanups.push(async () => {
+      await runtime.close();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const bot = await runtime.saveBot({
+      ...botInput,
+      name: "Kim Thunder",
+      harness: "antigravity",
+      model: "gemini-4-neon",
+      shared: true,
+    });
+
+    const sent = await runtime.submit({
+      ...submission(bot.id, "kim-429", "InlineQuotaError"),
+      senderId: "kim",
+    });
+    const fallbackSession = await nextSession(pi, sent.runId);
+    fallbackSession.emit({
+      type: "text.delta",
+      turnId: sent.runId!,
+      delta: "Here is the comparison.",
+    });
+    fallbackSession.emit({
+      type: "turn.completed",
+      turnId: sent.runId!,
+      text: "Here is the comparison.",
+      stopReason: "end_turn",
+    });
+    await vi.waitFor(async () => {
+      const convo = await runtime.conversation(bot.id);
+      expect(convo.messages.at(-1)?.text).toBe("Here is the comparison.");
+      expect(convo.messages.some((msg) => msg.text.includes("RESOURCE_EXHAUSTED"))).toBe(false);
     });
   });
 
