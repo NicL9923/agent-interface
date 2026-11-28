@@ -1293,6 +1293,7 @@ struct BotSettingsView: View {
     guard let bot, let api = store.api, store.supports(.routines) else { return }
     do {
       let all: [Routine] = try await api.get("/routines")
+      store.publishRoutinesSnapshot(all)
       guard !Task.isCancelled else { return }
       routines = all.filter { $0.botId == bot.id }
       templates = try await api.get("/routines/templates")
@@ -1579,6 +1580,7 @@ private struct RoutineAdvancedFields: View {
     } catch { errors.append("Could not load models. \(error.localizedDescription)") }
     do {
       let all: [Routine] = try await api.get("/routines")
+      store.publishRoutinesSnapshot(all)
       sources = all.filter { $0.botId == routine.botId && $0.id != routine.id }
     } catch { errors.append("Could not load context sources. \(error.localizedDescription)") }
   }

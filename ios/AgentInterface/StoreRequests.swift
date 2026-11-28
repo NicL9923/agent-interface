@@ -39,15 +39,20 @@ extension AppStore {
     guard let api else { return nil }
     if household, !householdReachable { return .failure(ConnectionRefused(errorDescription: Self.waitingForConnection)) }
     let started = scope
+    let startedToken = api.token
     let context = RequestContext(api: api, scope: started) { [weak self] in
-      !Task.isCancelled && self?.scope == started && self?.api === api && current()
+      !Task.isCancelled && self?.scope == started && self?.api === api && self?.sessionExpired == false
+        && self?.api?.token == startedToken && current()
     }
     do {
       try context.checkCurrent()
       let value = try await work(context)
-      guard !Task.isCancelled, scope == context.scope, self.api === api, current() else { return nil }
+      guard !Task.isCancelled, scope == context.scope, self.api === api, !sessionExpired,
+        self.api?.token == startedToken, current()
+      else { return nil }
       return .success(value)
     } catch {
+      handleSessionExpiryIfCurrent(error, client: api, token: startedToken)
       guard !(error is StaleRequest), !Task.isCancelled, scope == context.scope, current() else { return nil }
       // The same member signed in again while this ran, which ended it without an answer.
       if error is CancellationError, context.api.retired { return .failure(APIError(message: Self.signInChanged, status: 0)) }

@@ -23,6 +23,7 @@ struct ComposerView: View {
   @State private var importFiles = false
   @State private var importPhotos = false
   @State private var takePhoto = false
+  @State private var scanDocument = false
   @State private var photos: [PhotosPickerItem] = []
   @State private var discardConfirm = false
   @State private var stopping = false
@@ -37,7 +38,8 @@ struct ComposerView: View {
       TalkPanel(talk: talk, name: bot.name)
       MessageQueuePanel(bot: bot)
       card.fixedSize(horizontal: false, vertical: true)
-    }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
+    }.glassContainer(spacing: 8)
+      .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
       .frame(maxWidth: 752).frame(maxWidth: .infinity)
       .accessibilityElement(children: .contain).accessibilityIdentifier("composerArea")
       .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
@@ -46,8 +48,8 @@ struct ComposerView: View {
       }
       .overlay { if dropTargeted { ComposerDropOverlay(botName: bot.name, unavailable: store.attachUnavailable(bot.id)) } }
       .modifier(ComposerPickers(
-        bot: bot, importFiles: $importFiles, importPhotos: $importPhotos, takePhoto: $takePhoto, photos: $photos,
-        discardConfirm: $discardConfirm))
+        bot: bot, importFiles: $importFiles, importPhotos: $importPhotos, takePhoto: $takePhoto,
+        scanDocument: $scanDocument, photos: $photos, discardConfirm: $discardConfirm))
       .onAppear { configureVoice(); configureTalk() }
       // Talk belongs to one assistant and one sign-in: another one ends it.
       .onChange(of: bot.id) { _, _ in talk.end(); talk.dismiss(); configureTalk() }
@@ -102,7 +104,7 @@ struct ComposerView: View {
       AttachmentTrayView(botId: bot.id)
       ComposerRowLayout(singleLine: inputLineHeight,
         forceStack: dynamicTypeSize.isAccessibilitySize || store.composerDraft.text.contains("\n")) {
-        HStack(spacing: 4) { attachMenu }
+        HStack(spacing: 4) { attachMenu }.glassContainer(spacing: 4)
         input
         HStack(spacing: 4) {
           VoiceButtons(voice: voice, bot: bot, disabled: voiceDisabled || talk.live, beforeRecording: { speech?.cancel() })
@@ -112,11 +114,11 @@ struct ComposerView: View {
               busy: voice.state != .idle || voice.recording != nil, connected: store.connected, beforeStart: { speech?.cancel() })
           }
           sendButton
-        }
+        }.glassContainer(spacing: 4)
       }
       VoicePanel(voice: voice, disabled: voiceDisabled, bot: bot)
       footnotes
-    }.padding(4).glassSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
+    }.padding(4).glassSurface(RoundedRectangle(cornerRadius: 26, style: .continuous), interactive: true)
   }
   private var input: some View {
     // While a message is on its way the transcript shows it, so the box reads empty and is
@@ -157,9 +159,14 @@ struct ComposerView: View {
       if UIImagePickerController.isSourceTypeAvailable(.camera) {
         Button("Take Photo", systemImage: "camera") { takePhoto = true }
       }
+      if DocumentScannerPicker.isSupported {
+        Button("Scan Document", systemImage: "doc.viewfinder") { scanDocument = true }
+          .accessibilityIdentifier("composerScanDocument")
+      }
       Button("Choose Files", systemImage: "folder") { importFiles = true }
     } label: {
       Image(systemName: "paperclip").font(.system(size: 20)).frame(width: 44, height: 44)
+        .glassSurface(Circle(), interactive: true)
     }.accessibilityLabel("Attach images, PDFs, or text").accessibilityIdentifier("composerAttach")
       .accessibilityHint(unavailable ?? "You can also paste or drop them here.")
       .disabled(unavailable != nil)
@@ -311,6 +318,7 @@ private struct ComposerPickers: ViewModifier {
   @Binding var importFiles: Bool
   @Binding var importPhotos: Bool
   @Binding var takePhoto: Bool
+  @Binding var scanDocument: Bool
   @Binding var photos: [PhotosPickerItem]
   @Binding var discardConfirm: Bool
   @Environment(AppStore.self) private var store
@@ -320,6 +328,13 @@ private struct ComposerPickers: ViewModifier {
       .onChange(of: photos) { _, selection in pick(selection) }
       .fullScreenCover(isPresented: $takePhoto) {
         CameraPicker(isPresented: $takePhoto) { data in attach([data], from: store.scope) }.ignoresSafeArea()
+      }
+      .fullScreenCover(isPresented: $scanDocument) {
+        let scanScope = store.scope
+        let scanBotId = bot.id
+        DocumentScannerPicker(isPresented: $scanDocument) { result in
+          attachScannedPDF(result, scope: scanScope, botId: scanBotId)
+        }.ignoresSafeArea()
       }
       .fileImporter(isPresented: $importFiles, allowedContentTypes: UploadRules.pickerTypes, allowsMultipleSelection: true) { result in
         switch result {
@@ -354,6 +369,29 @@ private struct ComposerPickers: ViewModifier {
     Task {
       guard scope == store.scope, store.selectedBotId == botId else { return }
       await store.uploads.attach(images: images, named: "Photo")
+    }
+  }
+  /// Attaches a scanned multi-page PDF only if the initiating account and chat are still active.
+  private func attachScannedPDF(_ result: Result<Data, Error>, scope: String?, botId: String) {
+    Task {
+      guard scope == store.scope, store.selectedBotId == botId else { return }
+      switch result {
+      case .failure(let error):
+        store.report(error)
+      case .success(let pdfData):
+        do {
+          let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scan-\(UUID().uuidString)", isDirectory: true)
+          try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+          let url = directory.appendingPathComponent(ScannedDocumentPDF.filename())
+          defer { try? FileManager.default.removeItem(at: directory) }
+          try pdfData.write(to: url, options: [.atomic, .completeFileProtection])
+          guard scope == store.scope, store.selectedBotId == botId else { return }
+          await store.uploads.attach(urls: [url])
+        } catch {
+          if scope == store.scope { store.report(error) }
+        }
+      }
     }
   }
 }
@@ -517,19 +555,6 @@ private struct ComposerRowLayout: Layout {
     } else {
       subviews[1].place(at: CGPoint(x: bounds.minX + value.lead.width + 4, y: bounds.midY), anchor: .leading,
         proposal: ProposedViewSize(width: max(0, bounds.width - value.lead.width - value.trail.width - 8), height: value.input.height))
-    }
-  }
-}
-
-extension View {
-  /// A control floating over the transcript, with nothing behind it but the messages scrolling under:
-  /// Liquid Glass on iOS 26, and a material with a hairline edge before it. Both turn solid with
-  /// Reduce Transparency.
-  @ViewBuilder func glassSurface<S: Shape>(_ shape: S, interactive: Bool = false) -> some View {
-    if #available(iOS 26, *) {
-      glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
-    } else {
-      background(.regularMaterial, in: shape).overlay(shape.stroke(Palette.line, lineWidth: 1))
     }
   }
 }

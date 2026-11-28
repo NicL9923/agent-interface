@@ -78,6 +78,7 @@ struct ComputerView: View {
   var take = false
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.openWindow) private var openWindow
   enum Phase: Equatable { case opening, connected, reconnecting, failed(String) }
   @State private var ticket: DesktopTicket?
   @State private var viewerId: String?
@@ -121,7 +122,13 @@ struct ComputerView: View {
       .onChange(of: input) { _, input in if !input { keyboard = false; info = nil } }
       .navigationTitle("Computer").navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          if UIDevice.current.userInterfaceIdiom == .pad {
+            Button {
+              openWindow(id: WindowID.computer, value: ComputerWindowRequest(take: false))
+            } label: { Image(systemName: "macwindow.badge.plus") }
+              .accessibilityLabel("Open Computer in new window").accessibilityIdentifier("computerNewWindow")
+          }
           Button { helpShown = true } label: { Image(systemName: "questionmark") }
             .accessibilityLabel("How to use the desktop").accessibilityIdentifier("computerHelp")
         }
@@ -166,19 +173,23 @@ struct ComputerView: View {
   }
   /// The keyboard and clipboard while this person holds the desktop; the ⋯ menu's touch settings always.
   private var controlBar: some View {
-    HStack(spacing: 4) {
+    HStack(spacing: 8) {
       if desktop.held {
-        Button { keyboard.toggle() } label: { barIcon(keyboard ? "keyboard.chevron.compact.down" : "keyboard") }
-          .disabled(!input)
-          .accessibilityLabel(keyboard ? "Hide keyboard" : "Type on the desktop")
-          .accessibilityHint("Keys go to the field selected on the desktop")
-          .accessibilityIdentifier("computerKeyboard")
-        Menu {
-          Button("Copy to \(device)", systemImage: "doc.on.doc") { Task { await copyToDevice() } }
-          Button("Paste from \(device)", systemImage: "doc.on.clipboard") { Task { await pasteFromDevice() } }
-        } label: { barIcon("doc.on.clipboard") }
-          .disabled(!input)
-          .accessibilityLabel("Clipboard").accessibilityIdentifier("computerClipboard")
+        HStack(spacing: 4) {
+          Button { keyboard.toggle() } label: { barIcon(keyboard ? "keyboard.chevron.compact.down" : "keyboard") }
+            .disabled(!input)
+            .accessibilityLabel(keyboard ? "Hide keyboard" : "Type on the desktop")
+            .accessibilityHint("Keys go to the field selected on the desktop")
+            .accessibilityIdentifier("computerKeyboard")
+          Menu {
+            Button("Copy to \(device)", systemImage: "doc.on.doc") { Task { await copyToDevice() } }
+            Button("Paste from \(device)", systemImage: "doc.on.clipboard") { Task { await pasteFromDevice() } }
+          } label: { barIcon("doc.on.clipboard") }
+            .disabled(!input)
+            .accessibilityLabel("Clipboard").accessibilityIdentifier("computerClipboard")
+        }
+        .padding(.horizontal, 4)
+        .glassSurface(Capsule(), interactive: true)
       }
       Spacer(minLength: 0)
       Menu {
@@ -186,8 +197,12 @@ struct ComputerView: View {
         if trackpad { Button("Recenter pointer", systemImage: "scope") { typing.view(.recenter) } }
         if zoomed { Button("Reset zoom", systemImage: "arrow.down.right.and.arrow.up.left") { typing.view(.resetZoom) } }
       } label: { barIcon("ellipsis") }
+        .padding(.horizontal, 2)
+        .glassSurface(Circle(), interactive: true)
         .accessibilityLabel("More").accessibilityIdentifier("computerMore")
-    }.padding(.horizontal, 8).padding(.top, 4)
+    }
+    .glassContainer(spacing: 8)
+    .padding(.horizontal, 12).padding(.top, 8)
   }
   private func barIcon(_ symbol: String) -> some View {
     Image(systemName: symbol).font(.title3).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())

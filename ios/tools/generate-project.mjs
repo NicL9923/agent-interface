@@ -53,6 +53,8 @@ const groups = [];
 
 for (const [name, kind] of [
   ...EXTENSIONS.map((extension) => [extension, "extension"]),
+  ["AgentInterfaceWatchWidgets", "watchExtension"],
+  ["AgentInterfaceWatch", "watchApp"],
   ["AgentInterface", "app"],
   ["AgentInterfaceTests", "unit"],
   ["AgentInterfaceUITests", "ui"],
@@ -64,6 +66,21 @@ for (const [name, kind] of [
   // Widget and Live Activity models and views: the app writes and previews what the widgets show.
   if (name === "AgentInterface" || name === "AgentInterfaceWidgets") {
     files.push(...swiftFilesIn(join(ROOT, "Shared", "Widgets")));
+  }
+  // WatchConnectivity wire payload and shared snapshot models for iPhone + Watch companion + Watch Smart Stack.
+  if (
+    name === "AgentInterface" ||
+    name === "AgentInterfaceWatch" ||
+    name === "AgentInterfaceWatchWidgets"
+  ) {
+    files.push(...swiftFilesIn(join(ROOT, "Shared", "Watch")));
+  }
+  if (kind === "watchApp" || kind === "watchExtension") {
+    files.push(
+      join(ROOT, "Shared", "ShareInbox.swift"),
+      join(ROOT, "Shared", "Widgets", "AssistantActivity.swift"),
+      join(ROOT, "Shared", "Widgets", "WidgetSnapshot.swift"),
+    );
   }
   // Notification prefetch: only the app and the notification service extension share the prefetch token and cache.
   if (name === "AgentInterface" || name === "AgentInterfaceNotifications") {
@@ -93,8 +110,11 @@ for (const [name, kind] of [
     builds.push(add(`build:${name}/${fileName}`, `{isa = PBXBuildFile; fileRef = ${reference};}`));
   }
 
+  const isWatch = kind === "watchApp" || kind === "watchExtension";
+  const hasAppResources = kind === "app" || kind === "extension" || isWatch;
+
   const resourceBuilds = [];
-  if (kind === "app" || kind === "extension") {
+  if (hasAppResources) {
     for (const [filename, filetype] of [
       ["Info.plist", "text.plist.xml"],
       [`${name}.entitlements`, "text.plist.entitlements"],
@@ -113,13 +133,14 @@ for (const [name, kind] of [
     }
   }
 
-  if (kind === "app") {
+  if (kind === "app" || kind === "watchApp") {
+    const assetKey = kind === "app" ? "Assets" : `${name}/Assets`;
     const assets = add(
-      "ref:Assets",
+      `ref:${assetKey}`,
       '{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>";}',
     );
     references.push(assets);
-    resourceBuilds.push(add("build:Assets", `{isa = PBXBuildFile; fileRef = ${assets};}`));
+    resourceBuilds.push(add(`build:${assetKey}`, `{isa = PBXBuildFile; fileRef = ${assets};}`));
   }
 
   groups.push(
@@ -130,12 +151,17 @@ for (const [name, kind] of [
   );
 
   const explicitFileType =
-    kind === "app"
+    kind === "app" || kind === "watchApp"
       ? "wrapper.application"
-      : kind === "extension"
+      : kind === "extension" || kind === "watchExtension"
         ? "wrapper.app-extension"
         : "wrapper.cfbundle";
-  const ext = kind === "app" ? "app" : kind === "extension" ? "appex" : "xctest";
+  const ext =
+    kind === "app" || kind === "watchApp"
+      ? "app"
+      : kind === "extension" || kind === "watchExtension"
+        ? "appex"
+        : "xctest";
   const product = add(
     `product:${name}`,
     `{isa = PBXFileReference; explicitFileType = ${explicitFileType}; path = "${name}.${ext}"; sourceTree = BUILT_PRODUCTS_DIR;}`,
@@ -157,13 +183,22 @@ for (const [name, kind] of [
 
   const configs = [];
   for (const configuration of ["Debug", "Release"]) {
+    const bundleIdentifier =
+      kind === "app"
+        ? "dev.agentinterface.ios"
+        : kind === "watchApp"
+          ? "dev.agentinterface.ios.watchkitapp"
+          : kind === "watchExtension"
+            ? "dev.agentinterface.ios.watchkitapp.widgets"
+            : `dev.agentinterface.ios.${name}`;
     const values = {
       PRODUCT_NAME: "$(TARGET_NAME)",
-      PRODUCT_BUNDLE_IDENTIFIER: `dev.agentinterface.ios${kind === "app" ? "" : `.${name}`}`,
-      SDKROOT: "iphoneos",
-      SUPPORTED_PLATFORMS: "iphoneos iphonesimulator",
-      IPHONEOS_DEPLOYMENT_TARGET: "17.0",
-      TARGETED_DEVICE_FAMILY: "1,2",
+      PRODUCT_BUNDLE_IDENTIFIER: bundleIdentifier,
+      SDKROOT: isWatch ? "watchos" : "iphoneos",
+      SUPPORTED_PLATFORMS: isWatch ? "watchos watchsimulator" : "iphoneos iphonesimulator",
+      ...(isWatch
+        ? { WATCHOS_DEPLOYMENT_TARGET: "10.0", TARGETED_DEVICE_FAMILY: "4" }
+        : { IPHONEOS_DEPLOYMENT_TARGET: "17.0", TARGETED_DEVICE_FAMILY: "1,2" }),
       SWIFT_VERSION: "6.0",
       SWIFT_STRICT_CONCURRENCY: "complete",
       CODE_SIGN_STYLE: "Automatic",
@@ -172,7 +207,7 @@ for (const [name, kind] of [
       MARKETING_VERSION,
       CURRENT_PROJECT_VERSION,
       LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @loader_path/Frameworks",
-      GENERATE_INFOPLIST_FILE: kind === "app" || kind === "extension" ? "NO" : "YES",
+      GENERATE_INFOPLIST_FILE: hasAppResources ? "NO" : "YES",
     };
     if (kind === "app") {
       Object.assign(values, {
@@ -191,6 +226,20 @@ for (const [name, kind] of [
         APPLICATION_EXTENSION_API_ONLY: "YES",
         SKIP_INSTALL: "YES",
       });
+    } else if (kind === "watchApp") {
+      Object.assign(values, {
+        INFOPLIST_FILE: `${name}/Info.plist`,
+        CODE_SIGN_ENTITLEMENTS: `${name}/${name}.entitlements`,
+        ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon",
+        SKIP_INSTALL: "YES",
+      });
+    } else if (kind === "watchExtension") {
+      Object.assign(values, {
+        INFOPLIST_FILE: `${name}/Info.plist`,
+        CODE_SIGN_ENTITLEMENTS: `${name}/${name}.entitlements`,
+        APPLICATION_EXTENSION_API_ONLY: "YES",
+        SKIP_INSTALL: "YES",
+      });
     } else if (kind === "unit") {
       Object.assign(values, {
         TEST_HOST:
@@ -200,7 +249,10 @@ for (const [name, kind] of [
     } else {
       values.TEST_TARGET_NAME = "AgentInterface";
     }
-    if (configuration === "Release" && (kind === "app" || kind === "extension")) {
+    if (
+      configuration === "Release" &&
+      (kind === "app" || kind === "extension" || kind === "watchApp" || kind === "watchExtension")
+    ) {
       values.PROVISIONING_PROFILE_SPECIFIER = `$(WILDBOTS_PROFILE_${name})`;
     }
     if (configuration === "Debug") {
@@ -225,7 +277,7 @@ for (const [name, kind] of [
   );
 
   const dependencies = [];
-  if (kind !== "app" && kind !== "extension") {
+  if (kind === "unit" || kind === "ui") {
     const proxy = add(
       `proxy:${name}`,
       `{isa = PBXContainerItemProxy; containerPortal = ${ident("project")}; proxyType = 1; remoteGlobalIDString = ${ident("target:AgentInterface")}; remoteInfo = AgentInterface;}`,
@@ -239,6 +291,28 @@ for (const [name, kind] of [
   }
 
   const phases = [source, frameworks, resources];
+  if (kind === "watchApp") {
+    const watchWidgetsEmbed = add(
+      "embed:AgentInterfaceWatchWidgets",
+      `{isa = PBXBuildFile; fileRef = ${ident("product:AgentInterfaceWatchWidgets")}; settings = {ATTRIBUTES = (RemoveHeadersOnCopy);};}`,
+    );
+    const proxy = add(
+      "proxy:AgentInterfaceWatchWidgets",
+      `{isa = PBXContainerItemProxy; containerPortal = ${ident("project")}; proxyType = 1; remoteGlobalIDString = ${ident("target:AgentInterfaceWatchWidgets")}; remoteInfo = AgentInterfaceWatchWidgets;}`,
+    );
+    dependencies.push(
+      add(
+        "dependency:AgentInterfaceWatchWidgets",
+        `{isa = PBXTargetDependency; target = ${ident("target:AgentInterfaceWatchWidgets")}; targetProxy = ${proxy};}`,
+      ),
+    );
+    phases.push(
+      add(
+        "phase:WatchExtensions",
+        `{isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = (${watchWidgetsEmbed}); name = "Embed watch extensions"; runOnlyForDeploymentPostprocessing = 0;}`,
+      ),
+    );
+  }
   if (kind === "app") {
     const embedded = [];
     for (const extension of EXTENSIONS) {
@@ -267,10 +341,32 @@ for (const [name, kind] of [
         `{isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = ${array(embedded)}; name = "Embed app extensions"; runOnlyForDeploymentPostprocessing = 0;}`,
       ),
     );
+    const watchEmbed = add(
+      "embed:AgentInterfaceWatch",
+      `{isa = PBXBuildFile; fileRef = ${ident("product:AgentInterfaceWatch")}; settings = {ATTRIBUTES = (RemoveHeadersOnCopy);};}`,
+    );
+    const watchProxy = add(
+      "proxy:AgentInterfaceWatch",
+      `{isa = PBXContainerItemProxy; containerPortal = ${ident("project")}; proxyType = 1; remoteGlobalIDString = ${ident("target:AgentInterfaceWatch")}; remoteInfo = AgentInterfaceWatch;}`,
+    );
+    dependencies.push(
+      add(
+        "dependency:AgentInterfaceWatch",
+        `{isa = PBXTargetDependency; target = ${ident("target:AgentInterfaceWatch")}; targetProxy = ${watchProxy};}`,
+      ),
+    );
+    phases.push(
+      add(
+        "phase:WatchContent",
+        `{isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = "$(CONTENTS_FOLDER_PATH)/Watch"; dstSubfolderSpec = 16; files = (${watchEmbed}); name = "Embed Watch Content"; runOnlyForDeploymentPostprocessing = 0;}`,
+      ),
+    );
   }
 
   const productType = {
     extension: "app-extension",
+    watchExtension: "app-extension",
+    watchApp: "application",
     app: "application",
     unit: "bundle.unit-test",
     ui: "bundle.ui-testing",
@@ -319,18 +415,33 @@ writeFileSync(
 const schemeDir = join(projectPath, "xcshareddata", "xcschemes");
 mkdirSync(schemeDir, { recursive: true });
 
-function reference(name) {
-  return `<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="${ident(`target:${name}`)}" BuildableName="${name}.${name === "AgentInterface" ? "app" : "xctest"}" BlueprintName="${name}" ReferencedContainer="container:AgentInterface.xcodeproj"/>`;
+function reference(name, suffix) {
+  const ext =
+    suffix ?? (name === "AgentInterface" || name === "AgentInterfaceWatch" ? "app" : "xctest");
+  return `<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="${ident(`target:${name}`)}" BuildableName="${name}.${ext}" BlueprintName="${name}" ReferencedContainer="container:AgentInterface.xcodeproj"/>`;
 }
 
 writeFileSync(
   join(schemeDir, "AgentInterface.xcscheme"),
   `<?xml version="1.0" encoding="UTF-8"?>
 <Scheme LastUpgradeVersion="2700" version="1.7">
-<BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">${reference("AgentInterface")}</BuildActionEntry></BuildActionEntries></BuildAction>
-<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO" parallelizable="NO">${reference("AgentInterfaceTests")}</TestableReference><TestableReference skipped="NO" parallelizable="NO">${reference("AgentInterfaceUITests")}</TestableReference></Testables></TestAction>
-<LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugServiceExtension="internal" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0">${reference("AgentInterface")}</BuildableProductRunnable></LaunchAction>
-<ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugServiceExtension="internal"><BuildableProductRunnable runnableDebuggingMode="0">${reference("AgentInterface")}</BuildableProductRunnable></ProfileAction>
+<BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">${reference("AgentInterface", "app")}</BuildActionEntry></BuildActionEntries></BuildAction>
+<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO" parallelizable="NO">${reference("AgentInterfaceTests", "xctest")}</TestableReference><TestableReference skipped="NO" parallelizable="NO">${reference("AgentInterfaceUITests", "xctest")}</TestableReference></Testables></TestAction>
+<LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugServiceExtension="internal" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0">${reference("AgentInterface", "app")}</BuildableProductRunnable></LaunchAction>
+<ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugServiceExtension="internal"><BuildableProductRunnable runnableDebuggingMode="0">${reference("AgentInterface", "app")}</BuildableProductRunnable></ProfileAction>
+<AnalyzeAction buildConfiguration="Debug"/><ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
+</Scheme>
+`,
+);
+
+writeFileSync(
+  join(schemeDir, "AgentInterfaceWatch.xcscheme"),
+  `<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion="2700" version="1.7">
+<BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">${reference("AgentInterfaceWatch", "app")}</BuildActionEntry></BuildActionEntries></BuildAction>
+<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables/></TestAction>
+<LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugServiceExtension="internal" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0">${reference("AgentInterfaceWatch", "app")}</BuildableProductRunnable></LaunchAction>
+<ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugServiceExtension="internal"><BuildableProductRunnable runnableDebuggingMode="0">${reference("AgentInterfaceWatch", "app")}</BuildableProductRunnable></ProfileAction>
 <AnalyzeAction buildConfiguration="Debug"/><ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
 </Scheme>
 `,

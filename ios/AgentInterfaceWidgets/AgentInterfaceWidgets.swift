@@ -7,7 +7,11 @@ import WidgetKit
   var body: some Widget {
     AssistantsWidget()
     AssistantsLiveActivity()
-    if #available(iOS 18.0, *) { TalkToAssistantControl() }
+    if #available(iOS 18.0, *) {
+      TalkToAssistantControl()
+      CheckAssistantsControl()
+      OpenTodayControl()
+    }
   }
 }
 
@@ -24,6 +28,34 @@ struct TalkToAssistantControl: ControlWidget {
     .displayName("Talk to assistant")
     .description("Opens an assistant and starts a voice message.")
     .promptsForUserConfiguration()
+  }
+}
+
+/// Control Center, Lock Screen and Action button: check which assistants need you or are working.
+@available(iOS 18.0, *)
+struct CheckAssistantsControl: ControlWidget {
+  var body: some ControlWidgetConfiguration {
+    StaticControlConfiguration(kind: "CheckAssistants") {
+      ControlWidgetButton(action: CheckAssistantsIntent()) {
+        Label("Check on assistants", systemImage: "person.crop.circle.badge.exclamationmark")
+      }
+    }
+    .displayName("Check on assistants")
+    .description("Shows who needs you and who is working without opening WildBots.")
+  }
+}
+
+/// Control Center, Lock Screen and Action button: jump straight to Today.
+@available(iOS 18.0, *)
+struct OpenTodayControl: ControlWidget {
+  var body: some ControlWidgetConfiguration {
+    StaticControlConfiguration(kind: "OpenToday") {
+      ControlWidgetButton(action: OpenTodayIntent()) {
+        Label("Open Today", systemImage: "calendar")
+      }
+    }
+    .displayName("Open Today")
+    .description("Opens what is new, waiting, and in progress in WildBots.")
   }
 }
 

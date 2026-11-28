@@ -230,12 +230,22 @@ struct GroupCreateView: View {
   @State private var pending: GroupCreate?
   @State private var error: String?
   @State private var busy = false
+  @State private var suggestingName = false
   var body: some View {
     Form {
       if let error { ErrorBanner(message: error) }
       if let pending { Text("\(pending.name) · \(pending.botIds.count) assistants. The saved request will be checked with Hermes.") }
       else {
         TextField("Group name", text: Binding(get: { name }, set: { name = GroupLimits.clip($0, to: GroupLimits.name) }))
+        if botIds.count >= 2 && OnDeviceIntelligence.isAvailable {
+          Button {
+            suggestName()
+          } label: {
+            Label(suggestingName ? "Suggesting name…" : "Suggest group name", systemImage: "sparkles")
+          }
+          .disabled(suggestingName || busy)
+          .accessibilityIdentifier("suggestGroupName")
+        }
         Section {
           ForEach((store.bootstrap?.bots ?? []).filter { !["all", "everyone"].contains($0.id.lowercased()) }) { bot in
             Toggle(isOn: Binding(get: { botIds.contains(bot.id) }, set: { if $0 { if !botIds.contains(bot.id) { botIds.append(bot.id) } } else { botIds.removeAll { $0 == bot.id } } })) {
@@ -269,6 +279,21 @@ struct GroupCreateView: View {
     }
     guard let room else { return }
     pending = nil; onCreated(room); dismiss()
+  }
+  private func suggestName() {
+    guard !suggestingName, botIds.count >= 2 else { return }
+    let initialName = name
+    let initialSelection = botIds
+    let memberNames = (store.bootstrap?.bots ?? []).filter { initialSelection.contains($0.id) }.map(\.name)
+    suggestingName = true
+    Task {
+      defer { suggestingName = false }
+      if let suggestion = await OnDeviceIntelligence.suggestGroupTitle(members: memberNames),
+        name == initialName, botIds == initialSelection
+      {
+        name = GroupLimits.clip(suggestion, to: GroupLimits.name)
+      }
+    }
   }
 }
 extension AppStore {

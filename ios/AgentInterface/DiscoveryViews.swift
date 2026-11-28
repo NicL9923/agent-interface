@@ -113,6 +113,13 @@ struct DiscoveryView: View {
       }
     }
     .onAppear(perform: focusSearchIfAsked).onChange(of: store.searchFocusPending) { _, _ in focusSearchIfAsked() }
+    .onAppear(perform: openSavedIfAsked).onChange(of: store.savedRequest) { _, _ in openSavedIfAsked() }
+  }
+  private func openSavedIfAsked() {
+    guard store.savedRequest != nil else { return }
+    store.savedRequest = nil
+    tab = "saved"
+    page = nil
   }
   /// Cmd+F from anywhere opens Search with the keyboard ready.
   private func focusSearchIfAsked() {
@@ -250,12 +257,21 @@ struct DiscoveryView: View {
     }
   }
   private func saveReply(_ message: Message, _ page: HistoryPage) {
-    savePointer(SavedPointer(botId: page.botId, kind: "session", sessionId: page.sessionId, messageId: message.id, offset: page.offset, title: Self.replyTitle(message.text)))
+    guard let api = store.api else { return }
+    let owner = store.scope
+    Task {
+      let suggested = await OnDeviceIntelligence.suggestReferenceTitle(for: message.text)
+      guard store.scope == owner, store.api === api else { return }
+      savePointer(SavedPointer(botId: page.botId, kind: "session", sessionId: page.sessionId, messageId: message.id, offset: page.offset, title: suggested ?? Self.replyTitle(message.text)))
+    }
   }
   private func removeSaved(_ item: SavedItem) {
     Task { guard !busy else { return }; await perform { api in
+      let startedScope = store.publishableScope
+      let startedToken = api.token
       let _: EmptyResponse = try await api.write("/saved/\(APIClient.component(item.id))", [String:String](), method: "DELETE")
       saved.removeAll { $0.id == item.id }
+      store.publishSavedSpotlight(saved, expectedScope: startedScope, expectedToken: startedToken)
       if item.kind == "session", let session = item.sessionId { pinned.remove(Bookmark(botId: item.botId, sessionId: session, messageId: item.messageId)) }
     } }
   }
@@ -346,12 +362,32 @@ struct DiscoveryView: View {
   private func name(_ id:String, fallback: String = "Assistant")->String { store.bootstrap?.bots.first { $0.id == id }?.name ?? fallback }
   private func cost(_ value:Double?)->String { value.map { String(format:"$%.2f",$0) } ?? "Unknown" }
   private func perform(_ action:(APIClient)async throws->Void) async {
-    guard let api=store.api else { return };let scope=store.scope;let request=UUID();loadId=request;busy=true;error=nil;notice=nil
+    guard let api=store.api else { return };let scope=store.scope;let startedToken=api.token;let request=UUID();loadId=request;busy=true;error=nil;notice=nil
     defer { if scope==store.scope && request==loadId { busy=false } }
-    do { try await action(api) } catch { if scope==store.scope && request==loadId { self.error=error.localizedDescription } }
+    do { try await action(api) } catch {
+      store.handleSessionExpiryIfCurrent(error, client: api, token: startedToken)
+      if scope==store.scope && request==loadId { self.error=error.localizedDescription }
+    }
     if scope != store.scope { hits=[];saved=[];pinned=[];overview=nil;page=nil;notice=nil }
   }
-  private func load() async { await perform { api in if tab=="saved" { saved=try await api.get("/saved"); pinned = Set(saved.compactMap { item in item.kind == "session" ? item.sessionId.map { Bookmark(botId: item.botId, sessionId: $0, messageId: item.messageId) } : nil }) };if tab=="automations" { overview=try await api.get("/automations") } } }
+  private func load() async {
+    await perform { api in
+      let startedScope = store.publishableScope
+      let startedToken = api.token
+      if tab == "saved" {
+        saved = try await api.get("/saved")
+        store.publishSavedSpotlight(saved, expectedScope: startedScope, expectedToken: startedToken)
+        pinned = Set(saved.compactMap { item in item.kind == "session" ? item.sessionId.map { Bookmark(botId: item.botId, sessionId: $0, messageId: item.messageId) } : nil })
+      }
+      if tab == "automations" {
+        let fetched: AutomationOverview = try await api.get("/automations")
+        overview = fetched
+        if store.publishableScope == startedScope, store.api === api, api.token == startedToken {
+          store.publishRoutinesSnapshot(fetched.routines)
+        }
+      }
+    }
+  }
   /// Typing waits this long before searching; at least two characters are needed.
   static let searchDelay: Duration = .milliseconds(300)
   static let minimumQuery = 2
@@ -359,7 +395,7 @@ struct DiscoveryView: View {
   private func search() async {
     let text = Self.trimmed(query)
     guard !text.isEmpty, let api = store.api else { return }
-    let request = requests.start(), scope = store.scope
+    let request = requests.start(), scope = store.scope, startedToken = api.token
     searching = true; error = nil
     defer { if request == requests.token { searching = false } }
     do {
@@ -370,6 +406,7 @@ struct DiscoveryView: View {
       notice = result.unavailableBots.isEmpty ? (hits.isEmpty ? "No matching conversations." : nil) : "Could not search \(result.unavailableBots.count) assistant(s)."
       AccessibilityNotification.Announcement(Self.resultsAnnouncement(hits.count)).post()
     } catch {
+      store.handleSessionExpiryIfCurrent(error, client: api, token: startedToken)
       guard !Task.isCancelled, requests.applies(request, asked: text, query: query), scope == store.scope else { return }
       self.error = error.localizedDescription
     }

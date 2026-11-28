@@ -646,6 +646,30 @@ struct RoutineEnhancements: View {
         Text("Each run appears in the assistant's conversation for you.").font(.caption).foregroundStyle(Palette.muted)
       }
     }.tint(Palette.accent).accessibilityIdentifier("routineShowRuns-\(routine.id)")
+    if CriticalAlarmManager.shared.isEnabled(for: store.scope) {
+      Toggle(isOn: Binding(
+        get: { CriticalAlarmManager.shared.routineEnabled(routine.id, for: store.scope) },
+        set: { enabled in
+          CriticalAlarmManager.shared.setRoutineEnabled(enabled, routineId: routine.id, for: store.scope)
+          if enabled, let targetScope = store.scope {
+            let startEpoch = CriticalAlarmManager.shared.currentEpoch
+            Task {
+              guard store.scope == targetScope else { return }
+              await CriticalAlarmManager.shared.scheduleRoutineAlarmIfOptedIn(
+                routine: routine,
+                scope: targetScope,
+                expectedEpoch: startEpoch
+              )
+            }
+          }
+        }
+      )) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Escalate with alarm")
+          Text("Sound an AlarmKit alert when this routine runs or fails.").font(.caption).foregroundStyle(Palette.muted)
+        }
+      }.tint(Palette.accent).accessibilityIdentifier("routineAlarm-\(routine.id)")
+    }
   }
   private func saveReceipt(_ value: RoutineRunReceipt, key: String) { receipt = value; if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: key) } }
   private func startRun() {

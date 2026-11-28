@@ -1,39 +1,56 @@
 import Foundation
 import UserNotifications
 
+/// Honest result returned to Apple Watch or other callers after running a Live Activity / widget action.
+struct ActivityActionResult: Equatable, Sendable {
+  var ok: Bool
+  var message: String
+}
+
 /// The Live Activity's Stop and Decline. iOS runs them in the app, possibly launched in the background
 /// just for this, so they use the same sign-in a notification's Decline does.
 extension NotificationController {
   func act(_ action: ActivityAction) async {
+    _ = await performAction(action)
+  }
+
+  func performAction(_ action: ActivityAction) async -> ActivityActionResult {
     // Only the account the activity was started for acts on it. Before the account loads, the saved
     // sign-in names it, as when the activity decides whether to end.
     let signedIn = store?.scope ?? (actionClient() != nil ? savedScope() : nil)
     guard signedIn == action.scope, let userId = AppStore.userId(inScope: action.scope) else {
-      await deliverNotice(Self.activityNotice(action, title: "\(action.name) wasn't changed",
-        body: "This activity belongs to an account that isn't signed in here. Tap to open WildBots."))
-      return
+      let body = "This activity belongs to an account that isn't signed in here. Tap to open WildBots."
+      await deliverNotice(Self.activityNotice(action, title: "\(action.name) wasn't changed", body: body))
+      return ActivityActionResult(ok: false, message: "Sign in to this account on iPhone first.")
     }
     switch action.kind {
     case .decline(let approvalId):
       // The server refuses a decision whose account is not the signed-in person's.
-      await decide(ApprovalDecision(botId: action.botId, approvalId: approvalId, account: NotificationActions.accountMarker(userId),
+      let ok = await decide(ApprovalDecision(botId: action.botId, approvalId: approvalId, account: NotificationActions.accountMarker(userId),
         url: "/?bot=\(APIClient.component(action.botId))", title: action.name))
+      return ok
+        ? ActivityActionResult(ok: true, message: "Decline sent for \(action.name).")
+        : ActivityActionResult(ok: false, message: "Could not decline \(action.name)'s request. Open WildBots on iPhone.")
     case .stop:
       let api = store?.api.flatMap { $0.token != nil || $0.localCookieAuth ? $0 : nil } ?? actionClient()
       guard let api else {
         await deliverNotice(Self.activityNotice(action, title: "\(action.name) didn't stop", body: "Sign in to WildBots again, then stop it in the chat."))
-        return
+        return ActivityActionResult(ok: false, message: "Sign in to WildBots on iPhone to stop \(action.name).")
       }
       do {
         // The server refuses a Stop for another account, as for a decision, so a sign-in that changed
-        // since this check cannot stop someone else's work with its own token.
-        let _: EmptyResponse = try await api.write("/bots/\(APIClient.component(action.botId))/stop",
-          ["account": NotificationActions.accountMarker(userId)])
+        // since this check cannot stop someone else's work with its own token. When a runId is provided
+        // (from widgets or Apple Watch), the server refuses stopping a newer run than the one shown.
+        var body = ["account": NotificationActions.accountMarker(userId)]
+        if let runId = action.runId, !runId.isEmpty { body["runId"] = runId }
+        let _: EmptyResponse = try await api.write("/bots/\(APIClient.component(action.botId))/stop", body)
         if let store, store.selectedBotId == action.botId, store.api === api { await store.refreshConversation() }
+        return ActivityActionResult(ok: true, message: "Stop requested for \(action.name).")
       } catch {
         let reason = (error as? LocalizedError)?.errorDescription ?? "WildBots couldn't reach the server."
         await deliverNotice(Self.activityNotice(action, title: "\(action.name) didn't stop",
           body: (reason.hasSuffix(".") ? reason : reason + ".") + " Tap to open the chat."))
+        return ActivityActionResult(ok: false, message: reason)
       }
     }
   }

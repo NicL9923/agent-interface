@@ -217,17 +217,25 @@ import XCTest
     XCTAssertEqual(DeepLink.relativePath(for: URL(string: "agentinterface://open?bot=kitchen")!), "/?bot=kitchen")
     XCTAssertEqual(DeepLink.relativePath(for: DeepLink.bot("a b&c")), "/?bot=a%20b%26c")
     XCTAssertEqual(DeepLink.relativePath(for: DeepLink.today), "/?view=today")
+    XCTAssertEqual(DeepLink.relativePath(for: DeepLink.search), "/?view=search")
+    XCTAssertEqual(DeepLink.relativePath(for: DeepLink.saved), "/?view=saved")
+    XCTAssertEqual(DeepLink.relativePath(for: DeepLink.group("room-1")), "/?group=room-1")
+    XCTAssertEqual(DeepLink.relativePath(for: DeepLink.routine(botId: "kitchen", routineId: "morning")), "/?bot=kitchen&routine=morning")
     let origin = URL(string: "https://app.example.test")!
     XCTAssertEqual(NotificationController.botId(from: try XCTUnwrap(DeepLink.relativePath(for: DeepLink.bot("a b&c"))), origin: origin), "a b&c")
     for rejected in ["agentinterface://auth/callback?code=x&bot=kitchen", "agentinterface://open/other?bot=kitchen",
-      "https://open?bot=kitchen", "agentinterface://open?bot=", "agentinterface://open?view=settings", "other://open?bot=kitchen"] {
+      "https://open?bot=kitchen", "agentinterface://open?bot=", "agentinterface://open?group=", "agentinterface://open?view=settings", "other://open?bot=kitchen"] {
       XCTAssertNil(DeepLink.relativePath(for: URL(string: rejected)!), rejected)
     }
   }
   /// iOS ends the app when a feature asks for a device permission without a purpose string, and
   /// the simulator hides the camera, so only this check catches a missing one.
   func testEveryRequestedDevicePermissionHasAPurposeString() {
-    for key in ["NSCameraUsageDescription", "NSMicrophoneUsageDescription", "NSCalendarsFullAccessUsageDescription", "NSRemindersFullAccessUsageDescription"] {
+    for key in [
+      "NSCameraUsageDescription", "NSMicrophoneUsageDescription",
+      "NSCalendarsFullAccessUsageDescription", "NSRemindersFullAccessUsageDescription",
+      "NSFaceIDUsageDescription", "NSAlarmKitUsageDescription",
+    ] {
       let purpose = Bundle.main.object(forInfoDictionaryKey: key) as? String
       XCTAssertFalse(purpose?.isEmpty ?? true, key)
     }

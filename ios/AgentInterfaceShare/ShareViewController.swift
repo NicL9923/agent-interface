@@ -4,10 +4,12 @@ import UniformTypeIdentifiers
 final class ShareViewController: UIViewController {
   private let status = UILabel()
   private let picker = UIButton(type:.system)
+  private let summarize = UIButton(type: .system)
   private let save = UIButton(type:.system)
   private var selectedBotId: String?
   private var context: ShareContext?
   private var text = ""
+  private var originalText: String?
   private var files: [String] = []
   private let captureId = UUID().uuidString.lowercased()
   private var loading = true
@@ -17,10 +19,13 @@ final class ShareViewController: UIViewController {
     status.numberOfLines = 0
     status.text = "Preparing a draft…"
     let title = UILabel(); title.text = "Share with an assistant"; title.font = .preferredFont(forTextStyle: .title2)
+    summarize.isHidden = true
+    summarize.setTitle("Summarize snippet on device", for: .normal)
+    summarize.addTarget(self, action: #selector(toggleSummarize), for: .touchUpInside)
     save.isEnabled = false
     save.setTitle("Save draft", for: .normal); save.addTarget(self, action: #selector(saveDraft), for: .touchUpInside)
     let cancel = UIButton(type: .system); cancel.setTitle("Cancel", for: .normal); cancel.addTarget(self, action: #selector(cancelShare), for: .touchUpInside)
-    let stack = UIStackView(arrangedSubviews: [title, status, picker, save, cancel]); stack.axis = .vertical; stack.spacing = 20; stack.translatesAutoresizingMaskIntoConstraints = false
+    let stack = UIStackView(arrangedSubviews: [title, status, picker, summarize, save, cancel]); stack.axis = .vertical; stack.spacing = 20; stack.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(stack)
     NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo:view.safeAreaLayoutGuide.leadingAnchor,constant:24), stack.trailingAnchor.constraint(equalTo:view.safeAreaLayoutGuide.trailingAnchor,constant:-24),stack.topAnchor.constraint(equalTo:view.safeAreaLayoutGuide.topAnchor,constant:24)])
     context = ShareInbox.context()
@@ -62,6 +67,7 @@ final class ShareViewController: UIViewController {
       guard text.count <= 50000 else { throw CocoaError(.fileReadTooLarge) }
       loading = false
       save.isEnabled = true
+      summarize.isHidden = !(OnDeviceIntelligence.isAvailable && text.count >= 240)
       let ready = files.isEmpty ? "Ready to save." : "\(files.count) \(files.count == 1 ? "attachment" : "attachments") ready."
       status.text = "\(ready) Save, then open WildBots to review your draft. Nothing is sent automatically."
     } catch {
@@ -83,6 +89,32 @@ final class ShareViewController: UIViewController {
       default: continuation.resume(throwing:CocoaError(.fileReadUnknown))
       }
     } }
+  }
+  @objc private func toggleSummarize() {
+    guard !loading else { return }
+    if let original = originalText {
+      text = original
+      originalText = nil
+      summarize.setTitle("Summarize snippet on device", for: .normal)
+      status.text = "Restored original text. Save, then open WildBots to review your draft."
+      return
+    }
+    let source = text
+    summarize.isEnabled = false
+    status.text = "Summarizing on device…"
+    Task { @MainActor [weak self] in
+      let summary = await OnDeviceIntelligence.summarizeSharedSnippet(source)
+      guard let self else { return }
+      self.summarize.isEnabled = true
+      if let summary {
+        self.originalText = source
+        self.text = summary
+        self.summarize.setTitle("Restore original text", for: .normal)
+        self.status.text = "Summary ready. Save, then open WildBots to review your draft."
+      } else {
+        self.status.text = "Kept original text. Save, then open WildBots to review your draft."
+      }
+    }
   }
   @objc private func saveDraft() {
     guard !loading, let context, ShareInbox.context()?.scope == context.scope, let root = ShareInbox.root else {

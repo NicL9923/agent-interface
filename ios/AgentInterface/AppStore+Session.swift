@@ -1,5 +1,6 @@
 import AuthenticationServices
 import SwiftUI
+import WidgetKit
 
 // Connecting to a server, signing in and out, and keeping the sign-in renewed.
 extension AppStore {
@@ -7,7 +8,11 @@ extension AppStore {
   /// Reopens the saved server. A stored sign-in goes straight to bootstrap, because
   /// `/auth/config` only matters for signing in and an outage there must not strand the person.
   func restore() async {
-    guard !host.isEmpty, !restoring else { return }
+    guard !restoring else { return }
+    if host.isEmpty {
+      spotlight?.sync(nil)
+      return
+    }
     restoring = true
     defer { restoring = false }
     do {
@@ -51,6 +56,8 @@ extension AppStore {
         // changed to. One with no poll yet starts here.
         if let api, api.token != nil, api === started || pollTask == nil { startPolling() }
       } else {
+        // Signed-out launch: retry any pending Spotlight clear (e.g., if `deleteAll` failed on sign-out).
+        spotlight?.sync(nil)
         try await ensureAuthConfig()
       }
     } catch { report(error) }
@@ -133,17 +140,32 @@ extension AppStore {
       // longer send, and its late answers cannot touch this session. Another member also takes over
       // an account the last one leaves, so nothing of theirs, such as a failed settings save or an
       // unsaved draft, stays to be sent. The same member keeps their draft and failed save.
-      if let previous = bootstrap?.user.id, previous != result.user.id {
+      let nextScope = AppStore.scope(server: api.baseURL, userId: result.user.id)
+      let priorScope = UserDefaults.standard.string(forKey: DeviceDefaults.signedInScope)
+      let switchedUser = (bootstrap?.user.id != nil && bootstrap?.user.id != result.user.id)
+        || (priorScope != nil && priorScope != nextScope)
+      if switchedUser {
         // While the last member's token still works, as in the minute before it expires, it ends their
         // session here, which also releases this device's push registration for them.
-        await revokeSession(api)
-        guard generation == authGeneration, self.api === api else { return }
-        // Before the new token is saved, which the notification extension reads: its process must never pair it
-        // with the last member's config.
+        if bootstrap?.user.id != nil {
+          await revokeSession(api)
+          guard generation == authGeneration, self.api === api else { return }
+        }
+        // Before the new token is saved, clear every cross-process and account-scoped surface so
+        // Shortcuts, widgets, Watch, and extensions can never pair the new member's token with the
+        // prior member's saved scope or snapshots.
         clearNotificationPrefetch()
+        if WidgetSnapshotStore.write(nil, to: widgetSnapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
+        RoutineSnapshotStore.write(nil)
+        WatchBridge.shared.sync(nil)
+        QuickActions.sync(nil)
+        BiometricGate.shared.lock()
+        CriticalAlarmManager.shared.cancelAll()
+        UserDefaults.standard.set(nextScope, forKey: DeviceDefaults.signedInScope)
         try saveToken(result.token, api.baseURL.absoluteString)
         leaveAccount(nextToken: result.token)
       } else {
+        UserDefaults.standard.set(nextScope, forKey: DeviceDefaults.signedInScope)
         try SecureToken.save(result.token, host: api.baseURL.absoluteString)
         replaceClient(token: result.token)
       }
@@ -315,6 +337,9 @@ extension AppStore {
     leftBotId = nil
     deletedBotId = nil
     openedFile = nil
+    searchRequest = nil
+    savedRequest = nil
+    openGroupRoomId = nil
     retryAttempt = nil
     focusedMessage = nil
     conversationRefreshedAt = nil
@@ -358,6 +383,14 @@ extension AppStore {
     resetPreferenceSaves()
     listenRequest = nil
     routineResult = nil
+    searchRequest = nil
+    savedRequest = nil
+    openGroupRoomId = nil
+    BiometricGate.shared.lock()
+    CriticalAlarmManager.shared.cancelAll()
+    RoutineSnapshotStore.write(nil)
+    WatchBridge.shared.sync(nil)
+    QuickActions.sync(nil)
     replyWatch = nil
     failures = 0
     forgetSentEchoes()

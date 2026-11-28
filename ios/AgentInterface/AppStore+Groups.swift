@@ -15,16 +15,24 @@ extension AppStore {
   /// Reads the room catalog for home. A failure keeps the rooms already shown; the next poll tries again.
   func refreshGroups() async {
     let id = UUID(); groupLoadId = id
+    let startedToken = api?.token
     let result = await attempt(current: { [weak self] in self?.groupLoadId == id }) { try await $0.api.get("/groups") as GroupCatalog }
-    guard case .success(let value)? = result, value != groupCatalog else { return }
-    groupCatalog = value
+    guard case .success(let value)? = result,
+      let activeScope = publishableScope,
+      api?.token == startedToken
+    else { return }
+    if value != groupCatalog { groupCatalog = value }
+    // Always pass through to Spotlight so re-signing in as the same member after session expiry
+    // reindexes unchanged rooms (Spotlight deduplicates against its own stored state).
+    spotlight?.syncGroups(value.rooms, scope: activeScope)
   }
   /// A room just made shows at once; the next read of the catalog replaces this copy.
   func groupRoomCreated(_ room: GroupRoom) {
-    guard var catalog = groupCatalog else { return }
+    guard let activeScope = publishableScope, var catalog = groupCatalog else { return }
     catalog.rooms.removeAll { $0.id == room.id }
     catalog.rooms.append(room)
     groupCatalog = catalog
+    spotlight?.syncGroups(catalog.rooms, scope: activeScope)
     Task { await refreshGroups() }
   }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 // Operator tooling uses Node's built-in modules and has no TypeScript build step.
@@ -10,6 +10,7 @@ import {
   appleApi,
   AppleNotReady,
   distribute,
+  identifiers,
   requireReadyBuild,
   runPrivate,
   untilReady,
@@ -382,5 +383,26 @@ describe("publish-ios archive refuses before it touches the host, credentials or
     expect(result.stderr).toContain("No passing iOS validation exists");
     expect(result.stderr).toContain(validateCommand);
     expect(result.stderr).not.toContain("Mac mini");
+  });
+
+  it("includes embedded Watch targets in release provisioning profile specifiers and bundle paths", () => {
+    const byName = new Map(identifiers.map((item: any) => [item.name, item]));
+    expect(byName.get("AgentInterfaceWatch")).toEqual({
+      name: "AgentInterfaceWatch",
+      identifier: "dev.agentinterface.ios.watchkitapp",
+      bundlePath: "Watch/AgentInterfaceWatch.app",
+    });
+    expect(byName.get("AgentInterfaceWatchWidgets")).toEqual({
+      name: "AgentInterfaceWatchWidgets",
+      identifier: "dev.agentinterface.ios.watchkitapp.widgets",
+      bundlePath: "Watch/AgentInterfaceWatch.app/PlugIns/AgentInterfaceWatchWidgets.appex",
+    });
+    const pbxproj = readFileSync(
+      join(root, "ios/AgentInterface.xcodeproj/project.pbxproj"),
+      "utf8",
+    );
+    for (const { name } of identifiers as Array<{ name: string }>) {
+      expect(pbxproj).toContain(`PROVISIONING_PROFILE_SPECIFIER = "$(WILDBOTS_PROFILE_${name})";`);
+    }
   });
 });

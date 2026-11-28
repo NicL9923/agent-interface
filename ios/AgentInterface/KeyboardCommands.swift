@@ -28,6 +28,7 @@ extension AppStore {
 /// `NativeFlowTests.testCommandPeriodAsksBeforeStoppingActiveWork` fail when this menu breaks.
 struct AssistantCommands: Commands {
   var store: AppStore
+  @Environment(\.openWindow) private var openWindow
   var body: some Commands {
     CommandMenu("Assistants") {
       ForEach(Array(store.pinnedForShortcuts.enumerated()), id: \.element.id) { index, bot in
@@ -41,6 +42,19 @@ struct AssistantCommands: Commands {
         .disabled(store.bootstrap == nil)
       Button("Stop active work") { store.command(.stop) }.keyboardShortcut(".", modifiers: .command)
         .disabled(store.bootstrap == nil)
+      if UIDevice.current.userInterfaceIdiom == .pad {
+        Divider()
+        Button("Open Computer in New Window") {
+          openWindow(id: WindowID.computer, value: ComputerWindowRequest(take: false))
+        }.keyboardShortcut("d", modifiers: [.command, .shift])
+          .disabled(store.bootstrap == nil)
+        if let id = store.selectedBotId {
+          Button("Open Chat in New Window") {
+            openWindow(id: WindowID.conversation, value: id)
+          }.keyboardShortcut("n", modifiers: [.command, .shift])
+            .disabled(store.bootstrap == nil)
+        }
+      }
     }
   }
 }

@@ -90,6 +90,14 @@ extension Data {
       of: "/", with: "_"
     ).replacingOccurrences(of: "=", with: "")
   }
+
+  init?(base64URLEncoded value: String) {
+    var base64 = value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+    let remainder = base64.count % 4
+    if remainder == 1 { return nil }
+    if remainder > 0 { base64 += String(repeating: "=", count: 4 - remainder) }
+    self.init(base64Encoded: base64)
+  }
 }
 
 @MainActor final class APIClient {
@@ -97,6 +105,10 @@ extension Data {
   /// Paths kept for conditional GETs. Polling uses a handful; the bound covers browsing.
   static let conditionalCacheLimit = 64
   private struct Validated { var etag: String; var data: Data }
+  /// Called immediately when any authenticated request (other than `/api/auth/logout`) receives
+  /// HTTP `401` with `code == "session_expired"`, passing the error, client, and token that sent it
+  /// so `AppStore` invalidates the session regardless of which view or request wrapper called it.
+  var onSessionExpired: (@MainActor (APIError, APIClient, String?) -> Void)?
   /// One server per client: changing servers creates a new client and a new cache.
   let baseURL: URL
   var token: String? {
@@ -323,6 +335,9 @@ extension Data {
           path: path, method: method, body: body, contentType: contentType,
           authenticated: authenticated, conditional: false)
       }
+      if authenticated, failure.isSessionExpired, path != "/api/auth/logout" {
+        onSessionExpired?(failure, self, sentToken)
+      }
       throw failure
     }
     // Only JSON is kept; file downloads can be large and are never polled.
@@ -377,6 +392,19 @@ extension Data {
       return try await openEvents(path)
     }
     guard http?.statusCode == 200, http?.mimeType == "text/event-stream" else {
+      if http?.statusCode == 401 {
+        var body = Data()
+        for try await byte in bytes {
+          body.append(byte)
+          if body.count >= 4096 { break }
+        }
+        bytes.task.cancel()
+        let failure = Self.failure(401, body)
+        if failure.isSessionExpired {
+          onSessionExpired?(failure, self, sentToken)
+        }
+        throw failure
+      }
       bytes.task.cancel()
       throw APIError(message: "The change stream is unavailable.", status: http?.statusCode ?? 0)
     }
@@ -526,7 +554,11 @@ extension Data {
       guard token == sentToken else { throw Self.failure(response.statusCode, result) }
       return try await sendUpload(botId: botId, name: name, mime: mime, data: data, progress: progress)
     }
-    guard (200..<300).contains(response.statusCode) else { throw Self.failure(response.statusCode, result) }
+    guard (200..<300).contains(response.statusCode) else {
+      let failure = Self.failure(response.statusCode, result)
+      if failure.isSessionExpired { onSessionExpired?(failure, self, sentToken) }
+      throw failure
+    }
     return try await Self.decoded(result, from: path)
   }
 }

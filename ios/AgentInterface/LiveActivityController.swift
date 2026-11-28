@@ -51,6 +51,27 @@ struct LiveActivityStartRegistration: Encodable {
   /// somewhere else, and the account it was last registered for.
   private var startToken: String?
   private var registeredStart: (scope: String, token: String)?
+  /// Latest authoritative pending approval IDs observed from `/native/live-activity`, scoped to one account.
+  private var cachedApprovals: (scope: String, approvals: [String: String])?
+
+  func latestApprovals(for scope: String) -> [String: String] {
+    guard let cachedApprovals, cachedApprovals.scope == scope else { return [:] }
+    return cachedApprovals.approvals
+  }
+
+  private func recordApprovals(from state: AssistantActivityState, scope: String) {
+    var map: [String: String] = [:]
+    for row in state.rows where row.phase == .waiting {
+      if let approvalId = row.approvalId, !approvalId.isEmpty {
+        map[row.botId] = approvalId
+      }
+    }
+    let changed = cachedApprovals?.scope != scope || cachedApprovals?.approvals != map
+    cachedApprovals = (scope: scope, approvals: map)
+    if changed, store?.scope == scope {
+      store?.publishWidgetSnapshot()
+    }
+  }
   /// How often a foreground app refreshes its own activity instead of waiting for a push.
   static let foregroundInterval: Duration = .seconds(15)
   static let staleAfter: TimeInterval = 15 * 60
@@ -113,17 +134,23 @@ struct LiveActivityStartRegistration: Encodable {
     signedIn != scope || running.contains { $0.scope == scope }
   }
   /// The loaded account, or before it loads, the account the saved sign-in belongs to. Nil when
-  /// nobody is signed in, as after an offline sign-out the server never heard about.
-  private func signedInScope() -> String? {
-    if let scope = store?.scope { return scope }
-    guard backgroundClient() != nil else { return nil }
-    return savedScope()
+  /// nobody is signed in, when signing in, or when the session has expired (either reported or past
+  /// its saved expiry deadline while suspended) so delayed push-to-start activities dismiss immediately.
+  func signedInScope(defaults: UserDefaults = .standard, now: Date = Date()) -> String? {
+    if let store {
+      if store.sessionExpired || store.signingIn { return nil }
+      if let scope = store.scope {
+        return WatchBridge.scopeMatchesCredential(scope, client: store.api, defaults: defaults, now: now) ? scope : nil
+      }
+    }
+    guard let bg = backgroundClient(), let scope = savedScope() else { return nil }
+    return WatchBridge.scopeMatchesCredential(scope, client: bg, defaults: defaults, now: now) ? scope : nil
   }
   var savedScope: () -> String? = { UserDefaults.standard.string(forKey: DeviceDefaults.signedInScope) }
 
   /// After a send the server accepted: show the assistant as starting right away.
   func sent(to botId: String) async {
-    guard let store, let api = store.api, let scope = store.scope, enabled, systemAllowed else { return }
+    guard let store, !store.sessionExpired, let api = store.api, api.token != nil, let scope = store.scope, enabled, systemAllowed else { return }
     unregisteredSends[botId] = Date()
     let token = api.token
     // A server that can start activities by push holds off while this app starts its own.
@@ -151,6 +178,7 @@ struct LiveActivityStartRegistration: Encodable {
       token == api.token, scope == store.scope, !store.suspended
     else { return }
     guard status.available else { await endAll(unregister: false); return }
+    recordApprovals(from: status.state, scope: scope)
     let state = seeded(status.state)
     if state.activeCount > 0 {
       await show(state, scope: scope)
@@ -170,6 +198,7 @@ struct LiveActivityStartRegistration: Encodable {
   func endAll(unregister: Bool) async {
     background()
     unregisteredSends = [:]
+    cachedApprovals = nil
     // The server drops the old account's start token with its session, or when the next account registers it.
     registeredStart = nil
     let activities = Live.activities
@@ -183,17 +212,17 @@ struct LiveActivityStartRegistration: Encodable {
     for activity in activities { await activity.end(nil, dismissalPolicy: .immediate) }
   }
   private func startForegroundUpdates() {
-    guard store?.suspended == false else { return }
+    guard store?.suspended == false, store?.sessionExpired == false else { return }
     foregroundTask?.cancel()
     foregroundTask = Task { [weak self] in
       while !Task.isCancelled {
         try? await Task.sleep(for: Self.foregroundInterval)
-        guard let self, !Task.isCancelled, let store = self.store, let api = store.api, let scope = store.scope,
+        guard let self, !Task.isCancelled, let store = self.store, !store.sessionExpired,
+          let api = store.api, let token = api.token, let scope = store.scope,
           let activity = self.running.first(where: { $0.attributes.scope == scope })
         else { return }
-        let token = api.token
         guard let status: LiveActivityStatus = try? await api.get(self.statePath(scope: scope)),
-          token == api.token, scope == store.scope, !store.suspended, status.available, activity.activityState == .active || activity.activityState == .stale
+          !store.sessionExpired, token == api.token, scope == store.scope, !store.suspended, status.available, activity.activityState == .active || activity.activityState == .stale
         else { continue }
         let state = self.seeded(status.state)
         if state.activeCount > 0 {

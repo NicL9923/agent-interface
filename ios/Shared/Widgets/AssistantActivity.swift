@@ -1,15 +1,19 @@
-import ActivityKit
+#if canImport(ActivityKit)
+  import ActivityKit
+#endif
 import Foundation
 
-/// The one aggregate Live Activity per device. The server owns `ContentState`: it is both the
-/// `GET /api/native/live-activity` state and the APNs `content-state`, so its field names and
-/// types follow docs/native-api.md exactly.
-struct AssistantsActivityAttributes: ActivityAttributes {
-  typealias ContentState = AssistantActivityState
-  /// The account that started the activity. A different sign-in ends it instead of showing
-  /// another person's assistants.
-  var scope: String
-}
+#if canImport(ActivityKit)
+  /// The one aggregate Live Activity per device. The server owns `ContentState`: it is both the
+  /// `GET /api/native/live-activity` state and the APNs `content-state`, so its field names and
+  /// types follow docs/native-api.md exactly.
+  struct AssistantsActivityAttributes: ActivityAttributes {
+    typealias ContentState = AssistantActivityState
+    /// The account that started the activity. A different sign-in ends it instead of showing
+    /// another person's assistants.
+    var scope: String
+  }
+#endif
 
 /// A Live Activity row's phase. A phase this version does not know decodes as `unknown`, so a
 /// newer server cannot break an activity that is already on the Lock Screen.
@@ -80,14 +84,16 @@ struct AssistantActivityState: Codable, Hashable {
   /// What the Lock Screen and Dynamic Island offer for the first row: Decline a pending approval, or
   /// Stop running work. Nothing while out of date, since the row may no longer be true. Approving
   /// stays in the chat, where the approval card shows what it would run.
-  func action(stale: Bool) -> ActivityAction.Kind? {
-    guard !stale, let hero else { return nil }
-    switch hero.phase {
-    case .waiting: return hero.approvalId.map { .decline(approvalId: $0) }
-    case .thinking, .working: return .stop
-    default: return nil
+  #if canImport(ActivityKit)
+    func action(stale: Bool) -> ActivityAction.Kind? {
+      guard !stale, let hero else { return nil }
+      switch hero.phase {
+      case .waiting: return hero.approvalId.map { .decline(approvalId: $0) }
+      case .thinking, .working: return .stop
+      default: return nil
+      }
     }
-  }
+  #endif
   var updatedDate: Date { Date(timeIntervalSince1970: updatedAt) }
   static func empty(at now: Date) -> Self {
     Self(title: "", activeCount: 0, attentionCount: 0, updatedAt: now.timeIntervalSince1970, rows: [])
@@ -140,6 +146,8 @@ struct AssistantActivityState: Codable, Hashable {
 enum DeepLink {
   static let today = URL(string: "agentinterface://open?view=today")!
   static let home = URL(string: "agentinterface://open?view=home")!
+  static let search = URL(string: "agentinterface://open?view=search")!
+  static let saved = URL(string: "agentinterface://open?view=saved")!
   /// `listen` also starts a voice message once the chat is open.
   static func bot(_ id: String, listen: Bool = false) -> URL {
     var components = URLComponents()
@@ -148,8 +156,22 @@ enum DeepLink {
     components.queryItems = [URLQueryItem(name: "bot", value: id)] + (listen ? [URLQueryItem(name: "listen", value: "1")] : [])
     return components.url ?? today
   }
-  /// `agentinterface://open?bot=ID` becomes `/?bot=ID`, keeping `listen=1`. Anything else, including
-  /// the sign-in callback `agentinterface://auth/callback`, is not a navigation link.
+  static func routine(botId: String, routineId: String) -> URL {
+    var components = URLComponents()
+    components.scheme = "agentinterface"
+    components.host = "open"
+    components.queryItems = [URLQueryItem(name: "bot", value: botId), URLQueryItem(name: "routine", value: routineId)]
+    return components.url ?? today
+  }
+  static func group(_ roomId: String) -> URL {
+    var components = URLComponents()
+    components.scheme = "agentinterface"
+    components.host = "open"
+    components.queryItems = [URLQueryItem(name: "group", value: roomId)]
+    return components.url ?? home
+  }
+  /// `agentinterface://open?bot=ID` becomes `/?bot=ID`, keeping `listen=1` and `routine=ID`.
+  /// Anything else, including the sign-in callback `agentinterface://auth/callback`, is not a navigation link.
   static func relativePath(for url: URL) -> String? {
     guard url.scheme?.lowercased() == "agentinterface", url.host?.lowercased() == "open",
       url.path.isEmpty || url.path == "/",
@@ -159,8 +181,14 @@ enum DeepLink {
     components.path = "/"
     if let bot = items.first(where: { $0.name == "bot" })?.value, !bot.isEmpty {
       let listen = items.contains { $0.name == "listen" && $0.value == "1" }
-      components.queryItems = [URLQueryItem(name: "bot", value: bot)] + (listen ? [URLQueryItem(name: "listen", value: "1")] : [])
-    } else if let view = items.first(where: { $0.name == "view" })?.value, ["today", "home"].contains(view) {
+      let routine = items.first(where: { $0.name == "routine" })?.value.flatMap { $0.isEmpty ? nil : $0 }
+      var query = [URLQueryItem(name: "bot", value: bot)]
+      if let routine { query.append(URLQueryItem(name: "routine", value: routine)) }
+      if listen { query.append(URLQueryItem(name: "listen", value: "1")) }
+      components.queryItems = query
+    } else if let group = items.first(where: { $0.name == "group" })?.value, !group.isEmpty {
+      components.queryItems = [URLQueryItem(name: "group", value: group)]
+    } else if let view = items.first(where: { $0.name == "view" })?.value, ["today", "home", "search", "saved"].contains(view) {
       components.queryItems = [URLQueryItem(name: "view", value: view)]
     } else {
       return nil

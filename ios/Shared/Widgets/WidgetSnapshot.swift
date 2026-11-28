@@ -12,6 +12,10 @@ struct WidgetSnapshot: Codable, Equatable {
     var lastMessageAt: Date?
     var color: String?
     var pinned: Bool
+    /// Pending approval ID when the assistant is waiting on an approval that widgets/Watch can decline.
+    var approvalId: String? = nil
+    /// Active run ID when the assistant is working so widgets/Watch only stop the exact run displayed.
+    var runId: String? = nil
     var needsAttention: Bool { activity == "waiting" || activity == "blocked" }
     var isWorking: Bool { activity == "thinking" || activity == "working" }
     /// Idle and disconnected have no phase of their own; the row shows the last message instead.
@@ -99,5 +103,41 @@ enum WidgetSnapshotStore {
     // Readable while the device is locked after its first unlock, for Lock Screen widgets.
     try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     return true
+  }
+}
+
+/// Non-secret list of the signed-in account's routines for Shortcuts (`TryOnceIntent`) and Spotlight.
+/// Never stores sign-in tokens or prompts; cleared immediately on sign-out or account switch.
+struct RoutineSnapshot: Codable, Equatable, Sendable {
+  struct Item: Codable, Equatable, Identifiable, Sendable {
+    var id: String
+    var botId: String
+    var botName: String
+    var name: String
+    var enabled: Bool
+  }
+  var scope: String
+  var updatedAt: Date
+  var routines: [Item]
+}
+
+enum RoutineSnapshotStore {
+  static var defaultURL: URL? {
+    FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: ShareInbox.group)?
+      .appendingPathComponent("Widgets", isDirectory: true).appendingPathComponent("routines.json")
+  }
+  static func read(from url: URL? = defaultURL) -> RoutineSnapshot? {
+    guard let url, let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONDecoder().decode(RoutineSnapshot.self, from: data)
+  }
+  static func write(_ value: RoutineSnapshot?, to url: URL? = defaultURL) {
+    guard let url else { return }
+    guard let value else {
+      try? FileManager.default.removeItem(at: url)
+      return
+    }
+    guard let data = try? JSONEncoder().encode(value) else { return }
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
   }
 }

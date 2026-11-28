@@ -14,6 +14,45 @@ import WidgetKit
   /// The saved server and Keychain sign-in, as a notification action uses after a background launch.
   static var client: @MainActor () -> APIClient? = { NotificationController.shared.actionClient() }
   static var snapshotURL: URL? = WidgetSnapshotStore.defaultURL
+  /// System surfaces cleared directly when a cold background refresh or cold action receives
+  /// `401 session_expired` with no `AppStore` window mounted. Unit tests leave real system/App
+  /// Group stores untouched unless explicitly injected.
+  static var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
+  static var senderAvatars: SenderAvatars? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? SenderAvatars(root: NotificationSenders.root) : nil
+  static var prefetchRoot: URL? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? NotificationPrefetchStore.root : nil
+  static var watchBridge: WatchBridge = .shared
+
+  /// Authoritative cold/background session-expiry teardown shared by `BackgroundRefresh` and
+  /// cold `actionClient()` actions (Shortcuts, Watch, Widgets) when no window is mounted.
+  static func handleColdSessionExpiry(_ error: APIError, client: APIClient, token: String?) {
+    guard error.isSessionExpired, let token else { return }
+    // Require an authoritative match against the CURRENT active origin and credential (from an
+    // attached `AppStore` or `Self.client()`), never falling back to a detached client from an
+    // earlier server so a late 401 from server A can never wipe server B's shared state.
+    if let store = watchBridge.store, let activeAPI = store.api {
+      guard activeAPI.baseURL == client.baseURL, activeAPI.token == token else { return }
+    } else if let current = Self.client() {
+      guard current.baseURL == client.baseURL, current.token == token else { return }
+      current.token = nil
+    } else {
+      return
+    }
+    try? SecureToken.save(nil, host: client.baseURL.absoluteString)
+    client.token = nil
+    if WidgetSnapshotStore.write(nil, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
+    RoutineSnapshotStore.write(nil)
+    watchBridge.sync(nil)
+    QuickActions.sync(nil)
+    CriticalAlarmManager.shared.cancelAll()
+    BiometricGate.shared.lock()
+    spotlight?.sync(nil)
+    senderAvatars?.sync(account: nil, bots: [])
+    if let prefetchRoot { NotificationPrefetchStore.clear(root: prefetchRoot) }
+    Task { await LiveActivityController.shared.endAll(unregister: false) }
+    if let store = watchBridge.store, store.api?.baseURL == client.baseURL, store.api?.token == token {
+      store.report(error)
+    }
+  }
   /// One read at a time: a push and the refresh task can arrive together.
   private static var running: Task<Bool, Never>?
 
@@ -45,6 +84,7 @@ import WidgetKit
     // The roster is at least this old. A snapshot written since, such as by the app opening meanwhile,
     // is newer and stays.
     let started = now()
+    let startEpoch = CriticalAlarmManager.shared.currentEpoch
     do {
       let bootstrap: Bootstrap = try await api.get("/bootstrap?roster=lean")
       // An outage, or a roster from the server's cache, keeps the last good snapshot, as the open app does:
@@ -52,11 +92,41 @@ import WidgetKit
       guard !Task.isCancelled, !bootstrap.servedFromCache else { return false }
       // Signed out or into another account while this read was out: it is not theirs to show.
       guard let current = client(), current.baseURL == api.baseURL, current.token == token else { return false }
-      if let stored = WidgetSnapshotStore.read(from: snapshotURL), stored.generatedAt > started { return false }
-      let snapshot = WidgetSnapshot(bootstrap: bootstrap, scope: AppStore.scope(server: api.baseURL, userId: bootstrap.user.id), at: started)
+      let scope = AppStore.scope(server: api.baseURL, userId: bootstrap.user.id)
+      let stored = WidgetSnapshotStore.read(from: snapshotURL)
+      if let stored, stored.generatedAt > started { return false }
+      // Carry forward known pending approval IDs for the same account scope from LiveActivityController
+      // and the prior snapshot so background refresh never strips Decline metadata without making an
+      // extra network round-trip. Never copy stale runIds across lean refreshes: run A may have ended
+      // and run B started, so Stop is offered only when live activity confirms the current runId.
+      var pendingApprovals = LiveActivityController.shared.latestApprovals(for: scope)
+      if let stored, stored.scope == scope {
+        for prev in stored.assistants {
+          if prev.activity == "waiting", let ap = prev.approvalId, !ap.isEmpty, pendingApprovals[prev.id] == nil {
+            pendingApprovals[prev.id] = ap
+          }
+        }
+      }
+      let snapshot = WidgetSnapshot(
+        bootstrap: bootstrap,
+        scope: scope,
+        at: started,
+        pendingApprovals: pendingApprovals
+      )
       if WidgetSnapshotStore.write(snapshot, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
+      watchBridge.sync(snapshot)
+      await CriticalAlarmManager.shared.escalateWaitingBatch(
+        snapshot.assistants,
+        scope: snapshot.scope,
+        expectedEpoch: startEpoch
+      )
       return true
-    } catch { return false }
+    } catch {
+      if let apiError = error as? APIError, apiError.isSessionExpired {
+        handleColdSessionExpiry(apiError, client: api, token: token)
+      }
+      return false
+    }
   }
 
   /// Registers the refresh task. iOS requires this before launch finishes.

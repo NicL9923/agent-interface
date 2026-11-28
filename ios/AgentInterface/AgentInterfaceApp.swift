@@ -6,9 +6,11 @@ import UserNotifications
   @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
   @State private var store = AppStore()
   @Environment(\.scenePhase) private var scenePhase
+  @Namespace private var zoomNamespace
   var body: some Scene {
     WindowGroup {
       RootView().appStore(store)
+        .environment(\.zoomNamespace, zoomNamespace)
         .background(DeviceInputWatcher().allowsHitTesting(false))
         .fontDesign(.rounded).tint(Palette.accent)
         .preferredColorScheme(
@@ -23,6 +25,7 @@ import UserNotifications
           }
           LiveActivityController.shared.store = store
           DeviceActivity.shared.store = store
+          WatchBridge.shared.store = store
           CrashReporter.shared.api = { [weak store] in store?.api }
           CrashDiagnosticsSubscriber.shared.start()
           #if DEBUG
@@ -30,6 +33,8 @@ import UserNotifications
           #endif
           await store.restore()
           await store.refreshFocus()
+          CriticalAlarmManager.shared.reconcileOnLaunch(activeScope: store.scope)
+          await store.refreshRoutinesForAlarms()
         }
         .onChange(of: scenePhase) { _, phase in
           if phase == .active {
@@ -42,12 +47,16 @@ import UserNotifications
               await store.refreshFocus()
               await NotificationController.shared.synchronize()
               await LiveActivityController.shared.foreground()
+              await store.refreshRoutinesForAlarms()
             }
           } else {
             DeviceActivity.shared.backgrounded()
             store.suspend()
             LiveActivityController.shared.background()
-            if phase == .background { BackgroundRefresh.schedule() }
+            if phase == .background {
+              BiometricGate.shared.lock()
+              BackgroundRefresh.schedule()
+            }
           }
         }
         // The store times a lost connection from this, so every screen shows it the same way.
@@ -61,6 +70,14 @@ import UserNotifications
         // Sign-out, another account or another server: the old account's activity ends, and
         // the new one starts from its own state.
         .onChange(of: store.scope) { old, new in
+          BiometricGate.shared.lock()
+          CriticalAlarmManager.shared.cancelAll()
+          DraggableManagedFile.cleanupTemporaryFiles(maxAge: 0)
+          if new == nil {
+            RoutineSnapshotStore.write(nil)
+            WatchBridge.shared.sync(nil)
+            QuickActions.sync(nil)
+          }
           store.deviceNotifications = DeviceNotificationState()
           store.listenRequest = nil
           DeviceActivity.shared.accountChanged()
@@ -70,22 +87,50 @@ import UserNotifications
               await CrashReporter.shared.flush()
               await NotificationController.shared.synchronize()
               await LiveActivityController.shared.foreground()
+              await store.refreshRoutinesForAlarms()
             }
           }
         }
         // Widget and Live Activity taps. The sign-in callback never arrives here: the
         // authentication session receives it directly, and `DeepLink` ignores it anyway.
         .onOpenURL { url in Task { await NotificationController.shared.open(url) } }
-        // A Spotlight result for an assistant opens its chat like a widget row.
+        // Spotlight results for assistants, group chats, routines, and saved items.
         .onContinueUserActivity(CSSearchableItemActionType) { activity in
-          guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String else { return }
-          Task { await NotificationController.shared.open(DeepLink.bot(id)) }
+          guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+            let url = AssistantSpotlight.deepLink(for: id)
+          else { return }
+          Task { await NotificationController.shared.open(url) }
         }
         // A chat handed off from another device's app, and universal links or Safari pages for a chat or Today.
         .onContinueUserActivity(ChatHandoff.activityType) { activity in Task { await NotificationController.shared.continueActivity(activity) } }
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in Task { await NotificationController.shared.continueActivity(activity) } }
     }
     .commands { AssistantCommands(store: store) }
+
+    // iPadOS Multi-Window: side-by-side shared Computer window in Stage Manager / Split View.
+    WindowGroup("Computer", id: WindowID.computer, for: ComputerWindowRequest.self) { $request in
+      ComputerWindowView(request: request ?? ComputerWindowRequest())
+        .appStore(store)
+        .fontDesign(.rounded).tint(Palette.accent)
+        .preferredColorScheme(
+          store.bootstrap?.preferences.theme == "dark"
+            ? .dark : store.bootstrap?.preferences.theme == "light" ? .light : nil
+        )
+    }
+
+    // iPadOS Multi-Window: independent second assistant conversation side-by-side.
+    WindowGroup("Assistant", id: WindowID.conversation, for: String.self) { $botId in
+      if let botId {
+        SecondaryConversationWindow(botId: botId)
+          .appStore(store)
+          .environment(\.zoomNamespace, zoomNamespace)
+          .fontDesign(.rounded).tint(Palette.accent)
+          .preferredColorScheme(
+            store.bootstrap?.preferences.theme == "dark"
+              ? .dark : store.bootstrap?.preferences.theme == "light" ? .light : nil
+          )
+      }
+    }
   }
 }
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -100,10 +145,22 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     LiveActivityController.shared.watchSystem()
     // Controls and other intents that run in the app open their link here.
     IntentLinks.handler = { await NotificationController.shared.open($0) }
-    // The Live Activity's Stop and Decline run in the app, which holds the sign-in.
+    // The Live Activity's and interactive widget's Stop, Decline, and Refresh run in the app, which holds the sign-in.
     ActivityActions.handler = { await NotificationController.shared.act($0) }
+    ActivityActions.refreshHandler = { await BackgroundRefresh.refreshWidgets() }
+    CheckAssistantsRefresh.handler = { await BackgroundRefresh.refreshWidgets(waitingAtMost: $0) }
+    WatchBridge.shared.start()
     BackgroundRefresh.register()
     return true
+  }
+  func application(
+    _ application: UIApplication,
+    configurationForConnecting connectingSceneSession: UISceneSession,
+    options: UIScene.ConnectionOptions
+  ) -> UISceneConfiguration {
+    let config = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+    config.delegateClass = QuickActionSceneDelegate.self
+    return config
   }
   func application(
     _ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
@@ -180,12 +237,27 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   var pendingURL: String? { didSet { if pendingURL != nil { navigationAt = Date(); navigationScope = store?.scope } } }
   /// Text typed into notifications' Reply, in arrival order, until a signed-in store can hold it for its draft.
   var pendingReplies: [NotificationReply] = []
+  /// Builds a Keychain-backed `APIClient` for cold actions (Shortcuts, Watch, Widgets, notification
+  /// actions) and wires its `onSessionExpired` handler to cold session teardown. Leaving `session`
+  /// nil preserves `APIClient`'s guarded `APISessionDelegate` and isolated cookie store in production.
+  static func makeActionClient(
+    baseURL: URL,
+    session: URLSession? = nil,
+    token: String? = nil
+  ) -> APIClient? {
+    let api = session.map { APIClient(baseURL: baseURL, session: $0) } ?? APIClient(baseURL: baseURL)
+    if let token { api.token = token }
+    guard api.token != nil else { return nil }
+    api.onSessionExpired = { error, client, token in
+      BackgroundRefresh.handleColdSessionExpiry(error, client: client, token: token)
+    }
+    return api
+  }
   /// The sign-in a notification action uses. After a launch in the background just for the action, the
   /// store has not restored, so this falls back to the saved server address and the Keychain sign-in.
   var actionClient: @MainActor () -> APIClient? = {
     guard let host = UserDefaults.standard.string(forKey: DeviceDefaults.host), let url = try? ConnectionAddress.parse(host) else { return nil }
-    let api = APIClient(baseURL: url)
-    return api.token == nil ? nil : api
+    return NotificationController.makeActionClient(baseURL: url)
   }
   var deliverNotice: @MainActor (UNNotificationRequest) async -> Void = { try? await UNUserNotificationCenter.current().add($0) }
   /// The account the saved sign-in belongs to, before the store loads it.
@@ -442,16 +514,18 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   }
   /// Approve or Deny from a notification, possibly with the app in the background. It is sent once; when it
   /// does not go through, a notification says so and opens the chat, where the approval card shows its state.
-  func decide(_ decision: ApprovalDecision) async {
-    guard deciding.insert(decision.approvalId).inserted else { return }
+  @discardableResult func decide(_ decision: ApprovalDecision) async -> Bool {
+    guard deciding.insert(decision.approvalId).inserted else { return false }
     defer { deciding.remove(decision.approvalId) }
     let api = store?.api.flatMap { $0.token != nil || $0.localCookieAuth ? $0 : nil } ?? actionClient()
     let outcome = await decision.send(with: api)
     if outcome == .decided {
       if let store, store.selectedBotId == decision.botId, store.api === api { await store.refreshConversation() }
+      return true
     } else if let notice = decision.failureNotice(outcome) {
       await deliverNotice(notice)
     }
+    return false
   }
   func clearPendingNavigation() {
     pendingURL = nil; pendingBotId = nil; pendingRoutineId = nil; pendingListen = false
@@ -477,6 +551,26 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       if let url=URL(string:pendingURL,relativeTo:origin)?.absoluteURL,url.scheme==origin.scheme,url.host==origin.host,url.port==origin.port,url.path=="/",URLComponents(url:url,resolvingAgainstBaseURL:false)?.queryItems?.first(where:{$0.name=="view"})?.value=="today" {
         guard let store,store.bootstrap != nil else { return }
         store.todayRequest=UUID();self.pendingURL=nil;pendingBotId=nil;pendingRoutineId=nil;return
+      }
+      if let url = URL(string: pendingURL, relativeTo: origin)?.absoluteURL,
+        url.scheme == origin.scheme, url.host == origin.host, url.port == origin.port, url.path == "/",
+        let view = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "view" })?.value,
+        view == "search" || view == "saved"
+      {
+        guard let store, store.bootstrap != nil else { return }
+        if view == "saved" { store.savedRequest = UUID() } else { store.searchRequest = UUID() }
+        self.pendingURL = nil; pendingBotId = nil; pendingRoutineId = nil; pendingListen = false
+        return
+      }
+      if let url = URL(string: pendingURL, relativeTo: origin)?.absoluteURL,
+        url.scheme == origin.scheme, url.host == origin.host, url.port == origin.port, url.path == "/",
+        let groupId = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "group" })?.value,
+        !groupId.isEmpty
+      {
+        guard let store, store.bootstrap != nil else { return }
+        store.openGroupRoomId = groupId
+        self.pendingURL = nil; pendingBotId = nil; pendingRoutineId = nil; pendingListen = false
+        return
       }
       pendingBotId = Self.botId(from: pendingURL, origin: origin)
       pendingRoutineId = nil

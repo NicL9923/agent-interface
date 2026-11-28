@@ -179,8 +179,8 @@ async function profiles(api, config, destination) {
 }
 
 function checkSignedBundles(root, config, version, build) {
-  for (const { name, identifier } of identifiers) {
-    const path = name === "AgentInterface" ? root : join(root, "PlugIns", `${name}.appex`);
+  for (const { name, identifier, bundlePath } of identifiers) {
+    const path = bundlePath ? join(root, bundlePath) : root;
     const info = plist(readFileSync(join(path, "Info.plist")));
     fail(
       info.CFBundleIdentifier === identifier &&

@@ -1659,6 +1659,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         value.leftBotId = "family"; value.deletedBotId = "family"
         value.notice = "Member one's notice"; value.earlierFilesFailure = "Member one's failure"
         value.openedFile = PreviewFile(url: FileManager.default.temporaryDirectory.appendingPathComponent("one.txt"))
+        value.searchRequest = UUID(); value.savedRequest = UUID(); value.openGroupRoomId = "room-one"
         // What the notification extension staged for member one. Its process reads the new token as soon as it is saved,
         // so both must be gone by then.
         let staged = FileManager.default.temporaryDirectory.appendingPathComponent("prefetch-\(UUID().uuidString)")
@@ -1734,14 +1735,14 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         everConnected failures fileTask focus focusedMessage generation groupCatalog groupLoadId groupNoticeScope
         haptic hapticCount heldTurn historyStarts homeRequest host interruptionReviewed keyboardCommand knownBots
         latestInflight leftBotId listedActivity listenRequest loading loadingEarlier loadingEarlierFiles makeClient
-        notice now offlineLibraryRoot offlineSavedAt offlineWriteDelay offlineWriter openComputer openRequests
+        notice now offlineLibraryRoot offlineSavedAt offlineWriteDelay offlineWriter openComputer openGroupRoomId openRequests
         openTerminal openedFile openingBotId outageDeadline outagePause outageTimer ownRows ownSends pending
         pendingTurn pendings pollTask preferenceSaves preferencesDraft preferencesFailureMessage preferencesNotice
         preferencesSaveFailed preferencesSaving prefetchAgain prefetchRoot prefetchRun prefetchTask presenceBeat
         presenceReports presenceScope queuedChoices queuedPreferences readFailedFor readFailures readHere readRetry
         readRetryPause receipt receipts recentChats removeDeliveredChats renewalAttemptedAt replyAnnouncement replyFiles
         replyWatch requestedWindow restoredRosterAt restoring resyncPause retryAttempt retryCheckDelays retryCheckKey
-        retryChecks revokeWait rosterFromCache rosterTask routineResult scheduledDraftSave scope searchFocusPending
+        retryChecks revokeWait rosterFromCache rosterTask routineResult savedRequest scheduledDraftSave scope searchFocusPending searchRequest
         selectedBotId selectionGeneration selections senderAvatars sending sendingRequests sessionExpired signingIn
         spotlight staleRosterSince stayHome streamHeardAt submissionChecks suspended todayRequest transcript turns
         unconfirmedDepartures uploads viewingBotId widgetSnapshotURL windowGeneration uploads.items

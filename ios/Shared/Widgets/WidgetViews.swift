@@ -298,33 +298,72 @@ struct AssistantsWidgetView: View {
       footer(snapshot)
     }.frame(maxWidth: .infinity, alignment: .leading).widgetURL(DeepLink.bot(hero.id))
   }
-  private func row(_ assistant: WidgetSnapshot.Assistant) -> some View {
-    Link(destination: DeepLink.bot(assistant.id)) {
-      HStack(spacing: 10) {
-        AssistantGlyphView(color: tone.identity(assistant.color)).frame(width: 24, height: 24)
-        VStack(alignment: .leading, spacing: 1) {
-          HStack(spacing: 6) {
-            Text(assistant.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-            if assistant.pinned { Image(systemName: "star.fill").font(.system(size: pinSize)).foregroundStyle(.secondary).accessibilityLabel("Pinned") }
-            Spacer(minLength: 4)
-            if assistant.status != nil { status(assistant) }
+  private func row(_ assistant: WidgetSnapshot.Assistant, scope: String, interactive: Bool) -> some View {
+    HStack(spacing: 8) {
+      Link(destination: DeepLink.bot(assistant.id)) {
+        HStack(spacing: 10) {
+          AssistantGlyphView(color: tone.identity(assistant.color)).frame(width: 24, height: 24)
+          VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+              Text(assistant.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+              if assistant.pinned { Image(systemName: "star.fill").font(.system(size: pinSize)).foregroundStyle(.secondary).accessibilityLabel("Pinned") }
+              Spacer(minLength: 4)
+              if assistant.status != nil { status(assistant) }
+            }
+            preview(assistant, lines: 1)
           }
-          preview(assistant, lines: 1)
+        }.foregroundStyle(Color.primary)
+      }
+      if interactive, !stale, !scope.isEmpty {
+        if assistant.activity == "waiting", let approvalId = assistant.approvalId, !approvalId.isEmpty {
+          Button(intent: DeclineApprovalActivityIntent(botId: assistant.id, name: assistant.name, approvalId: approvalId, scope: scope)) {
+            Image(systemName: "xmark")
+          }
+          .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.mini)
+          .tint(WidgetPalette.color(.waiting))
+          .accessibilityLabel("Decline \(assistant.name)'s request")
+        } else if assistant.isWorking, let runId = assistant.runId, !runId.isEmpty {
+          Button(intent: StopAssistantActivityIntent(botId: assistant.id, name: assistant.name, scope: scope, runId: runId)) {
+            Image(systemName: "stop.fill")
+          }
+          .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.mini)
+          .tint(WidgetPalette.color(assistant.phase))
+          .accessibilityLabel("Stop \(assistant.name)")
         }
-      }.foregroundStyle(Color.primary)
+      }
     }
   }
   private func list(_ ordered: [WidgetSnapshot.Assistant], _ snapshot: WidgetSnapshot, limit: Int, header: Bool) -> some View {
-    VStack(alignment: .leading, spacing: header ? 9 : 7) {
+    let interactive = family == .systemMedium || family == .systemLarge
+    return VStack(alignment: .leading, spacing: header ? 9 : 7) {
       if header {
         HStack(spacing: 8) {
           AssistantGlyphView(color: tone.identity(nil)).frame(width: 20, height: 20)
           Text(snapshot.summary).font(.headline).lineLimit(1)
+          Spacer(minLength: 0)
+          if interactive {
+            Button(intent: RefreshWidgetsIntent()) {
+              Image(systemName: "arrow.clockwise").font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.mini)
+            .accessibilityLabel("Refresh assistants")
+          }
         }
       }
-      ForEach(ordered.prefix(limit)) { row($0) }
+      ForEach(ordered.prefix(limit)) { row($0, scope: snapshot.scope, interactive: interactive) }
       Spacer(minLength: 0)
-      footer(snapshot)
+      HStack(spacing: 6) {
+        footer(snapshot)
+        if interactive && !header {
+          Spacer(minLength: 0)
+          Button(intent: RefreshWidgetsIntent()) {
+            Image(systemName: "arrow.clockwise").font(.caption2.weight(.semibold))
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(.secondary)
+          .accessibilityLabel("Refresh assistants")
+        }
+      }
     }.frame(maxWidth: .infinity, alignment: .leading).widgetURL(DeepLink.today)
   }
   private func summarySymbol(_ snapshot: WidgetSnapshot) -> String {

@@ -10,7 +10,15 @@ import CryptoKit
 @MainActor @Observable
 final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding {
   var host = UserDefaults.standard.string(forKey: DeviceDefaults.host) ?? ""
-  var api: APIClient? { didSet { updateScope() } }
+  var api: APIClient? {
+    didSet {
+      oldValue?.onSessionExpired = nil
+      api?.onSessionExpired = { [weak self] error, client, token in
+        self?.handleSessionExpiryIfCurrent(error, client: client, token: token)
+      }
+      updateScope()
+    }
+  }
   var bootstrap: Bootstrap? {
     didSet {
       updateScope(); appliedBootstrapTag = nil; publishWidgetSnapshot(); updateEcho(); scheduleAdditions()
@@ -22,6 +30,19 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   private(set) var scope: String?
   /// The account on a server, as drafts, widgets and the Live Activity name it.
   nonisolated static func scope(server: URL, userId: String) -> String { Data((server.absoluteString + "|" + userId).utf8).base64URLEncoded }
+  /// Returns whether a base64url-encoded account `scope` belongs to `server`.
+  nonisolated static func scope(_ scope: String, matchesServer server: URL) -> Bool {
+    guard let data = Data(base64URLEncoded: scope),
+      let decoded = String(data: data, encoding: .utf8)
+    else { return false }
+    return decoded.hasPrefix(server.absoluteString + "|")
+  }
+  /// Active account scope eligible to publish to Spotlight and cross-process surfaces: `nil`
+  /// whenever the session is expired, signing in, or signed out.
+  var publishableScope: String? {
+    guard !sessionExpired, !signingIn else { return nil }
+    return scope
+  }
   private func updateScope() {
     let next = bootstrap.flatMap { boot in api.map { Self.scope(server: $0.baseURL, userId: boot.user.id) } }
     guard next != scope else { return }
@@ -98,6 +119,12 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   var routineResult: RoutineResultDestination?
   var todayRequest: UUID?
+  /// Opens Search & Saved (from Quick Actions or Spotlight).
+  var searchRequest: UUID?
+  /// Opens Search & Saved directly on the Saved tab (from Spotlight).
+  var savedRequest: UUID?
+  /// Opens a specific group chat room (from Spotlight or deep link).
+  var openGroupRoomId: String?
   /// A voice message to start in this assistant's chat, from the Talk to assistant control.
   var listenRequest: ListenRequest?
   /// The assistants the current Focus lets through; see `FocusFilter.swift`.
@@ -603,6 +630,17 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if let connectionError { dismissedPolls.insert(connectionError) }
     error = nil
   }
+  /// Routes a `401 session_expired` failure from any view or helper request through `report(_:)`
+  /// when it belongs to the active client and token, immediately invalidating credentials and
+  /// cross-process surfaces so concurrent in-flight responses cannot reindex private titles.
+  func handleSessionExpiryIfCurrent(_ error: Error, client: APIClient, token: String?) {
+    guard (error as? APIError)?.isSessionExpired == true,
+      api === client,
+      api?.token == token
+    else { return }
+    report(error)
+  }
+
   func report(_ error: Error) {
     if error is CancellationError { return }
     self.error = error.localizedDescription
@@ -613,6 +651,13 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       api?.token = nil
       stopPolling()
       sessionExpired = true
+      // Clear every cross-process and system surface (widget snapshot + timeline reload, routines,
+      // Watch, Quick Actions, Spotlight, avatars, prefetch, alarms, biometric unlock, Live Activity)
+      // identically to cold expiry.
+      publishWidgetSnapshot()
+      CriticalAlarmManager.shared.cancelAll()
+      BiometricGate.shared.lock()
+      Task { await LiveActivityController.shared.endAll(unregister: false) }
     }
   }
 }
@@ -628,6 +673,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
 struct PreviewFile: Identifiable {
   let id = UUID()
   var url: URL
+  /// Optional matchedTransitionSource identifier for native iOS 18+ zoom transitions.
+  var sourceId: String? = nil
 }
 /// A reply for VoiceOver to read, worded as the web's status region.
 struct ReplyAnnouncement: Equatable {

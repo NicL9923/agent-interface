@@ -45,6 +45,12 @@ struct PreferencesView: View {
   @State private var changeServerConfirm = false
   @State private var quietError: String?
   @State private var macs: MacDeviceList?
+  @State private var securityError: String?
+  @State private var securityBusy = false
+  @State private var shortcutSendEnabled = false
+  private let biometricGate = BiometricGate.shared
+  private let criticalAlarms = CriticalAlarmManager.shared
+  @Environment(\.openWindow) private var openWindow
   #if DEBUG
     @State private var captureComputerOpen = false
   #endif
@@ -72,6 +78,13 @@ struct PreferencesView: View {
             settingsRow("Computer", icon: "desktopcomputer", detail: store.computerStatus?.detail ?? "Shared desktop and terminal")
           }.disabled(store.computerStatus.map { !$0.available && $0.terminal?.available != true } ?? false)
             .accessibilityIdentifier("sharedComputer")
+            .contextMenu {
+              if UIDevice.current.userInterfaceIdiom == .pad {
+                Button("Open in new window", systemImage: "macwindow.badge.plus") {
+                  openWindow(id: WindowID.computer, value: ComputerWindowRequest(take: false))
+                }
+              }
+            }
           // Hidden while the server has no Mac link key, and on servers from before Mac links.
           if let macs, macs.available {
             NavigationLink { MacsView(list: $macs) } label: {
@@ -158,6 +171,61 @@ struct PreferencesView: View {
           }.disabled(store.sessionExpired)
         }
         Section {
+          HStack {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Require \(biometricGate.biometryLabel)")
+              Text("Protects Passwords & logins, vault unlock prompts, and sensitive approvals on this device.")
+                .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Toggle("Require \(biometricGate.biometryLabel)", isOn: Binding(
+              get: { biometricGate.isEnabled(for: store.scope) },
+              set: { next in toggleBiometricLock(next) }
+            ))
+            .labelsHidden().fixedSize().disabled(securityBusy || store.scope == nil)
+            .accessibilityIdentifier("biometricLockToggle")
+          }
+          HStack {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Allow Shortcuts to send messages")
+              Text("Lets iOS Shortcuts automations send messages directly to an assistant (up to 4,000 characters).")
+                .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Toggle("Allow Shortcuts to send messages", isOn: Binding(
+              get: { shortcutSendEnabled },
+              set: { next in
+                shortcutSendEnabled = next
+                ShortcutSendPolicy.setEnabled(next, for: store.scope)
+              }
+            ))
+            .labelsHidden().fixedSize().disabled(store.scope == nil)
+            .accessibilityIdentifier("shortcutSendToggle")
+          }
+          if criticalAlarms.isSupported {
+            HStack {
+              VStack(alignment: .leading, spacing: 4) {
+                Text("Critical alert alarms")
+                Text("Allow AlarmKit escalation for routines or waiting alerts you explicitly mark as alarm-worthy.")
+                  .font(.caption).foregroundStyle(.secondary)
+              }
+              Spacer(minLength: 8)
+              Toggle("Critical alert alarms", isOn: Binding(
+                get: { criticalAlarms.isEnabled(for: store.scope) },
+                set: { next in toggleCriticalAlarms(next) }
+              ))
+              .labelsHidden().fixedSize().disabled(securityBusy || store.scope == nil)
+              .accessibilityIdentifier("criticalAlarmsToggle")
+            }
+          }
+          if let securityError {
+            Text(securityError).font(.footnote).foregroundStyle(Palette.danger)
+              .accessibilityIdentifier("securityError")
+          }
+        } header: { Text("Security & automation") } footer: {
+          Text("Stored per account on this device. Shared iPads relock automatically when you leave the app or switch accounts.")
+        }.disabled(store.sessionExpired)
+        Section {
           if store.sessionExpired { Button("Sign in again") { Task { await store.signIn() } } }
           Button("Sign out", role: .destructive) { signOutConfirm = true }
         }
@@ -190,7 +258,10 @@ struct PreferencesView: View {
             else if saveFailed { Text("Settings not saved").foregroundStyle(Palette.danger) }
           }
         }
-        .onAppear { form.load(store) }
+        .onAppear {
+          form.load(store)
+          shortcutSendEnabled = ShortcutSendPolicy.isEnabled(for: store.scope)
+        }
         // Once every save is in, the controls show what the server kept, which a server from before a
         // setting, or another device, may have answered differently. The end of the saves resyncs too,
         // because a server that drops a choice can answer with a copy equal to the one already read.
@@ -242,6 +313,33 @@ struct PreferencesView: View {
     }.householdListBackground().navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
   }
   private func closeSheet() { if let close { close() } else { dismiss() } }
+  private func toggleBiometricLock(_ enabled: Bool) {
+    guard !securityBusy else { return }
+    securityBusy = true
+    securityError = nil
+    let scope = store.scope
+    Task {
+      defer { securityBusy = false }
+      let outcome = await biometricGate.setEnabled(enabled, for: scope)
+      switch outcome {
+      case .authenticated, .cancelled: break
+      case .failed(let message), .unavailable(let message): securityError = message
+      }
+    }
+  }
+  private func toggleCriticalAlarms(_ enabled: Bool) {
+    guard !securityBusy else { return }
+    securityBusy = true
+    securityError = nil
+    let scope = store.scope
+    Task {
+      defer { securityBusy = false }
+      let state = await criticalAlarms.setEnabled(enabled, for: scope)
+      if enabled && state != .authorized {
+        securityError = "Allow Alarms permission for WildBots in iOS Settings to enable critical alert alarms."
+      }
+    }
+  }
   /// Retries the failed save. The chat style choices it held stay queued.
   private func enqueueSave() { store.queuePreferences(preferences, changed: []) }
   /// The form, for a control whose edits are queued as they happen. `changed` names the chat style choice it sets.

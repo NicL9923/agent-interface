@@ -27,6 +27,12 @@ struct BotProfileView: View {
         if MainAssistant.eligible(bot, userId: store.bootstrap?.user.id ?? "") { MainAssistantSection(bot: bot) }
         Section {
           Toggle("Notify me about all activity", isOn: follow).disabled(!store.homeCanOrganize).accessibilityIdentifier("followBot")
+          if CriticalAlarmManager.shared.isEnabled(for: store.scope) {
+            Toggle("Escalate waiting alerts with alarm", isOn: Binding(
+              get: { CriticalAlarmManager.shared.botWaitingEnabled(bot.id, for: store.scope) },
+              set: { CriticalAlarmManager.shared.setBotWaitingEnabled($0, botId: bot.id, for: store.scope) }
+            )).accessibilityIdentifier("botWaitingAlarm")
+          }
           HomeSectionPicker(botId: bot.id) { sectionFor = bot }
         } footer: {
           Text("Shared tasks you're part of always notify you. Turn this on to hear about everything \(bot.name) does.").foregroundStyle(Palette.muted)

@@ -219,9 +219,28 @@ struct VaultView: View {
   /// A failed change may or may not have reached the server, so actions stay locked until a reload succeeds.
   @State private var uncertain = false
   @State private var generation = UUID()
+  @State private var biometricBusy = false
+  @State private var biometricError: String?
+  private let gate = BiometricGate.shared
+  private var unlocked: Bool { gate.isVaultUnlocked(for: store.scope) }
   private var profileBot: String { botId ?? selectedBot }
   private var identity: String { (store.scope ?? "") + "|" + profileBot }
   var body: some View {
+    Group {
+      if !unlocked {
+        VaultLockedView(gate: gate, error: biometricError, busy: biometricBusy) {
+          Task { await authenticateVault() }
+        }
+      } else {
+        vaultForm
+      }
+    }
+    .navigationTitle("Passwords & logins").navigationBarTitleDisplayMode(.inline)
+    .onChange(of: scenePhase) { _, phase in if phase == .background { gate.lock(); clear() } }
+    .onChange(of: store.scope) { _, _ in gate.lock(); biometricError = nil; clear() }
+    .onDisappear { gate.lock(); clear() }
+  }
+  private var vaultForm: some View {
     Form {
       if botId == nil {
         Section {
@@ -290,17 +309,16 @@ struct VaultView: View {
       } else if busy { ProgressView("Loading logins…") }
       else if profileBot.isEmpty { Text("Create an assistant before managing its logins.") }
       if !profileBot.isEmpty { Section { Button("Reload logins") { Task { await refresh() } }.disabled(busy).accessibilityIdentifier("vault.reload") } }
-    }.navigationTitle("Passwords & logins").navigationBarTitleDisplayMode(.inline)
+    }
       .accessibilityIdentifier("vaultForm")
       .disabled(busy || store.sessionExpired || !store.connected)
       .refreshable { await refresh() }
-      .task(id: identity) {
+      .task(id: "\(identity)|\(unlocked)") {
+        guard unlocked else { return }
         clear(); catalog = nil; error = nil; notice = nil; uncertain = false
         if profileBot.isEmpty { selectedBot = store.selectedBotId ?? store.bootstrap?.bots.first?.id ?? ""; return }
         await refresh()
       }
-      .onChange(of: scenePhase) { _, phase in if phase != .active { clear() } }
-      .onDisappear { clear() }
       .confirmationDialog("Remove \(removing?.label ?? "this login") from WildBots? This assistant will lose access to it.", isPresented: $showRemove, titleVisibility: .visible) {
         Button("Remove login", role: .destructive) { if let item = removing { run(success: "Login removed from WildBots.") { api, id in try await api.removeVaultLogin(botId: id, itemId: item.id) } } }
       }
@@ -337,6 +355,18 @@ struct VaultView: View {
       }
   }
   private func clear() { generation = UUID(); unlockPassword = ""; unlocking = nil; adding = false; addingSecret = false; busy = false }
+  private func authenticateVault() async {
+    guard !biometricBusy else { return }
+    biometricBusy = true
+    biometricError = nil
+    defer { biometricBusy = false }
+    let outcome = await gate.verify(reason: "Unlock saved passwords and logins.", scope: store.scope)
+    switch outcome {
+    case .authenticated: break
+    case .cancelled: biometricError = "Authentication was cancelled."
+    case .failed(let msg), .unavailable(let msg): biometricError = msg
+    }
+  }
   /// The sheet stays open until Hermes answers, so a failure shows where the password was typed.
   private func unlock(_ source: VaultSource) {
     let password = unlockPassword; unlockPassword = ""
@@ -646,10 +676,32 @@ struct SecureAttentionView: View {
   private func submit(cancel: Bool) {
     guard let api = store.api, let secure = request.secure, store.connected,
       secure.explicit?.answerable(by: store.bootstrap?.user.id) != false else { input.clear(); return }
-    let binding = key, token = api.token
-    input.submit(api: api, botId: botId, requestId: request.id, request: secure, key: binding, cancel: cancel, assistant: assistantName ?? "The assistant",
-      current: { store.api === api && api.token == token && key == binding && !store.sessionExpired },
-      refresh: { await store.refreshConversation() })
+    let binding = key, token = api.token, currentScope = store.scope
+    let sendAnswer: () -> Void = {
+      input.submit(api: api, botId: botId, requestId: request.id, request: secure, key: binding, cancel: cancel, assistant: assistantName ?? "The assistant",
+        current: { store.api === api && api.token == token && key == binding && !store.sessionExpired },
+        refresh: { await store.refreshConversation() })
+    }
+    if !cancel && secure.method == "vault.unlock_prompt" && BiometricGate.shared.isEnabled(for: currentScope) {
+      Task {
+        let outcome = await BiometricGate.shared.verify(
+          reason: "Confirm unlocking \(secure.displayName ?? "your password source") in Hermes.",
+          scope: currentScope,
+          requireFresh: true
+        )
+        guard store.scope == currentScope && store.api === api && api.token == token && key == binding && !store.sessionExpired else { input.clear(); return }
+        switch outcome {
+        case .authenticated:
+          sendAnswer()
+        case .cancelled:
+          input.message = "Authentication was cancelled. Nothing was sent."
+        case .failed(let msg), .unavailable(let msg):
+          input.message = msg
+        }
+      }
+      return
+    }
+    sendAnswer()
   }
 }
 
