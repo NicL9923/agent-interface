@@ -175,7 +175,7 @@ import XCTest
         XCTAssertTrue(app.staticTexts["Nothing saved here yet. Add a fact you want this profile to remember."].firstMatch.waitForExistence(timeout: 5)); try capture(name)
         app.terminate(); continue
       }
-      let profile = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Shared profile: ranch")).firstMatch
+      let profile = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Assistant: ranch")).firstMatch
       XCTAssertTrue(profile.waitForExistence(timeout: 5))
       if ["loaded", "dark", "large-text"].contains(variant) {
         try capture(name)
