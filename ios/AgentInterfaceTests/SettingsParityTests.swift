@@ -88,7 +88,7 @@ final class SettingsParityTests: XCTestCase {
       RoutineRunReceipt(requestId: "r", routineId: "x", botId: "b", status: status, message: message, startedAt: "2026-10-01T12:00:00Z")
     }
     XCTAssertEqual(receipt("completed", "Done.").summary, "Trial run completed. Done.")
-    XCTAssertEqual(receipt("accepted", nil).summary, "Trial run started. Hermes will finish it even if you close this screen.")
+    XCTAssertEqual(receipt("accepted", nil).summary, "Trial run started. WildBots will finish it even if you close this screen.")
     XCTAssertEqual(receipt("uncertain", "").summary, "The run's outcome is unknown. Review its result before starting another.")
     XCTAssertTrue(receipt("failed", nil).finished)
     XCTAssertFalse(receipt("accepted", nil).finished)
